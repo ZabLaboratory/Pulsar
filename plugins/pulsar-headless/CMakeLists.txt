@@ -38,6 +38,23 @@ if(NOT EXISTS "${PULSAR_LIBOBS_HEADERS}/obs.h")
         "Initialise the upstream/ submodule.")
 endif()
 
+# Locate Qt6 from the obs-deps Qt6 tarball that upstream's preset
+# downloads under upstream/.deps/. The version stamp in the path
+# tracks upstream's pinned obs-deps release.
+file(GLOB _qt6_dirs LIST_DIRECTORIES true
+     "${PULSAR_UPSTREAM_DIR}/.deps/obs-deps-qt6-*-x64")
+list(FILTER _qt6_dirs INCLUDE REGEX ".*-x64$")
+list(LENGTH _qt6_dirs _qt6_dirs_count)
+if(_qt6_dirs_count EQUAL 0)
+    message(FATAL_ERROR
+        "Qt6 obs-deps not found under ${PULSAR_UPSTREAM_DIR}/.deps/. "
+        "Run scripts/build-win.ps1 -Stage configure first.")
+endif()
+list(GET _qt6_dirs 0 PULSAR_QT6_ROOT)
+
+list(APPEND CMAKE_PREFIX_PATH "${PULSAR_QT6_ROOT}")
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
+
 add_executable(pulsar-headless main.cpp)
 
 target_include_directories(pulsar-headless PRIVATE
@@ -48,6 +65,8 @@ target_include_directories(pulsar-headless PRIVATE
 
 target_link_libraries(pulsar-headless PRIVATE
     "${PULSAR_LIBOBS_LIB}"
+    Qt6::Core
+    Qt6::Widgets
 )
 
 set_target_properties(pulsar-headless PROPERTIES

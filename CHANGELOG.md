@@ -74,6 +74,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `../../obs-plugins/64bit/` and `../../data/obs-plugins/%module%/`
   on Windows. Calling `obs_add_module_path` ourselves with the
   same paths was duplicating every module load.
+- **Phase 4b — Qt infrastructure for libobs Qt-linked plugins.**
+  `pulsar-headless` now constructs a `QApplication` early in `main`
+  with `QT_QPA_PLATFORM=minimal`, so libobs plugins that link
+  against Qt6 (notably the upstream obs-websocket) can be loaded
+  without crashing on `QObject` machinery. The build script stages
+  the Qt6 runtime (`Qt6Core`, `Qt6Gui`, `Qt6Widgets`,
+  `Qt6Network`, `Qt6Svg`, `Qt6Xml`) plus the `qminimal` /
+  `qwindows` platform plugins from the `obs-deps-qt6-*-x64`
+  tarball into the rundir. RAM cost: ~5 MB (66 MB → 71 MB idle).
+- **Upstream obs-websocket disabled.** Pass
+  `-DENABLE_WEBSOCKET=OFF` to upstream's CMake. The upstream plugin
+  hardcodes Qt UI dependencies (`forms/SettingsDialog`,
+  `forms/ConnectInfo`) and calls `obs_frontend_get_current_profile_path`
+  in its `obs_module_load` migration path, which crashes under our
+  headless service because no frontend has registered. Phase 4c
+  introduces a `plugins/pulsar-websocket/` vendor fork with Qt UI
+  and frontend-api migration calls stripped.
 - Top-level `CMakeLists.txt` rewritten as a real build entry: the
   Pulsar root project now adds `plugins/pulsar-headless/` (via
   `PULSAR_BUILD_HEADLESS=ON` default) and reserves slots for
