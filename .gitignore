@@ -1,0 +1,60 @@
+# Build output
+build/
+build-*/
+out/
+dist/
+cmake-build-*/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+Testing/
+Makefile
+*.cmake
+!CMakeLists.txt
+!cmake/**/*.cmake
+
+# Compiler / linker artefacts
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.exp
+*.pdb
+*.idb
+*.ilk
+
+# Native module / package artefacts
+*.tar.gz
+*.zip
+*.dmg
+*.pkg
+*.msi
+*.AppImage
+
+# IDE
+.vscode/
+.vs/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Environment / secrets (no secrets in this repo, defence in depth)
+.env
+.env.*
+!.env.example
+
+# Patches workspace
+patches/.applied
+patches/.rejects

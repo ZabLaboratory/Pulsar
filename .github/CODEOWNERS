@@ -1,0 +1,14 @@
+# Pulsar — code ownership.
+#
+# The maintainer is the only person who can approve changes to
+# governance, CI, and licence files. Everything else falls under the
+# default catch-all.
+
+# Default catch-all — adjust once contributors are onboarded.
+*                           @ZabLaboratory/maintainers
+
+# Governance: maintainer-only.
+/CLAUDE.md                  @ZabLaboratory/maintainers
+/LICENSE                    @ZabLaboratory/maintainers
+/.github/                   @ZabLaboratory/maintainers
+/.github/workflows/         @ZabLaboratory/maintainers

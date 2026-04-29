@@ -1,0 +1,24 @@
+# Normalise text files to LF in the repo, native EOL on checkout.
+* text=auto eol=lf
+
+# Windows-only build/runtime files keep CRLF on checkout.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Patches must stay byte-stable.
+*.patch -text
+
+# Binary types.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.ico   binary
+*.icns  binary
+*.tar.gz binary
+*.zip   binary
+*.dll   binary
+*.dylib binary
+*.so    binary
+*.lib   binary
+*.exe   binary

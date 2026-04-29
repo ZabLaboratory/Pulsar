@@ -1,0 +1,27 @@
+# Pulsar — CI lightweight checks.
+#
+# Runs on every pull request. Phase 1+ adds:
+#   - cmake configure smoke (no build)
+#   - patch lint (each .patch applies cleanly to upstream@pinned)
+#   - plugin metadata sanity (CMakeLists.txt + README.md present)
+#
+# Phase 0: workflow stub.
+
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  placeholder:
+    name: ci-placeholder
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Notice
+        run: |
+          echo "::notice::Pulsar CI not yet implemented (Phase 1)."
+          echo "See docs/DEVELOPMENT.md for the planned pipeline."

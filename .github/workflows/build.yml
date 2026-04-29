@@ -1,0 +1,25 @@
+# Pulsar — full platform build matrix.
+#
+# Phase 1 lights this up for Windows. Mac (Phase 7) and Linux (Phase 8)
+# join the matrix later.
+#
+# Phase 0: workflow stub.
+
+name: build
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  placeholder:
+    name: build-placeholder
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Notice
+        run: |
+          echo "::notice::Pulsar build matrix not yet implemented (Phase 1)."
+          echo "Target order: Windows -> macOS -> Linux."

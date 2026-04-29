@@ -1,0 +1,25 @@
+# Pulsar — release on tag push.
+#
+# Phase 1+ wires up:
+#   - tag push fans out the build matrix
+#   - signs Win/Mac binaries (when secrets configured)
+#   - publishes a GitHub Release with platform packages attached
+#   - emits a release notification webhook (Discord) if configured
+#
+# Phase 0: workflow stub.
+
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+jobs:
+  placeholder:
+    name: release-placeholder
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Notice
+        run: |
+          echo "::notice::Pulsar release pipeline not yet implemented (Phase 1)."
