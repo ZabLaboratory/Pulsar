@@ -91,6 +91,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   headless service because no frontend has registered. Phase 4c
   introduces a `plugins/pulsar-websocket/` vendor fork with Qt UI
   and frontend-api migration calls stripped.
+- **Phase 4c — pulsar-websocket vendor fork (source).** The
+  obs-websocket plugin source tree (v5.7.3) is vendored under
+  `plugins/pulsar-websocket/` with three intentional differences
+  from upstream:
+  1. `src/forms/` removed entirely (no Qt SettingsDialog /
+     ConnectInfo / images / resources.qrc).
+  2. `src/obs-websocket.cpp`'s `obs_module_load` no longer
+     constructs `SettingsDialog` and no longer registers a Tools
+     menu entry. The `forms/SettingsDialog.h` include and the
+     `_settingsDialog` global are gone.
+  3. `src/Config.cpp`'s `MigrateGlobalConfigData()` and
+     `MigratePersistentData()` are reduced to no-ops. Pulsar starts
+     from a clean state -- there are no legacy obs-studio
+     obs-websocket configs to migrate, so the calls into
+     `obs_frontend_get_app_config()` and
+     `obs_frontend_get_current_profile_path()` (which return null
+     under headless and crash the migrate path) are not made.
+
+  The CMakeLists.txt is a stub that aborts with `FATAL_ERROR` if
+  `PULSAR_BUILD_WEBSOCKET=ON` is set. Phase 4d adds the actual
+  build wiring (sources, deps from `upstream/.deps/`,
+  Qt6::Core + Qt6::Network link, `obs.lib` link, output target).
 - Top-level `CMakeLists.txt` rewritten as a real build entry: the
   Pulsar root project now adds `plugins/pulsar-headless/` (via
   `PULSAR_BUILD_HEADLESS=ON` default) and reserves slots for
