@@ -7,23 +7,49 @@
 // leaving WebSocket events frozen and getters useless.
 //
 // This is a static library, not an OBS plugin. pulsar-headless's main()
-// calls pulsar_frontend_init() *before* obs_load_all_modules(), so the
-// callback table is populated when obs-websocket registers its event
-// callback in its own obs_module_load.
+// owns the lifecycle:
 //
-// Phase 5 keeps the model deliberately simple:
-//   - one immutable scene collection ("Default")
-//   - one immutable profile ("Default")
-//   - one default scene created at init
-//   - one fade transition
-//   - stream / record / replay-buffer / virtualcam outputs created upfront
-//     and signal-bridged to frontend events; they accept obs_output_start
-//     once a plugin (Phase 7+) configures their encoders + service.
+//   pulsar_frontend_init()             -- BEFORE obs_load_all_modules.
+//                                         Installs the vtable + UI task
+//                                         handler only. Plugins registering
+//                                         frontend callbacks during
+//                                         obs_module_load find a populated
+//                                         table.
+//   obs_load_all_modules
+//   obs_post_load_modules
+//   pulsar_frontend_finished_loading() -- AFTER plugins are loaded.
+//                                         Runs setup() (scene, fade
+//                                         transition, x264 + aac encoders,
+//                                         outputs with encoders attached,
+//                                         window_capture source, rtmp
+//                                         service, record directory) and
+//                                         then emits FINISHED_LOADING.
+//                                         Splitting init from setup is the
+//                                         only way to call factories like
+//                                         obs_video_encoder_create("obs_x264",
+//                                         ...) -- the IDs are owned by
+//                                         plugins that aren't registered
+//                                         until after load_all_modules.
+//   ... idle loop ...
+//   pulsar_frontend_shutdown()         -- emits EXIT, gracefully stops
+//                                         active outputs, then hands the
+//                                         object back to obs-frontend-api
+//                                         (which deletes it via the
+//                                         destructor running teardown()).
 //
-// The signal-bridging path matches what OBSBasic does upstream: the
-// frontend layer triggers STARTING/STOPPING manually around the start/stop
-// calls, and STARTED/STOPPED come from the output's own signal handler.
-// That keeps event ordering identical for v5 clients.
+// Scenes are bound to libobs main mixer channel 0 via
+// obs_set_output_source(0, ...) on setup AND on every set_current_scene.
+// Without this binding, the encoder receives no frames and obs_output_start
+// declines silently with last_error=null.
+//
+// Event sources mix two patterns: explicit emission for state mutations
+// (SCENE_CHANGED on set_current_scene, STUDIO_MODE_* on
+// set_preview_program_mode, etc.) and signal-bridged for output state
+// (STREAMING/RECORDING/REPLAY/VIRTUALCAM start/stop). STARTING and STOPPING
+// are emitted manually around obs_output_start / obs_output_stop, STARTED
+// and STOPPED come from the output's own signal handler -- this matches
+// the ordering OBSBasic produces upstream so v5 clients see the same
+// timeline.
 
 #include <obs.h>
 #include <obs.hpp>
@@ -41,6 +67,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "pulsar-frontend-stub.h"
@@ -421,6 +448,26 @@ private:
         signal_handler_connect(sh, "stop", onStop, this);
     }
 
+    // Releasing an output while it is still active is undefined: the
+    // muxer / encoder threads keep writing through pointers that the
+    // ref-drop is about to free. Issue obs_output_stop, poll for
+    // obs_output_active to flip, and only then return so teardown can
+    // safely release the handle. ~1 s budget; fall back to force_stop
+    // if the muxer's writeback is wedged (loses the trailing fragment
+    // but still better than a use-after-free at exit).
+    static void stop_output_and_wait(obs_output_t *out, const char *name)
+    {
+        if (!out || !obs_output_active(out))
+            return;
+        obs_output_stop(out);
+        for (int i = 0; i < 50 && obs_output_active(out); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        if (obs_output_active(out)) {
+            blog(LOG_WARNING, "[pulsar-frontend-stub] %s still active after 1s, force-stopping", name);
+            obs_output_force_stop(out);
+        }
+    }
+
     // state
     obs_source_t *currentScene = nullptr;
     obs_source_t *previewScene = nullptr;
@@ -594,6 +641,14 @@ void PulsarFrontendAPI::teardown()
                 obs_source_release(s);
         v.clear();
     };
+
+    // Drain active outputs gracefully before release. A user who Ctrl+C's
+    // mid-recording would otherwise hit obs_output_release on a live
+    // output, which races with the muxer thread still writing frames.
+    stop_output_and_wait(streamOutput, "stream");
+    stop_output_and_wait(recordOutput, "record");
+    stop_output_and_wait(replayOutput, "replay");
+    stop_output_and_wait(virtualcamOutput, "virtualcam");
 
     // Unbind any source held on libobs main mixer channel before releasing
     // outputs / scenes -- otherwise libobs keeps a ref past teardown and
