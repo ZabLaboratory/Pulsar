@@ -159,6 +159,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   LISTENING`.
 
   Phase 4e: validate v5 round-trip from an external client.
+- **Phase 4e -- v5 round-trip validated.** A v5 client
+  (`scripts/probe-websocket.py`, ~140 lines, depends on the
+  `websockets` Python package) now successfully connects to
+  `ws://127.0.0.1:4455`, completes the obs-websocket v5 handshake
+  (Hello -> auth challenge -> Identify -> Identified), issues a
+  `GetVersion` request, and receives a full response listing 137
+  available v5 requests, the libobs version (32.1.2), the
+  obs-websocket version (5.7.3), platform info, and supported
+  image formats. Disconnection is clean. Pulsar speaks v5 end-to-
+  end.
+
+  One additional fork patch was needed: `WebSocketServer._obsReady`
+  defaults to `true` (vs `false` upstream). The upstream gate is
+  flipped by `OBS_FRONTEND_EVENT_FINISHED_LOADING`, fired by the
+  Qt frontend when its event loop has settled. With no frontend in
+  Pulsar the event never fires, the gate never opens, and every
+  request returned `RequestStatus::NotReady` (code 207). Pulsar
+  has no "loading phase" to wait for -- libobs is initialised by
+  pulsar-headless before the websocket server starts accepting
+  connections, so requests are valid from the first `Identify`.
 - Top-level `CMakeLists.txt` rewritten as a real build entry: the
   Pulsar root project now adds `plugins/pulsar-headless/` (via
   `PULSAR_BUILD_HEADLESS=ON` default) and reserves slots for

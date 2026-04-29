@@ -98,7 +98,15 @@ private:
 	std::mutex _sessionMutex;
 	std::map<websocketpp::connection_hdl, SessionPtr, std::owner_less<websocketpp::connection_hdl>> _sessions;
 
-	std::atomic<bool> _obsReady = false;
+	// Pulsar fork: _obsReady defaults to true (vs false upstream).
+	// Upstream's gate fires when OBS_FRONTEND_EVENT_FINISHED_LOADING
+	// arrives -- but the headless service has no frontend to emit
+	// that event, so requests would forever return NotReady (code
+	// 207). For Pulsar there is no "loading phase" to wait for:
+	// libobs is initialised by pulsar-headless before the websocket
+	// server starts accepting connections, so requests are valid
+	// from the first connection.
+	std::atomic<bool> _obsReady = true;
 
 	ClientSubscriptionCallback _clientSubscriptionCallback;
 };

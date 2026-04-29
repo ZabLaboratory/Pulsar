@@ -119,14 +119,17 @@ build it ourselves.
   forms/ directory). Plugin sources, the obs-deps lookup, and the
   Qt6 lookup all flow through
   `plugins/pulsar-websocket/CMakeLists.txt`.
-- **Phase 4e:** validate the v5 round-trip from an external
-  client. The server password is logged on First Load
-  (`[Config::Load] (FirstLoad) Generating new server password.`)
-  and persisted to `<cwd>/obs-websocket/config.json` -- in dev
-  that resolves to
-  `upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs-websocket/config.json`.
-  Connect with e.g. `obsws-python` to
-  `ws://127.0.0.1:4455` using that password.
+- **Phase 4e:** DONE. `scripts/probe-websocket.py` does the v5
+  handshake (Hello -> Identify -> Identified), issues a
+  `GetVersion`, prints the response. Run with:
+
+  ```
+  pip install websockets
+  python scripts/probe-websocket.py
+  ```
+
+  Pulsar speaks obs-websocket v5 end-to-end -- 137 v5 request
+  types are advertised in the GetVersion response.
 - **Phase 4:** wire the `pulsar-websocket` plugin (fork of
   obs-websocket v5). Service speaks v5 baseline.
 - See ARCHITECTURE.md for the full phase plan.
