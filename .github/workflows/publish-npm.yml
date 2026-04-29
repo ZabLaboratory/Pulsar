@@ -1,0 +1,94 @@
+# Publish @zablaboratory/pulsar-client and @zablaboratory/pulsar-bundle
+# to npm.
+#
+# Trigger: tag push of vX.Y.Z (matching the release.yml's trigger), so
+# the npm version comes out alongside the binary release. workflow_dispatch
+# is also available for manual republish or recovery.
+#
+# pulsar-client is published first because pulsar-bundle declares it as a
+# runtime dependency. npm workspaces would order them automatically, but
+# we publish them in two explicit steps so a failure on one is easy to
+# spot and recover from.
+#
+# Required secret:
+#   NPM_TOKEN  -- automation token from https://www.npmjs.com/settings/<user>/tokens
+#                 with publish access to the @zablaboratory scope.
+
+name: publish-npm
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write   # OIDC for npm provenance (not yet enabled, harmless to keep)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # No submodules: the npm packages are pure JS/TS under packages/,
+        # they don't touch upstream/ at build time.
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org/'
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          v=$(cat VERSION | tr -d '[:space:]')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Pulsar version: $v"
+
+      - name: Verify tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          tag='${{ github.ref_name }}'
+          expected='v${{ steps.version.outputs.version }}'
+          if [ "$tag" != "$expected" ]; then
+            echo "::error::Tag $tag does not match VERSION ($expected)."
+            exit 1
+          fi
+
+      - name: Install workspaces
+        # PULSAR_BUNDLE_SKIP_POSTINSTALL skips the binary download in
+        # pulsar-bundle's postinstall -- we don't need pulsar.exe to
+        # publish its npm package.
+        env:
+          PULSAR_BUNDLE_SKIP_POSTINSTALL: '1'
+        run: npm install --no-audit --no-fund
+
+      - name: Build all packages
+        run: npm run build --workspaces --if-present
+
+      - name: Run tests
+        run: npm run test --workspaces --if-present
+
+      - name: Publish @zablaboratory/pulsar-client
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd packages/pulsar-client
+          npm publish --access public
+
+      - name: Publish @zablaboratory/pulsar-bundle
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # bundle declares pulsar-client@0.1.0 as a runtime dep. Publishing
+        # bundle right after client succeeds works because npm registry
+        # propagation is synchronous within the same registry session.
+        run: |
+          cd packages/pulsar-bundle
+          npm publish --access public
