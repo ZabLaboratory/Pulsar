@@ -182,18 +182,13 @@ if ($Stage -in @('configure', 'all')) {
         $extraArgs += '-DENABLE_FRONTEND=OFF'
         $extraArgs += '-DENABLE_UI=OFF'
         $extraArgs += '-DENABLE_BROWSER=OFF'
-        # ENABLE_WEBSOCKET=OFF -- skip the upstream obs-websocket
-        # plugin. It hardcodes Qt UI (forms/SettingsDialog) and
-        # frontend-api dependencies that crash in obs_module_load
-        # under our headless service: MigratePersistentData calls
-        # obs_frontend_get_current_profile_path which returns null
-        # without a registered frontend, and the migrate path then
-        # dereferences it.
-        #
-        # Phase 4c will introduce plugins/pulsar-websocket/ -- a
-        # vendor-fork of obs-websocket with the Qt UI / frontend
-        # dependencies stripped -- and re-enable WebSocket support
-        # via that plugin.
+        # ENABLE_WEBSOCKET=OFF -- skip building the upstream
+        # obs-websocket plugin. Pulsar ships its own fork at
+        # plugins/pulsar-websocket/ which targets the same
+        # OUTPUT_NAME ("obs-websocket.dll") and replaces it in the
+        # rundir. Without this flag we'd compile both versions and
+        # the second-loaded one would emit "obs_register_*: id 'X'
+        # already exists! Duplicate library?" warnings.
         $extraArgs += '-DENABLE_WEBSOCKET=OFF'
     }
     Push-Location $upstream
@@ -240,7 +235,9 @@ if ($Stage -in @('build', 'all')) {
         Write-Host ""
         Write-Host "--- Configuring Pulsar plugins ---"
         $pulsarBuild = Join-Path $root 'build'
-        & $cmake -S $root -B $pulsarBuild -G "Visual Studio 17 2022" -A x64
+        & $cmake -S $root -B $pulsarBuild -G "Visual Studio 17 2022" -A x64 `
+                 -DPULSAR_BUILD_HEADLESS=ON `
+                 -DPULSAR_BUILD_WEBSOCKET=ON
         if ($LASTEXITCODE -ne 0) { throw "Pulsar configure failed" }
 
         Write-Host ""

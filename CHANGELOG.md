@@ -113,6 +113,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PULSAR_BUILD_WEBSOCKET=ON` is set. Phase 4d adds the actual
   build wiring (sources, deps from `upstream/.deps/`,
   Qt6::Core + Qt6::Network link, `obs.lib` link, output target).
+- **Phase 4d -- pulsar-websocket builds + listens.** The plugin
+  CMakeLists is now a real build target. Output:
+  `obs-websocket.dll` (2.8 MB) dropped into
+  `rundir/obs-plugins/64bit/`, en-US locale staged into
+  `rundir/data/obs-plugins/obs-websocket/locale/`. Linkage:
+  `obs.lib` + `obs-frontend-api.lib` from
+  `upstream/build_x64/`, `Qt6::Core` + `Qt6::Gui` +
+  `Qt6::Widgets` + `Qt6::Network` from the obs-deps Qt6 tarball,
+  `nlohmann_json::nlohmann_json` from obs-deps. Header-only Asio
+  + websocketpp resolved via include path on the
+  `obs-deps-*-x64/include/` directory.
+
+  Two extra patches were needed beyond the Phase 4c source changes
+  to make it actually load + listen under headless:
+
+  - **`src/Config.h` -- `ServerEnabled` defaults to `true` (was
+    `false` upstream).** Upstream relied on `SettingsDialog`
+    consenting to start the server. With the dialog removed, the
+    server is the entire reason the plugin exists, so it must be
+    enabled out of the box.
+  - **`src/obs-websocket.cpp` -- include `forms/SettingsDialog.h`
+    and the `_settingsDialog` global removed, alongside the
+    `obs_frontend_*` Tools-menu wiring inside `obs_module_load`.**
+    These were applied in Phase 4c but documenting them here too
+    since they are part of the runtime story.
+
+  Also: `Qt6::Widgets` and `Qt6::Gui` had to come back into the
+  link list (Phase 4b's plan was Core+Network only) -- the source
+  pulls in `QSystemTrayIcon`, `QImageWriter`, `QGuiApplication`,
+  `QMainWindow`, etc. across `utils/Platform.h`,
+  `requesthandler/RequestHandler_Config.cpp`,
+  `requesthandler/RequestHandler_General.cpp`,
+  `requesthandler/RequestHandler_Sources.cpp`,
+  `requesthandler/RequestHandler_Ui.cpp`. The widgets are never
+  instantiated at runtime in headless mode (no menu, no UI
+  request paths exercised) but the headers must compile and the
+  symbols must link.
+
+  Validated end-to-end: `pulsar.exe` starts, `obs-websocket.dll`
+  loads, `[Config::Load] Existing configuration not found, using
+  defaults.`, `(FirstLoad) Generating new server password.`,
+  `obs_module_post_load: WebSocket server is enabled, starting...`,
+  and `netstat` shows `0.0.0.0:4455 LISTENING` + `[::]:4455
+  LISTENING`.
+
+  Phase 4e: validate v5 round-trip from an external client.
 - Top-level `CMakeLists.txt` rewritten as a real build entry: the
   Pulsar root project now adds `plugins/pulsar-headless/` (via
   `PULSAR_BUILD_HEADLESS=ON` default) and reserves slots for

@@ -109,15 +109,24 @@ build it ourselves.
   dropped, `obs-websocket.cpp` stripped of the Qt menu /
   SettingsDialog wiring, and `Config.cpp` migrate functions
   reduced to no-ops. The CMakeLists is still a stub.
-- **Phase 4d:** wire the build for `pulsar-websocket`. Source list,
-  dependency lookups (websocketpp, asio, nlohmann_json,
-  qrcodegencpp from `upstream/.deps/obs-deps-*-x64/`), Qt6::Core +
-  Qt6::Network link, OBS::libobs link via `obs.lib`. Re-enable
-  `PULSAR_BUILD_WEBSOCKET=ON` and stop passing
-  `-DENABLE_WEBSOCKET=OFF` to upstream so our plugin replaces
-  upstream's obs-websocket.
-- **Phase 4e:** validate v5 round-trip with an external client
-  (e.g. `obsws-python` against `ws://127.0.0.1:<port>`).
+- **Phase 4d:** DONE. `obs-websocket.dll` produced from our fork,
+  loads inside `pulsar.exe`, listens on `0.0.0.0:4455` and
+  `[::]:4455`. Two extra patches beyond Phase 4c: ServerEnabled
+  defaults to `true` (Pulsar opts users in by default since there
+  is no SettingsDialog to consent), and `Qt6::Widgets` / `Qt6::Gui`
+  came back into the link list (source pulls QSystemTrayIcon,
+  QImageWriter, QGuiApplication, QMainWindow even outside the
+  forms/ directory). Plugin sources, the obs-deps lookup, and the
+  Qt6 lookup all flow through
+  `plugins/pulsar-websocket/CMakeLists.txt`.
+- **Phase 4e:** validate the v5 round-trip from an external
+  client. The server password is logged on First Load
+  (`[Config::Load] (FirstLoad) Generating new server password.`)
+  and persisted to `<cwd>/obs-websocket/config.json` -- in dev
+  that resolves to
+  `upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs-websocket/config.json`.
+  Connect with e.g. `obsws-python` to
+  `ws://127.0.0.1:4455` using that password.
 - **Phase 4:** wire the `pulsar-websocket` plugin (fork of
   obs-websocket v5). Service speaks v5 baseline.
 - See ARCHITECTURE.md for the full phase plan.

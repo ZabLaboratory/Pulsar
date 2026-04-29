@@ -34,7 +34,11 @@ struct Config {
 	std::atomic<bool> PasswordOverridden = false;
 
 	std::atomic<bool> FirstLoad = true;
-	std::atomic<bool> ServerEnabled = false;
+	// Pulsar fork: ServerEnabled defaults to true (vs false upstream).
+	// Upstream relied on the SettingsDialog UI to opt the user into
+	// starting the server. With the dialog removed, the server is
+	// the entire reason the plugin exists, so enable by default.
+	std::atomic<bool> ServerEnabled = true;
 	std::atomic<uint16_t> ServerPort = 4455;
 	std::atomic<bool> Ipv4Only = false;
 	std::atomic<bool> DebugEnabled = false;
