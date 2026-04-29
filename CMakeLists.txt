@@ -16,9 +16,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(PULSAR_BUILD_HEADLESS    "Build the pulsar-headless service exe"          ON)
-option(PULSAR_BUILD_WEBSOCKET   "Build the pulsar-websocket plugin"              ON)
-option(PULSAR_BUILD_MULTISTREAM "Build the pulsar-multi-stream plugin (Phase 4)" OFF)
+option(PULSAR_BUILD_HEADLESS      "Build the pulsar-headless service exe"          ON)
+option(PULSAR_BUILD_FRONTEND_STUB "Build the pulsar-frontend-stub static library"  ON)
+option(PULSAR_BUILD_WEBSOCKET     "Build the pulsar-websocket plugin"              ON)
+option(PULSAR_BUILD_MULTISTREAM   "Build the pulsar-multi-stream plugin (Phase 7)" OFF)
+
+# Order matters: pulsar-headless links pulsar-frontend-stub, so the
+# subdirectory exposing that target must be added first.
+if(PULSAR_BUILD_FRONTEND_STUB)
+    add_subdirectory(plugins/pulsar-frontend-stub)
+endif()
 
 if(PULSAR_BUILD_HEADLESS)
     add_subdirectory(plugins/pulsar-headless)

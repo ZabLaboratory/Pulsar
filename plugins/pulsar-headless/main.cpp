@@ -6,10 +6,17 @@
 // console-control event (Ctrl+C / window close / system shutdown)
 // to flip the running flag and trigger graceful obs_shutdown.
 //
-// Phase 4b will add the websocket plugin so external clients can
-// drive this service. Phase 4c validates the protocol round-trip.
+// Phase 4b/c/d: Qt minimal platform + obs-websocket plugin loaded so
+// external clients drive the service over WebSocket on port 4455.
+//
+// Phase 5: pulsar-frontend-stub installs an obs_frontend_callbacks
+// implementation BEFORE obs_load_all_modules so plugins like
+// obs-websocket find a populated frontend table when they register
+// their event callbacks.
 
 #include <obs.h>
+
+#include "pulsar-frontend-stub.h"
 
 #include <QtCore/QByteArray>
 #include <QtWidgets/QApplication>
@@ -127,7 +134,18 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // Install the frontend callback table BEFORE loading plugins so
+    // obs-websocket's EventHandler (which calls
+    // obs_frontend_add_event_callback inside obs_module_load) finds a
+    // valid frontend and its callback registers correctly.
+    pulsar_frontend_init();
+
     load_modules();
+
+    // FINISHED_LOADING is the trigger obs-websocket waits for before
+    // accepting requests/events on the wire. Emit it once modules are
+    // post-loaded.
+    pulsar_frontend_finished_loading();
 
 #ifdef _WIN32
     SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
@@ -144,6 +162,7 @@ int main(int argc, char **argv)
     std::printf("pulsar-headless: shutting down\n");
     std::fflush(stdout);
 
+    pulsar_frontend_shutdown();
     obs_shutdown();
 
     return 0;

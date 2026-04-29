@@ -65,6 +65,7 @@ target_include_directories(pulsar-headless PRIVATE
 
 target_link_libraries(pulsar-headless PRIVATE
     "${PULSAR_LIBOBS_LIB}"
+    pulsar-frontend-stub
     Qt6::Core
     Qt6::Widgets
 )

@@ -58,3 +58,6 @@ Thumbs.db
 # Patches workspace
 patches/.applied
 patches/.rejects
+
+# Local build / run logs
+*.log
