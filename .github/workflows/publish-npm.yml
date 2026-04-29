@@ -77,11 +77,22 @@ jobs:
           PULSAR_BUNDLE_SKIP_POSTINSTALL: '1'
         run: npm install --no-audit --no-fund --force
 
-      - name: Build all packages
-        run: npm run build --workspaces --if-present
+      # pulsar-client is built first explicitly because pulsar-bundle's
+      # tsc compile imports `@clodocapeo/pulsar-client`, which only
+      # resolves after the client's dist/ exists. `npm run build
+      # --workspaces` doesn't respect dependency order (the topological
+      # build order is npm 10+ behaviour and needs explicit topo sort).
+      - name: Build pulsar-client
+        run: npm run build -w @clodocapeo/pulsar-client
 
-      - name: Run tests
-        run: npm run test --workspaces --if-present
+      - name: Build pulsar-bundle
+        run: npm run build -w @clodocapeo/pulsar-bundle
+
+      - name: Test pulsar-client
+        run: npm run test -w @clodocapeo/pulsar-client
+
+      - name: Test pulsar-bundle
+        run: npm run test -w @clodocapeo/pulsar-bundle
 
       - name: Publish @clodocapeo/pulsar-client
         env:
