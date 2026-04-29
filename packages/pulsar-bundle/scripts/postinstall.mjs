@@ -1,4 +1,4 @@
-// @zablaboratory/pulsar-bundle postinstall.
+// @clodocapeo/pulsar-bundle postinstall.
 //
 // Downloads the matching pulsar-windows-x64-v<VERSION>.zip from the
 // Pulsar GitHub Releases and extracts it into ./binaries/. Idempotent:

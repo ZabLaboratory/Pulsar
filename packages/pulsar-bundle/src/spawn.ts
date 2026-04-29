@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PulsarClient } from "@zablaboratory/pulsar-client";
+import { PulsarClient } from "@clodocapeo/pulsar-client";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

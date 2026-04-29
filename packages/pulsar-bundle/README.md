@@ -1,18 +1,18 @@
-# @zablaboratory/pulsar-bundle
+# @clodocapeo/pulsar-bundle
 
-Bundles `pulsar.exe` and exposes a Node `spawn()` API. Pairs with [`@zablaboratory/pulsar-client`](../pulsar-client).
+Bundles `pulsar.exe` and exposes a Node `spawn()` API. Pairs with [`@clodocapeo/pulsar-client`](../pulsar-client).
 
 This package is **Windows x64 only**. The `os` / `cpu` fields in `package.json` make `npm install` skip it on every other platform without erroring out.
 
 ## Install
 
 ```bash
-npm install @zablaboratory/pulsar-bundle
+npm install @clodocapeo/pulsar-bundle
 ```
 
 A `postinstall` step downloads the matching version's
 `pulsar-windows-x64-v<VERSION>.zip` from the Pulsar GitHub Releases and
-extracts it to `node_modules/@zablaboratory/pulsar-bundle/binaries/`.
+extracts it to `node_modules/@clodocapeo/pulsar-bundle/binaries/`.
 The download is cached: re-running `npm install` against an unchanged
 version is a no-op.
 
@@ -28,7 +28,7 @@ If the GitHub Release isn't available (unpublished version, network failure), th
 ## Usage
 
 ```ts
-import { spawn } from "@zablaboratory/pulsar-bundle";
+import { spawn } from "@clodocapeo/pulsar-bundle";
 
 const pulsar = await spawn({
   env: {
@@ -54,7 +54,7 @@ await pulsar.shutdown();
 
 `spawn()` resolves once `pulsar.exe` has printed its `ready, idling` boot marker AND the package's bundled `PulsarClient` has connected to the WebSocket on the session-random port. The handle exposes:
 
-- `client` — connected `PulsarClient` (re-exported from `@zablaboratory/pulsar-client`)
+- `client` — connected `PulsarClient` (re-exported from `@clodocapeo/pulsar-client`)
 - `port` — the loopback WebSocket port pulsar bound to
 - `libobsVersion` — version string parsed from the boot log
 - `child` — underlying `ChildProcess` (advanced use only)

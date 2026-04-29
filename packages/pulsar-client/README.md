@@ -1,19 +1,19 @@
-# @zablaboratory/pulsar-client
+# @clodocapeo/pulsar-client
 
 Typed TypeScript client for [Pulsar](https://github.com/ZabLaboratory/Pulsar), the headless broadcast engine bundled in Prism.
 
-This package is the **client side only** — it speaks the obs-websocket v5 protocol plus Pulsar's `pulsar:*` vendor namespace, but does not embed `pulsar.exe`. To launch Pulsar from Node use [`@zablaboratory/pulsar-bundle`](../pulsar-bundle) (Phase 13b).
+This package is the **client side only** — it speaks the obs-websocket v5 protocol plus Pulsar's `pulsar:*` vendor namespace, but does not embed `pulsar.exe`. To launch Pulsar from Node use [`@clodocapeo/pulsar-bundle`](../pulsar-bundle) (Phase 13b).
 
 ## Install
 
 ```bash
-npm install @zablaboratory/pulsar-client
+npm install @clodocapeo/pulsar-client
 ```
 
 ## Usage
 
 ```ts
-import { PulsarClient } from "@zablaboratory/pulsar-client";
+import { PulsarClient } from "@clodocapeo/pulsar-client";
 
 const pulsar = new PulsarClient();
 await pulsar.connect({

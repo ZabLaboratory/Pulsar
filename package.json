@@ -1,7 +1,7 @@
 {
   "name": "pulsar-monorepo",
   "private": true,
-  "description": "npm workspace root for the @zablaboratory/pulsar-* packages. Not published.",
+  "description": "npm workspace root for the @clodocapeo/pulsar-* packages. Not published.",
   "workspaces": ["packages/*"],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

@@ -1,4 +1,4 @@
-// @zablaboratory/pulsar-client
+// @clodocapeo/pulsar-client
 //
 // Typed TypeScript client for Pulsar -- the headless broadcast engine.
 // See README.md for a full example.
