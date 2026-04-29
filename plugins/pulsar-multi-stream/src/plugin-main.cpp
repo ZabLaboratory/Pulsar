@@ -43,6 +43,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -64,14 +66,22 @@ namespace {
 enum DestinationKind {
     Kind_RtmpCustom,
     Kind_VodLocal,
+    Kind_Twitch,
     Kind_Unknown,
 };
+
+// Twitch's primary RTMP ingest. Twitch publishes per-region ingests at
+// https://help.twitch.tv/s/twitch-ingest-recommendation but the global
+// "live" host LB-redirects to the closest one, which is fine for any
+// non-low-latency use case. Twitch's stream key is per-channel.
+constexpr const char *TWITCH_INGEST_URL = "rtmp://live.twitch.tv/app/";
 
 const char *kind_to_string(DestinationKind k)
 {
     switch (k) {
     case Kind_RtmpCustom: return "rtmp_custom";
     case Kind_VodLocal:   return "vod_local";
+    case Kind_Twitch:     return "twitch";
     default:              return "unknown";
     }
 }
@@ -79,9 +89,69 @@ const char *kind_to_string(DestinationKind k)
 DestinationKind kind_from_string(const char *s)
 {
     if (!s) return Kind_Unknown;
-    if (std::string(s) == "rtmp_custom") return Kind_RtmpCustom;
-    if (std::string(s) == "vod_local")   return Kind_VodLocal;
+    std::string str(s);
+    if (str == "rtmp_custom") return Kind_RtmpCustom;
+    if (str == "vod_local")   return Kind_VodLocal;
+    if (str == "twitch")      return Kind_Twitch;
     return Kind_Unknown;
+}
+
+// Returns true if url starts with "rtmp://" or "rtmps://".
+bool is_rtmp_scheme(const char *url)
+{
+    if (!url) return false;
+    return std::strncmp(url, "rtmp://", 7) == 0 || std::strncmp(url, "rtmps://", 8) == 0;
+}
+
+// Front-load validation so we surface a typed error to the caller before
+// any obs_output_* allocation happens. Phase 7e tightening:
+//   rtmp_custom -> url must be rtmp[s]://, key must be non-empty
+//   vod_local   -> url is a path; parent directory must exist or be creatable
+//   twitch      -> key non-empty (url ignored, server is pinned)
+bool validate_destination_input(DestinationKind kind, const char *url, const char *key, std::string &errOut)
+{
+    switch (kind) {
+    case Kind_RtmpCustom:
+        if (!is_rtmp_scheme(url)) {
+            errOut = "rtmp_custom: url must be rtmp:// or rtmps://";
+            return false;
+        }
+        if (!key || !*key) {
+            errOut = "rtmp_custom: key required";
+            return false;
+        }
+        return true;
+
+    case Kind_VodLocal: {
+        if (!url || !*url) {
+            errOut = "vod_local: url (file path) required";
+            return false;
+        }
+        std::filesystem::path p(url);
+        auto parent = p.parent_path();
+        if (parent.empty()) return true; // relative path in cwd is fine
+        std::error_code ec;
+        if (!std::filesystem::exists(parent, ec)) {
+            std::filesystem::create_directories(parent, ec);
+            if (ec) {
+                errOut = "vod_local: cannot create parent dir: " + ec.message();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    case Kind_Twitch:
+        if (!key || !*key) {
+            errOut = "twitch: key required (Twitch stream key)";
+            return false;
+        }
+        return true;
+
+    default:
+        errOut = "unknown destination kind";
+        return false;
+    }
 }
 
 struct Destination {
@@ -168,9 +238,10 @@ bool DestinationRegistry::ensure_output(Destination &d, std::string &errOut)
     obs_output_set_video_encoder(d.output, vEnc);
     obs_output_set_audio_encoder(d.output, aEnc, 0);
 
-    if (d.kind == Kind_RtmpCustom) {
+    if (d.kind == Kind_RtmpCustom || d.kind == Kind_Twitch) {
+        const char *server = (d.kind == Kind_Twitch) ? TWITCH_INGEST_URL : d.url.c_str();
         OBSDataAutoRelease svcSettings = obs_data_create();
-        obs_data_set_string(svcSettings, "server", d.url.c_str());
+        obs_data_set_string(svcSettings, "server", server);
         obs_data_set_string(svcSettings, "key", d.key.c_str());
         if (d.service) {
             obs_service_release(d.service);
@@ -356,14 +427,22 @@ void on_create_destination(obs_data_t *req, obs_data_t *res, void *)
 
     DestinationKind kind = kind_from_string(kindS);
     if (kind == Kind_Unknown) {
-        obs_data_set_string(res, "error", "kind must be 'rtmp_custom' or 'vod_local'");
+        obs_data_set_string(res, "error", "kind must be 'rtmp_custom', 'vod_local', or 'twitch'");
         return;
     }
-    if (!url || !*url) {
-        obs_data_set_string(res, "error", "url required (RTMP server URL or file path)");
+
+    std::string err;
+    if (!validate_destination_input(kind, url, key, err)) {
+        obs_data_set_string(res, "error", err.c_str());
         return;
     }
-    auto id = g_registry->create(name ? name : "", kind, url, key ? key : "");
+
+    // For Twitch the server URL is fixed; the user-supplied url field is
+    // ignored. Stash the pinned URL so GetDestinations + diagnostics
+    // surface it consistently.
+    const char *storeUrl = (kind == Kind_Twitch) ? TWITCH_INGEST_URL : url;
+
+    auto id = g_registry->create(name ? name : "", kind, storeUrl, key ? key : "");
     obs_data_set_string(res, "id", id.c_str());
 }
 

@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """
-Pulsar multi-stream probe (Phase 7 PR1 validation).
+Pulsar multi-stream probe (Phase 7 validation, PR1 + PR2).
 
-Round-trip:
-  1. Connect + identify.
-  2. CallVendorRequest("pulsar", "GetDestinations") -> empty list.
-  3. CreateDestination(kind="vod_local", url=<temp.mp4>) -> id.
-  4. StartDestination(id) -> started=true.
-  5. Sleep 3 s.
-  6. StopDestination(id) -> stopped=true.
-  7. Assert the MP4 was written and is >= 100 KB.
-  8. CreateDestination(kind="rtmp_custom", url="rtmp://127.0.0.1:1/dummy",
-                       key="x")  -- intentionally a dead address.
-  9. StartDestination expected to fail cleanly (started=false, error set).
- 10. RemoveDestination twice -> list back to empty.
+PR1 round-trip (kept):
+  - vod_local create -> start -> 3 s -> stop -> assert MP4 >= 100 KB
+  - rtmp_custom create (dead address) -> start -> stop -> remove
+  - GetDestinations back to baseline
+
+PR2 additions:
+  - twitch kind (alias of rtmp_custom with pinned ingest URL)
+  - input validation rejects malformed inputs (bad URL scheme, missing key)
+  - remove-during-active: start a vod_local then RemoveDestination without
+    StopDestination first; expect the MP4 to be flushed and the list empty.
 
 Usage (pulsar.exe must be running):
     python scripts/probe-multi-stream.py
@@ -207,13 +205,102 @@ async def probe(url: str, password: str) -> int:
         # Stop in case it briefly went active.
         await vendor_call(inbox, ws, "StopDestination", "stop-rtmp", {"id": rtmp_id})
 
-        # ---- Cleanup ----
+        # ---- Cleanup PR1 destinations ----
         for did in (vod_id, rtmp_id):
             r = await vendor_call(inbox, ws, "RemoveDestination", f"rm-{did}", {"id": did})
             if not r.get("removed"):
                 print(f"error: remove failed for {did}: {r}")
                 return 1
 
+        # =========================================================
+        # PR2 additions
+        # =========================================================
+
+        # ---- Twitch kind: alias of rtmp_custom with pinned URL ----
+        print("\n-> CreateDestination(twitch, dummy key)")
+        resp = await vendor_call(inbox, ws, "CreateDestination", "create-twitch", {
+            "name": "test-twitch",
+            "kind": "twitch",
+            "key": "live_dummy_dummy",  # bogus stream key, won't actually go live
+        })
+        twitch_id = resp.get("id")
+        if not twitch_id:
+            print(f"error: twitch create failed: {resp}")
+            return 1
+
+        # GetDestinations should report kind=twitch and the pinned URL.
+        listing = await vendor_call(inbox, ws, "GetDestinations", "list-twitch")
+        items = listing.get("destinations") or []
+        twitch_entry = next((d for d in items if d["id"] == twitch_id), None)
+        if not twitch_entry:
+            print("error: twitch destination not in list")
+            return 1
+        if twitch_entry["kind"] != "twitch":
+            print(f"error: kind mismatch: {twitch_entry}")
+            return 1
+        if not twitch_entry["url"].startswith("rtmp://live.twitch.tv/"):
+            print(f"error: twitch url not pinned to live ingest: {twitch_entry['url']!r}")
+            return 1
+        print(f"   <- twitch entry pinned to {twitch_entry['url']!r} OK")
+
+        await vendor_call(inbox, ws, "RemoveDestination", "rm-twitch", {"id": twitch_id})
+
+        # ---- Validation: malformed inputs must be rejected at create time ----
+        print("\n-> Validation rejects bad inputs")
+        cases = [
+            ("rtmp_custom-no-scheme", {"kind": "rtmp_custom", "url": "live.twitch.tv/app/", "key": "k"}),
+            ("rtmp_custom-no-key",    {"kind": "rtmp_custom", "url": "rtmp://x/", "key": ""}),
+            ("vod_local-no-url",      {"kind": "vod_local", "url": ""}),
+            ("twitch-no-key",         {"kind": "twitch", "key": ""}),
+            ("unknown-kind",          {"kind": "ftp", "url": "ftp://x"}),
+        ]
+        for label, payload in cases:
+            r = await vendor_call(inbox, ws, "CreateDestination", f"bad-{label}", payload)
+            if r.get("id"):
+                print(f"error: {label} should have been rejected, got id={r['id']}")
+                return 1
+            err = r.get("error")
+            if not err:
+                print(f"error: {label} returned no error: {r}")
+                return 1
+            print(f"   <- {label}: {err}")
+
+        # ---- Remove during active: start a vod_local then Remove without Stop ----
+        active_path = RUNDIR / "recordings" / f"multi-stream-active-{int(time.time())}.mp4"
+        if active_path.exists():
+            active_path.unlink()
+        print(f"\n-> CreateDestination(vod_local, {active_path.name}) for active-remove test")
+        resp = await vendor_call(inbox, ws, "CreateDestination", "create-active", {
+            "kind": "vod_local",
+            "url": str(active_path),
+        })
+        active_id = resp.get("id")
+        if not active_id:
+            print(f"error: active-remove create failed: {resp}")
+            return 1
+
+        await vendor_call(inbox, ws, "StartDestination", "start-active", {"id": active_id})
+        await asyncio.sleep(1.5)
+
+        print("-> RemoveDestination while active (no Stop first)")
+        r = await vendor_call(inbox, ws, "RemoveDestination", "rm-active", {"id": active_id})
+        if not r.get("removed"):
+            print(f"error: active-remove failed: {r}")
+            return 1
+
+        # The graceful stop in release_destination_handles_locked should leave
+        # a finalised MP4 on disk.
+        for _ in range(40):
+            if active_path.exists() and active_path.stat().st_size >= MIN_MP4_BYTES:
+                break
+            await asyncio.sleep(0.1)
+        if not active_path.exists() or active_path.stat().st_size < MIN_MP4_BYTES:
+            print(f"error: active-remove did not flush MP4: exists={active_path.exists()}, "
+                  f"size={active_path.stat().st_size if active_path.exists() else 0}")
+            return 1
+        print(f"   active-remove MP4: {active_path.stat().st_size:,} bytes OK")
+
+        # ---- Final listing ----
         listing = await vendor_call(inbox, ws, "GetDestinations", "list-final")
         final = listing.get("destinations") or []
         if len(final) != len(before):
@@ -221,7 +308,7 @@ async def probe(url: str, password: str) -> int:
             return 1
         print(f"GetDestinations (final): back to {len(final)} entr{'y' if len(final)==1 else 'ies'}")
 
-    print("\nphase 7 multi-stream vendor API validated end-to-end")
+    print("\nphase 7 PR2 multi-stream (twitch + validation + remove-during-active) OK")
     return 0
 
 
