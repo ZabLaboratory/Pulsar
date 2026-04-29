@@ -79,9 +79,19 @@ build it ourselves.
   (`0001-build-tag-OBS_VERSION-with-pulsar-suffix.patch`) appends
   `-pulsar` to the runtime version string so the fork is observable
   in `obs64.exe` window titles and logs.
-- **Phase 3:** disable Qt frontend via CMake options + first headless
-  run. At this point `obs64.exe` becomes a no-op service waiting on
-  the websocket plugin to drive it.
+- **Phase 3a:** DONE. `build-win.ps1` defaults to headless mode --
+  passes `ENABLE_FRONTEND=OFF`, `ENABLE_UI=OFF`, `ENABLE_BROWSER=OFF`
+  on the cmake invocation so the Qt frontend and CEF browser plugin
+  are excluded at build time. `obs64.exe` is no longer produced.
+  libobs core + 25 modules (encoders, capture, websocket, virtualcam,
+  audio etc.) still build. `-GuiBuild` switch restores the original
+  obs-studio behaviour. `-Clean` switch wipes the build directory
+  while preserving dependency caches.
+- **Phase 3b:** ship the `pulsar-headless` executable target -- a
+  minimal C++ entry point that does `obs_startup`, configures video
+  / audio, calls `obs_load_all_modules`, and idles waiting for a
+  shutdown signal. This is the binary that `pulsar-websocket` will
+  drive in Phase 4.
 - **Phase 4:** wire the `pulsar-websocket` plugin (fork of
   obs-websocket v5). Service speaks v5 baseline.
 - See ARCHITECTURE.md for the full phase plan.

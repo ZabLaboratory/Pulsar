@@ -13,7 +13,20 @@
 param(
     [ValidateSet('configure', 'build', 'all')]
     [string] $Stage = 'all',
-    [switch] $CI
+    [switch] $CI,
+    # -GuiBuild keeps obs-studio's Qt frontend + Browser (CEF) plugin
+    # enabled. Default is headless: Pulsar disables ENABLE_FRONTEND,
+    # ENABLE_UI and ENABLE_BROWSER so libobs builds without Qt6 / CEF.
+    # Pass -GuiBuild to opt back in to the full obs-studio build for
+    # debugging or comparison runs.
+    [switch] $GuiBuild,
+    # -Clean wipes upstream/build_x64 before configure so stale
+    # artifacts from a previous run (e.g. the obs64.exe + Qt DLLs left
+    # behind by a GUI build) do not pollute a subsequent headless run.
+    # The downloaded dependency caches under upstream/.deps/ are kept,
+    # so re-configure does not re-download obs-deps / Qt6 / CEF; only
+    # the CMake cache and compiled artefacts go.
+    [switch] $Clean
 )
 
 # Windows PowerShell 5.1 wraps native command stderr lines as
@@ -133,12 +146,46 @@ try {
     Pop-Location
 }
 
+if ($Clean) {
+    $buildDir = Join-Path $upstream 'build_x64'
+    if (Test-Path $buildDir) {
+        Write-Host ""
+        Write-Host "--- Wiping $buildDir (-Clean) ---"
+        Remove-Item -Recurse -Force $buildDir
+    }
+}
+
 if ($Stage -in @('configure', 'all')) {
     Write-Host ""
-    Write-Host "--- Configuring (will fetch obs-deps + Qt6 + CEF on first run) ---"
+    if ($GuiBuild) {
+        Write-Host "--- Configuring (GUI build: obs-studio with Qt + Browser) ---"
+    } else {
+        Write-Host "--- Configuring (headless: ENABLE_FRONTEND=OFF + ENABLE_UI=OFF + ENABLE_BROWSER=OFF) ---"
+    }
+    # Headless overrides applied via -D on the cmake invocation rather
+    # than via a patch on upstream's CMakePresets.json (which is a
+    # high-churn upstream file). The preset still fetches Qt6 / CEF
+    # tarballs because that is encoded in the dependencies block, but
+    # nothing links against them when ENABLE_UI / ENABLE_BROWSER are
+    # off.
+    # Headless toggles. Two distinct ENABLE flags need to be off:
+    #   ENABLE_FRONTEND  - drops the Qt6 obs-studio frontend (frontend/
+    #                      CMakeLists.txt:5). This is the real Qt gate.
+    #   ENABLE_UI        - gates frontend-api inclusion in the scripting
+    #                      modules (obspython, obslua). Without this OFF
+    #                      they would still try to link frontend-api,
+    #                      which won't exist when ENABLE_FRONTEND=OFF.
+    #   ENABLE_BROWSER   - default OFF in obs-browser, but the windows-x64
+    #                      preset forces it ON in cacheVariables. Override.
+    $extraArgs = @()
+    if (-not $GuiBuild) {
+        $extraArgs += '-DENABLE_FRONTEND=OFF'
+        $extraArgs += '-DENABLE_UI=OFF'
+        $extraArgs += '-DENABLE_BROWSER=OFF'
+    }
     Push-Location $upstream
     try {
-        & $cmake --preset $preset
+        & $cmake --preset $preset @extraArgs
         if ($LASTEXITCODE -ne 0) { throw "Configure failed" }
     } finally {
         Pop-Location

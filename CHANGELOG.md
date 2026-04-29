@@ -29,3 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   title, About dialog, log preamble). First demonstrator that the
   patch lifecycle works end-to-end. Validated runtime: window title
   reads `OBS 32.1.2-1-g<sha>-pulsar`.
+- Headless build mode (Phase 3a). `scripts/build-win.ps1` defaults
+  to disabling Qt frontend and the CEF browser source plugin via
+  `-DENABLE_FRONTEND=OFF -DENABLE_UI=OFF -DENABLE_BROWSER=OFF`.
+  No `obs64.exe`, no Qt6 DLLs in the rundir, libobs core + 25
+  modules build. `User Interface` and `Browser sources are not
+  enabled by default` listed under Disabled Features at configure
+  time. Pass `-GuiBuild` to opt back in to the full obs-studio
+  build for debugging or comparison.
+- `-Clean` switch on `build-win.ps1` — wipes `upstream/build_x64`
+  before configure so stale artefacts from a previous mode (e.g.
+  obs64.exe + Qt6 DLLs left in rundir by a GUI build) do not
+  contaminate a subsequent headless run. Dep caches under
+  `upstream/.deps/` are preserved.
