@@ -39,6 +39,14 @@ goes through the vendor namespace.
 | `StopAllDestinations` | — | `ok: bool` |
 | `GetVideoSettings` | — | `fps, width, height, video_bitrate, video_rate_control, video_keyint_sec, audio_bitrate` |
 | `SetVideoSettings` | `video_bitrate?, audio_bitrate?` | `changed: bool, video_bitrate?, audio_bitrate?` (or `error`) |
+| `GetAdaptiveState` | — | `enabled, target_kbps, current_kbps, floor_kbps, stable_ticks, adjustments_total, last_delta_total, last_delta_dropped, last_drop_ratio` |
+| `SetAdaptiveEnabled` | `enabled` | `enabled` |
+
+### Vendor events
+
+| Event | Payload | When |
+|---|---|---|
+| `BitrateAdjusted` | `bitrate, target, floor, reason ("drops" \| "recovery"), drop_ratio` | Each time the adaptive loop applies a new video bitrate. |
 
 `SetVideoSettings` accepts only encoder-level mutations live: `video_bitrate` updates instantly via `obs_encoder_update`; `audio_bitrate` only updates when no output is pulling from the audio encoder (ffmpeg_aac doesn't support mid-stream re-init). `fps` / `width` / `height` are pinned at boot via `PULSAR_FPS` / `PULSAR_RESOLUTION` env vars; trying to set them through this request is rejected with a typed error.
 
@@ -60,13 +68,11 @@ session is finalised gracefully.
 
 ## Phase scope
 
-- **PR1** — `rtmp_custom` + `vod_local`, registry, vendor API, encode
-  sharing.
-- **PR2 (this)** — `twitch` kind alias, input validation, validated
-  graceful remove-during-active.
-- **Later** — destination state events (`pulsar:DestinationStateChanged`),
-  per-destination retry policy, persistence of destination configs,
-  YouTube OAuth.
+- **PR1 (Phase 7a-d)** — `rtmp_custom` + `vod_local`, registry, vendor API, encode sharing.
+- **PR2 (Phase 7e)** — `twitch` kind alias, input validation, validated graceful remove-during-active.
+- **PR3 (Phase 12a)** — `GetVideoSettings` / `SetVideoSettings` for live bitrate mutation.
+- **PR4 (Phase 12b)** — adaptive bitrate worker (background thread sampling `obs_output_get_frames_dropped`, scaling within `[floor, target]`, emitting `pulsar:BitrateAdjusted`); `GetAdaptiveState` / `SetAdaptiveEnabled` for runtime control. `PULSAR_ADAPTIVE_BITRATE=off` opt-out at boot.
+- **Later** — destination state events (`pulsar:DestinationStateChanged`), per-destination retry policy, persistence of destination configs, YouTube OAuth (Phase 8 deferred), YouTube kind.
 
 ## Validation
 
