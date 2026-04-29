@@ -1,0 +1,339 @@
+// Mock obs-websocket v5 server with a stub of Pulsar's vendor namespace.
+//
+// Stays intentionally lo-fi: no SHA256 auth challenge (clients connect
+// without a password), no event subscription filtering, no RPC version
+// negotiation beyond rpcVersion=1. Just enough wire shape that the real
+// obs-websocket-js client treats us as a real server.
+//
+// Vendor state lives in-memory and is reset per server instance, so
+// each test gets a clean slate.
+
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { decode as msgpackDecode, encode as msgpackEncode } from "@msgpack/msgpack";
+import { WebSocketServer, type WebSocket } from "ws";
+
+type Json = Record<string, unknown>;
+
+interface VendorDest {
+  id: string;
+  name: string;
+  kind: string;
+  url: string;
+  enabled: boolean;
+  active: boolean;
+}
+
+interface VideoState {
+  fps: number;
+  width: number;
+  height: number;
+  video_bitrate: number;
+  video_rate_control: string;
+  video_keyint_sec: number;
+  audio_bitrate: number;
+}
+
+interface AdaptiveState {
+  enabled: boolean;
+  target_kbps: number;
+  current_kbps: number;
+  floor_kbps: number;
+  stable_ticks: number;
+  adjustments_total: number;
+  last_delta_total: number;
+  last_delta_dropped: number;
+  last_drop_ratio: number;
+}
+
+export class MockObsWebSocket {
+  readonly httpServer: Server;
+  readonly wss: WebSocketServer;
+  readonly destinations = new Map<string, VendorDest>();
+  readonly clients = new Set<WebSocket>();
+
+  video: VideoState = {
+    fps: 60,
+    width: 1920,
+    height: 1080,
+    video_bitrate: 6000,
+    video_rate_control: "CBR",
+    video_keyint_sec: 2,
+    audio_bitrate: 160,
+  };
+
+  adaptive: AdaptiveState = {
+    enabled: true,
+    target_kbps: 6000,
+    current_kbps: 6000,
+    floor_kbps: 1800,
+    stable_ticks: 0,
+    adjustments_total: 0,
+    last_delta_total: 0,
+    last_delta_dropped: 0,
+    last_drop_ratio: 0,
+  };
+
+  /** Hooks tests can swap in to override responses. */
+  vendorOverride?: (requestType: string, requestData: Json) => Json | undefined;
+
+  private nextId = 1;
+
+  /** Async factory. Drives an explicit http.createServer().listen() so the
+   *  port assignment is predictable across platforms (the bare
+   *  WebSocketServer({port:0}) variant has been flaky on Windows). */
+  static async create(): Promise<MockObsWebSocket> {
+    const m = new MockObsWebSocket();
+    await new Promise<void>((resolve, reject) => {
+      m.httpServer.once("error", reject);
+      m.httpServer.listen(0, "127.0.0.1", () => resolve());
+    });
+    return m;
+  }
+
+  private constructor() {
+    this.httpServer = createServer();
+    this.wss = new WebSocketServer({
+      server: this.httpServer,
+      // obs-websocket-js sends Sec-WebSocket-Protocol: obswebsocket.json
+      // (or .msgpack) and refuses to send Identify if the server
+      // doesn't echo a known subprotocol back. Default ws behaviour is
+      // to ignore the header entirely, which leaves the client hanging
+      // on Hello forever.
+      handleProtocols: (protocols) => {
+        const list = Array.from(protocols as Iterable<string>);
+        // Both encodings carry the same v5 message shape -- pick what
+        // the client offered, prefer msgpack (smaller wire). The
+        // selection per-connection is tracked via the subprotocol the
+        // ws.WebSocket instance reports back in handleConnection.
+        if (list.includes("obswebsocket.msgpack")) return "obswebsocket.msgpack";
+        if (list.includes("obswebsocket.json")) return "obswebsocket.json";
+        return false;
+      },
+    });
+    this.wss.on("connection", (ws) => this.handleConnection(ws));
+  }
+
+  get url(): string {
+    const addr = this.httpServer.address() as AddressInfo | null;
+    if (!addr) throw new Error("MockObsWebSocket not listening yet");
+    return `ws://127.0.0.1:${addr.port}`;
+  }
+
+  async close(): Promise<void> {
+    for (const c of this.clients) c.terminate();
+    await new Promise<void>((resolve) => this.wss.close(() => resolve()));
+    await new Promise<void>((resolve) => this.httpServer.close(() => resolve()));
+  }
+
+  emitVendorEvent(eventType: string, eventData: Json): void {
+    const frame = {
+      op: 5,
+      d: {
+        eventType: "VendorEvent",
+        eventIntent: 1,
+        eventData: {
+          vendorName: "pulsar",
+          eventType,
+          eventData,
+        },
+      },
+    };
+    for (const c of this.clients) {
+      if (c.readyState === c.OPEN) sendFrame(c, frame);
+    }
+  }
+
+  private handleConnection(ws: WebSocket): void {
+    this.clients.add(ws);
+
+    // Send Hello in the encoding negotiated during the WS handshake.
+    sendFrame(ws, {
+      op: 0,
+      d: { obsWebSocketVersion: "5.7.3", rpcVersion: 1 },
+    });
+
+    ws.on("message", (raw, isBinary) => {
+      const frame = decodeFrame(raw, isBinary);
+      if (!frame) return;
+      if (frame.op === 1) {
+        sendFrame(ws, { op: 2, d: { negotiatedRpcVersion: 1 } });
+      } else if (frame.op === 6) {
+        const requestType = frame.d["requestType"] as string;
+        const requestId = frame.d["requestId"] as string;
+        const requestData = (frame.d["requestData"] ?? {}) as Json;
+        const responseData = this.handleRequest(requestType, requestData);
+        sendFrame(ws, {
+          op: 7,
+          d: {
+            requestType,
+            requestId,
+            requestStatus: { result: true, code: 100 },
+            responseData,
+          },
+        });
+      }
+    });
+
+    ws.on("close", () => this.clients.delete(ws));
+  }
+
+  private handleRequest(requestType: string, requestData: Json): Json {
+    if (requestType !== "CallVendorRequest") {
+      // We don't simulate the v5 baseline here; tests that need
+      // baseline calls (StartRecord, etc.) install their own routing.
+      return {};
+    }
+
+    const vendorReq = requestData["requestType"] as string;
+    const vendorData = (requestData["requestData"] ?? {}) as Json;
+
+    if (this.vendorOverride) {
+      const override = this.vendorOverride(vendorReq, vendorData);
+      if (override !== undefined) return { responseData: override };
+    }
+
+    return { responseData: this.handleVendor(vendorReq, vendorData) };
+  }
+
+  private handleVendor(requestType: string, data: Json): Json {
+    switch (requestType) {
+      case "GetDestinations":
+        return { destinations: Array.from(this.destinations.values()) };
+
+      case "CreateDestination": {
+        const kind = data["kind"] as string | undefined;
+        if (kind !== "rtmp_custom" && kind !== "vod_local" && kind !== "twitch") {
+          return { error: "kind must be 'rtmp_custom', 'vod_local', or 'twitch'" };
+        }
+        const id = `mock-${this.nextId++}`;
+        const url = (data["url"] as string | undefined) ?? "";
+        const dest: VendorDest = {
+          id,
+          name: (data["name"] as string | undefined) ?? id,
+          kind,
+          url: kind === "twitch" ? "rtmp://live.twitch.tv/app/" : url,
+          enabled: false,
+          active: false,
+        };
+        this.destinations.set(id, dest);
+        return { id };
+      }
+
+      case "RemoveDestination": {
+        const id = data["id"] as string | undefined;
+        if (!id) return { removed: false, error: "id required" };
+        return { removed: this.destinations.delete(id) };
+      }
+
+      case "StartDestination": {
+        const id = data["id"] as string | undefined;
+        if (!id) return { started: false, error: "id required" };
+        const d = this.destinations.get(id);
+        if (!d) return { started: false, error: "no such destination" };
+        d.enabled = true;
+        d.active = true;
+        return { started: true };
+      }
+
+      case "StopDestination": {
+        const id = data["id"] as string | undefined;
+        if (!id) return { stopped: false };
+        const d = this.destinations.get(id);
+        if (!d) return { stopped: false };
+        d.enabled = false;
+        d.active = false;
+        return { stopped: true };
+      }
+
+      case "StartAllDestinations":
+        for (const d of this.destinations.values()) {
+          d.enabled = true;
+          d.active = true;
+        }
+        return { ok: true };
+
+      case "StopAllDestinations":
+        for (const d of this.destinations.values()) {
+          d.enabled = false;
+          d.active = false;
+        }
+        return { ok: true };
+
+      case "GetVideoSettings":
+        return { ...this.video };
+
+      case "SetVideoSettings": {
+        if ("fps" in data || "width" in data || "height" in data) {
+          return { error: "fps / width / height pinned at boot" };
+        }
+        let changed = false;
+        const out: Json = {};
+        if (typeof data["video_bitrate"] === "number") {
+          this.video.video_bitrate = data["video_bitrate"];
+          out["video_bitrate"] = data["video_bitrate"];
+          changed = true;
+        }
+        if (typeof data["audio_bitrate"] === "number") {
+          this.video.audio_bitrate = data["audio_bitrate"];
+          out["audio_bitrate"] = data["audio_bitrate"];
+          changed = true;
+        }
+        out["changed"] = changed;
+        return out;
+      }
+
+      case "GetAdaptiveState":
+        return { ...this.adaptive };
+
+      case "SetAdaptiveEnabled": {
+        if (typeof data["enabled"] !== "boolean") {
+          return { error: "enabled (bool) required" };
+        }
+        this.adaptive.enabled = data["enabled"];
+        if (data["enabled"]) this.adaptive.stable_ticks = 0;
+        return { enabled: this.adaptive.enabled };
+      }
+
+      default:
+        return { error: `unknown vendor request: ${requestType}` };
+    }
+  }
+}
+
+// ---- Per-connection encoding helpers --------------------------------------
+//
+// obs-websocket-js v5 negotiates either obswebsocket.json (text frames) or
+// obswebsocket.msgpack (binary frames) at WS handshake. The mock honours
+// whichever the client picked by inspecting ws.protocol after the upgrade.
+
+type Frame = { op: number; d: Json };
+
+function isMsgpack(ws: WebSocket): boolean {
+  return (ws as unknown as { protocol?: string }).protocol === "obswebsocket.msgpack";
+}
+
+function sendFrame(ws: WebSocket, frame: Frame): void {
+  if (isMsgpack(ws)) {
+    const buf = msgpackEncode(frame);
+    // ws Buffer signature accepts Uint8Array directly -- cast keeps the
+    // underlying typed-array reference without an extra copy.
+    ws.send(Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength));
+  } else {
+    ws.send(JSON.stringify(frame));
+  }
+}
+
+function decodeFrame(raw: Buffer | ArrayBuffer | Buffer[], isBinary: boolean): Frame | undefined {
+  try {
+    if (isBinary) {
+      const buf = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw as Buffer);
+      return msgpackDecode(buf) as Frame;
+    }
+    const str = Array.isArray(raw) ? Buffer.concat(raw).toString() : raw.toString();
+    return JSON.parse(str) as Frame;
+  } catch {
+    return undefined;
+  }
+}
+
