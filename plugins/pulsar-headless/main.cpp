@@ -13,6 +13,15 @@
 // implementation BEFORE obs_load_all_modules so plugins like
 // obs-websocket find a populated frontend table when they register
 // their event callbacks.
+//
+// Phase 6: pulsar-frontend-stub::setup() runs from
+// pulsar_frontend_finished_loading() (after plugins are loaded) and
+// brings up the encode + record pipeline -- x264 + ffmpeg_aac encoders
+// attached to the recording output, a window_capture source on the
+// Default scene (target via PULSAR_CAPTURE_WINDOW), and a record path
+// resolver under <cwd>/recordings (or PULSAR_RECORD_DIR). v5 clients
+// can issue StartRecord / StopRecord and receive a faststart MP4 on
+// disk.
 
 #include <obs.h>
 
