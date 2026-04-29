@@ -101,4 +101,16 @@ The vitest suite uses `tests/fake-pulsar.mjs` (a Node script that mimics pulsar.
 
 ## License
 
-MIT.
+GPL-2.0-or-later. See [`LICENSE`](./LICENSE).
+
+This package bundles `pulsar.exe`, libobs + Pulsar plugins, CEF (browser
+sources) and libVLC. The aggregate is distributed under GPL-2.0-or-later;
+individual components retain their own upstream notices (BSD for CEF,
+LGPL-2.1-or-later for libVLC, GPL-2.0-or-later for libobs and Pulsar).
+Source for the GPL components is available at <https://github.com/ZabLaboratory/Pulsar>
+at the matching version tag.
+
+If you only need the typed client without any binary, use
+[`@clodocapeo/pulsar-client`](https://www.npmjs.com/package/@clodocapeo/pulsar-client)
+(MIT). For the binary without browser sources, use
+[`@clodocapeo/pulsar-bundle`](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle).

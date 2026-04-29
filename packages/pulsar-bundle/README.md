@@ -97,4 +97,13 @@ Tests don't need a real `pulsar.exe`: a `tests/fake-pulsar.mjs` Node script mimi
 
 ## License
 
-MIT.
+GPL-2.0-or-later. See [`LICENSE`](./LICENSE).
+
+This package bundles `pulsar.exe` and its DLLs (libobs + Pulsar plugins),
+which are GPL-2.0-or-later. The aggregate distributed by this package is
+therefore covered by the GPL. Source for the bundled binaries is available
+at <https://github.com/ZabLaboratory/Pulsar> at the matching version tag.
+
+If you only need the typed client without the binary (e.g. you talk to a
+Pulsar already running elsewhere), use [`@clodocapeo/pulsar-client`](https://www.npmjs.com/package/@clodocapeo/pulsar-client)
+instead — it is MIT-licensed.

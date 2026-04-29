@@ -1,8 +1,8 @@
 {
   "name": "@clodocapeo/pulsar-bundle",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Bundles pulsar.exe + DLLs and exposes a Node spawn() API. Pairs with @clodocapeo/pulsar-client. For HTML overlays / browser sources, use @clodocapeo/pulsar-bundle-full instead.",
-  "license": "MIT",
+  "license": "GPL-2.0-or-later",
   "repository": {
     "type": "git",
     "url": "https://github.com/ZabLaboratory/Pulsar.git",
@@ -34,7 +34,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@clodocapeo/pulsar-client": "0.2.0"
+    "@clodocapeo/pulsar-client": "0.2.1"
   },
   "devDependencies": {
     "@msgpack/msgpack": "^3.0.0",

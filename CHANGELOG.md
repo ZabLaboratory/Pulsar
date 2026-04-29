@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-04-30
+
+### Added
+
+- `LICENSE` file shipped inside each npm package tarball — previously
+  the `files[]` arrays referenced a `LICENSE` that did not exist on
+  disk, so published tarballs had no licence text. Each package now
+  ships its own copy.
+- README "License" section expanded on all three packages to clarify
+  what users actually receive on disk and how the GPL applies.
+
+### Changed
+
+- `@clodocapeo/pulsar-bundle` and `@clodocapeo/pulsar-bundle-full`
+  `package.json` `license` field corrected from `MIT` to
+  `GPL-2.0-or-later`. The bundles ship `pulsar.exe` (libobs + Pulsar
+  plugins, GPL-2.0-or-later); declaring them MIT was misleading and
+  hid the GPL §3 source-distribution obligation that flows to
+  redistributors. The aggregate is GPL.
+- `@clodocapeo/pulsar-client` stays MIT — it contains no libobs code,
+  links nothing GPL, and speaks obs-websocket v5 over a WebSocket.
+  The README now states this explicitly so consumers building
+  proprietary tools on top of the protocol know the wrapper is safe
+  to embed.
+
+## [Unreleased - older entries]
+
 ### Added
 
 - Initial repository scaffold: README, CLAUDE.md, top-level
