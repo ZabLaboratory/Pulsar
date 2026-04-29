@@ -238,7 +238,8 @@ if ($Stage -in @('build', 'all')) {
         & $cmake -S $root -B $pulsarBuild -G "Visual Studio 17 2022" -A x64 `
                  -DPULSAR_BUILD_HEADLESS=ON `
                  -DPULSAR_BUILD_FRONTEND_STUB=ON `
-                 -DPULSAR_BUILD_WEBSOCKET=ON
+                 -DPULSAR_BUILD_WEBSOCKET=ON `
+                 -DPULSAR_BUILD_MULTISTREAM=ON
         if ($LASTEXITCODE -ne 0) { throw "Pulsar configure failed" }
 
         Write-Host ""
