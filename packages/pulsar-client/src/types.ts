@@ -1,4 +1,4 @@
-// Public types for @zablaboratory/pulsar-client.
+// Public types for @clodocapeo/pulsar-client.
 //
 // Pulsar's vendor wire format uses snake_case (legacy of the C++ impl);
 // the public API exposes camelCase to match TS/JS convention. The

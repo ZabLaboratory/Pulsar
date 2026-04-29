@@ -1,4 +1,4 @@
-# Publish @zablaboratory/pulsar-client and @zablaboratory/pulsar-bundle
+# Publish @clodocapeo/pulsar-client and @clodocapeo/pulsar-bundle
 # to npm.
 #
 # Trigger: tag push of vX.Y.Z (matching the release.yml's trigger), so
@@ -12,7 +12,7 @@
 #
 # Required secret:
 #   NPM_TOKEN  -- automation token from https://www.npmjs.com/settings/<user>/tokens
-#                 with publish access to the @zablaboratory scope.
+#                 with publish access to the @clodocapeo scope.
 
 name: publish-npm
 
@@ -76,14 +76,14 @@ jobs:
       - name: Run tests
         run: npm run test --workspaces --if-present
 
-      - name: Publish @zablaboratory/pulsar-client
+      - name: Publish @clodocapeo/pulsar-client
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd packages/pulsar-client
           npm publish --access public
 
-      - name: Publish @zablaboratory/pulsar-bundle
+      - name: Publish @clodocapeo/pulsar-bundle
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         # bundle declares pulsar-client@0.1.0 as a runtime dep. Publishing
