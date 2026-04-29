@@ -61,3 +61,6 @@ patches/.rejects
 
 # Local build / run logs
 *.log
+
+# npm workspaces
+node_modules/
