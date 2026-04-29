@@ -20,6 +20,14 @@ param(
     # Pass -GuiBuild to opt back in to the full obs-studio build for
     # debugging or comparison runs.
     [switch] $GuiBuild,
+    # -Full flips ENABLE_BROWSER on so obs-browser.dll is compiled
+    # against CEF and bundled. The headless ENABLE_FRONTEND=OFF and
+    # ENABLE_UI=OFF stay -- we want browser sources without the Qt
+    # main UI. Adds ~10 min to the build (CEF+ obs-browser compile).
+    # Default OFF for fast dev cycles; CI passes -Full so the rundir
+    # contains both light and full plugin sets, then package-win.ps1
+    # carves out the two distribution variants.
+    [switch] $Full,
     # -Clean wipes upstream/build_x64 before configure so stale
     # artifacts from a previous run (e.g. the obs64.exe + Qt DLLs left
     # behind by a GUI build) do not pollute a subsequent headless run.
@@ -181,7 +189,17 @@ if ($Stage -in @('configure', 'all')) {
     if (-not $GuiBuild) {
         $extraArgs += '-DENABLE_FRONTEND=OFF'
         $extraArgs += '-DENABLE_UI=OFF'
-        $extraArgs += '-DENABLE_BROWSER=OFF'
+        # ENABLE_BROWSER stays off in dev (-Full not passed) to skip
+        # the ~10 min CEF + obs-browser compile. CI / release builds
+        # pass -Full so the rundir contains obs-browser.dll + CEF
+        # runtime; package-win.ps1 then either ships them (full
+        # variant) or strips them (light variant).
+        if ($Full) {
+            $extraArgs += '-DENABLE_BROWSER=ON'
+            Write-Host "  -Full: ENABLE_BROWSER=ON (CEF + obs-browser will compile)"
+        } else {
+            $extraArgs += '-DENABLE_BROWSER=OFF'
+        }
         # ENABLE_WEBSOCKET=OFF -- skip building the upstream
         # obs-websocket plugin. Pulsar ships its own fork at
         # plugins/pulsar-websocket/ which targets the same

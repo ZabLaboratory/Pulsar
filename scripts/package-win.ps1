@@ -19,7 +19,18 @@
 
 param(
     [switch] $Zip,
-    [switch] $SkipBuild
+    [switch] $SkipBuild,
+    # Distribution variant:
+    #   light (default) -- minimal bundle. game capture + window/monitor
+    #     capture + WASAPI + x264/NVENC/QSV/AMF + ffmpeg/aac + filters
+    #     + transitions + rtmp_output + ffmpeg_muxer + replay buffer +
+    #     virtualcam + Pulsar's own plugins. ~40 MB zip.
+    #   full           -- light + obs-browser (CEF) + obs-text +
+    #     text-freetype2 + vlc-video. ~250 MB zip. Requires the upstream
+    #     build to have been done with -Full (ENABLE_BROWSER=ON), else
+    #     this script fails fast with a missing obs-browser.dll error.
+    [ValidateSet('light', 'full')]
+    [string] $Variant = 'light'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,18 +49,25 @@ $pluginsSrc  = Join-Path $runtimeRoot 'obs-plugins\64bit'
 $dataSrc     = Join-Path $runtimeRoot 'data'
 
 $distRoot = Join-Path $root 'dist'
-$distName = "pulsar-windows-x64-v$version"
+$distName = if ($Variant -eq 'full') {
+    "pulsar-windows-x64-full-v$version"
+} else {
+    "pulsar-windows-x64-v$version"
+}
 $dist     = Join-Path $distRoot $distName
 $binDst   = Join-Path $dist 'bin\64bit'
 
 Write-Host "Pulsar version: $version"
+Write-Host "Variant       : $Variant"
 Write-Host "Source rundir : $runtimeRoot"
 Write-Host "Output target : $dist"
 Write-Host ""
 
 if (-not $SkipBuild) {
     Write-Host "--- Running scripts/build-win.ps1 first ---"
-    & (Join-Path $PSScriptRoot 'build-win.ps1')
+    $buildArgs = @()
+    if ($Variant -eq 'full') { $buildArgs += '-Full' }
+    & (Join-Path $PSScriptRoot 'build-win.ps1') @buildArgs
     if ($LASTEXITCODE -ne 0) { throw "build-win.ps1 failed" }
 }
 
@@ -62,30 +80,71 @@ if (-not (Test-Path (Join-Path $binSrc 'pulsar.exe'))) {
     throw "pulsar.exe not found in $binSrc -- build is incomplete"
 }
 
-# Plugins we deliberately do NOT ship. Each entry strips both the .dll
-# under obs-plugins/64bit/ and any matching directory under
+# Plugin strip rules. Each entry strips both the .dll under
+# obs-plugins/64bit/ and any matching directory under
 # data/obs-plugins/<name>/.
+#
+# Always stripped (both variants):
 #   coreaudio-encoder  -- macOS-only encoder, useless on Windows.
-#   obs-vst            -- VST audio plugin host (~10 MB), out of scope.
-#   obs-webrtc         -- WHIP/WHEP outputs; Pulsar pushes RTMP, not WebRTC.
-#   vlc-video          -- VLC-backed media source; ffmpeg_source covers it.
-#   obs-text           -- GDI+ text source; Phase 13+ if needed.
-#   text-freetype2     -- companion freetype text source; ditto.
-#   decklink-*         -- Blackmagic Design hardware (~10 MB), n/a.
-#   frontend-tools     -- Lua/Python scripting + auto-remux; headless n/a.
-#   obs-libfdk         -- FDK-AAC, commercial license, off by default upstream.
-$strippedPlugins = @(
+#   obs-vst            -- VST audio host, niche + arbitrary DLL load
+#                         attack surface. obs-filters covers the standard
+#                         compressor/EQ/gate/limiter natively.
+#   obs-webrtc         -- WHIP/WHEP outputs; Pulsar pushes RTMP.
+#   decklink-*         -- Blackmagic Design hardware, n/a.
+#   frontend-tools     -- Lua/Python scripting + auto-remux; redundant
+#                         with the embedder's TS host, plus most code
+#                         paths null-deref in headless mode.
+#   obs-libfdk         -- FDK-AAC, commercial license, off upstream.
+$baseStrippedPlugins = @(
     'coreaudio-encoder',
     'obs-vst',
     'obs-webrtc',
-    'vlc-video',
-    'obs-text',
-    'text-freetype2',
     'decklink-captions',
     'decklink-output-ui',
     'frontend-tools',
     'obs-libfdk'
 )
+
+# Stripped only in the 'light' variant. In 'full' these stay so Prism
+# (and any embedder driving Pulsar with composed scenes) gets browser
+# sources for HTML overlays, native text sources, and VLC-backed media
+# sources.
+$lightOnlyStrippedPlugins = @(
+    'obs-browser',     # CEF runtime, ~200 MB
+    'obs-text',        # GDI+ text source
+    'text-freetype2',  # freetype-backed text source (companion to obs-text)
+    'vlc-video'        # VLC media source
+)
+
+# Always-stripped hardware capture plugins -- we don't bundle them
+# anyway because Pulsar targets software/encoded sources, and shipping
+# their stub DLLs makes pulsar.exe log "Failed to initialize module"
+# warnings at boot.
+$baseStrippedPlugins += @('aja', 'decklink')
+
+if ($Variant -eq 'full') {
+    $strippedPlugins = $baseStrippedPlugins
+} else {
+    $strippedPlugins = $baseStrippedPlugins + $lightOnlyStrippedPlugins
+}
+
+# CEF runtime files sit alongside the OBS plugin DLLs under
+# obs-plugins/64bit/ (NOT under bin/64bit/ as in some other OBS forks).
+# Strip them in the light variant; the full variant keeps them so
+# obs-browser.dll has a CEF runtime to link against.
+$cefRuntimeFiles = @(
+    'chrome_elf.dll',
+    'libcef.dll',
+    'libEGL.dll',
+    'libGLESv2.dll',
+    'icudtl.dat',
+    'v8_context_snapshot.bin',
+    'resources.pak',
+    'chrome_100_percent.pak',
+    'chrome_200_percent.pak'
+)
+# CEF locale .pak directory under obs-plugins/64bit/.
+$cefRuntimeDirs = @('locales')
 
 # Files we never copy: PDBs (debug symbols, ~50 MB), .ilk linker info,
 # .exp/.lib intermediate files. Production runtime doesn't need them and
@@ -140,20 +199,49 @@ New-Item -ItemType Directory -Path $pluginsDst -Force | Out-Null
 
 Write-Host ""
 Write-Host "--- Copying obs-plugins/64bit/ (filtered) ---"
+$skipCef = ($Variant -eq 'light')
 $kept = 0
 $stripped = 0
+$cefStripped = 0
 Get-ChildItem -Path $pluginsSrc -File | ForEach-Object {
     if (Should-SkipFile $_.Name) { return }
     $base = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
+
     if ($strippedPlugins -contains $base) {
         Write-Host "  strip   $($_.Name)"
         $script:stripped++
         return
     }
+
+    # CEF runtime files (libcef.dll, .pak resources, etc.) live next to
+    # obs-browser.dll under obs-plugins/64bit/. Light variant doesn't
+    # ship obs-browser, so its CEF deps are dead weight too.
+    if ($skipCef) {
+        if ($cefRuntimeFiles -contains $_.Name) {
+            $script:cefStripped++
+            return
+        }
+        # Catch-all for stray .pak / .bin CEF resources we might miss.
+        if ($_.Name -like '*.pak') { $script:cefStripped++; return }
+    }
+
     Copy-Item -Force -LiteralPath $_.FullName -Destination $pluginsDst
     $script:kept++
 }
 Write-Host "  kept $kept plugin(s), stripped $stripped"
+if ($skipCef -and $cefStripped -gt 0) {
+    Write-Host "  stripped $cefStripped CEF runtime file(s) (light variant)"
+}
+
+# CEF subdirectories (locales/) under obs-plugins/64bit/.
+if (-not $skipCef) {
+    foreach ($cefDir in $cefRuntimeDirs) {
+        $cefSrc = Join-Path $pluginsSrc $cefDir
+        if (Test-Path $cefSrc) {
+            Copy-Filtered $cefSrc (Join-Path $pluginsDst $cefDir)
+        }
+    }
+}
 
 # --- data/ with strip on plugin subfolders --------------------------------
 $dataDst = Join-Path $dist 'data'

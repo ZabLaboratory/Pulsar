@@ -88,11 +88,17 @@ jobs:
       - name: Build pulsar-bundle
         run: npm run build -w @clodocapeo/pulsar-bundle
 
+      - name: Build pulsar-bundle-full
+        run: npm run build -w @clodocapeo/pulsar-bundle-full
+
       - name: Test pulsar-client
         run: npm run test -w @clodocapeo/pulsar-client
 
       - name: Test pulsar-bundle
         run: npm run test -w @clodocapeo/pulsar-bundle
+
+      - name: Test pulsar-bundle-full
+        run: npm run test -w @clodocapeo/pulsar-bundle-full
 
       - name: Publish @clodocapeo/pulsar-client
         env:
@@ -104,9 +110,19 @@ jobs:
       - name: Publish @clodocapeo/pulsar-bundle
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        # bundle declares pulsar-client@0.1.0 as a runtime dep. Publishing
+        # bundle declares pulsar-client as a runtime dep. Publishing
         # bundle right after client succeeds works because npm registry
         # propagation is synchronous within the same registry session.
         run: |
           cd packages/pulsar-bundle
+          npm publish --access public
+
+      - name: Publish @clodocapeo/pulsar-bundle-full
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # Same dependency on pulsar-client as the light bundle. Independent
+        # tarball; users opt into the heavier postinstall by installing
+        # pulsar-bundle-full instead of pulsar-bundle.
+        run: |
+          cd packages/pulsar-bundle-full
           npm publish --access public
