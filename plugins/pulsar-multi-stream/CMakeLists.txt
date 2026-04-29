@@ -1,13 +1,74 @@
-# pulsar-multi-stream plugin — first-class multi-destination output.
+# pulsar-multi-stream -- libobs plugin (loaded as DLL by obs_load_all_modules)
+# providing first-class multi-destination streaming over an obs-websocket
+# vendor namespace ("pulsar").
 #
-# Phase 4 wiring will:
-#   - register destination kinds (twitch / youtube / rtmp_custom / vod_local)
-#   - hook into pulsar-websocket for the pulsar:* protocol extensions
-#   - implement encode-once-fan-out-N orchestration
-#
-# Stub for now.
+# Phase 7 ships the destinations API (kinds: rtmp_custom, vod_local) sharing
+# encoders with frontend-stub's recording output. Phase 7e adds the Twitch
+# kind (an rtmp_custom alias with a pinned base URL).
 
 cmake_minimum_required(VERSION 3.28)
 project(pulsar-multi-stream LANGUAGES CXX)
 
-message(STATUS "pulsar-multi-stream: not yet implemented (Phase 4)")
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(PULSAR_UPSTREAM_DIR "${PROJECT_SOURCE_DIR}/../../upstream")
+get_filename_component(PULSAR_UPSTREAM_DIR "${PULSAR_UPSTREAM_DIR}" ABSOLUTE)
+
+set(PULSAR_LIBOBS_HEADERS         "${PULSAR_UPSTREAM_DIR}/libobs")
+set(PULSAR_LIBOBS_BUILD           "${PULSAR_UPSTREAM_DIR}/build_x64/libobs")
+set(PULSAR_LIBOBS_CONFIG          "${PULSAR_UPSTREAM_DIR}/build_x64/config")
+set(PULSAR_LIBOBS_LIB             "${PULSAR_LIBOBS_BUILD}/RelWithDebInfo/obs.lib")
+set(PULSAR_FRONTEND_API_HEADERS   "${PULSAR_UPSTREAM_DIR}/frontend/api")
+set(PULSAR_FRONTEND_API_LIB       "${PULSAR_UPSTREAM_DIR}/build_x64/frontend/api/RelWithDebInfo/obs-frontend-api.lib")
+
+# obs-websocket-api.h is header-only, vendored inside our pulsar-websocket
+# fork. We only depend on the header; runtime registration discovers
+# obs-websocket via libobs's proc handler at module post-load time.
+set(PULSAR_WEBSOCKET_API_HEADERS "${PROJECT_SOURCE_DIR}/../pulsar-websocket/lib")
+
+# DLL lands in upstream/build_x64/rundir/.../obs-plugins/64bit/ so libobs's
+# add_default_module_paths picks it up at obs_load_all_modules time.
+set(PULSAR_OBS_PLUGINS_DIR "${PULSAR_UPSTREAM_DIR}/build_x64/rundir/RelWithDebInfo/obs-plugins/64bit")
+
+if(NOT EXISTS "${PULSAR_LIBOBS_LIB}")
+    message(FATAL_ERROR
+        "libobs import library not found at ${PULSAR_LIBOBS_LIB}.\n"
+        "Build upstream first: scripts/build-win.ps1 -Stage build")
+endif()
+
+if(NOT EXISTS "${PULSAR_FRONTEND_API_LIB}")
+    message(FATAL_ERROR
+        "obs-frontend-api import library not found at ${PULSAR_FRONTEND_API_LIB}.")
+endif()
+
+add_library(pulsar-multi-stream MODULE
+    src/plugin-main.cpp
+)
+
+target_include_directories(pulsar-multi-stream PRIVATE
+    "${PULSAR_LIBOBS_HEADERS}"
+    "${PULSAR_LIBOBS_BUILD}"
+    "${PULSAR_LIBOBS_CONFIG}"
+    "${PULSAR_FRONTEND_API_HEADERS}"
+    "${PULSAR_WEBSOCKET_API_HEADERS}"
+)
+
+target_link_libraries(pulsar-multi-stream PRIVATE
+    "${PULSAR_LIBOBS_LIB}"
+    "${PULSAR_FRONTEND_API_LIB}"
+)
+
+set_target_properties(pulsar-multi-stream PROPERTIES
+    PREFIX ""           # no "lib" prefix on Windows DLL
+    OUTPUT_NAME "pulsar-multi-stream"
+    LIBRARY_OUTPUT_DIRECTORY                "${PULSAR_OBS_PLUGINS_DIR}"
+    LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${PULSAR_OBS_PLUGINS_DIR}"
+    LIBRARY_OUTPUT_DIRECTORY_DEBUG          "${PULSAR_OBS_PLUGINS_DIR}"
+    LIBRARY_OUTPUT_DIRECTORY_RELEASE        "${PULSAR_OBS_PLUGINS_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY                "${PULSAR_OBS_PLUGINS_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${PULSAR_OBS_PLUGINS_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG          "${PULSAR_OBS_PLUGINS_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${PULSAR_OBS_PLUGINS_DIR}"
+)
