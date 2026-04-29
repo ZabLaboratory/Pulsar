@@ -1,23 +1,21 @@
 # Pulsar -- release on tag push.
 #
-# Trigger: push of a vX.Y.Z tag (matches `v*.*.*`) OR a manual
-# workflow_dispatch run for dry-run validation.
+# Trigger: push of a vX.Y.Z tag OR manual workflow_dispatch run.
 #
 # What it does:
 #   1. Checks out the repo + initialises every submodule recursively
 #      (upstream/, libdshowcapture, obs-browser, obs-websocket).
-#   2. Runs scripts/build-win.ps1 which compiles libobs + every Pulsar
-#      plugin against the windows-x64 preset.
-#   3. Runs scripts/package-win.ps1 -Zip which produces
-#      dist/pulsar-windows-x64-v<VERSION>/ and a same-named .zip.
-#   4. On tag push, attaches the .zip to the GitHub Release.
-#      On manual run, uploads the .zip as a workflow artifact instead.
-#
-# First runs of this workflow on a fresh GitHub Actions Windows runner
-# may fail on toolchain or obs-deps download nuances. The workflow is
-# designed to be re-runnable: scripts/build-win.ps1 is idempotent on the
-# patch+configure side and skips redownloading obs-deps if .deps/
-# is populated.
+#   2. Runs scripts/build-win.ps1 -Full which compiles libobs + every
+#      Pulsar plugin + obs-browser against CEF. Single build feeds both
+#      bundle variants.
+#   3. Runs scripts/package-win.ps1 twice:
+#        - once with -Variant light  (no CEF / no browser / no text /
+#                                     no vlc)  -> ~40 MB zip
+#        - once with -Variant full   (everything light has + obs-browser
+#                                     + CEF + obs-text + text-freetype2
+#                                     + vlc-video)        -> ~250 MB zip
+#   4. On tag push, attaches BOTH zips to the GitHub Release.
+#      On manual run, uploads them as workflow artifacts.
 
 name: release
 
@@ -87,41 +85,53 @@ jobs:
         with:
           arch: x64
 
-      - name: Build (build-win.ps1)
+      - name: Build with -Full (ENABLE_BROWSER=ON)
         shell: pwsh
         run: |
-          # Don't pass -CI: that switches the *configure* preset to
-          # windows-ci-x64, but upstream's CMakePresets.json defines no
-          # matching *build* preset (only windows-x64 / windows-arm64),
-          # so `cmake --build --preset windows-ci-x64` errors out with
-          # "No such build preset". Sticking to windows-x64 throughout
-          # works on both local dev and the GitHub runner.
-          ./scripts/build-win.ps1
+          # -Full compiles obs-browser against CEF on top of the
+          # standard headless build. Adds ~10 min to the build, but
+          # produces a single rundir that feeds both the light and
+          # full distribution variants -- package-win.ps1 carves out
+          # what each variant ships.
+          ./scripts/build-win.ps1 -Full
 
-      - name: Package (package-win.ps1 -Zip)
+      - name: Package light variant
         shell: pwsh
-        run: |
-          ./scripts/package-win.ps1 -Zip -SkipBuild
+        run: ./scripts/package-win.ps1 -Zip -SkipBuild -Variant light
+
+      - name: Package full variant
+        shell: pwsh
+        run: ./scripts/package-win.ps1 -Zip -SkipBuild -Variant full
 
       - name: List artefacts
         shell: pwsh
         run: |
-          Get-ChildItem dist | Format-Table Name, Length
+          Get-ChildItem dist -File | Format-Table Name, Length
 
-      # On tag push: publish to GitHub Release
+      # On tag push: publish both zips to the GitHub Release
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/pulsar-windows-x64-v${{ steps.version.outputs.version }}.zip
+          files: |
+            dist/pulsar-windows-x64-v${{ steps.version.outputs.version }}.zip
+            dist/pulsar-windows-x64-full-v${{ steps.version.outputs.version }}.zip
           generate_release_notes: true
           fail_on_unmatched_files: true
 
-      # On manual dispatch: keep the zip as a workflow artifact
-      - name: Upload artifact (manual dispatch)
+      # On manual dispatch: keep both zips as workflow artifacts
+      - name: Upload light artifact (manual dispatch)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: pulsar-windows-x64-v${{ steps.version.outputs.version }}
           path: dist/pulsar-windows-x64-v${{ steps.version.outputs.version }}.zip
+          retention-days: 14
+
+      - name: Upload full artifact (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsar-windows-x64-full-v${{ steps.version.outputs.version }}
+          path: dist/pulsar-windows-x64-full-v${{ steps.version.outputs.version }}.zip
           retention-days: 14
