@@ -243,5 +243,36 @@ if ($Stage -in @('build', 'all')) {
             Write-Host "Pulsar build finished but pulsar.exe not found at:"
             Write-Host "  $pulsarExe"
         }
+
+        # Stage obs-deps runtime DLLs into the rundir.
+        #
+        # obs.dll imports avcodec-61, avformat-61, avutil-59, swscale-8,
+        # swresample-5, zlib (and a few more transitively). Upstream's
+        # CMake stages those into the rundir as part of the frontend
+        # build steps -- with ENABLE_FRONTEND=OFF the copy never happens
+        # and pulsar.exe fails to load with STATUS_DLL_NOT_FOUND
+        # (0xC0000135) as soon as the loader resolves obs.dll's imports.
+        #
+        # Mirror the headless layout ourselves: take every .dll from
+        # upstream/.deps/obs-deps-*/bin/ and copy alongside obs.dll.
+        # Idempotent (Copy-Item -Force).
+        $depsBin = Get-ChildItem -Path (Join-Path $upstream '.deps') `
+                                 -Filter 'obs-deps-*' `
+                                 -Directory `
+                                 -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Name -notlike '*-x86*' } |
+                   Select-Object -First 1
+        if ($depsBin) {
+            $depsBinDir = Join-Path $depsBin.FullName 'bin'
+            $rundirBin  = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo\bin\64bit'
+            if ((Test-Path $depsBinDir) -and (Test-Path $rundirBin)) {
+                $copied = 0
+                Get-ChildItem $depsBinDir -Filter '*.dll' -File | ForEach-Object {
+                    Copy-Item -Force $_.FullName $rundirBin
+                    $copied++
+                }
+                Write-Host "Staged $copied obs-deps runtime DLLs into rundir/bin/64bit/"
+            }
+        }
     }
 }

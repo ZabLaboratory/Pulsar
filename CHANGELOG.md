@@ -49,6 +49,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detection, default video canvas creation, etc.), prints
   `pulsar-headless: libobs 32.1.2-1-g<sha>-pulsar initialised`,
   then `obs_shutdown` cleans up. Exit code 0, no Qt loaded.
+- **Phase 4a — long-running headless service.** `pulsar.exe`
+  becomes a real service: configures default video (1080p30
+  NV12 D3D11) via `obs_reset_video`, audio (48 kHz stereo) via
+  `obs_reset_audio`, lets libobs's default module paths
+  discover plugins, calls `obs_load_all_modules` +
+  `obs_post_load_modules`. Wires `SetConsoleCtrlHandler` so
+  Ctrl+C / window close / system shutdown flips an atomic
+  `g_running` flag, then a 100 ms idle loop polls it. Graceful
+  `obs_shutdown` on exit. ~66 MB RAM idling, vs 216 MB for the
+  Qt obs64.exe. **20 plugins loaded exactly once** (not the
+  duplicate registrations the first attempt produced).
+- obs-deps runtime staging in `build-win.ps1`. Upstream's CMake
+  copies FFmpeg / zlib DLLs to the rundir as part of the
+  frontend build steps; with `ENABLE_FRONTEND=OFF` the copy
+  never happens and `pulsar.exe` fails to load with
+  `STATUS_DLL_NOT_FOUND` (0xC0000135) as soon as the loader
+  resolves obs.dll's imports. The build script now stages every
+  `*.dll` from `upstream/.deps/obs-deps-*/bin/` into
+  `rundir/bin/64bit/` after the Pulsar plugin build.
+- **`obs_add_module_path` removed from `pulsar-headless`.** libobs's
+  built-in `add_default_module_paths()` (in
+  `upstream/libobs/obs-windows.c:43`) already registers
+  `../../obs-plugins/64bit/` and `../../data/obs-plugins/%module%/`
+  on Windows. Calling `obs_add_module_path` ourselves with the
+  same paths was duplicating every module load.
 - Top-level `CMakeLists.txt` rewritten as a real build entry: the
   Pulsar root project now adds `plugins/pulsar-headless/` (via
   `PULSAR_BUILD_HEADLESS=ON` default) and reserves slots for

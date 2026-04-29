@@ -89,11 +89,19 @@ build it ourselves.
   while preserving dependency caches.
 - **Phase 3b:** DONE. `pulsar.exe` produced from
   `plugins/pulsar-headless/main.cpp`, linked against the libobs
-  upstream built. Currently boots libobs (CPU + sysinfo
-  detection, default canvas creation), prints the patched version
-  string, then shuts down. No Qt. Phase 4+ extends this with
-  video/audio reset, `obs_load_all_modules`, signal-driven idle
-  loop, and the websocket server hookup.
+  upstream built. First headless run.
+- **Phase 4a:** DONE. `pulsar.exe` is now a real service:
+  default 1080p30 video / 48 kHz stereo audio, `obs_load_all_modules`
+  loads 20 plugins from libobs's built-in default search paths,
+  console-control handler flips an atomic flag for graceful
+  shutdown, 100 ms idle loop polls it. ~66 MB RAM idle.
+- **Phase 4b:** fork `upstream/plugins/obs-websocket/` into our
+  `plugins/pulsar-websocket/`, build it as a libobs plugin,
+  load it via `obs_load_all_modules` so external clients can
+  drive `pulsar.exe` over WebSocket on a session-random
+  loopback port.
+- **Phase 4c:** validate the round-trip with a v5 client
+  (e.g. `obsws-python` against `ws://127.0.0.1:<port>`).
 - **Phase 4:** wire the `pulsar-websocket` plugin (fork of
   obs-websocket v5). Service speaks v5 baseline.
 - See ARCHITECTURE.md for the full phase plan.
