@@ -1,7 +1,13 @@
 cmake_minimum_required(VERSION 3.28)
 
+# Source of truth for the version: top-level VERSION file. The packaging
+# script + GitHub release workflow + npm package versions all read from
+# the same place. Bumped manually on each release.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" PULSAR_VERSION_RAW)
+string(STRIP "${PULSAR_VERSION_RAW}" PULSAR_VERSION)
+
 project(Pulsar
-    VERSION 0.0.0
+    VERSION "${PULSAR_VERSION}"
     DESCRIPTION "Headless broadcast engine -- fork of OBS Studio for embedding"
     LANGUAGES C CXX
 )

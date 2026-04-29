@@ -1,25 +1,103 @@
-# Pulsar — release on tag push.
+# Pulsar -- release on tag push.
 #
-# Phase 1+ wires up:
-#   - tag push fans out the build matrix
-#   - signs Win/Mac binaries (when secrets configured)
-#   - publishes a GitHub Release with platform packages attached
-#   - emits a release notification webhook (Discord) if configured
+# Trigger: push of a vX.Y.Z tag (matches `v*.*.*`) OR a manual
+# workflow_dispatch run for dry-run validation.
 #
-# Phase 0: workflow stub.
+# What it does:
+#   1. Checks out the repo + initialises every submodule recursively
+#      (upstream/, libdshowcapture, obs-browser, obs-websocket).
+#   2. Runs scripts/build-win.ps1 which compiles libobs + every Pulsar
+#      plugin against the windows-x64 preset.
+#   3. Runs scripts/package-win.ps1 -Zip which produces
+#      dist/pulsar-windows-x64-v<VERSION>/ and a same-named .zip.
+#   4. On tag push, attaches the .zip to the GitHub Release.
+#      On manual run, uploads the .zip as a workflow artifact instead.
+#
+# First runs of this workflow on a fresh GitHub Actions Windows runner
+# may fail on toolchain or obs-deps download nuances. The workflow is
+# designed to be re-runnable: scripts/build-win.ps1 is idempotent on the
+# patch+configure side and skips redownloading obs-deps if .deps/
+# is populated.
 
 name: release
 
 on:
   push:
-    tags: ["v*.*.*"]
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
 
 jobs:
-  placeholder:
-    name: release-placeholder
-    runs-on: ubuntu-latest
+  build-and-package:
+    name: build-and-package (windows-x64)
+    runs-on: windows-2022
+    timeout-minutes: 60
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Notice
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        shell: pwsh
         run: |
-          echo "::notice::Pulsar release pipeline not yet implemented (Phase 1)."
+          $v = (Get-Content VERSION -Raw).Trim()
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Pulsar version: $v"
+
+      - name: Verify tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $expected = "v${{ steps.version.outputs.version }}"
+          if ($tag -ne $expected) {
+            Write-Error "Tag $tag does not match VERSION ($expected). Bump VERSION in the same commit as the tag."
+            exit 1
+          }
+
+      - name: Install CMake 3.28+
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: '3.30.0'
+
+      - name: Setup MSVC toolchain
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build (build-win.ps1)
+        shell: pwsh
+        run: |
+          ./scripts/build-win.ps1 -CI
+
+      - name: Package (package-win.ps1 -Zip)
+        shell: pwsh
+        run: |
+          ./scripts/package-win.ps1 -Zip -SkipBuild
+
+      - name: List artefacts
+        shell: pwsh
+        run: |
+          Get-ChildItem dist | Format-Table Name, Length
+
+      # On tag push: publish to GitHub Release
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/pulsar-windows-x64-v${{ steps.version.outputs.version }}.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      # On manual dispatch: keep the zip as a workflow artifact
+      - name: Upload artifact (manual dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsar-windows-x64-v${{ steps.version.outputs.version }}
+          path: dist/pulsar-windows-x64-v${{ steps.version.outputs.version }}.zip
+          retention-days: 14
