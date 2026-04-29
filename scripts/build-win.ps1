@@ -1,4 +1,4 @@
-# build-win.ps1 — Windows build pipeline for Pulsar (Phase 1).
+﻿# build-win.ps1 — Windows build pipeline for Pulsar (Phase 1).
 #
 # Phase 1 strategy: invoke obs-studio's own CMake preset (windows-x64)
 # against the vendored upstream/ submodule. The preset auto-fetches
@@ -76,6 +76,62 @@ if (-not $cmake) { throw "CMake not found. Install via D:\DevTools\CMake (see do
 Write-Host "Using cmake: $cmake"
 Write-Host "Preset:       $preset"
 Write-Host "Source:       $upstream"
+
+# --- Apply Pulsar patches onto upstream/ -----------------------------------
+#
+# Reset upstream/ to the SHA recorded by Pulsar's submodule pointer, then
+# re-apply every .patch under patches/ via git am. This is idempotent: a
+# fresh tree, and any prior run's commits, are wiped before the apply, so
+# the resulting upstream/ HEAD is always exactly:
+#   recorded_sha + N patches in lexical order
+#
+# git describe in upstream's versionconfig.cmake then reports something
+# like 32.1.2-N-g<sha> rather than -modified, which keeps OBS_VERSION
+# clean.
+
+$patchesDir = Join-Path $root 'patches'
+$patches = @()
+if (Test-Path $patchesDir) {
+    $patches = Get-ChildItem $patchesDir -Filter '*.patch' -File | Sort-Object Name
+}
+
+# Recorded submodule SHA - read from the index via --cached so the
+# value is the immutable pin recorded in Pulsar's tree, not the
+# submodule's current HEAD (which may have been advanced by a previous
+# `git am` run -- without --cached we'd reset to the post-patch SHA
+# and the patch re-apply would fail with "patch does not apply").
+$submoduleStatus = & git -C $root submodule status --cached -- upstream
+if ($LASTEXITCODE -ne 0) { throw "Could not read submodule status" }
+if ($submoduleStatus -notmatch '^[ +-]([0-9a-f]+)') {
+    throw "Could not parse submodule SHA from: $submoduleStatus"
+}
+$recordedSha = $Matches[1]
+
+Write-Host ""
+Write-Host "--- Applying Pulsar patches ---"
+Write-Host "Pinned upstream commit: $recordedSha"
+Write-Host "Patches found:          $($patches.Count)"
+
+Push-Location $upstream
+try {
+    # Abort any half-applied am session from a previous failed run.
+    if (Test-Path '.git/rebase-apply') {
+        & git am --abort 2>$null
+    }
+    & git reset --hard $recordedSha | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not reset upstream/ to $recordedSha" }
+
+    foreach ($patch in $patches) {
+        Write-Host "  applying $($patch.Name)"
+        & git am --keep-non-patch $patch.FullName
+        if ($LASTEXITCODE -ne 0) {
+            & git am --abort 2>$null
+            throw "Failed to apply $($patch.Name) -- see error above"
+        }
+    }
+} finally {
+    Pop-Location
+}
 
 if ($Stage -in @('configure', 'all')) {
     Write-Host ""

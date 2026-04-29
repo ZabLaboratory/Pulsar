@@ -72,9 +72,13 @@ build it ourselves.
 
 ## Phases 2+ (planned)
 
-- **Phase 2:** introduce the patch pipeline. First patch: build-system
-  metadata (rename product strings, version source). Confirms `git am`
-  on `upstream/` works cleanly.
+- **Phase 2:** DONE. Patch pipeline lives in `scripts/build-win.ps1`:
+  resets `upstream/` to the recorded submodule SHA (via `git
+  submodule status --cached`), applies every `patches/*.patch` in
+  lexical order via `git am`, then runs configure. First patch
+  (`0001-build-tag-OBS_VERSION-with-pulsar-suffix.patch`) appends
+  `-pulsar` to the runtime version string so the fork is observable
+  in `obs64.exe` window titles and logs.
 - **Phase 3:** disable Qt frontend via CMake options + first headless
   run. At this point `obs64.exe` becomes a no-op service waiting on
   the websocket plugin to drive it.
@@ -95,11 +99,31 @@ GitHub Actions matrix (Phase 1+):
 
 ## Adding a patch
 
-1. `cd upstream && git checkout -b pulsar-work`
-2. Make your change, commit with a descriptive message.
-3. `git format-patch -1 -o ../patches --start-number NNNN`
-4. Add rationale and "upstream candidate" marker in the patch header.
-5. PR against Pulsar `main` referencing the upstream concern.
+The build pipeline replays `patches/*.patch` onto the recorded
+submodule SHA on every run, so authoring a new patch is a matter of
+producing a clean `format-patch` artefact.
+
+1. Make sure `upstream/` is at the recorded SHA (run
+   `scripts/build-win.ps1 -Stage configure` once if unsure — it
+   resets and re-applies whatever patches are present).
+2. `cd upstream` and edit the files you want to change. The branch
+   you are on does not matter; `git am` will create commits on
+   detached HEAD when the build script next runs.
+3. Stage and commit with a meaningful message — include
+   `Pulsar-Patch: NNNN` and `Upstream-Candidate: yes/no` trailers
+   so the patch metadata stays self-describing.
+4. `git format-patch -1 --start-number NNNN -o ../patches HEAD`.
+   Pick the next free number (gaps are fine — see
+   `../patches/README.md`).
+5. `git reset --hard <recorded-sha>` to clean upstream/ back to the
+   pinned commit. The patch lives in `patches/` now; the build
+   script will re-apply it next configure.
+6. Run `scripts/build-win.ps1 -Stage configure` to verify the patch
+   applies cleanly via the build pipeline. Rebuild and validate
+   the change is observable at runtime.
+7. Open a PR against Pulsar `main` with the patch file. If the
+   patch is upstream-eligible, also open the corresponding PR on
+   `obsproject/obs-studio` and link it from the patch header.
 
 ## Adding a plugin
 

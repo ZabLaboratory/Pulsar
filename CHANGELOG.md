@@ -18,3 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (fork of `obsproject/obs-studio`), pinned to tag **32.1.2**
   (commit `fb4d98bf88fae5fc85cb11fc57f7c5e309282194`, released
   2026-04-21).
+- Patch pipeline — `scripts/build-win.ps1` now resets `upstream/`
+  to the recorded submodule SHA (read via `git submodule status
+  --cached`) and applies every `patches/*.patch` via `git am` in
+  lexical order before configure. Idempotent: each run starts from
+  the pinned commit + N patches.
+- `patches/0001-build-tag-OBS_VERSION-with-pulsar-suffix.patch` —
+  appends a `-pulsar` suffix to the runtime `OBS_VERSION` string
+  so any binary built from this fork is observable as such (window
+  title, About dialog, log preamble). First demonstrator that the
+  patch lifecycle works end-to-end. Validated runtime: window title
+  reads `OBS 32.1.2-1-g<sha>-pulsar`.

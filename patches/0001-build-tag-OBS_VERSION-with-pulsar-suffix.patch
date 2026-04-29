@@ -1,0 +1,35 @@
+From daf902e25d21cf1496aeb3c344f249877fc9778a Mon Sep 17 00:00:00 2001
+From: Mathias Tock <mathias.tock@epita.fr>
+Date: Wed, 29 Apr 2026 15:14:31 +0200
+Subject: [PATCH] build: tag OBS_VERSION with -pulsar suffix
+
+Append a 'pulsar' suffix to the runtime OBS_VERSION string so any
+binary produced from the Pulsar fork is observable as such at runtime
+(About dialog, log preamble, window title). OBS_VERSION_CANONICAL is
+left untouched because it drives target VERSION/SOVERSION which
+require strict MAJOR.MINOR.PATCH format.
+
+Pulsar-Patch: 0001
+Upstream-Candidate: no (fork-local branding)
+---
+ cmake/common/versionconfig.cmake | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/cmake/common/versionconfig.cmake b/cmake/common/versionconfig.cmake
+index 7a1e75312..f0491d8b3 100644
+--- a/cmake/common/versionconfig.cmake
++++ b/cmake/common/versionconfig.cmake
+@@ -77,3 +77,10 @@ unset(_obs_version_canonical)
+ unset(_obs_release_candidate)
+ unset(_obs_beta)
+ unset(_obs_version_result)
++
++# Pulsar fork build identifier. Suffixes the display version so any
++# binary produced from this fork is observable as such at runtime
++# (About dialog, log preamble, window title). Does not touch
++# OBS_VERSION_CANONICAL because that drives target VERSION/SOVERSION
++# which expects strict MAJOR.MINOR.PATCH.
++set(OBS_VERSION "${OBS_VERSION}-pulsar")
+-- 
+2.47.0.windows.2
+
