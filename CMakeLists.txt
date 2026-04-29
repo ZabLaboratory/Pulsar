@@ -2,37 +2,32 @@ cmake_minimum_required(VERSION 3.28)
 
 project(Pulsar
     VERSION 0.0.0
-    DESCRIPTION "Headless broadcast engine — fork of OBS Studio for embedding"
+    DESCRIPTION "Headless broadcast engine -- fork of OBS Studio for embedding"
     LANGUAGES C CXX
 )
 
-# Pulsar is a fork of obs-studio kept in upstream/ as a git submodule.
-# Top-level configuration is intentionally minimal at this stage —
-# Phase 1 of the build pipeline (see docs/DEVELOPMENT.md) wires up:
-#   - upstream/ submodule init + patches/ application
-#   - libobs and core obs-studio plugins
-#   - Pulsar-owned plugins under plugins/
-#   - service-mode entry point (no Qt)
-#   - per-platform packaging
-#
-# Until then, this file declares the project metadata and reserves the
-# subdirectories so editors and CMake-aware tooling can navigate the
-# tree without errors.
+# Pulsar's top-level project. This file does NOT build upstream/
+# itself; that happens via upstream's own CMakePresets.json driven
+# by scripts/build-win.ps1. This file is invoked AFTER upstream's
+# build_x64/ exists and links Pulsar-owned plugins against the
+# libobs that upstream produced.
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(PULSAR_BUILD_PLUGINS "Build Pulsar-owned plugins under plugins/" OFF)
-option(PULSAR_BUILD_UPSTREAM "Build vendored obs-studio from upstream/" OFF)
+option(PULSAR_BUILD_HEADLESS  "Build the pulsar-headless service exe"          ON)
+option(PULSAR_BUILD_WEBSOCKET "Build the pulsar-websocket plugin (Phase 4)"    OFF)
+option(PULSAR_BUILD_MULTISTREAM "Build the pulsar-multi-stream plugin (Phase 4)" OFF)
 
-if(PULSAR_BUILD_UPSTREAM)
-    message(STATUS "Pulsar: upstream build path not yet implemented (Phase 1)")
+if(PULSAR_BUILD_HEADLESS)
+    add_subdirectory(plugins/pulsar-headless)
 endif()
 
-if(PULSAR_BUILD_PLUGINS)
-    message(STATUS "Pulsar: plugin build path not yet implemented (Phase 1)")
-    # add_subdirectory(plugins/pulsar-headless)
-    # add_subdirectory(plugins/pulsar-websocket)
-    # add_subdirectory(plugins/pulsar-multi-stream)
+if(PULSAR_BUILD_WEBSOCKET)
+    add_subdirectory(plugins/pulsar-websocket)
+endif()
+
+if(PULSAR_BUILD_MULTISTREAM)
+    add_subdirectory(plugins/pulsar-multi-stream)
 endif()

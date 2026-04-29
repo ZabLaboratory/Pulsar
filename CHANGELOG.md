@@ -42,3 +42,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   obs64.exe + Qt6 DLLs left in rundir by a GUI build) do not
   contaminate a subsequent headless run. Dep caches under
   `upstream/.deps/` are preserved.
+- **Phase 3b — first headless run.** New `pulsar.exe` executable
+  built from `plugins/pulsar-headless/main.cpp` (37 KB), linked
+  against the libobs that upstream produced. Phase 3b proof of
+  life: the binary calls `obs_startup`, libobs initialises (CPU
+  detection, default video canvas creation, etc.), prints
+  `pulsar-headless: libobs 32.1.2-1-g<sha>-pulsar initialised`,
+  then `obs_shutdown` cleans up. Exit code 0, no Qt loaded.
+- Top-level `CMakeLists.txt` rewritten as a real build entry: the
+  Pulsar root project now adds `plugins/pulsar-headless/` (via
+  `PULSAR_BUILD_HEADLESS=ON` default) and reserves slots for
+  `pulsar-websocket` (Phase 4) and `pulsar-multi-stream` (Phase 4)
+  plugins. Top-level configure happens AFTER upstream finishes its
+  own build — this CMakeLists does not build upstream/.
+- `scripts/build-win.ps1` extended with a Pulsar-side build stage:
+  after upstream's RelWithDebInfo build completes, configures and
+  builds the top-level Pulsar CMake project. Output `pulsar.exe`
+  lands next to `obs.dll` in
+  `upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/` so the
+  Windows loader resolves libobs without touching `PATH`.
