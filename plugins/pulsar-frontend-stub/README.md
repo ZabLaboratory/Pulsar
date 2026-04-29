@@ -48,15 +48,29 @@ plugin-registered factories) is built *after* `obs_post_load_modules()`.
 | `TBAR_VALUE_CHANGED` | `set_tbar_position()`. |
 | `SCENE_LIST_CHANGED`, `SCENE_COLLECTION_*`, `PROFILE_*` | Single Default scene/collection/profile in current phases; mutations no-op. Phase 7+ may wire these once `pulsar-multi-stream` introduces multi-scene routing. |
 
-## Phase 5 / Phase 6 scope
+## Phase 5 / Phase 6 / Phase 9 scope
 
 - One scene `Default` with one `window_capture` source (target read from `PULSAR_CAPTURE_WINDOW` env var, format `<title>:<class>:<exe>`, method=WGC). Unset = source emits black frames.
 - One `fade_transition`.
 - Single immutable `Default` scene_collection and profile.
-- `obs_x264` (default ~2500 kbps) + `ffmpeg_aac` (mixer 0, 160 kbps) bound to both `recordOutput` (`ffmpeg_muxer`) and `streamOutput` (`rtmp_output`). Encoders share between both — Phase 7 (`pulsar-multi-stream`) will fan out destinations on top of the same encoder.
+- `obs_x264` (default ~2500 kbps) + `ffmpeg_aac` (mixer 0, 160 kbps) bound to both `recordOutput` (`ffmpeg_muxer`) and `streamOutput` (`rtmp_output`). Encoders share between both — `pulsar-multi-stream` (Phase 7) fans out destinations on the same encoder pair.
+- **Audio** (Phase 9) — `wasapi_output_capture` on channel 1 (desktop), `wasapi_input_capture` on channel 3 (mic). Both use `device_id="default"` unless overridden via `PULSAR_DESKTOP_AUDIO_DEVICE_ID` / `PULSAR_MIC_DEVICE_ID`. Channel 2 is reserved for `wasapi_process_output_capture` (per-process loopback, e.g. a Google Meet tab in Chrome) — created only when `PULSAR_PROCESS_AUDIO_NAME` is set, and tolerated as missing on Windows builds older than 10 19041 where the source ID isn't registered.
 - `recording_start()` resolves `<recordDir>/pulsar-<YYYYMMDD-HHMMSS>.mp4`, mkdir-p the directory, `obs_output_update({path})`, then `obs_output_start`. `recordDir` defaults to `<cwd>/recordings`, override via `PULSAR_RECORD_DIR`.
-- `streaming_start()` will return without effect until Phase 7 configures a real destination URL via `set_streaming_service`.
+- `streaming_start()` returns without effect until `pulsar-multi-stream` configures a real destination URL via `set_streaming_service`.
 - Virtual camera and replay buffer outputs created but inactive — no encoders are wired to them yet.
+
+### Audio mixer convention
+
+Pulsar follows OBS Studio's main-mixer channel layout:
+
+| Channel | Source | env override |
+|---|---|---|
+| 0 | Default scene (video) | — |
+| 1 | Desktop audio (system playback loopback) | `PULSAR_DESKTOP_AUDIO_DEVICE_ID` |
+| 2 | Process audio (per-process loopback) — opt-in | `PULSAR_PROCESS_AUDIO_NAME` |
+| 3 | Microphone | `PULSAR_MIC_DEVICE_ID` |
+
+Channels 4-5 are unused; Phase 12+ may grow them for guest mics or VST chains.
 
 ## Validation
 
