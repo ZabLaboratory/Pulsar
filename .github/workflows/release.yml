@@ -32,6 +32,12 @@ jobs:
     name: build-and-package (windows-x64)
     runs-on: windows-2022
     timeout-minutes: 60
+    # softprops/action-gh-release calls the GitHub Releases API to create
+    # the release + upload the zip. The default GITHUB_TOKEN ships
+    # read-only on private repos / restricted orgs; needs `contents:
+    # write` to publish a release. Scoped to this job only.
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout (with submodules)
