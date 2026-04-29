@@ -1,33 +1,103 @@
 # pulsar-websocket
 
-Pulsar's WebSocket control surface. Fork of `obs-websocket` v5 with
-the baseline protocol preserved (existing tooling — Stream Deck,
-Streamer.bot, Aitum — works against Pulsar without modification) plus
-Pulsar-specific extensions in the `pulsar:*` namespace.
+Vendor fork of [`obsproject/obs-websocket`](https://github.com/obsproject/obs-websocket)
+v5.7.3. Provides the WebSocket protocol surface that drives Pulsar
+from external clients (Stream Deck, Streamer.bot, Aitum, Prism, any
+v5-compatible client).
 
 ## Status
 
-Placeholder. Forking and building lands in Phase 2.
+Phase 4c — **source vendored, build wiring deferred to Phase 4d**.
+The plugin sources live here under `src/`, with the upstream Qt UI
+(`forms/SettingsDialog`, `forms/ConnectInfo`) removed and the
+frontend-api migration calls (`MigrateGlobalConfigData`,
+`MigratePersistentData`) reduced to no-ops so the plugin will load
+inside the headless `pulsar-headless` service. The CMakeLists.txt
+build target is **not yet active** — Phase 4d wires it.
 
-## Protocol
+## Why a fork
 
-- **Baseline:** obs-websocket v5 — see `../../docs/PROTOCOL.md`.
-- **Pulsar extensions:** documented in `../../docs/PROTOCOL.md` under
-  the `pulsar:*` namespace. Designed so a strict v5 client never sees
-  unexpected messages.
+Upstream obs-websocket assumes the Qt-based obs-studio frontend is
+present:
 
-## Auth
+- `forms/SettingsDialog.cpp` and `forms/ConnectInfo.cpp` construct
+  Qt widgets at module load time (a Tools menu entry plus a settings
+  dialog). With `ENABLE_FRONTEND=OFF`, no frontend exists, no main
+  window exists, and `obs_frontend_get_main_window()` returns null.
+  Constructing the dialog with a null parent in a process that has no
+  main window crashes the service.
+- `Config::MigrateGlobalConfigData()` and `Config::MigratePersistentData()`
+  call `obs_frontend_get_app_config()` and
+  `obs_frontend_get_current_profile_path()` to migrate legacy
+  obs-studio config files. Without a registered frontend, both return
+  null, and the migrate path dereferences them.
 
-- Session JWT issued by Pulsar at startup, given to the spawning
-  process (Prism) over stdout. Clients present it via the v5
-  authentication challenge flow.
-- Authentication failure on a non-loopback connection terminates the
-  socket. Pulsar binds loopback-only by default.
+The fork drops the UI code and stubs out the migrate calls (Pulsar
+starts from a clean state — there are no legacy obs-studio configs
+to migrate). The websocket server itself, the v5 protocol, the event
+handlers and the request handlers are unchanged: this fork stays as
+close to upstream as possible so v5 compat remains exact.
 
-## Why fork instead of using obs-websocket as-is
+## Layout
 
-Pulsar wants the websocket plugin to manage Pulsar-specific state
-(multi-destination outputs, scene streaming, session lifecycle). That
-state belongs alongside the v5 dispatch table, not bolted on as a
-sidecar plugin. The fork stays close enough to upstream that v5
-features land via rebase rather than reimplementation.
+```
+plugins/pulsar-websocket/
+├── CMakeLists.txt            -- build wiring (Phase 4d)
+├── README.md                 -- this file
+├── UPSTREAM-LICENSE          -- GPL-2.0 from obs-websocket
+├── cmake/                    -- vendored upstream cmake helpers
+│   ├── obs-websocket-api.cmake
+│   ├── obs-websocket-apiConfig.cmake.in
+│   └── macos/Info.plist.in
+├── data/locale/en-US.ini     -- text strings the plugin reads via obs_module_text
+├── lib/
+│   ├── example/              -- upstream sample client (kept for reference)
+│   └── obs-websocket-api.h   -- public C API for other plugins
+└── src/                      -- the plugin itself
+    ├── obs-websocket.cpp     -- entry point; Qt UI block stripped
+    ├── obs-websocket.h
+    ├── Config.cpp            -- Migrate* functions stubbed to no-ops
+    ├── Config.h
+    ├── WebSocketApi.cpp
+    ├── WebSocketApi.h
+    ├── plugin-macros.h.in
+    ├── eventhandler/         -- libobs signal -> v5 event translation
+    ├── requesthandler/       -- v5 request type implementations
+    ├── utils/                -- helpers (Crypto, Json, Obs, Compat...)
+    └── websocketserver/      -- WebSocket++ server, v5 framing
+```
+
+## Patches applied
+
+The diff between this tree and upstream's `plugins/obs-websocket/`
+is intentionally small:
+
+1. **`src/forms/` directory removed** — drops `SettingsDialog`,
+   `ConnectInfo`, `*.ui`, `images/`, `resources.qrc`. No Qt UI.
+2. **`src/obs-websocket.cpp`** — the `#include "forms/SettingsDialog.h"`,
+   the `SettingsDialog *_settingsDialog` global, and the
+   `obs_frontend_*` Tools-menu wiring inside `obs_module_load()` are
+   replaced with a comment block explaining the fork.
+3. **`src/Config.cpp`** — `MigrateGlobalConfigData()` returns an
+   empty `json{}`, `MigratePersistentData()` only ensures the
+   module config directory exists. Neither calls the frontend API.
+
+## Phase 4d plan
+
+- Author the build wiring in `CMakeLists.txt`. Mirror upstream's
+  source list (minus `src/forms/*`), find the deps (websocketpp,
+  asio, nlohmann_json, qrcodegencpp) from
+  `upstream/.deps/obs-deps-*-x64/`, link `Qt6::Core` + `Qt6::Network`
+  + `OBS::libobs` (the latter via direct `obs.lib` reference like
+  `pulsar-headless` does).
+- Set the output to `obs-websocket.dll` alongside the other plugins
+  in `rundir/obs-plugins/64bit/` so libobs's default module path
+  picks it up.
+- Re-enable `PULSAR_BUILD_WEBSOCKET=ON` by default in the top-level
+  Pulsar CMakeLists.
+
+## Phase 4e
+
+Validate the v5 round-trip with an external client (e.g.
+`obsws-python`) connecting to `ws://127.0.0.1:<port>` after the
+plugin has produced its session JWT on `pulsar.exe` stdout.

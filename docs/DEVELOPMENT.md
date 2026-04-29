@@ -104,13 +104,19 @@ build it ourselves.
   (`-DENABLE_WEBSOCKET=OFF`) because it hardcodes Qt UI +
   frontend-api migration calls that crash without a real
   frontend.
-- **Phase 4c:** vendor-fork `upstream/plugins/obs-websocket/`
-  into `plugins/pulsar-websocket/`. Strip `forms/` (Qt
-  SettingsDialog / ConnectInfo), patch out the
-  `obs_frontend_get_current_profile_path` migration path so the
-  plugin loads under headless. Re-enable WebSocket support via
-  this plugin instead.
-- **Phase 4d:** validate v5 round-trip with an external client
+- **Phase 4c:** DONE for the source side. `plugins/pulsar-websocket/`
+  vendored from upstream obs-websocket v5.7.3 with `src/forms/`
+  dropped, `obs-websocket.cpp` stripped of the Qt menu /
+  SettingsDialog wiring, and `Config.cpp` migrate functions
+  reduced to no-ops. The CMakeLists is still a stub.
+- **Phase 4d:** wire the build for `pulsar-websocket`. Source list,
+  dependency lookups (websocketpp, asio, nlohmann_json,
+  qrcodegencpp from `upstream/.deps/obs-deps-*-x64/`), Qt6::Core +
+  Qt6::Network link, OBS::libobs link via `obs.lib`. Re-enable
+  `PULSAR_BUILD_WEBSOCKET=ON` and stop passing
+  `-DENABLE_WEBSOCKET=OFF` to upstream so our plugin replaces
+  upstream's obs-websocket.
+- **Phase 4e:** validate v5 round-trip with an external client
   (e.g. `obsws-python` against `ws://127.0.0.1:<port>`).
 - **Phase 4:** wire the `pulsar-websocket` plugin (fork of
   obs-websocket v5). Service speaks v5 baseline.
