@@ -7,7 +7,7 @@
 #
 # Kept as a stub so the plugin slot exists in the source tree.
 
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.28)
 project(pulsar-headless LANGUAGES CXX)
 
 message(STATUS "pulsar-headless: not yet implemented (Phase 2)")
