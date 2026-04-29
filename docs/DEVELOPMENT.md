@@ -38,25 +38,49 @@
 - Per-distro dependencies — upstream documents for Ubuntu / Fedora /
   Arch in `upstream/CI/linux/`
 
-## Local build (planned, Phase 1)
+## Local build (Phase 1, Windows)
+
+Phase 1 deliberately reuses obs-studio's own CMake preset
+(`windows-x64`) against the vendored `upstream/` submodule. No patches
+applied, no Pulsar plugins built, no headless mode yet. The goal is to
+prove the toolchain integration end-to-end and produce a runnable
+`obs64.exe` (full GUI obs-studio at this stage).
 
 ```
-git clone https://github.com/ZabLaboratory/Pulsar
+git clone --recurse-submodules git@github.com:ZabLaboratory/Pulsar.git
 cd Pulsar
-git submodule update --init --recursive
-
-# apply our patches onto upstream/
-scripts/apply-patches.sh   # Phase 1 deliverable
-
-# configure
-cmake -B build -S . -DPULSAR_BUILD_UPSTREAM=ON -DPULSAR_BUILD_PLUGINS=ON
-
-# build
-cmake --build build --config Release
-
-# package
-scripts/package-win.ps1    # or build-mac.sh / build-linux.sh
+scripts\build-win.ps1
 ```
+
+What `build-win.ps1` does:
+
+1. Locates CMake (prefers `D:\DevTools\CMake\bin\cmake.exe`, falls back
+   to `PATH`).
+2. Invokes `cmake --preset windows-x64 -S upstream` — the preset fetches
+   the prebuilt obs-deps + Qt6 + CEF tarballs from
+   `obsproject/obs-deps` based on hashes pinned in
+   `upstream/CMakePresets.json`.
+3. Generates a Visual Studio 17 2022 solution under
+   `upstream/build_x64/`.
+4. Invokes `cmake --build --preset windows-x64 --config RelWithDebInfo`.
+5. Resulting binary lands under
+   `upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs64.exe`.
+
+Phase 1 success criteria: that binary launches and runs the obs-studio
+UI. We are not (yet) touching its behaviour — only proving we can
+build it ourselves.
+
+## Phases 2+ (planned)
+
+- **Phase 2:** introduce the patch pipeline. First patch: build-system
+  metadata (rename product strings, version source). Confirms `git am`
+  on `upstream/` works cleanly.
+- **Phase 3:** disable Qt frontend via CMake options + first headless
+  run. At this point `obs64.exe` becomes a no-op service waiting on
+  the websocket plugin to drive it.
+- **Phase 4:** wire the `pulsar-websocket` plugin (fork of
+  obs-websocket v5). Service speaks v5 baseline.
+- See ARCHITECTURE.md for the full phase plan.
 
 ## CI
 

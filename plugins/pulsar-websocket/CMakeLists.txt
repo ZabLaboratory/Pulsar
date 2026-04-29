@@ -8,7 +8,7 @@
 #
 # Stub for now.
 
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.28)
 project(pulsar-websocket LANGUAGES CXX)
 
 message(STATUS "pulsar-websocket: not yet implemented (Phase 2)")

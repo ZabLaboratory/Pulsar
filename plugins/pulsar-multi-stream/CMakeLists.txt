@@ -7,7 +7,7 @@
 #
 # Stub for now.
 
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.28)
 project(pulsar-multi-stream LANGUAGES CXX)
 
 message(STATUS "pulsar-multi-stream: not yet implemented (Phase 4)")
