@@ -49,18 +49,39 @@ def find_ffprobe() -> str | None:
     return shutil.which("ffprobe")
 
 
-def assert_mp4_has_audio(path: pathlib.Path) -> bool:
-    """Run ffprobe and confirm the MP4 has at least one AAC audio stream.
-    Phase 9 added wasapi sources on the main audio mixer; without them the
-    encoder still emits a silent track, so this check verifies the muxer
-    wrote *some* audio stream rather than asserting non-silence."""
+def parse_rate(rate_str: str) -> float:
+    """ffprobe r_frame_rate is "num/den" (e.g. "60/1"). Returns float."""
+    if not rate_str:
+        return 0.0
+    if "/" in rate_str:
+        num, den = rate_str.split("/", 1)
+        try:
+            n = float(num); d = float(den)
+            return n / d if d else 0.0
+        except ValueError:
+            return 0.0
+    try:
+        return float(rate_str)
+    except ValueError:
+        return 0.0
+
+
+def assert_mp4_streams(path: pathlib.Path, expected_fps: int = 60,
+                       min_video_kbps: int = 4500) -> bool:
+    """Run ffprobe and confirm:
+      - one AAC audio stream (Phase 9)
+      - one h264 video stream at expected_fps (Phase 12a)
+      - average video bit_rate >= min_video_kbps (Phase 12a; below this the
+        encoder probably ignored our bitrate setting)
+    Phase 12a default target is 6000 kbps so the floor is set generously
+    at 4500 to absorb x264 RC variance over a 3 s sample."""
     ffprobe = find_ffprobe()
     if not ffprobe:
-        print("warn: ffprobe not found; skipping audio-track assertion")
+        print("warn: ffprobe not found; skipping stream assertions")
         return True
     try:
         out = subprocess.check_output(
-            [ffprobe, "-v", "error", "-show_streams", "-of", "json", str(path)],
+            [ffprobe, "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
             stderr=subprocess.STDOUT,
             timeout=10,
         )
@@ -68,15 +89,38 @@ def assert_mp4_has_audio(path: pathlib.Path) -> bool:
         print(f"error: ffprobe failed: {e.output.decode(errors='replace')}")
         return False
     info = json.loads(out)
-    audio = [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
+    streams = info.get("streams", [])
+
+    audio = [s for s in streams if s.get("codec_type") == "audio"]
     if not audio:
         print(f"error: MP4 has no audio stream: {path}")
         return False
     a = audio[0]
     print(f"   audio stream: codec={a.get('codec_name')} "
           f"channels={a.get('channels')} sample_rate={a.get('sample_rate')}")
-    if a.get("codec_name") != "aac":
-        print(f"warn: expected aac, got {a.get('codec_name')}")
+
+    video = [s for s in streams if s.get("codec_type") == "video"]
+    if not video:
+        print(f"error: MP4 has no video stream: {path}")
+        return False
+    v = video[0]
+    fps = parse_rate(v.get("r_frame_rate") or v.get("avg_frame_rate") or "")
+    print(f"   video stream: codec={v.get('codec_name')} "
+          f"size={v.get('width')}x{v.get('height')} fps={fps:.0f}")
+    if abs(fps - expected_fps) > 0.5:
+        print(f"error: expected {expected_fps} fps, got {fps:.2f}")
+        return False
+
+    # The video stream's own bit_rate is rarely populated by ffmpeg_muxer;
+    # fall back to the format-level bit_rate (audio + video). The 4500 kbps
+    # floor easily separates a 6000 kbps target from a stuck-on-defaults
+    # output even after subtracting ~160 kbps of audio.
+    fmt_kbps = int(info.get("format", {}).get("bit_rate", 0)) // 1000
+    print(f"   container bitrate: {fmt_kbps} kbps")
+    if fmt_kbps < min_video_kbps:
+        print(f"error: container bitrate {fmt_kbps} kbps below floor {min_video_kbps} kbps")
+        return False
+
     return True
 
 
@@ -239,10 +283,10 @@ async def probe(url: str, password: str) -> int:
             return 1
         print(f"   MP4 written: {path}  ({size:,} bytes)")
 
-        if not assert_mp4_has_audio(path):
+        if not assert_mp4_streams(path):
             return 1
 
-    print("\nphase 6+9 record pipeline validated end-to-end (video + audio)")
+    print("\nphase 6+9+12a record pipeline validated (video 60fps + bitrate + audio)")
     return 0
 
 

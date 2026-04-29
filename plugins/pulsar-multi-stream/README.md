@@ -37,6 +37,10 @@ goes through the vendor namespace.
 | `StopDestination` | `id` | `stopped: bool` |
 | `StartAllDestinations` | — | `ok: bool` |
 | `StopAllDestinations` | — | `ok: bool` |
+| `GetVideoSettings` | — | `fps, width, height, video_bitrate, video_rate_control, video_keyint_sec, audio_bitrate` |
+| `SetVideoSettings` | `video_bitrate?, audio_bitrate?` | `changed: bool, video_bitrate?, audio_bitrate?` (or `error`) |
+
+`SetVideoSettings` accepts only encoder-level mutations live: `video_bitrate` updates instantly via `obs_encoder_update`; `audio_bitrate` only updates when no output is pulling from the audio encoder (ffmpeg_aac doesn't support mid-stream re-init). `fps` / `width` / `height` are pinned at boot via `PULSAR_FPS` / `PULSAR_RESOLUTION` env vars; trying to set them through this request is rejected with a typed error.
 
 ### Kinds
 

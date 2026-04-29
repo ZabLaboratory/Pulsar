@@ -581,12 +581,30 @@ bool PulsarFrontendAPI::setup()
     if (!streamService)
         blog(LOG_WARNING, "[pulsar-frontend-stub] rtmp_common service unavailable");
 
-    // ---- Phase 6: capture source + encoders + record path ----
+    // ---- Phase 6 + 12a: capture source + encoders + record path ----
     // Encoders are bound to the global libobs video/audio mixers and
     // attached to recordOutput so obs_output_start (recording) can run
     // without a Phase 7+ destination plugin. obs_x264 + ffmpeg_aac are
     // always available in upstream's plugin set.
-    videoEncoder = obs_video_encoder_create("obs_x264", "PulsarVideoEnc", nullptr, nullptr);
+    //
+    // Phase 12a: explicit settings replace x264's defaults so the
+    // pipeline produces a 1080p60-grade stream out of the box and so
+    // operators (and Phase 12b's adaptive loop) can tune bitrates at
+    // runtime via obs_encoder_update.
+    int videoBitrate = 6000; // kbps -- 1080p60 baseline for Twitch
+    if (const char *e = std::getenv("PULSAR_VIDEO_BITRATE"); e && *e) {
+        int v = std::atoi(e);
+        if (v >= 200 && v <= 50000) videoBitrate = v;
+        else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_VIDEO_BITRATE=%s rejected", e);
+    }
+    OBSDataAutoRelease vEncSettings = obs_data_create();
+    obs_data_set_int(vEncSettings, "bitrate", videoBitrate);
+    obs_data_set_string(vEncSettings, "rate_control", "CBR");
+    obs_data_set_int(vEncSettings, "keyint_sec", 2);    // GOP = 2s -- Twitch / RTMP target
+    obs_data_set_string(vEncSettings, "preset", "veryfast");
+    obs_data_set_string(vEncSettings, "profile", "high");
+    obs_data_set_string(vEncSettings, "tune", "zerolatency");
+    videoEncoder = obs_video_encoder_create("obs_x264", "PulsarVideoEnc", vEncSettings, nullptr);
     if (!videoEncoder) {
         blog(LOG_WARNING, "[pulsar-frontend-stub] obs_x264 encoder unavailable");
     } else {
@@ -595,9 +613,18 @@ bool PulsarFrontendAPI::setup()
             obs_output_set_video_encoder(recordOutput, videoEncoder);
         if (streamOutput)
             obs_output_set_video_encoder(streamOutput, videoEncoder);
+        blog(LOG_INFO, "[pulsar-frontend-stub] x264 configured: %d kbps CBR, keyint=2s, preset=veryfast", videoBitrate);
     }
 
-    audioEncoder = obs_audio_encoder_create("ffmpeg_aac", "PulsarAudioEnc", nullptr, 0, nullptr);
+    int audioBitrate = 160; // kbps
+    if (const char *e = std::getenv("PULSAR_AUDIO_BITRATE"); e && *e) {
+        int v = std::atoi(e);
+        if (v >= 32 && v <= 512) audioBitrate = v;
+        else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_AUDIO_BITRATE=%s rejected", e);
+    }
+    OBSDataAutoRelease aEncSettings = obs_data_create();
+    obs_data_set_int(aEncSettings, "bitrate", audioBitrate);
+    audioEncoder = obs_audio_encoder_create("ffmpeg_aac", "PulsarAudioEnc", aEncSettings, 0, nullptr);
     if (!audioEncoder) {
         blog(LOG_WARNING, "[pulsar-frontend-stub] ffmpeg_aac encoder unavailable");
     } else {
@@ -606,6 +633,7 @@ bool PulsarFrontendAPI::setup()
             obs_output_set_audio_encoder(recordOutput, audioEncoder, 0);
         if (streamOutput)
             obs_output_set_audio_encoder(streamOutput, audioEncoder, 0);
+        blog(LOG_INFO, "[pulsar-frontend-stub] aac configured: %d kbps", audioBitrate);
     }
 
     // Capture source. Phase 6 uses window_capture (Windows). The window
