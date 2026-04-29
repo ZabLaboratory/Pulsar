@@ -33,6 +33,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <thread>
 
 #ifdef _WIN32
@@ -61,16 +63,46 @@ BOOL WINAPI console_ctrl_handler(DWORD ctrl_type)
 }
 #endif
 
+// Phase 12a: video pipeline parameters are env-overridable at boot.
+//   PULSAR_FPS         -- frames-per-second (default 60). Must be an integer
+//                         libobs accepts as fps_num/1.
+//   PULSAR_RESOLUTION  -- "<W>x<H>" string (default "1920x1080"). Both base
+//                         and output resolution are set to this value;
+//                         downscaling is delegated to per-encoder scaling
+//                         when needed (Phase 12b+).
+// Changing these after obs_reset_video has run requires another reset and
+// re-attaching encoders, so they are intentionally fixed at boot.
 bool reset_video()
 {
     obs_video_info ovi = {};
     ovi.graphics_module = "libobs-d3d11.dll";
-    ovi.fps_num = 30;
+
+    int fps = 60;
+    if (const char *e = std::getenv("PULSAR_FPS"); e && *e) {
+        int v = std::atoi(e);
+        if (v == 24 || v == 30 || v == 48 || v == 60 || v == 120)
+            fps = v;
+        else
+            std::fprintf(stderr, "pulsar-headless: PULSAR_FPS=%s rejected; using %d\n", e, fps);
+    }
+    ovi.fps_num = fps;
     ovi.fps_den = 1;
-    ovi.base_width = 1920;
-    ovi.base_height = 1080;
-    ovi.output_width = 1920;
-    ovi.output_height = 1080;
+
+    int width = 1920, height = 1080;
+    if (const char *e = std::getenv("PULSAR_RESOLUTION"); e && *e) {
+        int w = 0, h = 0;
+        if (std::sscanf(e, "%dx%d", &w, &h) == 2 && w > 0 && h > 0 &&
+            w <= 7680 && h <= 4320) {
+            width = w; height = h;
+        } else {
+            std::fprintf(stderr, "pulsar-headless: PULSAR_RESOLUTION=%s rejected; using %dx%d\n",
+                         e, width, height);
+        }
+    }
+    ovi.base_width = width;
+    ovi.base_height = height;
+    ovi.output_width = width;
+    ovi.output_height = height;
     ovi.output_format = VIDEO_FORMAT_NV12;
     ovi.colorspace = VIDEO_CS_DEFAULT;
     ovi.range = VIDEO_RANGE_DEFAULT;
@@ -85,6 +117,7 @@ bool reset_video()
                      result);
         return false;
     }
+    std::fprintf(stdout, "pulsar-headless: video %dx%d @ %d fps\n", width, height, fps);
     return true;
 }
 

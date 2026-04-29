@@ -489,6 +489,100 @@ void on_stop_all(obs_data_t * /*req*/, obs_data_t *res, void *)
     obs_data_set_bool(res, "ok", true);
 }
 
+// ---- Phase 12a: video / encoder settings vendor requests --------------
+
+// Returns the encoders the streaming output is wired to. Lazy: callers
+// dispose of the OBSOutputAutoRelease, but the encoder pointers belong to
+// frontend-stub and must NOT be released.
+static void get_current_encoders(obs_encoder_t *&vEnc, obs_encoder_t *&aEnc)
+{
+    OBSOutputAutoRelease srcOutput = obs_frontend_get_streaming_output();
+    if (!srcOutput) {
+        vEnc = nullptr;
+        aEnc = nullptr;
+        return;
+    }
+    vEnc = obs_output_get_video_encoder(srcOutput);
+    aEnc = obs_output_get_audio_encoder(srcOutput, 0);
+}
+
+void on_get_video_settings(obs_data_t * /*req*/, obs_data_t *res, void *)
+{
+    obs_video_info ovi = {};
+    if (obs_get_video_info(&ovi)) {
+        obs_data_set_int(res, "fps", ovi.fps_num / (ovi.fps_den ? ovi.fps_den : 1));
+        obs_data_set_int(res, "width", static_cast<long long>(ovi.output_width));
+        obs_data_set_int(res, "height", static_cast<long long>(ovi.output_height));
+    }
+    obs_encoder_t *vEnc = nullptr, *aEnc = nullptr;
+    get_current_encoders(vEnc, aEnc);
+    if (vEnc) {
+        OBSDataAutoRelease s = obs_encoder_get_settings(vEnc);
+        obs_data_set_int(res, "video_bitrate", obs_data_get_int(s, "bitrate"));
+        obs_data_set_string(res, "video_rate_control", obs_data_get_string(s, "rate_control"));
+        obs_data_set_int(res, "video_keyint_sec", obs_data_get_int(s, "keyint_sec"));
+    }
+    if (aEnc) {
+        OBSDataAutoRelease s = obs_encoder_get_settings(aEnc);
+        obs_data_set_int(res, "audio_bitrate", obs_data_get_int(s, "bitrate"));
+    }
+}
+
+void on_set_video_settings(obs_data_t *req, obs_data_t *res, void *)
+{
+    // fps / width / height are pinned at obs_reset_video time. Surface a
+    // typed rejection if a client tries to mutate them; pulsar-headless
+    // would have to restart for that to take effect.
+    if (obs_data_has_user_value(req, "fps") || obs_data_has_user_value(req, "width") ||
+        obs_data_has_user_value(req, "height")) {
+        obs_data_set_string(res, "error",
+            "fps / width / height are fixed at boot via PULSAR_FPS / PULSAR_RESOLUTION; "
+            "restart pulsar.exe with new env vars to change them");
+        return;
+    }
+
+    obs_encoder_t *vEnc = nullptr, *aEnc = nullptr;
+    get_current_encoders(vEnc, aEnc);
+
+    bool changed = false;
+
+    if (obs_data_has_user_value(req, "video_bitrate") && vEnc) {
+        long long newKbps = obs_data_get_int(req, "video_bitrate");
+        if (newKbps < 200 || newKbps > 50000) {
+            obs_data_set_string(res, "error", "video_bitrate must be in [200, 50000] kbps");
+            return;
+        }
+        OBSDataAutoRelease patch = obs_data_create();
+        obs_data_set_int(patch, "bitrate", newKbps);
+        obs_encoder_update(vEnc, patch);
+        obs_data_set_int(res, "video_bitrate", newKbps);
+        changed = true;
+    }
+
+    if (obs_data_has_user_value(req, "audio_bitrate") && aEnc) {
+        long long newKbps = obs_data_get_int(req, "audio_bitrate");
+        if (newKbps < 32 || newKbps > 512) {
+            obs_data_set_string(res, "error", "audio_bitrate must be in [32, 512] kbps");
+            return;
+        }
+        if (obs_encoder_active(aEnc)) {
+            // ffmpeg_aac re-init on bitrate change is not supported mid-stream;
+            // reject so we don't introduce hidden encoder restarts.
+            obs_data_set_string(res, "error",
+                "audio_bitrate cannot change while audio encoder is active; stop all "
+                "outputs first");
+            return;
+        }
+        OBSDataAutoRelease patch = obs_data_create();
+        obs_data_set_int(patch, "bitrate", newKbps);
+        obs_encoder_update(aEnc, patch);
+        obs_data_set_int(res, "audio_bitrate", newKbps);
+        changed = true;
+    }
+
+    obs_data_set_bool(res, "changed", changed);
+}
+
 } // namespace
 
 // ---- module entry points ---------------------------------------------------
@@ -511,15 +605,17 @@ void obs_module_post_load(void)
         return;
     }
 
-    obs_websocket_vendor_register_request(g_vendor, "GetDestinations",   on_get_destinations,   nullptr);
-    obs_websocket_vendor_register_request(g_vendor, "CreateDestination", on_create_destination, nullptr);
-    obs_websocket_vendor_register_request(g_vendor, "RemoveDestination", on_remove_destination, nullptr);
-    obs_websocket_vendor_register_request(g_vendor, "StartDestination",  on_start_destination,  nullptr);
-    obs_websocket_vendor_register_request(g_vendor, "StopDestination",   on_stop_destination,   nullptr);
-    obs_websocket_vendor_register_request(g_vendor, "StartAllDestinations", on_start_all,       nullptr);
-    obs_websocket_vendor_register_request(g_vendor, "StopAllDestinations",  on_stop_all,        nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "GetDestinations",      on_get_destinations,    nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "CreateDestination",    on_create_destination,  nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "RemoveDestination",    on_remove_destination,  nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "StartDestination",     on_start_destination,   nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "StopDestination",      on_stop_destination,    nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "StartAllDestinations", on_start_all,           nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "StopAllDestinations",  on_stop_all,            nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "GetVideoSettings",     on_get_video_settings,  nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "SetVideoSettings",     on_set_video_settings,  nullptr);
 
-    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 7 requests");
+    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 9 requests");
 }
 
 void obs_module_unload(void)
