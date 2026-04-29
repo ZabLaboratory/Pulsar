@@ -66,9 +66,16 @@ jobs:
         # PULSAR_BUNDLE_SKIP_POSTINSTALL skips the binary download in
         # pulsar-bundle's postinstall -- we don't need pulsar.exe to
         # publish its npm package.
+        #
+        # --force is necessary because pulsar-bundle's package.json
+        # declares os: ["win32"], cpu: ["x64"]. The publish runner is
+        # ubuntu-latest, so npm refuses to install pulsar-bundle without
+        # --force. Publishing the tarball doesn't need to actually run
+        # pulsar.exe; we just need tsc to compile the TS sources, then
+        # npm publish ships the dist/.
         env:
           PULSAR_BUNDLE_SKIP_POSTINSTALL: '1'
-        run: npm install --no-audit --no-fund
+        run: npm install --no-audit --no-fund --force
 
       - name: Build all packages
         run: npm run build --workspaces --if-present
