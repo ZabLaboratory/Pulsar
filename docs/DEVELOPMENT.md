@@ -87,11 +87,13 @@ build it ourselves.
   audio etc.) still build. `-GuiBuild` switch restores the original
   obs-studio behaviour. `-Clean` switch wipes the build directory
   while preserving dependency caches.
-- **Phase 3b:** ship the `pulsar-headless` executable target -- a
-  minimal C++ entry point that does `obs_startup`, configures video
-  / audio, calls `obs_load_all_modules`, and idles waiting for a
-  shutdown signal. This is the binary that `pulsar-websocket` will
-  drive in Phase 4.
+- **Phase 3b:** DONE. `pulsar.exe` produced from
+  `plugins/pulsar-headless/main.cpp`, linked against the libobs
+  upstream built. Currently boots libobs (CPU + sysinfo
+  detection, default canvas creation), prints the patched version
+  string, then shuts down. No Qt. Phase 4+ extends this with
+  video/audio reset, `obs_load_all_modules`, signal-driven idle
+  loop, and the websocket server hookup.
 - **Phase 4:** wire the `pulsar-websocket` plugin (fork of
   obs-websocket v5). Service speaks v5 baseline.
 - See ARCHITECTURE.md for the full phase plan.

@@ -208,10 +208,40 @@ if ($Stage -in @('build', 'all')) {
     $obsExe = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo\bin\64bit\obs64.exe'
     if (Test-Path $obsExe) {
         Write-Host ""
-        Write-Host "Built: $obsExe"
+        Write-Host "Built: $obsExe (GUI build, stale if -GuiBuild was not passed)"
+    }
+}
+
+# --- Build Pulsar plugins (top-level Pulsar CMakeLists) -------------------
+# Runs after upstream/ is built. plugins/pulsar-headless/ links against
+# upstream's libobs and lands pulsar.exe next to obs.dll in the rundir
+# so the loader resolves the runtime DLLs without PATH changes.
+
+if ($Stage -in @('build', 'all')) {
+    $libobsLib = Join-Path $upstream 'build_x64\libobs\RelWithDebInfo\obs.lib'
+    if (-not (Test-Path $libobsLib)) {
+        Write-Host ""
+        Write-Host "Skipping Pulsar plugin build: libobs.lib not present at $libobsLib"
+        Write-Host "Run a full upstream build first."
     } else {
-        Write-Host "Build finished but obs64.exe not found at expected path:"
-        Write-Host "  $obsExe"
-        Write-Host "Inspect upstream/build_x64/ to locate the produced binary."
+        Write-Host ""
+        Write-Host "--- Configuring Pulsar plugins ---"
+        $pulsarBuild = Join-Path $root 'build'
+        & $cmake -S $root -B $pulsarBuild -G "Visual Studio 17 2022" -A x64
+        if ($LASTEXITCODE -ne 0) { throw "Pulsar configure failed" }
+
+        Write-Host ""
+        Write-Host "--- Building Pulsar plugins ---"
+        & $cmake --build $pulsarBuild --config RelWithDebInfo
+        if ($LASTEXITCODE -ne 0) { throw "Pulsar build failed" }
+
+        $pulsarExe = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo\bin\64bit\pulsar.exe'
+        if (Test-Path $pulsarExe) {
+            Write-Host ""
+            Write-Host "Built: $pulsarExe"
+        } else {
+            Write-Host "Pulsar build finished but pulsar.exe not found at:"
+            Write-Host "  $pulsarExe"
+        }
     }
 }
