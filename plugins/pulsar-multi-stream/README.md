@@ -31,26 +31,35 @@ goes through the vendor namespace.
 | Request | Inputs | Outputs |
 |---|---|---|
 | `GetDestinations` | — | `destinations: [{id, name, kind, url, enabled, active}, ...]` |
-| `CreateDestination` | `name, kind ("rtmp_custom" \| "vod_local"), url, key?` | `id` |
+| `CreateDestination` | `name, kind ("rtmp_custom" \| "vod_local" \| "twitch"), url, key?` | `id` (or `error`) |
 | `RemoveDestination` | `id` | `removed: bool` |
 | `StartDestination` | `id` | `started: bool, error?: string` |
 | `StopDestination` | `id` | `stopped: bool` |
 | `StartAllDestinations` | — | `ok: bool` |
 | `StopAllDestinations` | — | `ok: bool` |
 
-For `vod_local`, the `url` field is reused as the file path. Output
-paths are NOT auto-timestamped — supply a fully resolved path; the
-client (Prism) is responsible for naming.
+### Kinds
 
-For `rtmp_custom`, `url` is the server URL (`rtmp://...`) and `key`
-the stream key. Pulsar passes both through `obs_service_create("rtmp_custom", ...)`.
+| Kind | `url` field | `key` field |
+|---|---|---|
+| `rtmp_custom` | RTMP server URL (`rtmp://...` or `rtmps://...`, validated) | required, non-empty stream key |
+| `vod_local` | output file path (parent dir is mkdir-p'd) | unused |
+| `twitch` | ignored on input — Pulsar pins the URL to `rtmp://live.twitch.tv/app/` and surfaces the pinned value in `GetDestinations` | required, non-empty Twitch stream key |
+
+Output paths for `vod_local` are NOT auto-timestamped — supply a fully
+resolved path; the client (Prism) is responsible for naming.
+
+`RemoveDestination` while a destination is active is safe: the registry
+calls `obs_output_stop` and polls until inactive (with a `force_stop`
+fallback after ~1 s) before releasing handles, so the MP4 / RTMP
+session is finalised gracefully.
 
 ## Phase scope
 
-- **PR1 (this)** — `rtmp_custom` + `vod_local`, registry, vendor API,
-  encode sharing.
-- **PR2** — `twitch` kind (alias of `rtmp_custom` with a pinned base
-  URL), input validation, harden disable/remove during active state.
+- **PR1** — `rtmp_custom` + `vod_local`, registry, vendor API, encode
+  sharing.
+- **PR2 (this)** — `twitch` kind alias, input validation, validated
+  graceful remove-during-active.
 - **Later** — destination state events (`pulsar:DestinationStateChanged`),
   per-destination retry policy, persistence of destination configs,
   YouTube OAuth.
