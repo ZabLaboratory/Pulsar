@@ -33,7 +33,11 @@
 #include <util/util.hpp>
 
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -283,7 +287,10 @@ public:
     void obs_frontend_open_sceneitem_edit_transform(obs_sceneitem_t *) override {}
 
     // ---------- assorted strings ----------
-    char *obs_frontend_get_current_record_output_path(void) override { return bstrdup_or_null(""); }
+    char *obs_frontend_get_current_record_output_path(void) override
+    {
+        return bstrdup_or_null(recordDirectory.c_str());
+    }
     const char *obs_frontend_get_locale_string(const char *string) override { return string; }
     bool obs_frontend_is_theme_dark(void) override { return true; }
     char *obs_frontend_get_last_recording(void) override { return bstrdup_or_null(lastRecording.c_str()); }
@@ -427,6 +434,13 @@ private:
     obs_output_t *virtualcamOutput = nullptr;
     obs_service_t *streamService = nullptr;
 
+    obs_encoder_t *videoEncoder = nullptr;
+    obs_encoder_t *audioEncoder = nullptr;
+    obs_source_t *captureSource = nullptr;
+    obs_sceneitem_t *captureItem = nullptr;
+
+    std::string recordDirectory; // resolved at setup() from env or default
+
     int transitionDuration = 300;
     int tbarPosition = 0;
     bool studioMode = false;
@@ -452,6 +466,11 @@ bool PulsarFrontendAPI::setup()
     currentScene = obs_source_get_ref(obs_scene_get_source(scene));
     obs_scene_release(scene); // currentScene holds the ref now
     scenes.push_back(obs_source_get_ref(currentScene));
+
+    // Channel 0 is libobs's main video output. Without a source bound,
+    // the encoder receives no frames and obs_output_start declines
+    // silently. Bind the default scene now and rebind on set_current_scene.
+    obs_set_output_source(0, currentScene);
 
     // Default transition (fade).
     obs_source_t *fade = obs_source_create_private("fade_transition", "Fade", nullptr);
@@ -506,6 +525,64 @@ bool PulsarFrontendAPI::setup()
     if (!streamService)
         blog(LOG_WARNING, "[pulsar-frontend-stub] rtmp_common service unavailable");
 
+    // ---- Phase 6: capture source + encoders + record path ----
+    // Encoders are bound to the global libobs video/audio mixers and
+    // attached to recordOutput so obs_output_start (recording) can run
+    // without a Phase 7+ destination plugin. obs_x264 + ffmpeg_aac are
+    // always available in upstream's plugin set.
+    videoEncoder = obs_video_encoder_create("obs_x264", "PulsarVideoEnc", nullptr, nullptr);
+    if (!videoEncoder) {
+        blog(LOG_WARNING, "[pulsar-frontend-stub] obs_x264 encoder unavailable");
+    } else {
+        obs_encoder_set_video(videoEncoder, obs_get_video());
+        if (recordOutput)
+            obs_output_set_video_encoder(recordOutput, videoEncoder);
+        if (streamOutput)
+            obs_output_set_video_encoder(streamOutput, videoEncoder);
+    }
+
+    audioEncoder = obs_audio_encoder_create("ffmpeg_aac", "PulsarAudioEnc", nullptr, 0, nullptr);
+    if (!audioEncoder) {
+        blog(LOG_WARNING, "[pulsar-frontend-stub] ffmpeg_aac encoder unavailable");
+    } else {
+        obs_encoder_set_audio(audioEncoder, obs_get_audio());
+        if (recordOutput)
+            obs_output_set_audio_encoder(recordOutput, audioEncoder, 0);
+        if (streamOutput)
+            obs_output_set_audio_encoder(streamOutput, audioEncoder, 0);
+    }
+
+    // Capture source. Phase 6 uses window_capture (Windows). The window
+    // descriptor follows obs's "<title>:<class>:<exe>" format. PULSAR_CAPTURE_WINDOW
+    // overrides the default; when unset we leave the source unbound (it
+    // produces black frames but the pipeline still encodes / records).
+    OBSDataAutoRelease captureSettings = obs_data_create();
+    if (const char *envWindow = std::getenv("PULSAR_CAPTURE_WINDOW"); envWindow && *envWindow) {
+        obs_data_set_string(captureSettings, "window", envWindow);
+        blog(LOG_INFO, "[pulsar-frontend-stub] window_capture target: %s", envWindow);
+    } else {
+        blog(LOG_INFO, "[pulsar-frontend-stub] window_capture has no target (set PULSAR_CAPTURE_WINDOW); will produce black frames");
+    }
+    obs_data_set_int(captureSettings, "method", 2);    // WGC -- works against most modern apps incl. CEF/Electron
+    obs_data_set_bool(captureSettings, "cursor", true);
+    obs_data_set_bool(captureSettings, "client_area", true);
+    captureSource = obs_source_create("window_capture", "PulsarCapture", captureSettings, nullptr);
+    if (!captureSource) {
+        blog(LOG_WARNING, "[pulsar-frontend-stub] window_capture source unavailable");
+    } else if (scene) {
+        captureItem = obs_scene_add(scene, captureSource);
+    }
+
+    // Recording directory resolution. PULSAR_RECORD_DIR overrides the default,
+    // which is "<cwd>/recordings". The directory is created lazily on the
+    // first recording_start so we don't fail setup if the FS is read-only.
+    if (const char *envDir = std::getenv("PULSAR_RECORD_DIR"); envDir && *envDir) {
+        recordDirectory = envDir;
+    } else {
+        recordDirectory = (std::filesystem::current_path() / "recordings").string();
+    }
+    blog(LOG_INFO, "[pulsar-frontend-stub] recordings will land under: %s", recordDirectory.c_str());
+
     return true;
 }
 
@@ -517,6 +594,11 @@ void PulsarFrontendAPI::teardown()
                 obs_source_release(s);
         v.clear();
     };
+
+    // Unbind any source held on libobs main mixer channel before releasing
+    // outputs / scenes -- otherwise libobs keeps a ref past teardown and
+    // logs a leaked-source warning at obs_shutdown.
+    obs_set_output_source(0, nullptr);
 
     if (streamOutput) {
         signal_handler_t *sh = obs_output_get_signal_handler(streamOutput);
@@ -560,6 +642,24 @@ void PulsarFrontendAPI::teardown()
     if (streamService) {
         obs_service_release(streamService);
         streamService = nullptr;
+    }
+
+    // Encoders + capture source. Encoders carry refs from outputs which
+    // were already released above, so this just drops the setup-time ref.
+    if (videoEncoder) {
+        obs_encoder_release(videoEncoder);
+        videoEncoder = nullptr;
+    }
+    if (audioEncoder) {
+        obs_encoder_release(audioEncoder);
+        audioEncoder = nullptr;
+    }
+    if (captureSource) {
+        // The scene owns the sceneitem, which holds its own ref to the
+        // source. Release the setup-time ref; scene teardown clears the rest.
+        obs_source_release(captureSource);
+        captureSource = nullptr;
+        captureItem = nullptr;
     }
 
     if (currentTransition) {
@@ -610,6 +710,7 @@ void PulsarFrontendAPI::obs_frontend_set_current_scene(obs_source_t *scene)
         return;
     obs_source_t *prev = currentScene;
     currentScene = obs_source_get_ref(scene);
+    obs_set_output_source(0, currentScene);
     if (prev)
         obs_source_release(prev);
     emit(OBS_FRONTEND_EVENT_SCENE_CHANGED);
@@ -664,10 +765,43 @@ void PulsarFrontendAPI::obs_frontend_recording_start(void)
 {
     if (!recordOutput || obs_output_active(recordOutput))
         return;
+
+    // Resolve a fresh timestamped MP4 path under recordDirectory and bind
+    // it to ffmpeg_muxer's settings just before start. mkdir-as-needed so
+    // a missing recordings/ folder doesn't fail silently inside libobs.
+    std::error_code ec;
+    std::filesystem::create_directories(recordDirectory, ec);
+    if (ec) {
+        blog(LOG_WARNING, "[pulsar-frontend-stub] could not mkdir %s: %s",
+             recordDirectory.c_str(), ec.message().c_str());
+        return;
+    }
+
+    auto now = std::chrono::system_clock::now();
+    auto t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char stamp[64];
+    std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tm);
+    std::filesystem::path mp4 = std::filesystem::path(recordDirectory) /
+                                ("pulsar-" + std::string(stamp) + ".mp4");
+
+    OBSDataAutoRelease settings = obs_data_create();
+    obs_data_set_string(settings, "path", mp4.string().c_str());
+    // Empty muxer_settings -> ffmpeg picks defaults from extension (mp4 -> faststart on stop).
+    obs_output_update(recordOutput, settings);
+
     emit(OBS_FRONTEND_EVENT_RECORDING_STARTING);
-    if (!obs_output_start(recordOutput))
+    if (!obs_output_start(recordOutput)) {
         blog(LOG_INFO, "[pulsar-frontend-stub] obs_output_start (record) declined: %s",
              obs_output_get_last_error(recordOutput));
+        return;
+    }
+    blog(LOG_INFO, "[pulsar-frontend-stub] recording -> %s", mp4.string().c_str());
 }
 
 void PulsarFrontendAPI::obs_frontend_recording_stop(void)
@@ -756,12 +890,12 @@ extern "C" void pulsar_frontend_init(void)
         blog(LOG_WARNING, "[pulsar-frontend-stub] init called twice");
         return;
     }
+    // Install the vtable BEFORE obs_load_all_modules so plugins (notably
+    // obs-websocket) find a populated callback table at obs_module_load time.
+    // Heavy state -- scenes, encoders, outputs, sources, services -- depends
+    // on plugins that aren't loaded yet, so it lives in setup() called from
+    // pulsar_frontend_finished_loading() once obs_post_load_modules has run.
     auto *api = new PulsarFrontendAPI();
-    if (!api->setup()) {
-        delete api;
-        blog(LOG_ERROR, "[pulsar-frontend-stub] setup failed");
-        return;
-    }
     g_api = api;
     obs_frontend_set_callbacks_internal(api);
     obs_set_ui_task_handler(pulsar_ui_task_handler);
@@ -772,6 +906,8 @@ extern "C" void pulsar_frontend_finished_loading(void)
 {
     if (!g_api)
         return;
+    if (!g_api->setup())
+        blog(LOG_WARNING, "[pulsar-frontend-stub] setup() reported partial failure");
     g_api->emit(OBS_FRONTEND_EVENT_FINISHED_LOADING);
 }
 
