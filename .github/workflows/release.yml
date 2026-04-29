@@ -59,6 +59,18 @@ jobs:
             exit 1
           }
 
+      - name: Configure git identity
+        # build-win.ps1 calls `git am` to apply patches/ onto the
+        # upstream/ submodule. `git am` writes a commit, which requires
+        # a configured user.name / user.email -- absent on a fresh
+        # GitHub Actions runner, hence the v0.1.0 build failed at this
+        # step on first try. The values are scoped to this checkout
+        # only; nothing about the published commits changes.
+        shell: pwsh
+        run: |
+          git config --global user.email "ci@pulsar.zablaboratory"
+          git config --global user.name "Pulsar CI"
+
       - name: Install CMake 3.28+
         uses: lukka/get-cmake@latest
         with:
