@@ -182,6 +182,19 @@ if ($Stage -in @('configure', 'all')) {
         $extraArgs += '-DENABLE_FRONTEND=OFF'
         $extraArgs += '-DENABLE_UI=OFF'
         $extraArgs += '-DENABLE_BROWSER=OFF'
+        # ENABLE_WEBSOCKET=OFF -- skip the upstream obs-websocket
+        # plugin. It hardcodes Qt UI (forms/SettingsDialog) and
+        # frontend-api dependencies that crash in obs_module_load
+        # under our headless service: MigratePersistentData calls
+        # obs_frontend_get_current_profile_path which returns null
+        # without a registered frontend, and the migrate path then
+        # dereferences it.
+        #
+        # Phase 4c will introduce plugins/pulsar-websocket/ -- a
+        # vendor-fork of obs-websocket with the Qt UI / frontend
+        # dependencies stripped -- and re-enable WebSocket support
+        # via that plugin.
+        $extraArgs += '-DENABLE_WEBSOCKET=OFF'
     }
     Push-Location $upstream
     try {
@@ -242,6 +255,60 @@ if ($Stage -in @('build', 'all')) {
         } else {
             Write-Host "Pulsar build finished but pulsar.exe not found at:"
             Write-Host "  $pulsarExe"
+        }
+
+        # Stage Qt6 runtime DLLs into the rundir.
+        #
+        # pulsar-headless creates a QApplication so libobs plugins
+        # that link against Qt (notably obs-websocket) can run inside
+        # the headless service. We force QT_QPA_PLATFORM=minimal at
+        # runtime so no Qt platform plugin DLL is required, but the
+        # base Qt6 DLLs themselves still need to be loadable.
+        # Upstream's CMake stages these as part of the frontend build
+        # steps -- with ENABLE_FRONTEND=OFF that copy never happens.
+        $qt6Bin = Get-ChildItem -Path (Join-Path $upstream '.deps') `
+                                -Filter 'obs-deps-qt6-*-x64' `
+                                -Directory `
+                                -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+        if ($qt6Bin) {
+            $qt6BinDir = Join-Path $qt6Bin.FullName 'bin'
+            $rundirBin = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo\bin\64bit'
+            if ((Test-Path $qt6BinDir) -and (Test-Path $rundirBin)) {
+                $qt6Copied = 0
+                foreach ($name in @('Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Network.dll','Qt6Svg.dll','Qt6Xml.dll')) {
+                    $src = Join-Path $qt6BinDir $name
+                    if (Test-Path $src) {
+                        Copy-Item -Force $src $rundirBin
+                        $qt6Copied++
+                    }
+                }
+                Write-Host "Staged $qt6Copied Qt6 runtime DLLs into rundir/bin/64bit/"
+            }
+
+            # Qt platform plugins. The QApplication in pulsar-headless
+            # forces QT_QPA_PLATFORM=minimal at runtime; Qt then looks
+            # for `platforms/qminimal.dll` next to the exe. Without it
+            # QApplication aborts with "Could not find the Qt platform
+            # plugin". Copy the minimum we need (minimal + windows for
+            # belt-and-braces) into rundir/bin/64bit/platforms/.
+            $qt6PluginsDir = Join-Path $qt6Bin.FullName 'plugins'
+            $platformsSrc  = Join-Path $qt6PluginsDir 'platforms'
+            if (Test-Path $platformsSrc) {
+                $platformsDst = Join-Path $rundirBin 'platforms'
+                if (-not (Test-Path $platformsDst)) {
+                    New-Item -ItemType Directory -Path $platformsDst -Force | Out-Null
+                }
+                $qt6PlatCopied = 0
+                foreach ($name in @('qminimal.dll','qwindows.dll')) {
+                    $src = Join-Path $platformsSrc $name
+                    if (Test-Path $src) {
+                        Copy-Item -Force $src $platformsDst
+                        $qt6PlatCopied++
+                    }
+                }
+                Write-Host "Staged $qt6PlatCopied Qt6 platform plugins into rundir/bin/64bit/platforms/"
+            }
         }
 
         # Stage obs-deps runtime DLLs into the rundir.

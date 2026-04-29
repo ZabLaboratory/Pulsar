@@ -95,12 +95,22 @@ build it ourselves.
   loads 20 plugins from libobs's built-in default search paths,
   console-control handler flips an atomic flag for graceful
   shutdown, 100 ms idle loop polls it. ~66 MB RAM idle.
-- **Phase 4b:** fork `upstream/plugins/obs-websocket/` into our
-  `plugins/pulsar-websocket/`, build it as a libobs plugin,
-  load it via `obs_load_all_modules` so external clients can
-  drive `pulsar.exe` over WebSocket on a session-random
-  loopback port.
-- **Phase 4c:** validate the round-trip with a v5 client
+- **Phase 4b:** DONE. Qt infrastructure: `pulsar-headless`
+  constructs a `QApplication` (forced `QT_QPA_PLATFORM=minimal`
+  so no display server / platform plugin DLL is required for
+  rendering -- only the Qt event loop + QString/QJson machinery).
+  Build pipeline stages Qt6 runtime + minimal/windows platform
+  plugins. Upstream obs-websocket disabled
+  (`-DENABLE_WEBSOCKET=OFF`) because it hardcodes Qt UI +
+  frontend-api migration calls that crash without a real
+  frontend.
+- **Phase 4c:** vendor-fork `upstream/plugins/obs-websocket/`
+  into `plugins/pulsar-websocket/`. Strip `forms/` (Qt
+  SettingsDialog / ConnectInfo), patch out the
+  `obs_frontend_get_current_profile_path` migration path so the
+  plugin loads under headless. Re-enable WebSocket support via
+  this plugin instead.
+- **Phase 4d:** validate v5 round-trip with an external client
   (e.g. `obsws-python` against `ws://127.0.0.1:<port>`).
 - **Phase 4:** wire the `pulsar-websocket` plugin (fork of
   obs-websocket v5). Service speaks v5 baseline.

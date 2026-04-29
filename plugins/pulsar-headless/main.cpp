@@ -11,6 +11,9 @@
 
 #include <obs.h>
 
+#include <QtCore/QByteArray>
+#include <QtWidgets/QApplication>
+
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -99,8 +102,15 @@ void load_modules()
 
 int main(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
+    // Force the offscreen Qt platform so QApplication can construct
+    // without a display server / platform plugin DLL. obs-websocket
+    // (and other libobs plugins) link against Qt6 and assume a
+    // QApplication exists; in headless mode we never show a widget,
+    // but the QApplication instance is still required for
+    // QObject/QString/QJson machinery to work.
+    qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("minimal"));
+
+    QApplication qt_app(argc, argv);
 
     if (!obs_startup("en-US", nullptr, nullptr)) {
         std::fprintf(stderr, "pulsar-headless: obs_startup failed\n");
