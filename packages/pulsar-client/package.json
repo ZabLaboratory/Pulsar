@@ -1,6 +1,6 @@
 {
   "name": "@clodocapeo/pulsar-client",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Typed TypeScript client for Pulsar -- the headless broadcast engine bundled in Prism.",
   "license": "MIT",
   "repository": {

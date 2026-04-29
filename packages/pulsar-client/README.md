@@ -108,4 +108,9 @@ npm run build  # tsc -> dist/
 
 ## License
 
-MIT.
+MIT. See [`LICENSE`](./LICENSE).
+
+This wrapper contains no libobs code and links nothing GPL — it speaks
+obs-websocket v5 over a WebSocket. The `pulsar.exe` engine it talks to is
+distributed separately under GPL-2.0-or-later, but the process boundary
+keeps the licences disjoint (mere aggregation, not derivative work).
