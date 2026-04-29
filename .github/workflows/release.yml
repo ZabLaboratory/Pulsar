@@ -84,7 +84,13 @@ jobs:
       - name: Build (build-win.ps1)
         shell: pwsh
         run: |
-          ./scripts/build-win.ps1 -CI
+          # Don't pass -CI: that switches the *configure* preset to
+          # windows-ci-x64, but upstream's CMakePresets.json defines no
+          # matching *build* preset (only windows-x64 / windows-arm64),
+          # so `cmake --build --preset windows-ci-x64` errors out with
+          # "No such build preset". Sticking to windows-x64 throughout
+          # works on both local dev and the GitHub runner.
+          ./scripts/build-win.ps1
 
       - name: Package (package-win.ps1 -Zip)
         shell: pwsh
