@@ -28,6 +28,8 @@ import base64
 import hashlib
 import json
 import pathlib
+import shutil
+import subprocess
 import sys
 from typing import Callable
 
@@ -36,6 +38,46 @@ try:
 except ImportError:
     print("error: pip install websockets")
     sys.exit(2)
+
+
+def find_ffprobe() -> str | None:
+    """Prefer the ffprobe shipped with obs-deps so we use the same build the
+    runtime muxer was linked against. Fall back to PATH."""
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    for cand in (repo / "upstream/.deps").glob("obs-deps-*-x64/bin/ffprobe.exe"):
+        return str(cand)
+    return shutil.which("ffprobe")
+
+
+def assert_mp4_has_audio(path: pathlib.Path) -> bool:
+    """Run ffprobe and confirm the MP4 has at least one AAC audio stream.
+    Phase 9 added wasapi sources on the main audio mixer; without them the
+    encoder still emits a silent track, so this check verifies the muxer
+    wrote *some* audio stream rather than asserting non-silence."""
+    ffprobe = find_ffprobe()
+    if not ffprobe:
+        print("warn: ffprobe not found; skipping audio-track assertion")
+        return True
+    try:
+        out = subprocess.check_output(
+            [ffprobe, "-v", "error", "-show_streams", "-of", "json", str(path)],
+            stderr=subprocess.STDOUT,
+            timeout=10,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"error: ffprobe failed: {e.output.decode(errors='replace')}")
+        return False
+    info = json.loads(out)
+    audio = [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
+    if not audio:
+        print(f"error: MP4 has no audio stream: {path}")
+        return False
+    a = audio[0]
+    print(f"   audio stream: codec={a.get('codec_name')} "
+          f"channels={a.get('channels')} sample_rate={a.get('sample_rate')}")
+    if a.get("codec_name") != "aac":
+        print(f"warn: expected aac, got {a.get('codec_name')}")
+    return True
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -197,7 +239,10 @@ async def probe(url: str, password: str) -> int:
             return 1
         print(f"   MP4 written: {path}  ({size:,} bytes)")
 
-    print("\nphase 6 record pipeline validated end-to-end")
+        if not assert_mp4_has_audio(path):
+            return 1
+
+    print("\nphase 6+9 record pipeline validated end-to-end (video + audio)")
     return 0
 
 

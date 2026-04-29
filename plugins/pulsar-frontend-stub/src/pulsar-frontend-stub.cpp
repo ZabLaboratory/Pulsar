@@ -486,6 +486,15 @@ private:
     obs_source_t *captureSource = nullptr;
     obs_sceneitem_t *captureItem = nullptr;
 
+    // Audio sources bound to libobs main mixer channels 1-3 (the AAC encoder
+    // mixes channels 0..5 into mixer index 0). Source IDs come from
+    // upstream's win-wasapi plugin which is loaded by obs_load_all_modules
+    // on Windows. These are NOT scene items -- audio sources live on
+    // libobs's audio routing graph, not the visual scene.
+    obs_source_t *desktopAudioSource = nullptr; // channel 1
+    obs_source_t *processAudioSource = nullptr; // channel 2 (optional)
+    obs_source_t *micAudioSource = nullptr;     // channel 3
+
     std::string recordDirectory; // resolved at setup() from env or default
 
     int transitionDuration = 300;
@@ -620,6 +629,72 @@ bool PulsarFrontendAPI::setup()
         captureItem = obs_scene_add(scene, captureSource);
     }
 
+    // ---- Phase 9: audio sources on the main mixer ----
+    // libobs has 6 main "channels" addressed via obs_set_output_source.
+    // Channel 0 is video (already bound to the Default scene above).
+    // Channels 1-5 are audio inputs that the audio encoder mixes
+    // together before encoding. We follow the OBS Studio convention:
+    //   1 -> Desktop Audio (system playback loopback)
+    //   2 -> Process Audio (per-process loopback, Phase 9 optional)
+    //   3 -> Microphone
+    //
+    // device_id="" means "default device" -- libobs/win-wasapi resolves
+    // it at runtime against the system's current default endpoint.
+    // Operators can pin a specific device via env vars.
+    OBSDataAutoRelease desktopSettings = obs_data_create();
+    if (const char *id = std::getenv("PULSAR_DESKTOP_AUDIO_DEVICE_ID"); id && *id)
+        obs_data_set_string(desktopSettings, "device_id", id);
+    else
+        obs_data_set_string(desktopSettings, "device_id", "default");
+    desktopAudioSource = obs_source_create("wasapi_output_capture", "PulsarDesktopAudio",
+                                            desktopSettings, nullptr);
+    if (desktopAudioSource) {
+        obs_set_output_source(1, desktopAudioSource);
+        blog(LOG_INFO, "[pulsar-frontend-stub] desktop audio bound to channel 1");
+    } else {
+        blog(LOG_WARNING, "[pulsar-frontend-stub] wasapi_output_capture unavailable");
+    }
+
+    OBSDataAutoRelease micSettings = obs_data_create();
+    if (const char *id = std::getenv("PULSAR_MIC_DEVICE_ID"); id && *id)
+        obs_data_set_string(micSettings, "device_id", id);
+    else
+        obs_data_set_string(micSettings, "device_id", "default");
+    micAudioSource = obs_source_create("wasapi_input_capture", "PulsarMic",
+                                        micSettings, nullptr);
+    if (micAudioSource) {
+        obs_set_output_source(3, micAudioSource);
+        blog(LOG_INFO, "[pulsar-frontend-stub] mic bound to channel 3");
+    } else {
+        blog(LOG_WARNING, "[pulsar-frontend-stub] wasapi_input_capture unavailable");
+    }
+
+    // Process audio (per-process loopback). Requires Windows 10 build 19041+
+    // and the wasapi_process_output_capture source ID, which only exists in
+    // recent win-wasapi builds. Skip if env var unset OR source unavailable
+    // (older Windows or older win-wasapi).
+    if (const char *exe = std::getenv("PULSAR_PROCESS_AUDIO_NAME"); exe && *exe) {
+        OBSDataAutoRelease procSettings = obs_data_create();
+        // win-wasapi process loopback settings: priority=0 means match by
+        // executable; "window" is the value field even though it carries
+        // an exe path -- inherited from the window-capture-style API in
+        // upstream win-capture.
+        obs_data_set_int(procSettings, "priority", 0);
+        obs_data_set_string(procSettings, "window", exe);
+        processAudioSource = obs_source_create("wasapi_process_output_capture",
+                                                "PulsarProcessAudio",
+                                                procSettings, nullptr);
+        if (processAudioSource) {
+            obs_set_output_source(2, processAudioSource);
+            blog(LOG_INFO, "[pulsar-frontend-stub] process audio (%s) bound to channel 2", exe);
+        } else {
+            blog(LOG_WARNING, "[pulsar-frontend-stub] wasapi_process_output_capture not available "
+                              "(needs Win10 19041+ and recent win-wasapi); process audio skipped");
+        }
+    } else {
+        blog(LOG_INFO, "[pulsar-frontend-stub] PULSAR_PROCESS_AUDIO_NAME unset; process audio not wired");
+    }
+
     // Recording directory resolution. PULSAR_RECORD_DIR overrides the default,
     // which is "<cwd>/recordings". The directory is created lazily on the
     // first recording_start so we don't fail setup if the FS is read-only.
@@ -650,10 +725,13 @@ void PulsarFrontendAPI::teardown()
     stop_output_and_wait(replayOutput, "replay");
     stop_output_and_wait(virtualcamOutput, "virtualcam");
 
-    // Unbind any source held on libobs main mixer channel before releasing
-    // outputs / scenes -- otherwise libobs keeps a ref past teardown and
-    // logs a leaked-source warning at obs_shutdown.
+    // Unbind every main mixer channel (video on 0, audio on 1/2/3) before
+    // releasing the underlying sources. Otherwise libobs keeps refs past
+    // teardown and logs leaked-source warnings at obs_shutdown.
     obs_set_output_source(0, nullptr);
+    obs_set_output_source(1, nullptr);
+    obs_set_output_source(2, nullptr);
+    obs_set_output_source(3, nullptr);
 
     if (streamOutput) {
         signal_handler_t *sh = obs_output_get_signal_handler(streamOutput);
@@ -715,6 +793,18 @@ void PulsarFrontendAPI::teardown()
         obs_source_release(captureSource);
         captureSource = nullptr;
         captureItem = nullptr;
+    }
+    if (desktopAudioSource) {
+        obs_source_release(desktopAudioSource);
+        desktopAudioSource = nullptr;
+    }
+    if (processAudioSource) {
+        obs_source_release(processAudioSource);
+        processAudioSource = nullptr;
+    }
+    if (micAudioSource) {
+        obs_source_release(micAudioSource);
+        micAudioSource = nullptr;
     }
 
     if (currentTransition) {
