@@ -1,0 +1,143 @@
+# Pulsar — Twitch live broadcast end-to-end test.
+#
+# Spawns pulsar.exe, points its CEF browser_source at a locally-served
+# test scene, pushes a 5-minute (default) broadcast to Twitch using the
+# stream key from secrets.TWITCH_STREAM_KEY, polls metrics throughout,
+# asserts thresholds, cleans up.
+#
+# Triggers :
+#   - workflow_dispatch  : manual button on the Actions page. Lets you
+#                          override duration / fps for ad-hoc validation.
+#   - push tag v*.*.*    : automatic gate on every release tag. A failed
+#                          live-test keeps the binaries from shipping
+#                          (via the `needs:` chain — see release.yml
+#                          follow-up to wire that link explicitly).
+#
+# Concurrency : a global `live-test` group with cancel-in-progress=false
+# forces a queue of one. Twitch refuses two simultaneous streams on the
+# same channel, and stomping a running test mid-broadcast leaves the
+# Twitch-side ingest in a confused state for ~30 s.
+#
+# NOT triggered on PRs : the secret would be unavailable on fork PRs
+# anyway, but more importantly we don't want a contributor's PR to
+# light up the channel for 5 minutes per push.
+
+name: live-test
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: 'Broadcast duration (seconds)'
+        type: string
+        default: '300'
+      fps:
+        description: 'Encoder fps target'
+        type: string
+        default: '60'
+  push:
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: live-test
+  cancel-in-progress: false
+
+jobs:
+  twitch-live:
+    name: Twitch live broadcast (5 min, 1080p60)
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: License isolation source-tree audit
+        # Same pattern as release.yml/build.yml : last-chance gate
+        # against a tag-on-bypass-commit scenario.
+        shell: bash
+        run: bash scripts/check-license-isolation.sh
+
+      - name: Cache obs-deps + Qt6 + CEF
+        uses: actions/cache@v4
+        with:
+          path: upstream/.deps
+          key: obs-deps-full-${{ runner.os }}-${{ hashFiles('scripts/build-win.ps1', '.gitmodules') }}
+          restore-keys: |
+            obs-deps-full-${{ runner.os }}-
+            obs-deps-${{ runner.os }}-
+
+      - name: Configure git identity
+        shell: pwsh
+        run: |
+          git config --global user.email "ci@pulsar.zablaboratory"
+          git config --global user.name "Pulsar CI"
+
+      - name: Install CMake 3.28+
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: '3.30.0'
+
+      - name: Setup MSVC toolchain
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build with -Full (CEF + obs-browser required for browser_source)
+        shell: pwsh
+        run: ./scripts/build-win.ps1 -Full
+
+      - name: Verify pulsar.exe exports no symbols (#3)
+        # Same invariant check as build.yml / release.yml. Without
+        # this, a regression that started exporting symbols would
+        # ship via the live-test pipeline (workflow_dispatch + tag).
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse -Filter "pulsar.exe" -Path "upstream/build_x64/rundir" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "pulsar.exe not found"
+            exit 1
+          }
+          $output = & dumpbin /exports $exe.FullName 2>&1
+          $hasExports = $output | Where-Object { $_ -match '^\s+ordinal hint\s+RVA\s+name' }
+          if ($hasExports) {
+            Write-Error "pulsar.exe exports symbols — see LICENSE-INVARIANTS.md (#3)"
+            exit 1
+          }
+          Write-Host "::notice::pulsar.exe exports table is empty"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install probe deps
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install websockets
+
+      - name: Run Twitch live-broadcast probe
+        # The probe spawns pulsar.exe itself, hosts the test scene on a
+        # local port, drives the WS protocol, and asserts on the metric
+        # responses. Exit 0 = pass.
+        env:
+          TWITCH_STREAM_KEY:    ${{ secrets.TWITCH_STREAM_KEY }}
+          LIVE_TEST_DURATION:   ${{ github.event.inputs.duration_seconds || '300' }}
+          LIVE_TEST_FPS:        ${{ github.event.inputs.fps || '60' }}
+        shell: bash
+        run: python scripts/probe-twitch-live.py
+
+      - name: Upload pulsar log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsar-live-test-log
+          path: |
+            upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs-websocket/config.json
+          retention-days: 7
+          if-no-files-found: ignore
