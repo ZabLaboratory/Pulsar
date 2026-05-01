@@ -119,6 +119,15 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Setup ffmpeg
+        # windows-2022 GitHub runners do NOT ship ffmpeg by default,
+        # so the "Compress + stage broadcast VOD" step would fail with
+        # `ffmpeg: command not found`. setup-ffmpeg pulls a pinned
+        # static build (~30 s, cached on the runner).
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: release
+
       - name: Install probe deps
         shell: bash
         run: |
