@@ -337,6 +337,137 @@ def fail_log(label: str, msg: str) -> None:
     print(f"::error::live-test {label}: {msg}", file=sys.stderr)
 
 
+# ── Diagnostic JSON dump ────────────────────────────────────────────────────
+# Writes a structured snapshot at end-of-run so reviewers can attribute lag
+# to pulsar (high render time, dropped frames) vs network (low effective
+# bitrate vs target) vs upstream (e.g. Twitch ingest stalls). Two halves :
+#   - the per-poll sample series (raw signal)
+#   - a summary block (avg / max / p95 / total skipped) for at-a-glance
+# Plus ffprobe stats on the local MP4 (the encoded-on-disk truth).
+
+def _percentile(values: list[float], p: float) -> float | None:
+    """p-th percentile of a numeric list. p in [0, 100]."""
+    vs = sorted(v for v in values if v is not None)
+    if not vs:
+        return None
+    k = (len(vs) - 1) * (p / 100.0)
+    lo = int(k)
+    hi = min(lo + 1, len(vs) - 1)
+    if lo == hi:
+        return float(vs[lo])
+    return float(vs[lo] + (vs[hi] - vs[lo]) * (k - lo))
+
+
+def _ffprobe_summary(mp4_path: str) -> dict:
+    """Return codec / bitrate / fps / duration for the recorded MP4. Empty
+    dict on failure -- a missing diagnostic is non-fatal, the workflow
+    upload still happens."""
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "stream=codec_type,codec_name,width,height,r_frame_rate,bit_rate,duration,sample_rate,channels",
+             "-of", "json", mp4_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        if proc.returncode != 0:
+            return {"_ffprobe_error": (proc.stderr or "")[:500]}
+        data = json.loads(proc.stdout or "{}")
+        out = {"streams": []}
+        for s in data.get("streams", []):
+            entry = {k: s.get(k) for k in (
+                "codec_type", "codec_name", "width", "height",
+                "r_frame_rate", "bit_rate", "duration",
+                "sample_rate", "channels",
+            ) if s.get(k) is not None}
+            # Convert bit_rate to kbps for readability.
+            if "bit_rate" in entry:
+                try:
+                    entry["bit_rate_kbps"] = round(int(entry["bit_rate"]) / 1000)
+                except (TypeError, ValueError):
+                    pass
+            out["streams"].append(entry)
+        return out
+    except Exception as e:
+        return {"_ffprobe_error": str(e)[:500]}
+
+
+def write_diagnostic(samples: list[dict], vod_path: str | None, duration_sec: int) -> str | None:
+    """Compute end-of-run summary stats + ffprobe the MP4, write JSON to
+    LIVE_VOD_DIR. Returns the absolute path on success, None on failure
+    (failure here is non-fatal -- the broadcast proof MP4 is the gate)."""
+    if not samples:
+        return None
+
+    def _avg(key):
+        vals = [s.get(key) for s in samples if s.get(key) is not None]
+        return (sum(vals) / len(vals)) if vals else None
+    def _max(key):
+        vals = [s.get(key) for s in samples if s.get(key) is not None]
+        return max(vals) if vals else None
+    def _p95(key):
+        return _percentile([s.get(key) for s in samples], 95.0)
+    def _last(key):
+        for s in reversed(samples):
+            if s.get(key) is not None:
+                return s[key]
+        return None
+
+    # outputBytes is cumulative ; effective bitrate = (last - first) over span.
+    bytes_first = next((s["output_bytes"] for s in samples if s.get("output_bytes") is not None), 0) or 0
+    bytes_last  = _last("output_bytes") or 0
+    span_sec    = max(1, samples[-1]["t"] - samples[0]["t"])
+    effective_kbps = round((bytes_last - bytes_first) * 8 / span_sec / 1000) if bytes_last > bytes_first else None
+
+    summary = {
+        "duration_sec":      duration_sec,
+        "samples":           len(samples),
+        "active_fps_avg":    _avg("active_fps"),
+        "active_fps_min":    min((s["active_fps"] for s in samples if s.get("active_fps") is not None), default=None),
+        "render_ms_avg":     _avg("avg_render_ms"),
+        "render_ms_p95":     _p95("avg_render_ms"),
+        "render_ms_max":     _max("avg_render_ms"),
+        "render_skipped":    _last("render_skipped") or 0,
+        "render_total":      _last("render_total") or 0,
+        "output_skipped":    _last("output_skipped") or 0,
+        "output_total":      _last("output_total") or 0,
+        "drop_ratio_max":    _max("drop_ratio") or 0.0,
+        "current_kbps_min":  min((s["current_kbps"] for s in samples if s.get("current_kbps") is not None), default=None),
+        "current_kbps_max":  _max("current_kbps"),
+        "target_kbps":       _last("target_kbps"),
+        "effective_kbps":    effective_kbps,  # derived from outputBytes delta
+        "cpu_pct_avg":       _avg("cpu_pct"),
+        "cpu_pct_max":       _max("cpu_pct"),
+        "memory_mb_final":   _last("memory_mb"),
+        "adaptive_samples":  _last("adaptive_samples") or 0,
+    }
+
+    diagnostic = {
+        "schema": "pulsar-live-test-diagnostic/v1",
+        "summary": summary,
+        "samples": samples,
+        "mp4_ffprobe": _ffprobe_summary(vod_path) if vod_path else None,
+    }
+
+    try:
+        LIVE_VOD_DIR.mkdir(parents=True, exist_ok=True)
+        out = LIVE_VOD_DIR / "diagnostic.json"
+        out.write_text(json.dumps(diagnostic, indent=2, default=str), encoding="utf-8")
+    except OSError as e:
+        print(f"::warning::could not write diagnostic.json: {e}", file=sys.stderr)
+        return None
+
+    # One-line summary on stdout so a CI run is at-a-glance diagnosable.
+    print(f"[live-test] diagnostic : "
+          f"avg_fps={summary['active_fps_avg']} "
+          f"render_avg={summary['render_ms_avg']}ms "
+          f"render_p95={summary['render_ms_p95']}ms "
+          f"render_skipped={summary['render_skipped']} "
+          f"output_skipped={summary['output_skipped']} "
+          f"effective_kbps={summary['effective_kbps']} "
+          f"target={summary['target_kbps']}")
+    return str(out)
+
+
 async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
     if not stream_key:
         fail_log("config", "TWITCH_STREAM_KEY env var is empty")
@@ -509,12 +640,19 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
             print(f"[live-test] local recording started (writing under {LIVE_VOD_DIR})")
 
             # 4. Poll metrics every POLL_INTERVAL_SEC for `duration_sec`.
+            # Per-poll samples accumulate in `perf_samples` ; at end-of-run
+            # the probe computes a structured diagnostic JSON (avg / max /
+            # p95) plus an ffprobe summary of the recorded MP4. This is
+            # the gold-standard answer to "is the lag coming from pulsar"
+            # -- everything libobs collects internally is captured.
             start_t = time.time()
             poll_count = 0
             adaptive_samples_seen = 0
+            perf_samples: list[dict] = []
             while time.time() - start_t < duration_sec:
                 await asyncio.sleep(POLL_INTERVAL_SEC)
                 poll_count += 1
+                elapsed = int(time.time() - start_t)
 
                 # GetDestinations — assert active=true on our id.
                 r = await vendor_call(ws, inbox, f"get-dest-{poll_count}",
@@ -533,13 +671,54 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                 if samples > adaptive_samples_seen:
                     adaptive_samples_seen = samples
                 drop_ratio = float(adapt.get("last_drop_ratio", 0.0))
-                cur_bitrate = adapt.get("current_bitrate")
+                cur_bitrate = adapt.get("current_kbps")
+                target_bitrate = adapt.get("target_kbps")
 
-                elapsed = int(time.time() - start_t)
+                # GetStats — comprehensive perf snapshot (the "is it
+                # pulsar" tooling). Standard obs-websocket v5 request,
+                # NOT a vendor call. The fields that matter for lag
+                # attribution :
+                #   activeFps              -- live encoder fps. <60 = bad.
+                #   averageFrameRenderTime -- ms per render+encode. >16 = bad
+                #                             at 60fps.
+                #   renderSkippedFrames    -- compositor lagged.
+                #   outputSkippedFrames    -- encoder/network dropped.
+                stats_r = await request(ws, inbox, "GetStats", f"stats-{poll_count}")
+                stats = stats_r.get("responseData", {}) or {}
+
+                # GetStreamStatus — outputBytes lets us derive the actual
+                # encoded bitrate. Multi-stream destinations don't update
+                # the legacy outputs but obs's stats may still tick.
+                ss_r = await request(ws, inbox, "GetStreamStatus", f"stream-{poll_count}")
+                ss = ss_r.get("responseData", {}) or {}
+
+                sample = {
+                    "t": elapsed,
+                    "poll": poll_count,
+                    "adaptive_samples": samples,
+                    "drop_ratio": drop_ratio,
+                    "current_kbps": cur_bitrate,
+                    "target_kbps": target_bitrate,
+                    "active_fps": stats.get("activeFps"),
+                    "avg_render_ms": stats.get("averageFrameRenderTime"),
+                    "render_total": stats.get("renderTotalFrames"),
+                    "render_skipped": stats.get("renderSkippedFrames"),
+                    "output_total": stats.get("outputTotalFrames"),
+                    "output_skipped": stats.get("outputSkippedFrames"),
+                    "output_bytes": ss.get("outputBytes"),
+                    "cpu_pct": stats.get("cpuUsage"),
+                    "memory_mb": stats.get("memoryUsage"),
+                    "destination_active": bool(ours and ours.get("active")),
+                }
+                perf_samples.append(sample)
+
+                fps_str = f"{sample['active_fps']:.1f}" if sample['active_fps'] is not None else "—"
+                rt_str  = f"{sample['avg_render_ms']:.1f}ms" if sample['avg_render_ms'] is not None else "—"
                 print(f"[live-test] poll #{poll_count} t={elapsed}s "
                       f"active=true samples={samples} "
                       f"drop_ratio={drop_ratio:.4f} "
-                      f"bitrate={cur_bitrate}")
+                      f"bitrate={cur_bitrate} "
+                      f"fps={fps_str} render={rt_str}")
 
                 if drop_ratio > FRAME_DROP_RATIO_MAX:
                     fail_log("poll",
@@ -577,7 +756,14 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                 return 1
             print(f"[live-test] adaptive samples seen total : {adaptive_samples_seen}")
 
-            # 7. RemoveDestination.
+            # 7. Write diagnostic JSON so reviewers can attribute lag.
+            diag_path = write_diagnostic(perf_samples, vod_path, duration_sec)
+            if diag_path:
+                # Sentinel parsed by live-test.yml to upload the JSON
+                # as a workflow artefact alongside the MP4.
+                print(f"LIVE_DIAGNOSTIC_PATH={diag_path}")
+
+            # 8. RemoveDestination.
             await vendor_call(ws, inbox, "remove-dest", "pulsar",
                 "RemoveDestination", {"id": dest_id})
 

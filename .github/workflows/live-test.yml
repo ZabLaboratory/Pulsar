@@ -213,12 +213,32 @@ jobs:
           echo "VOD_STABLE_PATH=${stable}"     >> "$GITHUB_ENV"
           echo "VOD_VERSIONED_PATH=${versioned}" >> "$GITHUB_ENV"
 
-      - name: Upload broadcast VOD as workflow artefact
+      - name: Stage diagnostic JSON
+        # The probe writes diagnostic.json next to the raw MP4 with
+        # per-poll perf samples + summary + ffprobe of the recording.
+        # Useful for attributing lag (high render time, dropped frames)
+        # to pulsar vs network vs Twitch ingest.
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          diag="$(grep '^LIVE_DIAGNOSTIC_PATH=' probe-output.log | tail -1 | cut -d= -f2-)"
+          diag="${diag%$'\r'}"
+          if [ -n "${diag}" ] && [ -f "${diag}" ]; then
+            cp "${diag}" artefacts/diagnostic.json
+            echo "::notice::diagnostic.json staged ($(stat -c%s artefacts/diagnostic.json) bytes)"
+          else
+            echo "::warning::no diagnostic.json sentinel found -- probe may be older"
+          fi
+
+      - name: Upload broadcast VOD + diagnostic as workflow artefact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: pulsar-live-broadcast-proof
-          path: artefacts/pulsar-live-broadcast-proof-*.mp4
+          path: |
+            artefacts/pulsar-live-broadcast-proof-*.mp4
+            artefacts/diagnostic.json
           retention-days: 90
           if-no-files-found: error
 
