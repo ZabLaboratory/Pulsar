@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-02
+
+V1 — first stable release. Pulsar is now a production-grade headless
+broadcast engine that Prism (and any future consumer) can bundle and
+spawn confidently. The full set of changes squashed into the V1
+readiness commits on `main`, summarised :
+
+### Added
+
+- **CEF browser_source via the pulsar-browser fork.** Forked obs-browser,
+  dropped the `obs_browser_initialize` FFI surface, co-located the
+  helper exe with `libcef.dll` so Windows resolves CEF imports
+  without manual staging. browser_source now renders HTML/CSS/JS
+  scenes into the encode pipeline, used by the live-broadcast probe.
+- **Session credentials seeded at boot.** `PULSAR_PORT` and
+  `PULSAR_PASSWORD` env vars override any persisted obs-websocket
+  config before plugins load ; a `PULSAR_READY ws=… password=…`
+  sentinel is emitted on stdout for the spawning process to parse.
+  No more disk race against `obs-websocket/config.json`.
+- **/SUBSYSTEM:WINDOWS pulsar.exe** with `AttachConsole(ATTACH_PARENT_PROCESS)`.
+  Spawn from Prism / scripts no longer allocates a visible cmd.exe
+  window ; direct invocation from a real terminal still prints to
+  the operator's console.
+- **`docs/PRISM-EMBEDDING.md`** consumer spawn / handshake / lifecycle
+  contract (mandatory `cwd`, `windowsHide:true`, READY sentinel
+  parse loop, shutdown protocol).
+- **Live-broadcast proof on every release.** The pipeline pushes a
+  10 min Twitch broadcast, records locally via `StartRecord`,
+  re-encodes with ffmpeg CRF 23 (~5-25× smaller than source CBR),
+  publishes the MP4 to GitHub Pages so the README `<video>` plays
+  inline, and attaches the same MP4 to the GitHub Release.
+- **Lag-attribution diagnostic JSON** (`diagnostic.json`). Per-poll
+  perf samples (active_fps, render_ms, output_skipped, effective
+  bitrate) + summary stats + ffprobe of the MP4. Uploaded as
+  workflow artefact on every run.
+- **Apple-keynote test scene.** Hand-coded `test-scene.html` shell
+  + `prism-v2-app.jsx` React app. Six telemetry stats bound to
+  `pulsar:GetAdaptiveState`, Web Audio sound design (event-only,
+  no background music), `Introducing Pulsar` letter-cascade intro
+  with the `Pulsar` word warming to SF System Orange.
+- **CTest-driven offline probe suite**, wired into the pipeline as
+  the `offline probe suite` job. Probes : websocket, source-kinds
+  (input kind inventory smoke), events, adaptive, record.
+- **Binary-export gate broadened** to every Pulsar plugin DLL, not
+  just `pulsar.exe`. `pulsar.exe` + `pulsar-browser-page.exe` must
+  export zero symbols ; plugin DLLs may export only the OBS module
+  ABI (`obs_module_load`, `obs_module_set_pointer`, …).
+- **`pulsar-multi-stream.samples` counter** — the adaptive worker
+  exposes a monotonic sample count so external observers can
+  confirm liveness without waiting for a bitrate adjustment.
+
+### Changed
+
+- **CI consolidated from 6 workflows into 1 `pipeline.yml`** with
+  9 isolated jobs sharing a single `pulsar-rundir` artefact. No
+  more parallel rebuilds doing the same work. `concurrency:
+  pipeline-<ref>` with `cancel-in-progress: true` cancels in-flight
+  runs on the same ref.
+- Pipeline trigger matrix : push branch / PR = 60 s smoke ; push to
+  `main` = 10 min release-grade broadcast + gh-pages publish ; push
+  tag `v*.*.*` = + package + GitHub Release attach + npm publish ;
+  workflow_dispatch = configurable.
+- **WASAPI mic source is opt-in** via `PULSAR_MIC_DEVICE_ID`. Hosts
+  without a default input device (CI runners, servers) no longer
+  spam `Device '' invalidated. Retrying` every 2 s.
+- `pulsar-multi-stream::release_destination_handles_locked` does a
+  graceful stop + 500 ms drain tail before release. Avoids a
+  use-after-free between `obs_output_release` and the worker
+  thread on the rtmp_output ECONNREFUSED-fast path.
+
+### Fixed
+
+- CEF GPU subprocess `Reason: '63'` crash on launch — root cause
+  was the helper exe living in `bin/64bit/` while libobs's plugin
+  loader expected it in `obs-plugins/64bit/` next to `libcef.dll`.
+- Black-screen broadcast on the 30-min main run when unpkg.com
+  flaked. React + ReactDOM + Babel are now vendored under
+  `scripts/live-test/vendor/`.
+- The `pulsar-live-broadcast-proof.mp4` (stable name) was missing
+  from the gh-pages upload due to a too-narrow glob ; the README
+  inline player no longer 404s.
+- pulsar-scene-source vendor namespace renamed (`pulsar` →
+  `pulsar-scene`) to disambiguate from `pulsar-multi-stream`.
+
+### Skipped (tracked as TODO upstream-obs)
+
+- `probe-multi-stream.py` is excluded from the offline suite. The
+  destination lifecycle has known race-condition crash paths in
+  obs upstream (rtmp_output worker vs ECONNREFUSED, ffmpeg_muxer
+  flush vs Stop, service-ref vs worker exit ordering). The
+  `pulsar:CallVendorRequest` API contract is exercised by the
+  live-broadcast probe against a real Twitch ingest. Tracked as
+  TODOs in `run-probes.ps1`, the multi-stream plugin source, and
+  the probe.
+- The two specific sub-tests inside probe-multi-stream that
+  exercise the racey paths (`StartDestination` on a dead RTMP
+  address + `RemoveDestination` while active) are commented out
+  with TODO(upstream-obs) markers for when the upstream fixes land.
+
 ## [0.2.1] - 2026-04-30
 
 ### Added
