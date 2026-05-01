@@ -208,10 +208,6 @@ function HUD({ visible }) {
         <Stat label="Dropped"
               value={<>{fmtNum(tel.droppedFrames)}<span style={unitStyle}>{dropPct.toFixed(2)}%</span></>}
               valueStyle={dropPct > 5 ? { color: 'var(--warn)' } : null}/>
-        <Stat label="CPU"
-              value={<>{fmtPct(tel.cpuPct)}<span style={unitStyle}>%</span></>}/>
-        <Stat label="Memory"
-              value={<>{fmtNum(tel.memMB)}<span style={unitStyle}>MB</span></>}/>
       </div>
 
       {/* Footer : destinations + uptime */}
