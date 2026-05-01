@@ -273,3 +273,24 @@ See `docs/DEVELOPMENT.md` for tooling prerequisites (CMake ≥ 3.28, Visual Stud
 GPL-2.0-or-later, inherited from libobs and non-negotiable for anything linking Pulsar's binaries (= every plugin under `plugins/` and the upstream OBS modules). The `packages/pulsar-client/` TypeScript wrapper is MIT (no GPL link), since it speaks to Pulsar over WebSocket only — process boundary breaks GPL propagation.
 
 See [`LICENSE`](LICENSE) and the GPL-2.0 text in `upstream/COPYING`.
+
+### Embedding Pulsar in another application — read this first
+
+The "process boundary breaks GPL propagation" line above is **not magic**. It works only if four invariants are honoured by the consumer (Prism today, any future Pulsar-bundling app tomorrow). Each invariant being broken is enough to retroactively re-license every consumer that has shipped against the breach.
+
+Two documents you must read before bundling Pulsar :
+
+- ➡️ **[`LICENSE-INVARIANTS.md`](LICENSE-INVARIANTS.md)** — the non-negotiable contract : the four invariants, the tempting designs to refuse on sight, the watchdog point on the npm wrapper.
+- ➡️ **[`CONSUMER-AUDIT.md`](CONSUMER-AUDIT.md)** — the empirical checklist your consumer repo must enforce in CI. Every claim is a runnable script, every script has a pass/fail signal. Includes a copy-pasteable bash script + GitHub Actions workflow for static + binary-linkage checks (Windows / macOS / Linux). **If you have not run the scripts, you have not passed the audit.**
+
+Pulsar's own CI enforces the source-side and binary-side invariants for its own artefacts :
+
+| Workflow | Trigger | What it gates |
+|---|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | every PR + push to main | patches apply cleanly, plugins carry metadata |
+| [`license-isolation.yml`](.github/workflows/license-isolation.yml) | every PR + push to main | source-grep (FFI / NAPI / node-gyp / staging dirs), npm tarball content audit |
+| [`build.yml`](.github/workflows/build.yml) | every PR + push to main | full Windows build + `dumpbin /exports pulsar.exe` empty |
+| [`release.yml`](.github/workflows/release.yml) | tag `v*.*.*` push | re-runs source-grep + dumpbin before publishing the GitHub Release |
+| [`publish-npm.yml`](.github/workflows/publish-npm.yml) | tag `v*.*.*` push | re-runs source-grep + tarball audit before publishing the three npm packages |
+
+Inside this repo, the binary-export check on `pulsar.exe` plus the source-grep guarantees the boundary on Pulsar's side. The boundary on YOUR side is yours to enforce — that's what `CONSUMER-AUDIT.md` is for.

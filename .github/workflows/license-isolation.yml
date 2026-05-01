@@ -1,0 +1,57 @@
+# License isolation gate.
+#
+# Pulsar is GPL-2.0-or-later. Consumers (Prism, future apps) keep their
+# own license only because of the four invariants in
+# LICENSE-INVARIANTS.md (process boundary, WS-only IPC, no FFI on the
+# consumer side, no copy-paste of source). This workflow enforces what
+# can be enforced statically on the Pulsar source tree.
+#
+# Two jobs :
+#   - source-grep    : forbidden FFI / NAPI / node-gyp / consumer-stage
+#                      patterns in plugins/ + packages/ + scripts/
+#   - npm-pack-audit : every workspace's `npm pack --dry-run` content
+#                      must not include C/C++ source or node-gyp
+#                      manifests
+#
+# Both jobs delegate to scripts under scripts/check-*.sh so the same
+# logic runs in release.yml + publish-npm.yml on the path that
+# actually ships artefacts. Logic lives in one place, multiple
+# trigger points.
+#
+# The harder check (binary `dumpbin /exports pulsar.exe` empty) lives
+# in release.yml because it requires a full Windows build — too heavy
+# for every PR. release.yml fails early if the binary exports anything,
+# blocking the GitHub Release before artefacts are uploaded.
+
+name: license-isolation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  source-grep:
+    name: source-tree audit (#1, #3, #4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run source-tree audit
+        run: bash scripts/check-license-isolation.sh
+
+  npm-pack-audit:
+    name: npm tarball audit (#3, #4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install workspaces (skip pulsar.exe download)
+        env:
+          PULSAR_BUNDLE_SKIP_POSTINSTALL: '1'
+        run: npm install --no-audit --no-fund --force
+      - name: Run npm tarball audit
+        run: bash scripts/check-npm-pack-audit.sh

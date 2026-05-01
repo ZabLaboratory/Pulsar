@@ -1,9 +1,20 @@
-# Pulsar — full platform build matrix.
+# Pulsar — Windows build gate.
 #
-# Phase 1 lights this up for Windows. Mac (Phase 7) and Linux (Phase 8)
-# join the matrix later.
+# Runs the same build pipeline release.yml uses, minus packaging,
+# minus -Full (no CEF / no obs-browser — keeps the run under
+# ~20 min instead of ~40). Produces `pulsar.exe` so the binary-export
+# license invariant (#3) can be verified before any code lands on
+# main.
 #
-# Phase 0: workflow stub.
+# Why every PR pays a full Windows build : the binary-export check is
+# the only mechanism that catches a plugin starting to publish symbols
+# (a __declspec or EXPORT_SYMBOL is the source-side fingerprint, but
+# upstream patches or future linker flags could in principle slip a
+# symbol through other paths). Static grep + binary dumpbin is the
+# defence-in-depth this license posture needs.
+#
+# Mac (Phase 7) and Linux (Phase 8) join the matrix when those
+# targets light up. They will share the same gate structure.
 
 name: build
 
@@ -14,12 +25,85 @@ on:
     branches: [main]
 
 jobs:
-  placeholder:
-    name: build-placeholder
-    runs-on: ubuntu-latest
+  windows-x64:
+    name: build + license gate (windows-x64)
+    runs-on: windows-2022
+    timeout-minutes: 60
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Notice
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: License isolation source-tree audit
+        # Same gate license-isolation.yml runs, repeated here so the
+        # build job fails fast on a sourcecode-level violation before
+        # paying the build cost.
+        shell: bash
+        run: bash scripts/check-license-isolation.sh
+
+      - name: Cache obs-deps + Qt6
+        # build-win.ps1 fetches obs-deps, Qt6, and (with -Full) CEF
+        # into upstream/.deps/. The downloads dominate cold-cache
+        # build time. Key on the build-win.ps1 hash (so a deps-list
+        # change invalidates) + the upstream submodule pointer (so a
+        # libobs bump invalidates).
+        uses: actions/cache@v4
+        with:
+          path: upstream/.deps
+          key: obs-deps-${{ runner.os }}-${{ hashFiles('scripts/build-win.ps1', '.gitmodules') }}
+          restore-keys: |
+            obs-deps-${{ runner.os }}-
+
+      - name: Configure git identity
+        # build-win.ps1 calls `git am` to apply patches/ onto the
+        # upstream/ submodule, which writes a commit and needs a
+        # configured user.name / user.email — absent on a fresh runner.
+        shell: pwsh
         run: |
-          echo "::notice::Pulsar build matrix not yet implemented (Phase 1)."
-          echo "Target order: Windows -> macOS -> Linux."
+          git config --global user.email "ci@pulsar.zablaboratory"
+          git config --global user.name "Pulsar CI"
+
+      - name: Install CMake 3.28+
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: '3.30.0'
+
+      - name: Setup MSVC toolchain
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build (no -Full, headless only)
+        # Skipping -Full means no CEF / no obs-browser ; that codepath
+        # is exercised by release.yml on every tag. For PR validation
+        # we only need pulsar.exe + the four Pulsar plugins to confirm
+        # the source compiles + nothing exports.
+        shell: pwsh
+        run: ./scripts/build-win.ps1
+
+      - name: Verify pulsar.exe exports no symbols (#3)
+        # The binary-export contract from LICENSE-INVARIANTS.md (#3) :
+        # `dumpbin /exports pulsar.exe` must return an empty exports
+        # table. Any populated table = invariant breach = block the
+        # PR / main push before consumers ever see the binary.
+        #
+        # `dumpbin` is on PATH after ilammy/msvc-dev-cmd@v1.
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse -Filter "pulsar.exe" -Path "upstream/build_x64/rundir" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "pulsar.exe not found under upstream/build_x64/rundir/ — build did not produce the expected artefact."
+            exit 1
+          }
+          Write-Host "Inspecting $($exe.FullName)..."
+          $output = & dumpbin /exports $exe.FullName 2>&1
+          $output | ForEach-Object { Write-Host $_ }
+          $hasExports = $output | Where-Object { $_ -match '^\s+ordinal hint\s+RVA\s+name' }
+          if ($hasExports) {
+            Write-Error "pulsar.exe exports symbols. See LICENSE-INVARIANTS.md (#3). Re-run dumpbin manually for the full list."
+            exit 1
+          }
+          Write-Host "::notice::pulsar.exe exports table is empty — invariant #3 holds."
