@@ -1,26 +1,34 @@
 # Pulsar — Twitch live broadcast end-to-end test.
 #
 # Spawns pulsar.exe, points its CEF browser_source at a locally-served
-# test scene, pushes a 5-minute (default) broadcast to Twitch using the
-# stream key from secrets.TWITCH_STREAM_KEY, polls metrics throughout,
-# asserts thresholds, cleans up.
+# test scene, pushes a real broadcast to Twitch using
+# secrets.TWITCH_STREAM_KEY, polls metrics, asserts thresholds, cleans
+# up, then re-encodes the recording into a smaller MP4 for the README
+# `<video>` embed and the GitHub Release asset.
 #
-# Triggers :
-#   - workflow_dispatch  : manual button on the Actions page. Lets you
-#                          override duration / fps for ad-hoc validation.
-#   - push tag v*.*.*    : automatic gate on every release tag. A failed
-#                          live-test keeps the binaries from shipping
-#                          (via the `needs:` chain — see release.yml
-#                          follow-up to wire that link explicitly).
+# Triggers + duration matrix :
+#   - workflow_dispatch     : duration & fps from the manual inputs
+#                             (default 300 s / 60 fps -- tweakable).
+#   - push to main          : 1800 s (30 min). The "release proof"
+#                             broadcast fired by a PR merge into main,
+#                             producing the MP4 that ships in the
+#                             GitHub Release + the README <video> embed.
+#   - push tag v*.*.*       : 1800 s (30 min). Same release-grade
+#                             validation as a main push -- protects
+#                             against tag-on-bypass-commit scenarios.
+#   - push to any other     : 60 s (1 min). Smoke-grade end-to-end
+#     branch                  validation on every feature-branch commit,
+#                             fast enough to fit in the regular CI loop.
 #
 # Concurrency : a global `live-test` group with cancel-in-progress=false
 # forces a queue of one. Twitch refuses two simultaneous streams on the
 # same channel, and stomping a running test mid-broadcast leaves the
 # Twitch-side ingest in a confused state for ~30 s.
 #
-# NOT triggered on PRs : the secret would be unavailable on fork PRs
-# anyway, but more importantly we don't want a contributor's PR to
-# light up the channel for 5 minutes per push.
+# NOT triggered on PRs : the TWITCH_STREAM_KEY secret would be
+# unavailable on fork PRs and we don't want a contributor's PR to light
+# up the channel for any duration. Branch push (post-merge or local
+# branch push) is the right granularity.
 
 name: live-test
 
@@ -36,6 +44,7 @@ on:
         type: string
         default: '60'
   push:
+    branches: ['**']
     tags:
       - 'v*.*.*'
 
@@ -45,9 +54,18 @@ concurrency:
 
 jobs:
   twitch-live:
-    name: Twitch live broadcast (5 min, 1080p60)
+    name: Twitch live broadcast
     runs-on: windows-2022
-    timeout-minutes: 30
+    # 60 min covers : build (-Full, ~10 min cached) + 20 min broadcast
+    # (release path) + ffmpeg compression (~5 min) + slack.
+    timeout-minutes: 60
+    # softprops/action-gh-release in the "Attach broadcast VOD" step
+    # needs `contents: write` to add the MP4 to the GitHub Release the
+    # tag created. release.yml runs the same scope independently for
+    # the binary zips; both workflows append to the same release object
+    # because softprops/action-gh-release is idempotent on the tag.
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout (with submodules)
@@ -91,29 +109,24 @@ jobs:
         shell: pwsh
         run: ./scripts/build-win.ps1 -Full
 
-      - name: Verify pulsar.exe exports no symbols (#3)
-        # Same invariant check as build.yml / release.yml. Without
-        # this, a regression that started exporting symbols would
-        # ship via the live-test pipeline (workflow_dispatch + tag).
+      - name: Verify binary export tables (#3)
+        # Same invariant check as build.yml / release.yml.
         shell: pwsh
-        run: |
-          $exe = Get-ChildItem -Recurse -Filter "pulsar.exe" -Path "upstream/build_x64/rundir" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $exe) {
-            Write-Error "pulsar.exe not found"
-            exit 1
-          }
-          $output = & dumpbin /exports $exe.FullName 2>&1
-          $hasExports = $output | Where-Object { $_ -match '^\s+ordinal hint\s+RVA\s+name' }
-          if ($hasExports) {
-            Write-Error "pulsar.exe exports symbols — see LICENSE-INVARIANTS.md (#3)"
-            exit 1
-          }
-          Write-Host "::notice::pulsar.exe exports table is empty"
+        run: ./scripts/check-binary-exports.ps1
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Setup ffmpeg
+        # windows-2022 GitHub runners do NOT ship ffmpeg by default,
+        # so the "Compress + stage broadcast VOD" step would fail with
+        # `ffmpeg: command not found`. setup-ffmpeg pulls a pinned
+        # static build (~30 s, cached on the runner).
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: release
 
       - name: Install probe deps
         shell: bash
@@ -124,13 +137,115 @@ jobs:
       - name: Run Twitch live-broadcast probe
         # The probe spawns pulsar.exe itself, hosts the test scene on a
         # local port, drives the WS protocol, and asserts on the metric
-        # responses. Exit 0 = pass.
+        # responses. Exit 0 = pass. The probe also runs StartRecord in
+        # parallel with the Twitch push and writes the resulting MP4
+        # under LIVE_TEST_VOD_DIR; the absolute path is echoed on stdout
+        # via the `LIVE_VOD_PATH=...` sentinel parsed by the next step.
+        #
+        # Duration : workflow_dispatch input wins, else 1800 s (30 min)
+        # for push-to-main or tag, else 60 s (1 min) for any other
+        # branch push.
         env:
-          TWITCH_STREAM_KEY:    ${{ secrets.TWITCH_STREAM_KEY }}
-          LIVE_TEST_DURATION:   ${{ github.event.inputs.duration_seconds || '300' }}
-          LIVE_TEST_FPS:        ${{ github.event.inputs.fps || '60' }}
+          TWITCH_STREAM_KEY:  ${{ secrets.TWITCH_STREAM_KEY }}
+          LIVE_TEST_DURATION: >-
+            ${{
+              (github.event_name == 'workflow_dispatch' && github.event.inputs.duration_seconds)
+              || ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && '1800')
+              || '60'
+            }}
+          LIVE_TEST_FPS:      ${{ github.event.inputs.fps || '60' }}
+          LIVE_TEST_VOD_DIR:  ${{ runner.temp }}/pulsar-live-vod
         shell: bash
-        run: python scripts/probe-twitch-live.py
+        run: |
+          echo "::notice::live-test duration=${LIVE_TEST_DURATION} s"
+          python scripts/probe-twitch-live.py 2>&1 | tee probe-output.log
+
+      - name: Compress + stage broadcast VOD
+        # The recording produced by StartRecord is x264 CBR 6 Mbps which
+        # gives ~45 MB/min -- a 20 min broadcast lands at ~900 MB. That
+        # is too heavy for both GitHub artefact retention and the README
+        # `<video>` embed loading inline. Re-encode to x264 CRF 23
+        # preset fast + AAC 96k, which typically gets a 4-6× reduction
+        # with no perceptible quality loss.
+        # Then rename to a deterministic asset name so the README can
+        # link via `releases/latest/download/pulsar-live-broadcast-proof.mp4`
+        # without knowing the timestamp.
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          vod_path="$(grep '^LIVE_VOD_PATH=' probe-output.log | tail -1 | cut -d= -f2-)"
+          vod_path="${vod_path%$'\r'}"
+          if [ -z "${vod_path}" ] || [ ! -f "${vod_path}" ]; then
+            echo "::error::LIVE_VOD_PATH sentinel missing or file not found (got '${vod_path}')"
+            exit 1
+          fi
+          raw_size=$(stat -c%s "${vod_path}")
+          mkdir -p artefacts
+          short_sha="${GITHUB_SHA:0:7}"
+          stable="artefacts/pulsar-live-broadcast-proof.mp4"
+          versioned="artefacts/pulsar-live-broadcast-proof-${short_sha}.mp4"
+
+          ffmpeg -hide_banner -loglevel warning -y \
+            -i "${vod_path}" \
+            -c:v libx264 -preset fast -crf 23 -tune film -pix_fmt yuv420p \
+            -c:a aac -b:a 96k -ac 2 -ar 48000 \
+            -movflags +faststart \
+            "${stable}"
+          cp "${stable}" "${versioned}"
+
+          out_size=$(stat -c%s "${stable}")
+          ratio=$(awk -v a=${raw_size} -v b=${out_size} 'BEGIN{printf "%.2f", a/b}')
+          echo "::notice::VOD compression : raw=$(numfmt --to=iec ${raw_size}) -> compressed=$(numfmt --to=iec ${out_size}) (${ratio}× smaller)"
+          ls -la artefacts/
+          echo "VOD_STABLE_PATH=${stable}"     >> "$GITHUB_ENV"
+          echo "VOD_VERSIONED_PATH=${versioned}" >> "$GITHUB_ENV"
+
+      - name: Upload broadcast VOD as workflow artefact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsar-live-broadcast-proof
+          path: artefacts/pulsar-live-broadcast-proof-*.mp4
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Publish proof MP4 to GitHub Pages
+        # Release-grade runs only (push to main / tag). The README
+        # `<video>` tag plays the MP4 inline -- but a GitHub Release
+        # asset URL serves with `Content-Disposition: attachment`,
+        # which forces the browser to download instead of streaming.
+        # GitHub Pages serves the same file with `Content-Type:
+        # video/mp4` and no attachment disposition, so the inline
+        # player works.
+        # The orphan branch keeps gh-pages a single commit deep --
+        # we never want history of stale broadcasts bloating the repo.
+        if: success() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./artefacts
+          publish_branch: gh-pages
+          force_orphan: true
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: "live-test: refresh broadcast proof MP4 (${{ github.sha }})"
+
+      - name: Attach broadcast VOD to GitHub Release
+        # Tag-push runs only -- the workflow_dispatch path has no
+        # release to attach to, the workflow artefact suffices there.
+        # We attach a download copy alongside the GitHub Pages inline
+        # player so users can save the file if they want.
+        if: success() && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artefacts/pulsar-live-broadcast-proof.mp4
+            artefacts/pulsar-live-broadcast-proof-*.mp4
+          fail_on_unmatched_files: true
+          # Don't overwrite the release body / name -- release.yml owns
+          # the release object, we just append assets.
+          append_body: false
 
       - name: Upload pulsar log on failure
         if: failure()
@@ -139,5 +254,6 @@ jobs:
           name: pulsar-live-test-log
           path: |
             upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs-websocket/config.json
+            probe-output.log
           retention-days: 7
           if-no-files-found: ignore

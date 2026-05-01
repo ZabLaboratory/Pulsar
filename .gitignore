@@ -64,3 +64,11 @@ patches/.rejects
 
 # npm workspaces
 node_modules/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Live-broadcast probe output / staging
+artefacts/
+probe-output.log

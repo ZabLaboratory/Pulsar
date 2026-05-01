@@ -683,18 +683,27 @@ bool PulsarFrontendAPI::setup()
         blog(LOG_WARNING, "[pulsar-frontend-stub] wasapi_output_capture unavailable");
     }
 
-    OBSDataAutoRelease micSettings = obs_data_create();
-    if (const char *id = std::getenv("PULSAR_MIC_DEVICE_ID"); id && *id)
+    // Microphone: opt-in via PULSAR_MIC_DEVICE_ID. Unlike desktop
+    // playback (which has a default endpoint everywhere), input devices
+    // are absent on CI runners, on servers, and on plenty of dev
+    // workstations. Auto-creating the source against `device_id=default`
+    // when no mic exists triggers a "Device '' invalidated. Retrying"
+    // spam every ~2 s for the lifetime of the process. Make the user
+    // ask for it explicitly. Pass `default` to fall back to the system's
+    // current default input endpoint.
+    if (const char *id = std::getenv("PULSAR_MIC_DEVICE_ID"); id && *id) {
+        OBSDataAutoRelease micSettings = obs_data_create();
         obs_data_set_string(micSettings, "device_id", id);
-    else
-        obs_data_set_string(micSettings, "device_id", "default");
-    micAudioSource = obs_source_create("wasapi_input_capture", "PulsarMic",
-                                        micSettings, nullptr);
-    if (micAudioSource) {
-        obs_set_output_source(3, micAudioSource);
-        blog(LOG_INFO, "[pulsar-frontend-stub] mic bound to channel 3");
+        micAudioSource = obs_source_create("wasapi_input_capture", "PulsarMic",
+                                            micSettings, nullptr);
+        if (micAudioSource) {
+            obs_set_output_source(3, micAudioSource);
+            blog(LOG_INFO, "[pulsar-frontend-stub] mic bound to channel 3 (device_id=%s)", id);
+        } else {
+            blog(LOG_WARNING, "[pulsar-frontend-stub] wasapi_input_capture unavailable");
+        }
     } else {
-        blog(LOG_WARNING, "[pulsar-frontend-stub] wasapi_input_capture unavailable");
+        blog(LOG_INFO, "[pulsar-frontend-stub] mic skipped (PULSAR_MIC_DEVICE_ID unset)");
     }
 
     // Process audio (per-process loopback). Requires Windows 10 build 19041+

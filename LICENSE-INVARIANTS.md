@@ -134,9 +134,19 @@ must explain which invariant the change touches and why it's still safe.
     by name)
   - `electron`
 
-- **Binary exports** (release-tag pipeline, future) — `dumpbin /exports
-  pulsar.exe` must return an empty export table. Followed up in
-  `build.yml` once Phase 1 lights up the Windows build matrix.
+- **Binary exports** (every Windows build, every release tag) —
+  `scripts/check-binary-exports.ps1` runs `dumpbin /exports` on every
+  Pulsar-owned binary in the rundir:
+    - `pulsar.exe` and `pulsar-browser-page.exe` — export table MUST be
+      empty (they are final binaries, no consumer should ever bind to
+      them at link-time).
+    - Plugin DLLs (`pulsar-*.dll`, `obs-websocket.dll`) — MAY export
+      only the OBS module ABI (`obs_module_load`, `obs_module_set_pointer`,
+      `obs_module_ver`, …). libobs calls these via `GetProcAddress`,
+      so they are unavoidable. ANY other exported symbol is treated as
+      an FFI surface and fails the build. Wired into `build.yml`,
+      `release.yml`, `live-test.yml`. (`ci.yml` skips this gate because
+      it does not build binaries — patch-lint + plugin-metadata only.)
 
 ### Consumer-side audit (Prism, future Pulsar consumers)
 

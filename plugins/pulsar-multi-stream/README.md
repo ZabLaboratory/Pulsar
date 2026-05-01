@@ -39,7 +39,7 @@ goes through the vendor namespace.
 | `StopAllDestinations` | — | `ok: bool` |
 | `GetVideoSettings` | — | `fps, width, height, video_bitrate, video_rate_control, video_keyint_sec, audio_bitrate` |
 | `SetVideoSettings` | `video_bitrate?, audio_bitrate?` | `changed: bool, video_bitrate?, audio_bitrate?` (or `error`) |
-| `GetAdaptiveState` | — | `enabled, target_kbps, current_kbps, floor_kbps, stable_ticks, adjustments_total, last_delta_total, last_delta_dropped, last_drop_ratio` |
+| `GetAdaptiveState` | — | `enabled, target_kbps, current_kbps, floor_kbps, stable_ticks, adjustments_total, last_delta_total, last_delta_dropped, last_drop_ratio, samples` |
 | `SetAdaptiveEnabled` | `enabled` | `enabled` |
 
 ### Vendor events

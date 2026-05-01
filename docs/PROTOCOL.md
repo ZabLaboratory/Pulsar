@@ -12,15 +12,19 @@ Spec: [obs-websocket v5 protocol reference](https://github.com/obsproject/obs-we
 
 ## Connection
 
-- **Transport:** WebSocket over TCP, loopback (`127.0.0.1`) only by
-  default.
-- **Port:** session-random, allocated by Pulsar at startup. The port
-  is printed to stdout in a `PULSAR_READY <port> <jwt>` line so the
-  spawning process can pick it up.
-- **Auth:** v5 challenge / response with the session JWT as the
-  password. Session JWT is single-use and rotated on every Pulsar
-  start. A plain v5 client implementation handles the handshake
-  unchanged.
+- **Transport:** WebSocket over TCP, loopback (`127.0.0.1`) only.
+- **Port:** controlled by the `PULSAR_PORT` env var at spawn (default
+  `4455`). The chosen port is echoed in the `PULSAR_READY` stdout
+  sentinel so the spawning process never has to guess.
+- **Password:** controlled by the `PULSAR_PASSWORD` env var at spawn.
+  When unset, Pulsar generates a fresh 22-char URL-safe random string
+  per session and exposes it in the same sentinel:
+  `PULSAR_READY ws=ws://127.0.0.1:<port> password=<pw>`. The seeded
+  values are written to `obs-websocket/config.json` before
+  `obs_module_load`, so a previously persisted password is never
+  trusted.
+- **Auth:** standard obs-websocket v5 challenge/response. A plain v5
+  client implementation handles the handshake unchanged.
 
 ## Pulsar extensions
 

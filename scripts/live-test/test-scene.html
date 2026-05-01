@@ -2,198 +2,391 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Pulsar live-test scene</title>
+<title>Pulsar — Live broadcast scene</title>
+
+<!-- ─────────────────────────────────────────────────────────────────────────
+     Lean shell. The visual logic lives in prism-v2-app.jsx -- edit that
+     file to change scenes / HUD / animations. This file owns:
+       1. CSS variables (Apple-keynote palette)
+       2. Pulsar live-data adapter (window.__pulsarTelemetry)
+       3. Web Audio sound design (window.__pulsarSfx)
+       4. React + Babel loaders
+       5. The single <script src="prism-v2-app.jsx"> entry point.
+─────────────────────────────────────────────────────────────────────────── -->
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
+  :root {
+    --bg:               #000000;
+    --bg-soft:          #0a0a0c;
+    --fg:               #f5f5f7;
+    --fg-mute:          rgba(245, 245, 247, 0.62);
+    --fg-faint:         rgba(245, 245, 247, 0.34);
+    --hairline:         rgba(255, 255, 255, 0.08);
+    --hairline-strong:  rgba(255, 255, 255, 0.14);
+    --accent:           #ff9f0a;        /* SF System Orange */
+    --accent-soft:      rgba(255, 159, 10, 0.16);
+    --ok:               #30d158;        /* SF System Green */
+    --warn:             #ff453a;
+    --sf-display:       -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro", "Inter", system-ui, sans-serif;
+    --sf-text:          -apple-system, BlinkMacSystemFont, "SF Pro Text",    "SF Pro", "Inter", system-ui, sans-serif;
+    --sf-mono:          ui-monospace, "SF Mono", "Menlo", "Roboto Mono", monospace;
+  }
   html, body {
     margin: 0; padding: 0; width: 100%; height: 100%;
-    overflow: hidden; background: #0d0d11;
-    color: #fff; font-family: ui-monospace, "JetBrains Mono", monospace;
+    background: var(--bg);
+    overflow: hidden;
+    font-family: var(--sf-text);
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "ss01", "cv11";
   }
-  #stage {
-    position: relative; width: 100vw; height: 100vh;
-    display: grid; grid-template-rows: auto 1fr auto; gap: 24px; padding: 32px;
-    box-sizing: border-box;
-  }
-  /* Animated background — gradient that moves at 60fps. Smooth motion
-     is the visual signal for "encoder is feeding the right framerate". */
-  #stage::before {
-    content: ""; position: absolute; inset: 0; z-index: -1;
-    background: linear-gradient(135deg,
-      hsl(220 70% 6%), hsl(280 60% 12%), hsl(220 70% 6%));
-    background-size: 200% 200%;
-    animation: drift 6s ease-in-out infinite;
-  }
-  @keyframes drift {
-    0%   { background-position:   0%   0% }
-    50%  { background-position: 100% 100% }
-    100% { background-position:   0%   0% }
-  }
-  header {
-    display: flex; align-items: center; gap: 24px;
-    font-size: 32px; font-weight: 700; letter-spacing: -0.5px;
-  }
-  .live-dot {
-    width: 18px; height: 18px; border-radius: 50%;
-    background: #ff3b3b; box-shadow: 0 0 24px #ff3b3b;
-    animation: pulse 1.2s ease-in-out infinite;
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1) }
-    50%      { opacity: 0.4; transform: scale(0.85) }
-  }
-  main {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 32px;
-    align-items: center; justify-items: center;
-  }
-  /* Spinning cube — visible markers across frames, drives the
-     "frame pacing looks right" check that a human reviewing the
-     Twitch VOD makes. */
-  .cube-wrap { perspective: 1200px; }
-  .cube {
-    width: 240px; height: 240px; position: relative;
-    transform-style: preserve-3d;
-    animation: spin 4s linear infinite;
-  }
-  @keyframes spin {
-    0%   { transform: rotateX(0deg) rotateY(0deg) }
-    100% { transform: rotateX(360deg) rotateY(360deg) }
-  }
-  .face {
-    position: absolute; inset: 0;
-    border: 2px solid rgba(155, 179, 255, 0.8);
-    background: rgba(155, 179, 255, 0.12);
-    color: #9bb3ff;
-    display: grid; place-items: center; font-size: 96px; font-weight: 800;
-  }
-  .f-front  { transform: translateZ(120px); }
-  .f-back   { transform: rotateY(180deg) translateZ(120px); }
-  .f-right  { transform: rotateY(90deg) translateZ(120px); }
-  .f-left   { transform: rotateY(-90deg) translateZ(120px); }
-  .f-top    { transform: rotateX(90deg) translateZ(120px); }
-  .f-bottom { transform: rotateX(-90deg) translateZ(120px); }
-  /* Stats — frame counter + timestamp + audio-pulse indicator. */
-  .stats {
-    font-size: 28px; line-height: 1.6;
-    background: rgba(0,0,0,0.4); padding: 24px 32px; border-radius: 12px;
-    min-width: 460px;
-  }
-  .stats .label { color: #888; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
-  .stats .value { color: #fff; font-variant-numeric: tabular-nums; }
-  .audio-bar {
-    height: 8px; background: rgba(155,179,255,0.15); border-radius: 4px;
-    overflow: hidden; margin-top: 8px;
-  }
-  .audio-bar-fill {
-    height: 100%; background: linear-gradient(90deg, #3aa874, #9bb3ff);
-    width: 0%; transition: width 0.1s ease-out;
-  }
-  footer {
-    display: flex; justify-content: space-between; align-items: baseline;
-    font-size: 14px; opacity: 0.6;
+  #root { position: fixed; inset: 0; }
+
+  @keyframes pulseDot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
   }
 </style>
 </head>
 <body>
-<div id="stage">
-  <header>
-    <span class="live-dot" aria-hidden></span>
-    <span>PULSAR LIVE TEST</span>
-  </header>
+<div id="root"></div>
 
-  <main>
-    <div class="cube-wrap">
-      <div class="cube">
-        <div class="face f-front">P</div>
-        <div class="face f-back">U</div>
-        <div class="face f-right">L</div>
-        <div class="face f-left">S</div>
-        <div class="face f-top">A</div>
-        <div class="face f-bottom">R</div>
-      </div>
-    </div>
-    <div class="stats">
-      <div><span class="label">Frame</span> &nbsp;<span class="value" id="frame">0</span></div>
-      <div><span class="label">Elapsed</span> <span class="value" id="elapsed">0.000s</span></div>
-      <div><span class="label">FPS</span>   <span class="value" id="fps">--</span></div>
-      <div style="margin-top:16px">
-        <span class="label">Audio sine 440 Hz · pulse every 5s</span>
-        <div class="audio-bar"><div class="audio-bar-fill" id="audiobar"></div></div>
-      </div>
-    </div>
-  </main>
-
-  <footer>
-    <span>scene-server :: live-test fixture</span>
-    <span id="when">--</span>
-  </footer>
-</div>
+<!-- ─────────────────────────────────────────────────────────────────────────
+     PULSAR LIVE-DATA ADAPTER
+     Fills window.__pulsarTelemetry with live values when ?port=&token= are
+     in the query string. Otherwise stays dormant (mock mode). The HUD in
+     prism-v2-app.jsx reads from this hot ref every frame.
+─────────────────────────────────────────────────────────────────────────── -->
 <script>
-  // Frame counter + measured FPS, smoothed over the last second.
-  // Visible on the broadcast so a human + automated pipeline can
-  // verify the 60 fps target is held.
-  const elFrame   = document.getElementById('frame');
-  const elElapsed = document.getElementById('elapsed');
-  const elFps     = document.getElementById('fps');
-  const elWhen    = document.getElementById('when');
-  const elBar     = document.getElementById('audiobar');
+(function () {
+  window.__pulsarTelemetry = {
+    connected: false,
+    libobsVersion: null,
+    streaming: false,
+    recording: false,
+    bitrateKbps: null,
+    bitrateTargetKbps: null,
+    fps: null,
+    resolution: null,
+    encoder: null,
+    droppedFrames: 0,
+    totalFrames: 0,
+    cpuPct: null,
+    memMB: null,
+    audioLevels: [0, 0, 0],
+    destinations: [],
+    activeScene: null,
+    sessionStartedAt: null,
+    lastEvent: null,
+  };
 
-  const start = performance.now();
-  const timestamps = [];
-  let frame = 0;
-
-  function tick(now) {
-    frame += 1;
-    const elapsed = (now - start) / 1000;
-    timestamps.push(now);
-    while (timestamps.length && timestamps[0] < now - 1000) timestamps.shift();
-    elFrame.textContent   = frame.toLocaleString();
-    elElapsed.textContent = elapsed.toFixed(3) + 's';
-    elFps.textContent     = timestamps.length.toString();
-    elWhen.textContent    = new Date().toISOString();
-    requestAnimationFrame(tick);
-  }
-  requestAnimationFrame(tick);
-
-  // Audio probe : a 440 Hz sine wave that pulses for 1s every 5s.
-  // Validates the `reroute_audio` path end-to-end : if the pulse is
-  // visible on the published audio (via ffprobe of the resulting
-  // VOD or a Twitch-side listener), the audio routing through
-  // obs-browser → libobs → encoder works.
-  let audioReady = false;
-  function startAudio() {
-    if (audioReady) return;
-    audioReady = true;
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = 440;
-    osc.type = 'sine';
-    gain.gain.value = 0;
-    osc.connect(gain).connect(ctx.destination);
-    osc.start();
-
-    // Pulse envelope : 1s on, 4s off. Keep amplitude moderate (0.25)
-    // so it doesn't over-saturate Twitch's loudness gating.
-    setInterval(() => {
-      const t = ctx.currentTime;
-      gain.gain.cancelScheduledValues(t);
-      gain.gain.setValueAtTime(0, t);
-      gain.gain.linearRampToValueAtTime(0.25, t + 0.05);
-      gain.gain.setValueAtTime(0.25, t + 1.0);
-      gain.gain.linearRampToValueAtTime(0, t + 1.05);
-    }, 5000);
-
-    // Animate the visible audio bar so even a muted player sees
-    // the pulse cadence.
-    setInterval(() => {
-      elBar.style.width = '100%';
-      setTimeout(() => { elBar.style.width = '0%'; }, 1000);
-    }, 5000);
+  const qs = new URLSearchParams(location.search);
+  const port  = qs.get('port')  || (window.__PULSAR__ && window.__PULSAR__.port);
+  const token = qs.get('token') || (window.__PULSAR__ && window.__PULSAR__.token);
+  if (!port || !token) {
+    console.info('[pulsar-adapter] no port/token -- mock mode');
+    return;
   }
 
-  // CEF / obs-browser allows audio without a user gesture. Start
-  // immediately when the page loads.
-  startAudio();
+  let ws, retry;
+  const pending = new Map();
+
+  async function sha256base64(input) {
+    const buf = new TextEncoder().encode(input);
+    const hash = await crypto.subtle.digest('SHA-256', buf);
+    return btoa(String.fromCharCode(...new Uint8Array(hash)));
+  }
+  function rid()  { return crypto.randomUUID(); }
+  function send(op, d) { ws.send(JSON.stringify({ op, d })); }
+  function request(requestType, requestData) {
+    return new Promise((resolve) => {
+      const requestId = rid();
+      pending.set(requestId, resolve);
+      send(6, { requestType, requestId, requestData });
+    });
+  }
+
+  async function onHello(d) {
+    let auth;
+    if (d.authentication) {
+      const { challenge, salt } = d.authentication;
+      const secret = await sha256base64(token + salt);
+      auth = await sha256base64(secret + challenge);
+    }
+    send(1, { rpcVersion: d.rpcVersion, authentication: auth, eventSubscriptions: 0x7FF });
+  }
+
+  async function onIdentified() {
+    const T = window.__pulsarTelemetry;
+    T.connected = true;
+    T.sessionStartedAt = Date.now();
+    const ver = await request('GetVersion');
+    if (ver?.responseData) T.libobsVersion = ver.responseData.obsVersion || null;
+    const vid = await request('GetVideoSettings');
+    if (vid?.responseData) {
+      const v = vid.responseData;
+      T.fps = v.fpsNumerator && v.fpsDenominator ? Math.round(v.fpsNumerator / v.fpsDenominator) : null;
+      T.resolution = v.outputWidth && v.outputHeight ? `${v.outputWidth}x${v.outputHeight}` : null;
+    }
+    const dests = await request('CallVendorRequest', {
+      vendorName: 'pulsar', requestType: 'GetDestinations', requestData: {},
+    });
+    if (dests?.responseData?.responseData?.destinations) {
+      T.destinations = dests.responseData.responseData.destinations;
+    }
+  }
+
+  function onEvent(d) {
+    const T = window.__pulsarTelemetry;
+    T.lastEvent = d;
+    switch (d.eventType) {
+      case 'StreamStateChanged':         T.streaming = d.eventData.outputActive; break;
+      case 'RecordStateChanged':         T.recording = d.eventData.outputActive; break;
+      case 'CurrentProgramSceneChanged': T.activeScene = d.eventData.sceneName; break;
+      case 'InputVolumeMeters':
+        if (Array.isArray(d.eventData.inputs)) {
+          T.audioLevels = d.eventData.inputs.slice(0, 3).map(i => {
+            const lvls = i.inputLevelsMul?.flat?.() || [];
+            return lvls.length ? Math.max(...lvls) : 0;
+          });
+        }
+        break;
+      case 'VendorEvent':
+        if (d.eventData.vendorName === 'pulsar') {
+          const sub = d.eventData.eventType;
+          const ed  = d.eventData.eventData || {};
+          if (sub === 'BitrateAdjusted') {
+            T.bitrateKbps       = ed.currentKbps;
+            T.bitrateTargetKbps = ed.targetKbps;
+          } else if (sub === 'DestinationStateChanged') {
+            const dest = T.destinations.find(x => x.id === ed.id);
+            if (dest) dest.state = ed.state;
+          }
+        }
+        break;
+    }
+  }
+
+  function connect() {
+    ws = new WebSocket(`ws://127.0.0.1:${port}`, ['obswebsocket.json']);
+    ws.onopen    = () => console.info('[pulsar-adapter] socket open');
+    ws.onmessage = async (msg) => {
+      const { op, d } = JSON.parse(msg.data);
+      if (op === 0) return onHello(d);
+      if (op === 2) return onIdentified();
+      if (op === 5) return onEvent(d);
+      if (op === 7) {
+        const fn = pending.get(d.requestId);
+        if (fn) { pending.delete(d.requestId); fn(d); }
+      }
+    };
+    ws.onclose = () => {
+      window.__pulsarTelemetry.connected = false;
+      clearTimeout(retry);
+      retry = setTimeout(connect, 1500);
+    };
+    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+  }
+
+  // 1 Hz stat poll. GetAdaptiveState is the fallback bitrate source when
+  // no BitrateAdjusted event has fired yet (target reached, no drop).
+  // GetDestinations is re-polled every tick because pulsar-multi-stream
+  // destinations are NOT tracked by the legacy GetStreamStatus.outputActive
+  // / outputTotalFrames -- they live behind CallVendorRequest. We derive
+  // `streaming` and a synthetic `totalFrames` from them when the legacy
+  // numbers are 0.
+  setInterval(async () => {
+    const T = window.__pulsarTelemetry;
+    if (!T.connected) return;
+
+    const stats = await request('GetStats');
+    if (stats?.responseData) {
+      T.cpuPct = stats.responseData.cpuUsage ?? null;
+      T.memMB  = stats.responseData.memoryUsage ?? null;
+    }
+
+    const out = await request('GetStreamStatus');
+    let legacyFrames = 0, legacyDrops = 0, legacyActive = false;
+    if (out?.responseData) {
+      const s = out.responseData;
+      legacyActive = !!s.outputActive;
+      legacyFrames = s.outputTotalFrames   ?? 0;
+      legacyDrops  = s.outputSkippedFrames ?? 0;
+    }
+
+    const dests = await request('CallVendorRequest', {
+      vendorName: 'pulsar', requestType: 'GetDestinations', requestData: {},
+    });
+    const list = dests?.responseData?.responseData?.destinations;
+    if (Array.isArray(list)) T.destinations = list;
+    const vendorActive = (T.destinations || []).some(d => d.state === 'active' || d.active);
+    const vendorDrops  = (T.destinations || []).reduce(
+      (acc, d) => acc + (d.droppedFrames || d.dropped_frames || 0), 0);
+
+    // Live if either the legacy single-stream output OR any vendor
+    // destination is active.
+    T.streaming     = legacyActive || vendorActive;
+    T.droppedFrames = Math.max(legacyDrops, vendorDrops);
+
+    // Synthesize totalFrames from session uptime × fps when the legacy
+    // counter stays at 0 (vendor destinations don't update it). The
+    // encoder is CBR so the relation is tight enough for the HUD.
+    if (legacyFrames > 0) {
+      T.totalFrames = legacyFrames;
+    } else if (T.streaming && T.sessionStartedAt && T.fps) {
+      const elapsedMs = Date.now() - T.sessionStartedAt;
+      T.totalFrames = Math.max(0, Math.floor(elapsedMs / 1000 * T.fps));
+    }
+
+    const ad = await request('CallVendorRequest', {
+      vendorName: 'pulsar', requestType: 'GetAdaptiveState', requestData: {},
+    });
+    const ar = ad?.responseData?.responseData;
+    if (ar) {
+      T.bitrateKbps       = ar.current_kbps ?? T.bitrateKbps;
+      T.bitrateTargetKbps = ar.target_kbps  ?? T.bitrateTargetKbps;
+    }
+  }, 1000);
+
+  connect();
+})();
 </script>
+
+<!-- ─────────────────────────────────────────────────────────────────────────
+     SOUND DESIGN  (Web Audio API)
+     Event-only -- NO background drone, NO ambient pad. Each cue is tied
+     to a specific scene transition or visual event :
+
+       whoosh : intro letter cascade (single shot, scene 0)
+       chime  : Pulsar warm-up to orange (scene 0) ; stamp landing (s4)
+       swoop  : scene-to-scene crossfade (low filtered noise rise)
+       click  : boot transcript line / pipeline connector lit / kind swap
+       blip   : checklist tick
+
+     CEF launches with --autoplay-policy=no-user-gesture-required so the
+     AudioContext resumes immediately. reroute_audio:true on the
+     browser_source pulls page audio into the OBS mixer.
+─────────────────────────────────────────────────────────────────────────── -->
+<script>
+(function () {
+  let ctx;
+  try { ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  if (!ctx) {
+    window.__pulsarSfx = {
+      whoosh:()=>{}, chime:()=>{}, swoop:()=>{}, click:()=>{}, blip:()=>{},
+      // Legacy aliases so older code paths don't crash.
+      droneStart:()=>{}, tick:()=>{},
+    };
+    return;
+  }
+
+  const master = ctx.createGain();
+  master.gain.value = 0.45;
+  master.connect(ctx.destination);
+
+  // ── whoosh : long filtered-noise sweep, scene 0 letters ───────────────
+  function whoosh(durationSec) {
+    const dur = durationSec || 1.6;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1);
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const filt = ctx.createBiquadFilter(); filt.type = 'bandpass'; filt.Q.value = 0.8;
+    filt.frequency.setValueAtTime(220, ctx.currentTime);
+    filt.frequency.exponentialRampToValueAtTime(1800, ctx.currentTime + dur * 0.65);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.28, ctx.currentTime + 0.18);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
+    src.connect(filt).connect(g).connect(master);
+    src.start();
+    src.stop(ctx.currentTime + dur);
+  }
+
+  // ── chime : 3-partial sine bell, scene transitions / stamp landings ──
+  function chime(rootHz, durationSec) {
+    const root = rootHz || 523.25;
+    const dur  = durationSec || 1.8;
+    const t0   = ctx.currentTime;
+    [root, root * 1.5, root * 2].forEach((f, i) => {
+      const osc = ctx.createOscillator();
+      const g   = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = f;
+      const peak = 0.14 / (i + 1);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(peak, t0 + 0.04 + i * 0.06);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(g).connect(master);
+      osc.start(t0); osc.stop(t0 + dur);
+    });
+  }
+
+  // ── swoop : 0.6 s low-mid noise rise, scene-to-scene crossfade ────────
+  function swoop() {
+    const dur = 0.6;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1);
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const filt = ctx.createBiquadFilter(); filt.type = 'lowpass'; filt.Q.value = 1.2;
+    filt.frequency.setValueAtTime(140, ctx.currentTime);
+    filt.frequency.exponentialRampToValueAtTime(900, ctx.currentTime + dur * 0.7);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.18);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
+    src.connect(filt).connect(g).connect(master);
+    src.start(); src.stop(ctx.currentTime + dur);
+  }
+
+  // ── click : crisp 35 ms square pulse, UI events ───────────────────────
+  function click() {
+    const t0 = ctx.currentTime;
+    const osc = ctx.createOscillator(); const g = ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.value = 2400 + Math.random() * 200;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.05, t0 + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.035);
+    osc.connect(g).connect(master);
+    osc.start(t0); osc.stop(t0 + 0.04);
+  }
+
+  // ── blip : downward triangle sweep, checklist ticks ───────────────────
+  function blip() {
+    const t0 = ctx.currentTime;
+    const osc = ctx.createOscillator(); const g = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(1200, t0);
+    osc.frequency.exponentialRampToValueAtTime(520, t0 + 0.18);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.16, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
+    osc.connect(g).connect(master);
+    osc.start(t0); osc.stop(t0 + 0.25);
+  }
+
+  window.__pulsarSfx = {
+    whoosh, chime, swoop, click, blip,
+    // Aliases so older calls still work without crashing.
+    tick: click,
+    droneStart: () => {},
+  };
+})();
+</script>
+
+<!-- React + Babel runtime, served from unpkg. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<!-- App entry point. Babel fetches the .jsx, transpiles, evaluates. -->
+<script type="text/babel" src="prism-v2-app.jsx"></script>
+
 </body>
 </html>

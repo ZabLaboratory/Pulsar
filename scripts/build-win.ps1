@@ -250,6 +250,27 @@ if ($Stage -in @('build', 'all')) {
         Write-Host "Skipping Pulsar plugin build: libobs.lib not present at $libobsLib"
         Write-Host "Run a full upstream build first."
     } else {
+        # PULSAR: drop upstream's obs-browser binaries before our
+        # plugins build, so libobs picks up only pulsar-browser at
+        # obs_load_all_modules time. Both DLLs would register the
+        # `browser_source` source kind if both were present.
+        if ($Full) {
+            $rundirRoot     = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo'
+            $upstreamBrowser = Join-Path $rundirRoot 'obs-plugins\64bit\obs-browser.dll'
+            $upstreamHelper  = Join-Path $rundirRoot 'bin\64bit\obs-browser-page.exe'
+            $upstreamData    = Join-Path $rundirRoot 'data\obs-plugins\obs-browser'
+            foreach ($p in @($upstreamBrowser, $upstreamHelper)) {
+                if (Test-Path $p) {
+                    Write-Host "Removing upstream artefact: $p"
+                    Remove-Item -Force $p
+                }
+            }
+            if (Test-Path $upstreamData) {
+                Write-Host "Removing upstream data dir: $upstreamData"
+                Remove-Item -Recurse -Force $upstreamData
+            }
+        }
+
         Write-Host ""
         Write-Host "--- Configuring Pulsar plugins ---"
         $pulsarBuild = Join-Path $root 'build'
@@ -257,7 +278,9 @@ if ($Stage -in @('build', 'all')) {
                  -DPULSAR_BUILD_HEADLESS=ON `
                  -DPULSAR_BUILD_FRONTEND_STUB=ON `
                  -DPULSAR_BUILD_WEBSOCKET=ON `
-                 -DPULSAR_BUILD_MULTISTREAM=ON
+                 -DPULSAR_BUILD_MULTISTREAM=ON `
+                 -DPULSAR_BUILD_SCENE_SOURCE=ON `
+                 "-DPULSAR_BUILD_BROWSER=$(if ($Full) { 'ON' } else { 'OFF' })"
         if ($LASTEXITCODE -ne 0) { throw "Pulsar configure failed" }
 
         Write-Host ""

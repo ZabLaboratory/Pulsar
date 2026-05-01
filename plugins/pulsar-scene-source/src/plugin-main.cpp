@@ -235,22 +235,25 @@ bool obs_module_load(void)
 // handler is published. Same constraint as pulsar-multi-stream.
 void obs_module_post_load(void)
 {
-    g_vendor = obs_websocket_register_vendor("pulsar");
+    g_vendor = obs_websocket_register_vendor("pulsar-scene");
     if (!g_vendor) {
         blog(LOG_WARNING,
              "[pulsar-scene-source] obs-websocket not present ; vendor API disabled");
         return;
     }
 
-    // Note : "pulsar" is the same vendor namespace pulsar-multi-stream
-    // already registers. obs_websocket_register_vendor returns the
-    // existing handle when called twice — we just register additional
-    // requests onto it. The two plugins are coordinated through that
-    // shared namespace, not through cross-includes.
+    // Distinct vendor namespace `pulsar-scene` (NOT `pulsar`) :
+    // obs-websocket's vendor_register_cb in our pulsar-websocket fork
+    // refuses to register the same vendor name twice. The second
+    // plugin to call it gets NULL and its requests never bind. Each
+    // Pulsar plugin therefore owns its own namespace ; client code
+    // calls `CallVendorRequest("pulsar-scene", ...)` for capture
+    // source, `CallVendorRequest("pulsar", ...)` for the destinations
+    // and adaptive bitrate surface.
     obs_websocket_vendor_register_request(g_vendor, "SetCaptureSource", on_set_capture_source, nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetCaptureSource", on_get_capture_source, nullptr);
 
-    blog(LOG_INFO, "[pulsar-scene-source] vendor 'pulsar' SetCaptureSource + GetCaptureSource registered");
+    blog(LOG_INFO, "[pulsar-scene-source] vendor 'pulsar-scene' SetCaptureSource + GetCaptureSource registered");
 }
 
 void obs_module_unload(void)

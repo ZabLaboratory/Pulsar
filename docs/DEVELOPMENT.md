@@ -138,12 +138,18 @@ build it ourselves.
 
 GitHub Actions matrix (Phase 1+):
 
-- `ci.yml` — lightweight checks on every PR (cmake configure, lint
-  patches, validate plugin metadata).
-- `build.yml` — full build matrix Win/Mac/Linux on PR + main, uploads
-  artefacts for QA.
-- `release.yml` — on `vX.Y.Z` tag push, fans out the matrix and
-  publishes signed artefacts as a GitHub Release.
+- `ci.yml` — lightweight checks on every PR (patches/ apply cleanly on
+  the pinned upstream SHA; every plugins/* carries CMakeLists.txt + README).
+- `build.yml` — Windows x64 build on every PR + push to main. Runs the
+  full `-Full` build (CEF + obs-browser) and the binary-export gate
+  (`scripts/check-binary-exports.ps1`). **macOS / Linux are deferred
+  to Phase 7 / Phase 8 — V1 ships Windows-only.**
+- `license-isolation.yml` — source-tree audit for forbidden patterns
+  (`__declspec(dllexport)`, `napi_*`, `prism`, `electron`).
+- `live-test.yml` — end-to-end Twitch broadcast probe on tag push +
+  manual dispatch.
+- `release.yml` — on `vX.Y.Z` tag push, builds Windows x64 once and
+  packages two variants (light + full) into a GitHub Release.
 
 ## Adding a patch
 

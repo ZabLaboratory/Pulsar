@@ -70,6 +70,23 @@ target_link_libraries(pulsar-headless PRIVATE
     Qt6::Widgets
 )
 
+# /SUBSYSTEM:WINDOWS so Windows does not allocate a console window for
+# pulsar.exe when it has no parent terminal. Combined with the manual
+# AttachConsole(ATTACH_PARENT_PROCESS) call in main.cpp, the binary
+# behaves like:
+#   - spawn from Prism / Start-Process / probe                -> no window
+#   - direct invocation from cmd.exe / PowerShell terminal    -> output goes
+#     to that terminal (operator can still tail logs interactively)
+#   - any spawn with stdio:'pipe' / -RedirectStandardOutput   -> CRT picks
+#     up the inherited handles, printf writes to the pipe/file as before
+#
+# /ENTRY:mainCRTStartup keeps `int main(int, char**)` as the entry point
+# (the default for /SUBSYSTEM:WINDOWS would be `WinMain`).
+target_link_options(pulsar-headless PRIVATE
+    "$<$<PLATFORM_ID:Windows>:/SUBSYSTEM:WINDOWS>"
+    "$<$<PLATFORM_ID:Windows>:/ENTRY:mainCRTStartup>"
+)
+
 set_target_properties(pulsar-headless PROPERTIES
     OUTPUT_NAME "pulsar"
     # Land next to obs.dll so the loader resolves libobs at runtime
