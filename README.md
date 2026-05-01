@@ -273,3 +273,11 @@ See `docs/DEVELOPMENT.md` for tooling prerequisites (CMake ≥ 3.28, Visual Stud
 GPL-2.0-or-later, inherited from libobs and non-negotiable for anything linking Pulsar's binaries (= every plugin under `plugins/` and the upstream OBS modules). The `packages/pulsar-client/` TypeScript wrapper is MIT (no GPL link), since it speaks to Pulsar over WebSocket only — process boundary breaks GPL propagation.
 
 See [`LICENSE`](LICENSE) and the GPL-2.0 text in `upstream/COPYING`.
+
+### Embedding Pulsar in another application — read this first
+
+The "process boundary breaks GPL propagation" line above is **not magic**. It works only if four invariants are honoured by the consumer (Prism today, any future Pulsar-bundling app tomorrow). Each invariant being broken is enough to retroactively re-license every consumer that has shipped against the breach.
+
+➡️ **[`LICENSE-INVARIANTS.md`](LICENSE-INVARIANTS.md) — non-negotiable contract.** Read it before designing any code that crosses the Pulsar / consumer boundary.
+
+The CI workflow [`license-isolation`](.github/workflows/license-isolation.yml) statically enforces what can be enforced from inside this repo (no DLL export macros, no Node N-API bindings, no node-gyp manifests, no consumer-source-staging directories). The rest is on consumer-side audits.
