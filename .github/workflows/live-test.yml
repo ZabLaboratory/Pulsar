@@ -32,6 +32,11 @@
 
 name: live-test
 
+# paths-ignore : these files do NOT influence what pulsar.exe builds
+# or how the live broadcast renders, so triggering a 15-min CI run on
+# every typo fix is wasteful. Edits restricted to docs / npm tarballs /
+# CHANGELOG / .gitignore skip the workflow entirely. Source under
+# plugins/ scripts/ patches/ upstream/ does fire it as expected.
 on:
   workflow_dispatch:
     inputs:
@@ -47,6 +52,13 @@ on:
     branches: ['**']
     tags:
       - 'v*.*.*'
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'packages/**'
+      - 'CHANGELOG.md'
+      - '.gitignore'
+      - 'LICENSE'
 
 concurrency:
   group: live-test

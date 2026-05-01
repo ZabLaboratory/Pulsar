@@ -380,10 +380,34 @@
 })();
 </script>
 
-<!-- React + Babel runtime, served from unpkg. -->
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+<!-- React + Babel runtime, vendored locally under vendor/. unpkg.com
+     can flake / rate-limit during long-running broadcasts (this is what
+     caused the 30-min main run to ship a black screen on 2026-05-01),
+     and CEF on a CI runner has no recovery path if the script fetch
+     fails. Self-contained > convenient. -->
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/babel.min.js"></script>
+
+<!-- Fail-open visible error overlay : if the JSX throws or Babel can't
+     compile, we want to SEE the error in the broadcast frame rather
+     than ship a silent black screen to Twitch. -->
+<script>
+window.addEventListener('error', function(e) {
+  var d = document.getElementById('__scene_err') || (function(){
+    var x = document.createElement('div'); x.id = '__scene_err';
+    x.style.cssText = 'position:fixed;left:24px;right:24px;bottom:24px;'
+      + 'padding:14px 18px;border:1px solid #ff453a;border-radius:10px;'
+      + 'background:rgba(40,16,18,0.92);color:#ff8a80;'
+      + 'font:13px/1.5 ui-monospace,monospace;z-index:99999;'
+      + 'white-space:pre-wrap;max-height:40vh;overflow:auto';
+    document.body.appendChild(x); return x;
+  })();
+  d.textContent += '[scene] ' + (e.message || e.type)
+    + (e.filename ? ' (' + (e.filename.split('/').pop()) + ':' + e.lineno + ')' : '')
+    + '\n';
+}, true);
+</script>
 
 <!-- App entry point. Babel fetches the .jsx, transpiles, evaluates. -->
 <script type="text/babel" src="prism-v2-app.jsx"></script>
