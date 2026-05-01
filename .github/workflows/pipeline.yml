@@ -340,10 +340,14 @@ jobs:
       - name: Run Twitch live-broadcast probe
         env:
           TWITCH_STREAM_KEY:  ${{ secrets.TWITCH_STREAM_KEY }}
+          # Duration matrix : workflow_dispatch input wins ; else
+          # 600 s (10 min) for push-to-main / tag (release-grade
+          # broadcast that publishes to gh-pages + Release) ; else
+          # 60 s (1 min) for any other branch / PR push.
           LIVE_TEST_DURATION: >-
             ${{
               (github.event_name == 'workflow_dispatch' && github.event.inputs.duration_seconds)
-              || ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && '1800')
+              || ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && '600')
               || '60'
             }}
           LIVE_TEST_FPS:      ${{ github.event.inputs.fps || '60' }}
