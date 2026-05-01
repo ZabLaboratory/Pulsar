@@ -550,9 +550,13 @@ jobs:
       - name: Install npm workspaces
         # PULSAR_BUNDLE_SKIP_POSTINSTALL skips the binary download in
         # pulsar-bundle's postinstall -- tsc-publish doesn't need pulsar.exe.
+        # --force bypasses npm's os/cpu check : pulsar-bundle declares
+        # os:["win32"] cpu:["x64"] but this runner is ubuntu-latest, and
+        # we only need tsc to compile the TS sources. The published tarball
+        # carries the os/cpu constraints unchanged for end users.
         env:
           PULSAR_BUNDLE_SKIP_POSTINSTALL: '1'
-        run: npm install --no-audit --no-fund
+        run: npm install --no-audit --no-fund --force
 
       - name: Build npm packages (topo order)
         run: |
