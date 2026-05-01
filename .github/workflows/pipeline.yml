@@ -404,6 +404,7 @@ jobs:
         with:
           name: pulsar-live-broadcast-proof
           path: |
+            artefacts/pulsar-live-broadcast-proof.mp4
             artefacts/pulsar-live-broadcast-proof-*.mp4
             artefacts/diagnostic.json
           retention-days: 90
