@@ -270,13 +270,21 @@ bool DestinationRegistry::ensure_output(Destination &d, std::string &errOut)
 void DestinationRegistry::release_destination_handles_locked(Destination &d)
 {
     if (d.output) {
-        if (obs_output_active(d.output)) {
-            obs_output_stop(d.output);
-            for (int i = 0; i < 50 && obs_output_active(d.output); ++i)
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            if (obs_output_active(d.output))
-                obs_output_force_stop(d.output);
-        }
+        // Drain the worker thread before release so we don't free
+        // the output struct while a thread is mid-callback on it.
+        //
+        // Strategy : graceful stop first (lets ffmpeg_muxer write its
+        // moov atom, lets rtmp_output close the connection cleanly),
+        // wait up to 3 s for active() to drop, then a fixed tail to
+        // cover the worker-mid-callback window where active() flips
+        // to false slightly before the worker thread fully exits.
+        // force_stop is deliberately NOT called -- it short-circuits
+        // the flush path and races the worker more aggressively than
+        // a graceful stop.
+        obs_output_stop(d.output);
+        for (int i = 0; i < 150 && obs_output_active(d.output); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         obs_output_release(d.output);
         d.output = nullptr;
     }
@@ -335,7 +343,12 @@ bool DestinationRegistry::stop(const std::string &id)
     if (it == map_.end()) return false;
     auto &d = it->second;
     d.enabled = false;
-    if (d.output && obs_output_active(d.output))
+    // obs_output_stop is idempotent and also valid in the "starting"
+    // window where active() reports false. Calling it unconditionally
+    // means stopping a destination whose connect attempt is still in
+    // flight (e.g. rtmp_custom against a dead address) cleanly drains
+    // the worker thread instead of leaking it until release.
+    if (d.output)
         obs_output_stop(d.output);
     return true;
 }
@@ -367,7 +380,9 @@ void DestinationRegistry::stop_all()
     for (auto &p : map_) {
         auto &d = p.second;
         d.enabled = false;
-        if (d.output && obs_output_active(d.output))
+        // Same rationale as stop() : skip the active() gate so an
+        // output stuck in the starting state cleanly drains.
+        if (d.output)
             obs_output_stop(d.output);
     }
 }
