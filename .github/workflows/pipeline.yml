@@ -60,8 +60,17 @@ on:
         description: 'Publish @clodocapeo/pulsar-* to npm (requires NPM_TOKEN + tag-matched VERSION)'
         type: boolean
         default: false
+  # Dedup strategy : `pull_request` fires for every PR-touching push,
+  # so we DON'T also fire `push` on feature branches -- that would
+  # double every PR run. push is reserved for main + tags (the events
+  # without a backing PR). Net : exactly one pipeline run per change.
+  #   - feature branch + open PR  : pull_request fires (once per push)
+  #   - feature branch, no PR     : nothing fires (open a draft PR if
+  #                                  you want CI before review)
+  #   - direct push to main       : push fires
+  #   - tag push v*.*.*           : push fires
   push:
-    branches: ['**']
+    branches: [main]
     tags:
       - 'v*.*.*'
     paths-ignore:
@@ -72,6 +81,12 @@ on:
       - 'LICENSE'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+      - '.gitignore'
+      - 'LICENSE'
 
 concurrency:
   group: pipeline-${{ github.ref }}
