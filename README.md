@@ -46,18 +46,18 @@ Every push runs the [`live-test` workflow](.github/workflows/live-test.yml) on a
 | Trigger | Duration | Where the MP4 lands |
 |---|---|---|
 | Push to a feature branch | **1 min** smoke | workflow artefact (90 days retention) |
-| Push to `main` (post-PR merge) | **30 min** release-grade | GitHub Release attached to the merge SHA |
-| Push tag `v*.*.*` | **30 min** release-grade | GitHub Release attached to the tag |
+| Push to `main` (post-PR merge) | **30 min** release-grade | workflow artefact **+ GitHub Pages** (replaces the README inline player) |
+| Push tag `v*.*.*` | **30 min** release-grade | workflow artefact + GitHub Pages **+ GitHub Release** asset (download) |
 | `workflow_dispatch` (manual) | configurable | workflow artefact |
 
-What you can play below is the broadcast produced for the **latest release**. If the player shows 404 / never loads, no tag has been cut yet since the workflow was wired up — the file populates on the next release.
+What you can play below is the broadcast produced for the **latest release-grade run** (push to `main` or tag `v*.*.*`). The MP4 is published to GitHub Pages on every release-grade run so it streams inline in the player below — no download required. If the player shows 404 / never loads, no release-grade run has fired yet since the workflow was wired up; the file populates on the next push to `main`.
 
-<video src="https://github.com/ZabLaboratory/Pulsar/releases/latest/download/pulsar-live-broadcast-proof.mp4" controls preload="metadata" width="720">
+<video src="https://zablaboratory.github.io/Pulsar/pulsar-live-broadcast-proof.mp4" controls preload="metadata" width="720">
   Your browser doesn't support inline MP4 playback.
-  <a href="https://github.com/ZabLaboratory/Pulsar/releases/latest/download/pulsar-live-broadcast-proof.mp4">Download the proof MP4</a>.
+  <a href="https://zablaboratory.github.io/Pulsar/pulsar-live-broadcast-proof.mp4">Stream the proof MP4 directly</a>.
 </video>
 
-[➡️ Direct download (latest release MP4)](https://github.com/ZabLaboratory/Pulsar/releases/latest/download/pulsar-live-broadcast-proof.mp4) · [browse all live-test runs](https://github.com/ZabLaboratory/Pulsar/actions/workflows/live-test.yml)
+[➡️ Stream inline (GitHub Pages)](https://zablaboratory.github.io/Pulsar/pulsar-live-broadcast-proof.mp4) · [download from latest release](https://github.com/ZabLaboratory/Pulsar/releases/latest/download/pulsar-live-broadcast-proof.mp4) · [browse all live-test runs](https://github.com/ZabLaboratory/Pulsar/actions/workflows/live-test.yml)
 
 The probe asserts on the metric side too: `GetDestinations[id].active == true` every 5 s, `GetAdaptiveState.samples` strictly increasing, frame drop ratio < 5 %. The MP4 is the visible byproduct; the gate is the assertion suite.
 

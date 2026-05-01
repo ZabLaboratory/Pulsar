@@ -210,16 +210,35 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+      - name: Publish proof MP4 to GitHub Pages
+        # Release-grade runs only (push to main / tag). The README
+        # `<video>` tag plays the MP4 inline -- but a GitHub Release
+        # asset URL serves with `Content-Disposition: attachment`,
+        # which forces the browser to download instead of streaming.
+        # GitHub Pages serves the same file with `Content-Type:
+        # video/mp4` and no attachment disposition, so the inline
+        # player works.
+        # The orphan branch keeps gh-pages a single commit deep --
+        # we never want history of stale broadcasts bloating the repo.
+        if: success() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./artefacts
+          publish_branch: gh-pages
+          force_orphan: true
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: "live-test: refresh broadcast proof MP4 (${{ github.sha }})"
+
       - name: Attach broadcast VOD to GitHub Release
         # Tag-push runs only -- the workflow_dispatch path has no
         # release to attach to, the workflow artefact suffices there.
+        # We attach a download copy alongside the GitHub Pages inline
+        # player so users can save the file if they want.
         if: success() && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          # `pulsar-live-broadcast-proof.mp4` (no SHA suffix) is the
-          # filename the README expects via the
-          # `releases/latest/download/` redirect; the versioned copy
-          # gives reviewers a stable link to a specific tag's proof.
           files: |
             artefacts/pulsar-live-broadcast-proof.mp4
             artefacts/pulsar-live-broadcast-proof-*.mp4
