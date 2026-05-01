@@ -1,41 +1,39 @@
-# Pulsar pipeline -- single workflow, single job, single build.
+# Pulsar pipeline -- one build, many jobs.
 #
-# Replaces the previous five-workflow split (ci.yml, build.yml,
-# license-isolation.yml, live-test.yml, release.yml, publish-npm.yml)
-# which each spawned their own runner and rebuilt pulsar.exe from
-# scratch -- on a tag push that meant up to four parallel Windows
-# builds doing the same work. This file collapses the lot into one
-# linear pipeline : checkout, lint, build ONCE, then every gate /
-# test / packaging / publish step runs on the same runner against the
-# already-built rundir. ~50 % faster on tag pushes, no duplication,
-# no juggling artefacts between workflows.
+# pulsar.exe is built ONCE in the `build` job and uploaded as the
+# `pulsar-rundir` artefact. Every downstream job downloads that
+# artefact instead of rebuilding. Jobs are isolated so a failure in
+# `offline-probes` doesn't take down `live-broadcast`, `package`,
+# `npm-publish` etc -- you see exactly which gate broke and which
+# ones still passed in the GitHub Actions UI.
 #
-# Trigger / behaviour matrix :
-#   push to feature branch          : full pipeline minus tag-only
-#                                     stages (no package, no gh-pages,
-#                                     no npm publish, no release attach).
-#                                     live-broadcast = 60 s smoke.
-#   push to main (post-PR merge)    : adds gh-pages publish for the
-#                                     README inline player. live-broadcast
-#                                     = 1800 s release-grade.
-#   push tag v*.*.*                 : adds package (light + full zips)
-#                                     + GitHub Release attach + npm
-#                                     publish. live-broadcast = 1800 s.
-#   pull_request to main            : full pipeline minus all release-
-#                                     grade publish steps. broadcast
-#                                     stays at 60 s.
-#   workflow_dispatch               : manual run with operator-chosen
-#                                     duration / fps.
+# Job graph :
+#
+#   lint  ──► build ──┬─► binary-gate
+#                     ├─► offline-probes
+#                     ├─► live-broadcast ──► publish-gh-pages
+#                     │                  └─► release-attach
+#                     └─► package ──────────► release-attach
+#                ────► npm-publish
+#
+# Trigger / behaviour matrix (each job carries its own `if:`) :
+#   push to feature branch              : lint, build, gates, 60 s broadcast
+#   push to main (post-PR merge)        : + 30 min broadcast + gh-pages publish
+#   push tag v*.*.*                     : + package + release attach + npm publish
+#   pull_request to main                : full minus release-grade publish
+#   workflow_dispatch                   : full pipeline + operator-chosen
+#                                         broadcast duration / fps + opt-in
+#                                         release-grade stages via inputs
 #
 # paths-ignore : touching only docs / changelog / .gitignore / LICENSE
-# skips the whole pipeline -- those files do not affect what
+# skips the whole pipeline -- nothing in those paths affects what
 # pulsar.exe builds or how the broadcast renders.
 #
 # Concurrency : `pipeline-<ref>` group with cancel-in-progress=true
-# means a fresh push to the same branch cancels the previous run, so
-# you never have multiple builds queueing for the same change.
-# Live broadcast itself takes a separate, non-cancelling `live-test`
-# lock named at runtime so Twitch never sees two streams at once.
+# means a fresh push to the same ref cancels the previous run, so you
+# never have two builds queueing for the same change. Live broadcast
+# additionally takes its own non-cancelling lock named `live-test`
+# so Twitch never sees two streams at once.
 
 name: pipeline
 
@@ -50,6 +48,18 @@ on:
         description: 'Encoder fps target'
         type: string
         default: '60'
+      enable_package:
+        description: 'Run the package job (light + full zips)'
+        type: boolean
+        default: false
+      enable_release_attach:
+        description: 'Attach distros + proof to a GitHub Release (requires a tag context)'
+        type: boolean
+        default: false
+      enable_npm_publish:
+        description: 'Publish @clodocapeo/pulsar-* to npm (requires NPM_TOKEN + tag-matched VERSION)'
+        type: boolean
+        default: false
   push:
     branches: ['**']
     tags:
@@ -67,26 +77,22 @@ concurrency:
   group: pipeline-${{ github.ref }}
   cancel-in-progress: true
 
-jobs:
-  pipeline:
-    name: lint + build + tests + broadcast (+ release on tag)
-    runs-on: windows-2022
-    # 90 min covers : lint (~30 s) + build cold cache (~15 min) +
-    # gates (~1 min) + offline probes (~1 min) + 30 min broadcast +
-    # ffmpeg compress (~3 min) + gh-pages deploy (~30 s) + package
-    # both variants (~5 min) + npm publish (~3 min) + slack.
-    timeout-minutes: 90
-    # `contents: write` is the union of what every release-grade step
-    # needs : softprops/action-gh-release attaches MP4 + zips,
-    # peaceiris/actions-gh-pages pushes to the gh-pages branch.
-    # `id-token: write` is reserved for npm provenance (harmless if
-    # unused).
-    permissions:
-      contents: write
-      id-token: write
+# Shared expressions reused across job-level `if:` guards.
+env:
+  IS_TAG:    ${{ startsWith(github.ref, 'refs/tags/v') }}
+  IS_MAIN:   ${{ github.ref == 'refs/heads/main' }}
 
+jobs:
+
+  # ── Stage 1 : lint ────────────────────────────────────────────────
+  # Cheap fail-fast checks that don't need the build. Source-grep for
+  # forbidden patterns, patch lint against pinned upstream SHA, plugin
+  # metadata, npm tarball audit. Runs on ubuntu (faster, cheaper).
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      # ── Stage 1 : checkout ────────────────────────────────────────
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
         with:
@@ -94,48 +100,37 @@ jobs:
           fetch-depth: 0
 
       - name: Configure git identity
-        shell: pwsh
         run: |
           git config --global user.email "ci@pulsar.zablaboratory"
           git config --global user.name "Pulsar CI"
 
-      # ── Stage 2 : lint (cheap, runs before build so a typo in
-      # patches/ aborts in 30 s instead of 15 min into the compile) ─
       - name: License isolation source-tree audit
-        shell: bash
         run: bash scripts/check-license-isolation.sh
 
-      - name: Patch lint (apply patches against pinned upstream SHA)
-        # build-win.ps1 does this same reset-and-apply later, but we
-        # do it as a standalone gate so a bad patch fails the run
-        # before we burn 15 min compiling.
-        shell: bash
+      - name: Patch lint (apply against pinned upstream SHA)
         run: |
           set -e
           shopt -s nullglob
           patches=(patches/*.patch)
           if [ ${#patches[@]} -eq 0 ]; then
-            echo "::notice::No patches under patches/."
-            exit 0
+            echo "::notice::no patches to lint"; exit 0
           fi
           pinned=$(git submodule status --cached upstream | awk '{print $1}' | sed 's/^[+-]*//')
-          echo "Pinned upstream SHA : $pinned"
           cd upstream
           git reset --hard "$pinned"
           git clean -fdx
           for p in "${patches[@]}"; do
             full="../$p"
-            echo "::group::git am ../$p"
+            echo "::group::git am $p"
             if ! git am --3way "$full"; then
-              echo "::error::Patch $p does not apply on upstream pinned SHA."
               git am --abort || true
+              echo "::error::Patch $p does not apply on upstream pinned SHA."
               exit 1
             fi
             echo "::endgroup::"
           done
 
       - name: Plugin metadata (CMakeLists + README per plugin)
-        shell: bash
         run: |
           set -e
           fail=0
@@ -150,7 +145,31 @@ jobs:
           done
           [ $fail -eq 0 ]
 
-      # ── Stage 3 : build pulsar.exe (THE ONE BUILD) ────────────────
+      - name: npm tarball audit
+        run: bash scripts/check-npm-pack-audit.sh
+
+  # ── Stage 2 : build pulsar.exe (THE ONE BUILD) ────────────────────
+  # Every downstream Windows job consumes the `pulsar-rundir` artefact
+  # this job uploads. retention-days is short -- the artefact only
+  # has to outlive the in-flight pipeline run.
+  build:
+    name: build pulsar.exe (-Full)
+    needs: lint
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Configure git identity
+        shell: pwsh
+        run: |
+          git config --global user.email "ci@pulsar.zablaboratory"
+          git config --global user.name "Pulsar CI"
+
       - name: Cache obs-deps + Qt6 + CEF
         uses: actions/cache@v4
         with:
@@ -174,15 +193,63 @@ jobs:
         shell: pwsh
         run: ./scripts/build-win.ps1 -Full
 
-      # ── Stage 4 : binary export gate ──────────────────────────────
-      - name: Verify binary export tables (#3)
-        # Scans pulsar.exe + pulsar-browser-page.exe (must be empty)
-        # and every Pulsar plugin DLL (only OBS module ABI symbols
-        # allowed). LICENSE-INVARIANTS.md (#3).
+      - name: Upload pulsar-rundir artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsar-rundir
+          # The whole RelWithDebInfo rundir : pulsar.exe + all DLLs +
+          # CEF runtime + the CMake build dir for ctest. Compressed
+          # at level 1 (fast) since downstream jobs download once.
+          path: |
+            upstream/build_x64/rundir/RelWithDebInfo
+            build/CTestTestfile.cmake
+            build/**/CTestTestfile.cmake
+            build/**/*.vcxproj
+          retention-days: 1
+          compression-level: 1
+
+  # ── Stage 3a : binary-export gate ────────────────────────────────
+  binary-gate:
+    name: binary export gate (#3)
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (scripts only)
+        uses: actions/checkout@v4
+        # No submodules : we only need scripts/check-binary-exports.ps1.
+
+      - name: Download pulsar-rundir
+        uses: actions/download-artifact@v4
+        with:
+          name: pulsar-rundir
+          path: .
+
+      - name: Setup MSVC toolchain (dumpbin on PATH)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Verify binary export tables
         shell: pwsh
         run: ./scripts/check-binary-exports.ps1
 
-      # ── Stage 5 : offline probe suite (CTest) ─────────────────────
+  # ── Stage 3b : offline probe suite ───────────────────────────────
+  offline-probes:
+    name: offline probe suite (CTest)
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download pulsar-rundir
+        uses: actions/download-artifact@v4
+        with:
+          name: pulsar-rundir
+          path: .
+
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -195,24 +262,51 @@ jobs:
           pip install websockets
 
       - name: Run offline probe suite
-        # Spawns pulsar.exe, runs probe-{websocket, source-kinds,
-        # events, multi-stream, adaptive, record}.py against it.
-        # ~25 s end-to-end on this runner.
         shell: pwsh
         run: ctest --test-dir build --output-on-failure -C RelWithDebInfo
 
-      # ── Stage 6 : live broadcast to Twitch (gated duration) ───────
-      - name: Setup ffmpeg (compression step needs it)
+  # ── Stage 3c : live broadcast (Twitch + record + diagnostic) ─────
+  live-broadcast:
+    name: live broadcast (Twitch)
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: write   # gh-pages deploy is downstream, but release attach
+                        # needs it on this job too if dispatch enables it.
+    # Twitch refuses two simultaneous streams ; serialise.
+    concurrency:
+      group: live-test-twitch
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive  # the test scene + JSX live in scripts/live-test/
+
+      - name: Download pulsar-rundir
+        uses: actions/download-artifact@v4
+        with:
+          name: pulsar-rundir
+          path: .
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install probe deps
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install websockets
+
+      - name: Setup ffmpeg
         uses: FedericoCarboni/setup-ffmpeg@v3
         with:
           ffmpeg-version: release
 
       - name: Run Twitch live-broadcast probe
-        # Duration matrix : workflow_dispatch input wins, else 1800 s
-        # (30 min) for push-to-main / tag, else 60 s for any other
-        # branch push. The probe writes a structured diagnostic.json
-        # next to the MP4 with per-poll perf samples + summary +
-        # ffprobe of the recording (lag attribution tooling).
         env:
           TWITCH_STREAM_KEY:  ${{ secrets.TWITCH_STREAM_KEY }}
           LIVE_TEST_DURATION: >-
@@ -229,10 +323,6 @@ jobs:
           python scripts/probe-twitch-live.py 2>&1 | tee probe-output.log
 
       - name: Compress + stage broadcast VOD
-        # Re-encodes x264 CRF 23 preset fast + AAC 96k. Typically
-        # 4-25× smaller than the source CBR 6 Mbps. Two output names :
-        # pulsar-live-broadcast-proof.mp4 (stable, README points here
-        # via `releases/latest/download/`) + a sha-suffixed copy.
         if: success()
         shell: bash
         run: |
@@ -260,8 +350,6 @@ jobs:
           echo "::notice::VOD compression : raw=$(numfmt --to=iec ${raw_size}) -> compressed=$(numfmt --to=iec ${out_size}) (${ratio}× smaller)"
 
       - name: Stage diagnostic JSON
-        # The probe writes diagnostic.json with per-poll perf samples
-        # + summary + ffprobe of the MP4 -- the lag-attribution kit.
         if: success()
         shell: bash
         run: |
@@ -275,7 +363,7 @@ jobs:
             echo "::warning::no diagnostic.json sentinel found"
           fi
 
-      - name: Upload broadcast VOD + diagnostic as workflow artefact
+      - name: Upload broadcast artefact (proof MP4 + diagnostic)
         if: success()
         uses: actions/upload-artifact@v4
         with:
@@ -286,13 +374,34 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-      # ── Stage 7 : publish proof MP4 to gh-pages (main / tag only) ─
-      - name: Publish proof MP4 to GitHub Pages
-        # Release-grade runs only. GitHub Release assets serve with
-        # `Content-Disposition: attachment` (forces download). Pages
-        # serves the MP4 with `Content-Type: video/mp4` so the
-        # README `<video>` tag plays inline.
-        if: success() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+      - name: Upload pulsar log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsar-failure-log
+          path: |
+            probe-output.log
+            obs-websocket/config.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ── Stage 4 : publish proof MP4 to gh-pages ──────────────────────
+  publish-gh-pages:
+    name: publish proof to gh-pages
+    needs: live-broadcast
+    if: success() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Download broadcast artefact
+        uses: actions/download-artifact@v4
+        with:
+          name: pulsar-live-broadcast-proof
+          path: artefacts
+
+      - name: Publish to gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -303,42 +412,99 @@ jobs:
           user_email: 'github-actions[bot]@users.noreply.github.com'
           commit_message: "live-test: refresh broadcast proof MP4 (${{ github.sha }})"
 
-      # ── Stage 8 : package light + full distros (tag only) ─────────
+  # ── Stage 5 : package light + full distros (tag only) ────────────
+  package:
+    name: package light + full distros
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.enable_package == 'true')
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download pulsar-rundir
+        uses: actions/download-artifact@v4
+        with:
+          name: pulsar-rundir
+          path: .
+
       - name: Package light variant
-        if: success() && startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: ./scripts/package-win.ps1 -Variant light -Zip -SkipBuild
 
       - name: Package full variant
-        if: success() && startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: ./scripts/package-win.ps1 -Variant full -Zip -SkipBuild
 
-      # ── Stage 9 : GitHub Release attach (tag only) ────────────────
-      - name: Attach distros + broadcast proof to GitHub Release
-        if: success() && startsWith(github.ref, 'refs/tags/v')
+      - name: Upload distro zips artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsar-distros
+          path: dist/*.zip
+          retention-days: 30
+          if-no-files-found: error
+
+  # ── Stage 6 : attach distros + proof to GitHub Release (tag only) ─
+  release-attach:
+    name: GitHub Release attach
+    needs: [package, live-broadcast]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.enable_release_attach == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download distro zips
+        uses: actions/download-artifact@v4
+        with:
+          name: pulsar-distros
+          path: artefacts
+
+      - name: Download broadcast proof
+        uses: actions/download-artifact@v4
+        with:
+          name: pulsar-live-broadcast-proof
+          path: artefacts
+
+      - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
-          # Distro zips + the proof MP4 (stable + sha-versioned) all
-          # land on the release for the tag.
           files: |
-            dist/*.zip
+            artefacts/*.zip
             artefacts/pulsar-live-broadcast-proof.mp4
             artefacts/pulsar-live-broadcast-proof-*.mp4
             artefacts/diagnostic.json
           fail_on_unmatched_files: true
 
-      # ── Stage 10 : npm packages (tag only) ────────────────────────
+  # ── Stage 7 : npm packages publish (tag only, parallel to build) ─
+  # Independent of pulsar.exe build : different toolchain (Node, not
+  # MSVC), different runner (ubuntu-latest, faster). Only `needs: lint`
+  # so it doesn't sit waiting for the C++ build. Publishes pulsar-client
+  # first, then bundle + bundle-full which depend on it.
+  npm-publish:
+    name: publish @clodocapeo/pulsar-* to npm
+    needs: lint
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.enable_npm_publish == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write   # OIDC for npm provenance (kept for future use)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Setup Node.js
-        if: success() && startsWith(github.ref, 'refs/tags/v')
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org/'
 
       - name: Verify tag matches VERSION
-        if: success() && startsWith(github.ref, 'refs/tags/v')
-        shell: bash
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           set -e
           v=$(cat VERSION | tr -d '[:space:]')
@@ -347,57 +513,27 @@ jobs:
 
       - name: Install npm workspaces
         # PULSAR_BUNDLE_SKIP_POSTINSTALL skips the binary download in
-        # pulsar-bundle's postinstall -- we don't need pulsar.exe to
-        # publish its npm package.
-        if: success() && startsWith(github.ref, 'refs/tags/v')
-        shell: bash
+        # pulsar-bundle's postinstall -- tsc-publish doesn't need pulsar.exe.
         env:
           PULSAR_BUNDLE_SKIP_POSTINSTALL: '1'
         run: npm install --no-audit --no-fund
 
       - name: Build npm packages (topo order)
-        if: success() && startsWith(github.ref, 'refs/tags/v')
-        shell: bash
         run: |
-          # pulsar-client first because the bundles import it.
           npm run build -w @clodocapeo/pulsar-client
           npm run build -w @clodocapeo/pulsar-bundle
           npm run build -w @clodocapeo/pulsar-bundle-full
 
       - name: Test npm packages
-        if: success() && startsWith(github.ref, 'refs/tags/v')
-        shell: bash
         run: |
           npm run test -w @clodocapeo/pulsar-client
           npm run test -w @clodocapeo/pulsar-bundle
           npm run test -w @clodocapeo/pulsar-bundle-full
 
-      - name: npm tarball audit (#3, #4)
-        # Last-mile check : tarballs must not contain C/C++ source or
-        # node-gyp manifests. License isolation #4.
-        if: success() && startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: bash scripts/check-npm-pack-audit.sh
-
       - name: Publish to npm
-        if: success() && startsWith(github.ref, 'refs/tags/v')
-        shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          set -e
           npm publish -w @clodocapeo/pulsar-client     --access public
           npm publish -w @clodocapeo/pulsar-bundle      --access public
           npm publish -w @clodocapeo/pulsar-bundle-full --access public
-
-      # ── Stage 11 : failure forensics ─────────────────────────────
-      - name: Upload pulsar log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pulsar-failure-log
-          path: |
-            probe-output.log
-            upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs-websocket/config.json
-          retention-days: 7
-          if-no-files-found: ignore
