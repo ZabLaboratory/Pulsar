@@ -6,11 +6,22 @@
 # consumer side, no copy-paste of source). This workflow enforces what
 # can be enforced statically on the Pulsar source tree.
 #
-# Patterns checked here are the *unambiguous* FFI / native-module
-# fingerprints. The boundary itself (consumer-side dlopen, vendoring
-# Pulsar source into a non-GPL codebase, …) cannot be detected from
-# inside Pulsar — that lives in each consumer's own audit. See
-# LICENSE-INVARIANTS.md → "Consumer-side audit".
+# Two jobs :
+#   - source-grep    : forbidden FFI / NAPI / node-gyp / consumer-stage
+#                      patterns in plugins/ + packages/ + scripts/
+#   - npm-pack-audit : every workspace's `npm pack --dry-run` content
+#                      must not include C/C++ source or node-gyp
+#                      manifests
+#
+# Both jobs delegate to scripts under scripts/check-*.sh so the same
+# logic runs in release.yml + publish-npm.yml on the path that
+# actually ships artefacts. Logic lives in one place, multiple
+# trigger points.
+#
+# The harder check (binary `dumpbin /exports pulsar.exe` empty) lives
+# in release.yml because it requires a full Windows build — too heavy
+# for every PR. release.yml fails early if the binary exports anything,
+# blocking the GitHub Release before artefacts are uploaded.
 
 name: license-isolation
 
@@ -22,72 +33,25 @@ on:
 
 jobs:
   source-grep:
-    name: forbidden FFI / native-module fingerprints
+    name: source-tree audit (#1, #3, #4)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Run source-tree audit
+        run: bash scripts/check-license-isolation.sh
 
-      - name: No DLL export macros in plugins source
-        run: |
-          # __declspec(dllexport) and EXPORT_SYMBOL would publish symbols
-          # from Pulsar's binaries that consumers could then bind to via
-          # FFI — invariant #3.
-          set -e
-          if grep -rn -E '__declspec\(dllexport\)|EXPORT_SYMBOL\b' \
-              --include='*.cpp' --include='*.c' \
-              --include='*.h'   --include='*.hpp' \
-              plugins/ 2>/dev/null; then
-            echo "::error::Forbidden DLL export macro detected. See LICENSE-INVARIANTS.md (#3)."
-            exit 1
-          fi
-          echo "::notice::No DLL export macros in plugins source."
-
-      - name: No N-API / node-api references in plugins source
-        run: |
-          # napi_*, node_api.h, NAPI_MODULE — Node native module
-          # fingerprints. Pulsar must not expose itself as a Node
-          # extension ; consumers wrap the WS protocol from JS instead.
-          set -e
-          if grep -rn -E '\bnapi_[a-z_]+|<node_api\.h>|NAPI_MODULE|<napi\.h>' \
-              --include='*.cpp' --include='*.c' \
-              --include='*.h'   --include='*.hpp' \
-              plugins/ 2>/dev/null; then
-            echo "::error::N-API / node-api reference found. See LICENSE-INVARIANTS.md (#3)."
-            exit 1
-          fi
-          echo "::notice::No Node N-API references in plugins source."
-
-      - name: No bindings.gyp at repo root or in plugins
-        run: |
-          # bindings.gyp / binding.gyp = node-gyp build manifests = the
-          # only legit reason is to compile a Node native module, which
-          # invariant #3 forbids.
-          set -e
-          if [ -f bindings.gyp ] || [ -f binding.gyp ]; then
-            echo "::error::node-gyp manifest at repo root. Pulsar must not expose a Node native-module surface."
-            exit 1
-          fi
-          if find plugins -maxdepth 3 -type f \
-              \( -name bindings.gyp -o -name binding.gyp \) \
-              -print -quit 2>/dev/null | grep -q .; then
-            echo "::error::node-gyp manifest found under plugins/."
-            exit 1
-          fi
-          echo "::notice::No node-gyp manifests detected."
-
-      - name: Vendored Pulsar source must not appear under any consumer-named directory
-        run: |
-          # If a directory like 'prism/' / 'consumer/' / 'embed/' shows
-          # up at repo root carrying .cpp / .ts / .py files, that is
-          # Pulsar code being staged for a consumer — the literal
-          # opposite of the boundary. (Consumers that bundle Pulsar
-          # only ever copy `pulsar.exe` as a binary blob through the
-          # `pulsar-bundle-full` package ; never source.)
-          set -e
-          for dir in prism consumer embed embedding; do
-            if [ -d "$dir" ]; then
-              echo "::error::Suspicious top-level directory '$dir' present. Pulsar source must never be staged for a consumer."
-              exit 1
-            fi
-          done
-          echo "::notice::No consumer-source-staging directories detected."
+  npm-pack-audit:
+    name: npm tarball audit (#3, #4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install workspaces (skip pulsar.exe download)
+        env:
+          PULSAR_BUNDLE_SKIP_POSTINSTALL: '1'
+        run: npm install --no-audit --no-fund --force
+      - name: Run npm tarball audit
+        run: bash scripts/check-npm-pack-audit.sh

@@ -63,6 +63,14 @@ jobs:
             exit 1
           }
 
+      - name: License isolation source-tree audit
+        # Re-run the static audit on the exact commit being released.
+        # license-isolation.yml runs on PR + push:main, but a tag could
+        # in principle be pushed on a commit that bypassed the branch
+        # policy. This is the last-chance gate before binaries ship.
+        shell: bash
+        run: bash scripts/check-license-isolation.sh
+
       - name: Configure git identity
         # build-win.ps1 calls `git am` to apply patches/ onto the
         # upstream/ submodule. `git am` writes a commit, which requires
@@ -94,6 +102,38 @@ jobs:
           # full distribution variants -- package-win.ps1 carves out
           # what each variant ships.
           ./scripts/build-win.ps1 -Full
+
+      - name: Verify pulsar.exe exports no symbols (#3)
+        # The binary-export contract from LICENSE-INVARIANTS.md (#3) :
+        # `dumpbin /exports pulsar.exe` must return an empty exports
+        # table. If a plugin (or upstream submodule patch) starts
+        # publishing a symbol, the build is one `LoadLibrary` call
+        # away from contaminating any consumer that calls
+        # `dlopen("pulsar.exe")`. Fail the release before any zip ships.
+        #
+        # `dumpbin` is on PATH after ilammy/msvc-dev-cmd@v1. The output
+        # we want to see is "Summary" with no preceding "ordinal hint
+        # RVA name" listing.
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse -Filter "pulsar.exe" -Path "upstream/build_x64/rundir" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "pulsar.exe not found under upstream/build_x64/rundir/ — build did not produce the expected artefact."
+            exit 1
+          }
+          Write-Host "Inspecting $($exe.FullName)..."
+          $output = & dumpbin /exports $exe.FullName 2>&1
+          $output | ForEach-Object { Write-Host $_ }
+          # Look for a non-empty exports table. The header lines we
+          # ignore : "Microsoft (R) ...", "Copyright (C) ...",
+          # "Dump of file ...", "File Type ...", "Summary".
+          # A populated table contains a line with "ordinal hint RVA name".
+          $hasExports = $output | Where-Object { $_ -match '^\s+ordinal hint\s+RVA\s+name' }
+          if ($hasExports) {
+            Write-Error "pulsar.exe exports symbols. See LICENSE-INVARIANTS.md (#3). Re-run dumpbin manually for the full list."
+            exit 1
+          }
+          Write-Host "::notice::pulsar.exe exports table is empty — invariant #3 holds."
 
       - name: Package light variant
         shell: pwsh

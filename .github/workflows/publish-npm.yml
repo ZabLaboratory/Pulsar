@@ -62,6 +62,14 @@ jobs:
             exit 1
           fi
 
+      - name: License isolation source-tree audit
+        # Re-run the static audit on the exact commit being published.
+        # license-isolation.yml runs on PR + push:main, but a tag could
+        # in principle be pushed on a commit that bypassed the branch
+        # policy. This is the last-chance gate before npm publishes.
+        shell: bash
+        run: bash scripts/check-license-isolation.sh
+
       - name: Install workspaces
         # PULSAR_BUNDLE_SKIP_POSTINSTALL skips the binary download in
         # pulsar-bundle's postinstall -- we don't need pulsar.exe to
@@ -99,6 +107,16 @@ jobs:
 
       - name: Test pulsar-bundle-full
         run: npm run test -w @clodocapeo/pulsar-bundle-full
+
+      - name: npm tarball audit (#3, #4)
+        # Last-mile check : the actual tarballs that npm registry users
+        # will install must not contain C/C++ source or node-gyp
+        # manifests. A workspace package.json `files:` glob mistake
+        # would otherwise leak GPL source into a non-GPL consumer's
+        # node_modules. License-isolation.yml runs the same audit on
+        # PR + push:main ; this re-runs it on the publish commit.
+        shell: bash
+        run: bash scripts/check-npm-pack-audit.sh
 
       - name: Publish @clodocapeo/pulsar-client
         env:
