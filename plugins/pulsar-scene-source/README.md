@@ -1,12 +1,15 @@
 # pulsar-scene-source
 
-A small libobs plugin that exposes two `pulsar:*` vendor requests for
-swapping the broadcast capture source live :
+A small libobs plugin that exposes two vendor requests on the
+**`pulsar-scene`** namespace for swapping the broadcast capture source
+live :
 
 ```
-SetCaptureSource(kind, url, width?, height?, fps?, reroute_audio?, css?)
-GetCaptureSource()
+CallVendorRequest("pulsar-scene", "SetCaptureSource", { kind, url, width?, height?, fps?, reroute_audio?, css? })
+CallVendorRequest("pulsar-scene", "GetCaptureSource", {})
 ```
+
+> **Why a distinct vendor namespace (`pulsar-scene`, not `pulsar`)** : obs-websocket's `vendor_register_cb` rejects a second register on the same vendor name. The second plugin to call it gets NULL and its requests never bind. Each Pulsar plugin therefore owns its own namespace — `pulsar-multi-stream` keeps `pulsar` (destinations + adaptive bitrate + video settings), `pulsar-scene-source` owns `pulsar-scene` (capture source).
 
 This is the Pulsar side of the **Phase 13.4** integration : Prism (or
 any future Pulsar-bundling app) drops the legacy `window_capture` —
@@ -18,7 +21,7 @@ broadcast canvas size.
 
 ## Vendor requests
 
-### `pulsar:SetCaptureSource`
+### `pulsar-scene:SetCaptureSource`
 
 Replace the active capture source with a fresh `browser_source` on the
 current frontend scene. Removes any previously-installed Pulsar-managed
@@ -48,7 +51,7 @@ capture items (named `PulsarCapture` from `pulsar-frontend-stub` or
 | `"current_source_not_a_scene"` | The frontend's "current scene" source didn't unwrap into an `obs_scene_t`. |
 | `"scene_add_failed"` | `obs_scene_add` returned null. |
 
-### `pulsar:GetCaptureSource`
+### `pulsar-scene:GetCaptureSource`
 
 Return the active capture source state.
 
@@ -76,9 +79,7 @@ or `pulsar-frontend-stub`. We give it its own DLL because :
   request returns `browser_source_unavailable` and the rest of Pulsar
   keeps working.
 
-The two plugins coordinate by registering against the same vendor
-namespace `"pulsar"` — `obs_websocket_register_vendor` returns the
-existing handle when called twice. No cross-plugin includes.
+The two plugins do NOT share a vendor namespace : `pulsar-multi-stream` owns `pulsar` (destinations + adaptive bitrate + video settings), `pulsar-scene-source` owns `pulsar-scene` (capture source). Forced because `obs_websocket_register_vendor` rejects a duplicate vendor name in our fork's `vendor_register_cb`. No cross-plugin includes.
 
 ## Build
 

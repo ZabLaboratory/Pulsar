@@ -437,6 +437,10 @@ public:
         uint64_t last_delta_total = 0;
         uint64_t last_delta_dropped = 0;
         double last_drop_ratio = 0.0;
+        // Monotonic count of completed sampling ticks (incremented after
+        // first_tick_ initialisation). Lets external observers tell that
+        // the worker is alive even when no bitrate adjustment has fired.
+        uint64_t samples_total = 0;
     };
 
     void start();
@@ -613,6 +617,7 @@ void AdaptiveBitrate::run()
             state_.last_delta_total = dTotal;
             state_.last_delta_dropped = dDrop;
             state_.last_drop_ratio = ratio;
+            state_.samples_total += 1;
             if (reason && new_kbps != current) {
                 apply_bitrate(enc, new_kbps, reason, ratio);
                 state_.current_kbps = new_kbps;
@@ -819,6 +824,8 @@ void on_get_adaptive_state(obs_data_t * /*req*/, obs_data_t *res, void *)
     obs_data_set_int(res, "last_delta_dropped",
                      static_cast<long long>(s.last_delta_dropped));
     obs_data_set_double(res, "last_drop_ratio", s.last_drop_ratio);
+    obs_data_set_int(res, "samples",
+                     static_cast<long long>(s.samples_total));
 }
 
 void on_set_adaptive_enabled(obs_data_t *req, obs_data_t *res, void *)
@@ -890,6 +897,7 @@ void on_set_video_settings(obs_data_t *req, obs_data_t *res, void *)
 
     obs_data_set_bool(res, "changed", changed);
 }
+
 
 } // namespace
 

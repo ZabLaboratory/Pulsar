@@ -66,12 +66,26 @@ RUNDIR     = REPO_ROOT / "upstream/build_x64/rundir/RelWithDebInfo/bin/64bit"
 CONFIG_PATH = RUNDIR / "obs-websocket" / "config.json"
 SCENE_DIR  = REPO_ROOT / "scripts/live-test"
 
+# Local recording directory : pulsar runs StartRecord in parallel with
+# the Twitch push so the broadcast can be replayed offline as visual
+# proof of a successful run. live-test.yml uploads the resulting MP4
+# as a workflow artefact and attaches it to the GitHub Release on tag
+# push. Override the directory with LIVE_TEST_VOD_DIR for CI control.
+LIVE_VOD_DIR = pathlib.Path(
+    os.environ.get("LIVE_TEST_VOD_DIR",
+                   str(REPO_ROOT / "build" / "live-test-vod"))
+).resolve()
+
 EVENT_SUBSCRIPTION_ALL = 0x7FF
 
 # --- Thresholds ---
 FRAME_DROP_RATIO_MAX  = 0.05    # 5 %
 SPAWN_TIMEOUT_SEC     = 60.0    # pulsar to print PULSAR_READY + drop config.json
-POLL_INTERVAL_SEC     = 30.0
+# Poll cadence is also the WS keep-alive cadence : without periodic
+# app-level traffic, Windows's ProactorEventLoop RSTs the idle TCP
+# connection on loopback (observed at ~30 s). 5 s leaves plenty of
+# margin and gives the run summary more granular metrics.
+POLL_INTERVAL_SEC     = 5.0
 DESTINATION_NAME      = "pulsar-live-test"
 
 # Benign log substrings that do not constitute failure.
@@ -114,13 +128,28 @@ def spawn_pulsar(exe: pathlib.Path, fps: int) -> subprocess.Popen:
     env["PULSAR_FPS"] = str(fps)
     env["PULSAR_RESOLUTION"] = "1920x1080"
     env["PULSAR_VIDEO_BITRATE"] = "6000"
+    # Point the recording pipeline at a known directory so the live
+    # probe can pick up the produced MP4 deterministically and the
+    # workflow can upload it as the broadcast proof.
+    LIVE_VOD_DIR.mkdir(parents=True, exist_ok=True)
+    env["PULSAR_RECORD_DIR"] = str(LIVE_VOD_DIR)
     # Don't bind window_capture to anything — pulsar-scene-source will
     # add a browser_source soon. The default frontend-stub bootstrap
     # produces a transient black-frame moment we tolerate.
     env.pop("PULSAR_CAPTURE_WINDOW", None)
 
+    # `--disable-gpu` is forwarded to CEF (obs-browser plugin) via the
+    # process command line — CEF reads it through `GetCommandLineW()`
+    # at `CefInitialize` and propagates to every subprocess it spawns.
+    # Without it, CEF's GPU subprocess crashes at the first frame pull
+    # in a headless host (no display / no compositor) with
+    # 'gpu_data_manager_impl_private.cc: GPU process isn't usable.
+    # Goodbye.', taking obs-browser down with it. SW rasterization is
+    # the canonical config for headless CEF (Puppeteer / Playwright /
+    # Lambda runtime do the same). Pulsar-side fix : we just launch
+    # with the flag, no patch on upstream obs-browser needed.
     proc = subprocess.Popen(
-        [str(exe)],
+        [str(exe), "--disable-gpu", "--no-sandbox"],
         cwd=str(RUNDIR),
         env=env,
         stdout=subprocess.PIPE,
@@ -288,6 +317,22 @@ def vendor_response_data(resp: dict) -> dict:
     return inner if isinstance(inner, dict) else {}
 
 
+def vendor_request_status(resp: dict) -> dict:
+    """The CallVendorRequest envelope's requestStatus — `result` bool +
+    `code` int (100=success ; 200..=client error ; 300..=server error)
+    + `comment` string with a description on failure."""
+    s = resp.get("requestStatus", {})
+    return s if isinstance(s, dict) else {}
+
+
+def dump_response(label: str, resp: dict) -> None:
+    """Pretty-print a vendor response for debug logs. Used both on
+    success (one line summary) and failure (full status + data)."""
+    status = vendor_request_status(resp)
+    inner  = vendor_response_data(resp)
+    print(f"[live-test/{label}] status={status} responseData={inner}")
+
+
 def fail_log(label: str, msg: str) -> None:
     print(f"::error::live-test {label}: {msg}", file=sys.stderr)
 
@@ -320,8 +365,11 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
     # Local HTTP server hosting the test scene.
     http_port = find_free_port()
     httpd = start_scene_server(http_port)
-    scene_url = f"http://127.0.0.1:{http_port}/test-scene.html"
-    print(f"[live-test] scene HTTP server : {scene_url}")
+    # Scene URL is finalised after we know pulsar's WS port + password
+    # (see below). The adapter inside test-scene.html stays dormant
+    # until those are passed via the query string.
+    scene_url_base = f"http://127.0.0.1:{http_port}/test-scene.html"
+    print(f"[live-test] scene HTTP server : {scene_url_base}")
 
     # Spawn pulsar.exe.
     print(f"[live-test] spawning {exe}")
@@ -338,8 +386,18 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
         print(f"[live-test] pulsar ready : ws ws://127.0.0.1:{port}")
 
         ws_url = f"ws://127.0.0.1:{port}"
+        # ping_interval=None : websockets-lib's default 20 s ping is not
+        # answered by obs-websocket's webso­cketpp server (it relies on
+        # app-level activity, not WS-protocol pings). Without disabling
+        # client-side pings, the connection drops at the first ping
+        # timeout — observed at t=30 s while sleeping in the poll loop.
+        # close_timeout high so a slow shutdown doesn't fail the run.
         async with websockets.connect(
-            ws_url, subprotocols=["obswebsocket.json"], max_size=2**24
+            ws_url,
+            subprotocols=["obswebsocket.json"],
+            max_size=2**24,
+            ping_interval=None,
+            close_timeout=15,
         ) as ws:
             await hello_then_auth(ws, password)
             print("[live-test] auth OK")
@@ -347,8 +405,35 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
             inbox = Inbox()
             reader_task = asyncio.create_task(reader(ws, inbox))
 
+            # DEBUG : if PULSAR_SKIP_CAPTURE=1 in env, only test
+            # CreateDestination on its own to disambiguate whether the
+            # SetCaptureSource side-effect breaks multi-stream's
+            # registry, or whether multi-stream's vendor registration
+            # is broken outright.
+            if os.environ.get("PULSAR_SKIP_CAPTURE") == "1":
+                print("[live-test] DEBUG : skipping SetCaptureSource")
+                r = await vendor_call(ws, inbox, "create-dest", "pulsar",
+                    "CreateDestination", {
+                        "name": DESTINATION_NAME,
+                        "kind": "vod_local",
+                        "url":  str(REPO_ROOT / "scripts/live-test-debug.mp4"),
+                    })
+                dump_response("create-dest-debug", r)
+                dest_id = vendor_response_data(r).get("id")
+                print(f"[live-test] DEBUG CreateDestination id = {dest_id!r}")
+                # tear down whatever we made
+                if dest_id:
+                    await vendor_call(ws, inbox, "remove-dest", "pulsar",
+                        "RemoveDestination", {"id": dest_id})
+                reader_task.cancel()
+                return 0 if dest_id else 1
+
+            # Hand the scene the live WS coordinates so its in-page
+            # adapter can connect and stream telemetry into the HUD.
+            scene_url = f"{scene_url_base}?port={port}&token={password}"
+
             # 1. SetCaptureSource → browser_source.
-            r = await vendor_call(ws, inbox, "set-capture", "pulsar",
+            r = await vendor_call(ws, inbox, "set-capture", "pulsar-scene",
                 "SetCaptureSource", {
                     "kind": "browser_source",
                     "url":  scene_url,
@@ -357,11 +442,31 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                     "fps":    fps,
                     "reroute_audio": True,
                 })
+            dump_response("set-capture", r)
             data = vendor_response_data(r)
             if data.get("kind") != "browser_source":
                 fail_log("set-capture", f"unexpected response : {data}")
                 return 1
-            print(f"[live-test] capture source set : {data}")
+
+            # 1b. GetCaptureSource → confirm the active snapshot
+            #     reflects what we just set.
+            r = await vendor_call(ws, inbox, "get-capture", "pulsar-scene",
+                "GetCaptureSource", {})
+            dump_response("get-capture", r)
+            got = vendor_response_data(r)
+            if got.get("kind") != "browser_source":
+                fail_log("get-capture",
+                    f"snapshot not browser_source : {got}")
+                return 1
+            if got.get("url") != scene_url:
+                fail_log("get-capture",
+                    f"url drift : got {got.get('url')!r}, expected {scene_url!r}")
+                return 1
+            if int(got.get("last_change_unix", 0)) <= 0:
+                fail_log("get-capture",
+                    f"last_change_unix not set : {got}")
+                return 1
+            print(f"[live-test] get-capture confirms snapshot")
 
             # 2. CreateDestination twitch.
             r = await vendor_call(ws, inbox, "create-dest", "pulsar",
@@ -370,23 +475,38 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                     "kind": "twitch",
                     "key":  stream_key,
                 })
+            dump_response("create-dest", r)
             dest_data = vendor_response_data(r)
             dest_id = dest_data.get("id")
             if not dest_id:
+                status = vendor_request_status(r)
                 fail_log("create-dest",
-                    f"no id in response : {dest_data}")
+                    f"no id ; requestStatus={status} responseData={dest_data}")
                 return 1
             print(f"[live-test] destination created : id={dest_id}")
 
             # 3. StartDestination.
             r = await vendor_call(ws, inbox, "start-dest", "pulsar",
                 "StartDestination", {"id": dest_id})
+            dump_response("start-dest", r)
             sd = vendor_response_data(r)
             if not sd.get("started"):
+                status = vendor_request_status(r)
                 fail_log("start-dest",
-                    f"could not start : {sd}")
+                    f"not started ; requestStatus={status} responseData={sd}")
                 return 1
-            print(f"[live-test] destination STARTED — going live")
+            print(f"[live-test] destination STARTED -- going live")
+
+            # 3b. StartRecord -- record the broadcast locally so the CI
+            # workflow can upload the MP4 as the live-test proof. Standard
+            # obs-websocket v5 request, not a Pulsar vendor extension.
+            r = await request(ws, inbox, "StartRecord", "start-rec")
+            rec_status = r.get("requestStatus", {})
+            if not rec_status.get("result"):
+                fail_log("start-rec",
+                    f"could not start local recording: {rec_status}")
+                return 1
+            print(f"[live-test] local recording started (writing under {LIVE_VOD_DIR})")
 
             # 4. Poll metrics every POLL_INTERVAL_SEC for `duration_sec`.
             start_t = time.time()
@@ -432,6 +552,23 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                 "StopDestination", {"id": dest_id})
             print(f"[live-test] destination stopped : {vendor_response_data(r)}")
 
+            # 5b. StopRecord -- finalise the local MP4 and capture its
+            # path. ffmpeg_muxer flushes + writes the moov atom on close,
+            # so the file is ready to upload by the time this returns.
+            r = await request(ws, inbox, "StopRecord", "stop-rec")
+            rec_status = r.get("requestStatus", {})
+            rec_data   = r.get("responseData", {}) or {}
+            vod_path   = rec_data.get("outputPath")
+            if not rec_status.get("result") or not vod_path:
+                fail_log("stop-rec",
+                    f"StopRecord failed; requestStatus={rec_status} responseData={rec_data}")
+                return 1
+            print(f"[live-test] local recording finalised : {vod_path}")
+            # Sentinel parsed by .github/workflows/live-test.yml to find
+            # the file to upload as the broadcast proof. Must stay on a
+            # single line, must be the only LIVE_VOD_PATH= line emitted.
+            print(f"LIVE_VOD_PATH={vod_path}")
+
             # 6. Final adaptive snapshot — assert non-trivial samples
             #    over the broadcast.
             if adaptive_samples_seen <= 0:
@@ -462,10 +599,19 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
             # log lines that don't reflect the actual broadcast quality.
             # The metric-side assertions above are the authoritative gate.
 
-        print("\n[live-test] ✅ all assertions passed")
+        print("\n[live-test] OK -- all assertions passed")
         rc = 0
 
     finally:
+        # On any failure path, dump pulsar's stdout so we see what
+        # the engine reported before it died. Skipped on success
+        # to keep CI logs short.
+        if rc != 0 and log_lines:
+            print(f"\n[live-test] ---- pulsar stdout (last 80 lines) ----")
+            for line in log_lines[-80:]:
+                print(f"  {line}")
+            print(f"[live-test] ---- end pulsar stdout ----\n")
+
         # Tear down pulsar.
         try:
             proc.terminate()

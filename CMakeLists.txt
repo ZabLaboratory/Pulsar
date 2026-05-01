@@ -27,6 +27,7 @@ option(PULSAR_BUILD_FRONTEND_STUB "Build the pulsar-frontend-stub static library
 option(PULSAR_BUILD_WEBSOCKET     "Build the pulsar-websocket plugin"              ON)
 option(PULSAR_BUILD_MULTISTREAM   "Build the pulsar-multi-stream plugin"            ON)
 option(PULSAR_BUILD_SCENE_SOURCE  "Build the pulsar-scene-source plugin"            ON)
+option(PULSAR_BUILD_BROWSER       "Build the pulsar-browser plugin (forked CEF)"    ON)
 
 # Order matters: pulsar-headless links pulsar-frontend-stub, so the
 # subdirectory exposing that target must be added first.
@@ -48,4 +49,37 @@ endif()
 
 if(PULSAR_BUILD_SCENE_SOURCE)
     add_subdirectory(plugins/pulsar-scene-source)
+endif()
+
+if(PULSAR_BUILD_BROWSER)
+    add_subdirectory(plugins/pulsar-browser)
+endif()
+
+# ----------------------------------------------------------------------------
+# CTest harness around the offline probes.
+#
+# The probes (scripts/probe-*.py) live OUTSIDE the build tree because they
+# are integration tests, not unit tests -- they need a running pulsar.exe
+# + obs-websocket on a real loopback socket. Hence a single CTest entry
+# that delegates to scripts/run-probes.ps1, which spawns pulsar, waits
+# for the PULSAR_READY sentinel, runs every probe sequentially, then
+# stops the service. Local: `cmake --build build && ctest --test-dir build
+# --output-on-failure`. CI: same, wired into build.yml.
+#
+# probe-twitch-live.py is intentionally NOT run from here -- it needs a
+# real Twitch stream key + 5 min of bandwidth, lives in live-test.yml.
+# ----------------------------------------------------------------------------
+enable_testing()
+
+if(WIN32)
+    add_test(
+        NAME    pulsar-offline-probes
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/run-probes.ps1"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    set_tests_properties(pulsar-offline-probes PROPERTIES
+        TIMEOUT 600  # generous: 5 probes plus pulsar boot/teardown
+        LABELS "integration"
+    )
 endif()

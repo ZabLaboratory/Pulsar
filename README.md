@@ -39,6 +39,30 @@ End-to-end validated against a live Twitch ingest: 1080p60 frames + audio pushed
 
 ---
 
+## Live broadcast proof
+
+Every push runs the [`live-test` workflow](.github/workflows/live-test.yml) on a clean `windows-2022` runner — it builds Pulsar from source, spawns `pulsar.exe`, opens a hand-coded HTML/CSS/JS scene through CEF + `browser_source` (Apple-keynote intro, telemetry HUD bound to live `pulsar:GetAdaptiveState` data, Web Audio sound design), and pushes a real broadcast to Twitch using the project's stream key. Throughout, an in-process `StartRecord` writes the same broadcast to a local MP4 — same encoders, same source, same frames the Twitch ingest receives. The MP4 is then re-encoded with `ffmpeg -c:v libx264 -preset fast -crf 23` (typically 5–20× smaller than the source CBR 6 Mbps) and uploaded.
+
+| Trigger | Duration | Where the MP4 lands |
+|---|---|---|
+| Push to a feature branch | **1 min** smoke | workflow artefact (90 days retention) |
+| Push to `main` (post-PR merge) | **30 min** release-grade | GitHub Release attached to the merge SHA |
+| Push tag `v*.*.*` | **30 min** release-grade | GitHub Release attached to the tag |
+| `workflow_dispatch` (manual) | configurable | workflow artefact |
+
+What you can play below is the broadcast produced for the **latest release**. If the player shows 404 / never loads, no tag has been cut yet since the workflow was wired up — the file populates on the next release.
+
+<video src="https://github.com/ZabLaboratory/Pulsar/releases/latest/download/pulsar-live-broadcast-proof.mp4" controls preload="metadata" width="720">
+  Your browser doesn't support inline MP4 playback.
+  <a href="https://github.com/ZabLaboratory/Pulsar/releases/latest/download/pulsar-live-broadcast-proof.mp4">Download the proof MP4</a>.
+</video>
+
+[➡️ Direct download (latest release MP4)](https://github.com/ZabLaboratory/Pulsar/releases/latest/download/pulsar-live-broadcast-proof.mp4) · [browse all live-test runs](https://github.com/ZabLaboratory/Pulsar/actions/workflows/live-test.yml)
+
+The probe asserts on the metric side too: `GetDestinations[id].active == true` every 5 s, `GetAdaptiveState.samples` strictly increasing, frame drop ratio < 5 %. The MP4 is the visible byproduct; the gate is the assertion suite.
+
+---
+
 ## Quick start — go live in 50 lines
 
 The `live.mjs` script below boots Pulsar, creates a Twitch destination, starts streaming, and parks until you `Ctrl-C`. That is the full surface for "stream this to Twitch from a Node app".
@@ -218,7 +242,8 @@ Pulsar/
 │   └── probe-adaptive.py    phase-12b adaptive worker orchestration probe
 ├── docs/
 │   ├── ARCHITECTURE.md
-│   ├── PROTOCOL.md          v5 + pulsar:* vendor reference
+│   ├── PROTOCOL.md           v5 + pulsar:* vendor reference
+│   ├── PRISM-EMBEDDING.md    consumer-side spawn / handshake / lifecycle contract
 │   └── DEVELOPMENT.md
 ├── .github/workflows/
 │   ├── ci.yml               PR-time lint + tests on packages/
@@ -278,9 +303,10 @@ See [`LICENSE`](LICENSE) and the GPL-2.0 text in `upstream/COPYING`.
 
 The "process boundary breaks GPL propagation" line above is **not magic**. It works only if four invariants are honoured by the consumer (Prism today, any future Pulsar-bundling app tomorrow). Each invariant being broken is enough to retroactively re-license every consumer that has shipped against the breach.
 
-Two documents you must read before bundling Pulsar :
+Three documents you must read before bundling Pulsar :
 
 - ➡️ **[`LICENSE-INVARIANTS.md`](LICENSE-INVARIANTS.md)** — the non-negotiable contract : the four invariants, the tempting designs to refuse on sight, the watchdog point on the npm wrapper.
+- ➡️ **[`docs/PRISM-EMBEDDING.md`](docs/PRISM-EMBEDDING.md)** — the consumer-side spawn / handshake / lifecycle contract. Mandatory `cwd`, `PULSAR_PORT` / `PULSAR_PASSWORD` env knobs, `PULSAR_READY` stdout sentinel parsing, shutdown protocol. Read this before writing the spawn helper.
 - ➡️ **[`CONSUMER-AUDIT.md`](CONSUMER-AUDIT.md)** — the empirical checklist your consumer repo must enforce in CI. Every claim is a runnable script, every script has a pass/fail signal. Includes a copy-pasteable bash script + GitHub Actions workflow for static + binary-linkage checks (Windows / macOS / Linux). **If you have not run the scripts, you have not passed the audit.**
 
 Pulsar's own CI enforces the source-side and binary-side invariants for its own artefacts :
@@ -293,4 +319,4 @@ Pulsar's own CI enforces the source-side and binary-side invariants for its own 
 | [`release.yml`](.github/workflows/release.yml) | tag `v*.*.*` push | re-runs source-grep + dumpbin before publishing the GitHub Release |
 | [`publish-npm.yml`](.github/workflows/publish-npm.yml) | tag `v*.*.*` push | re-runs source-grep + tarball audit before publishing the three npm packages |
 
-Inside this repo, the binary-export check on `pulsar.exe` plus the source-grep guarantees the boundary on Pulsar's side. The boundary on YOUR side is yours to enforce — that's what `CONSUMER-AUDIT.md` is for.
+Inside this repo, `scripts/check-binary-exports.ps1` (binary-export gate covering `pulsar.exe`, `pulsar-browser-page.exe`, and every plugin DLL) plus the source-grep guarantees the boundary on Pulsar's side. The boundary on YOUR side is yours to enforce — that's what `CONSUMER-AUDIT.md` is for.

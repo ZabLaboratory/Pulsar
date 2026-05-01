@@ -88,11 +88,13 @@ Build environment is platform-specific — see `docs/DEVELOPMENT.md`.
 Each branch is **resolved after merge** when:
 
 1. Squash merge effected on `main` by the maintainer.
-2. CI green on the merge commit (build matrix Win/Mac/Linux).
-3. Release artefacts produced for the target platform(s).
+2. CI green on the merge commit (Windows x64 build + license isolation
+   gate; macOS / Linux deferred to Phase 7 / 8).
+3. Release artefacts produced (`pulsar-windows-x64-v<x>.zip` light +
+   `pulsar-windows-x64-full-v<x>.zip` full) on tag push.
 4. Prism updated to consume the new version (if minor/major bump).
 5. Branch deleted from remote.
 
 ## Status
 
-Pre-alpha. No binary yet. See `CHANGELOG.md` for milestones.
+V1 candidate, Windows x64 only. See `CHANGELOG.md` for milestones.

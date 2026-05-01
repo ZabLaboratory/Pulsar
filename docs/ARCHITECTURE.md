@@ -63,25 +63,37 @@ The discipline: **prefer plugin → upstream PR → patch**, in that order.
 3. CMake configures `upstream/` with the OBS toolchain, with Qt /
    front-end disabled, plus our plugins enabled.
 4. Build produces:
-   - `pulsar` (or `pulsar.exe` on Windows): the service binary, a
-     thin entry into libobs that loads our plugins by default.
-   - Platform-native package (`.zip` Win, `.tar.gz` Mac/Linux) with
-     the binary, libobs `.so/.dll`, plugins, locales, and resource
-     bundle.
-5. CI (Phase 1+) publishes the package as a GitHub Release artefact.
+   - `pulsar.exe`: the service binary, a thin entry into libobs that
+     loads our plugins by default.
+   - Two Windows distribution variants (`scripts/package-win.ps1`):
+     `pulsar-windows-x64-v<version>.zip` (light, ~100 MB, no CEF) and
+     `pulsar-windows-x64-full-v<version>.zip` (full, ~370 MB, with CEF
+     + obs-browser for `browser_source` rendering).
+5. `release.yml` publishes both variants as GitHub Release artefacts on
+   every `vX.Y.Z` tag push.
+
+V1 ships Windows x64 only. macOS (Phase 7) and Linux (Phase 8) are
+deferred — `scripts/build-mac.sh` and `scripts/build-linux.sh` exit 1
+with a clear "not implemented" message.
 
 ## Embedding contract
 
 A consumer of Pulsar (Prism today, others later) must:
 
-- Bundle the platform-appropriate Pulsar package alongside its own
-  binary.
-- Spawn the service with a session-random loopback port and capture
-  the JWT printed on Pulsar's stdout at boot.
+- Bundle the Pulsar distribution under `resources/pulsar/` preserving
+  the rundir layout (`bin/64bit/`, `obs-plugins/64bit/`, `data/`).
+- Spawn `bin/64bit/pulsar.exe` with `cwd=bin/64bit`, optionally setting
+  `PULSAR_PORT` and `PULSAR_PASSWORD` to pin per-session credentials.
+- Read stdout line-by-line until the `PULSAR_READY ws=ws://127.0.0.1:<port>
+  password=<pw>` sentinel arrives; parse it and use the credentials to
+  authenticate the obs-websocket v5 session.
 - Keep the WebSocket connection open for the duration of broadcast
-  work; reconnect with the same JWT on transient drops.
-- Stop the service on consumer shutdown via the protocol's `Shutdown`
-  request and `SIGTERM` / `taskkill` as fallback.
+  work; reconnect with the same password on transient drops.
+- Stop the service via WebSocket close + process termination on
+  consumer shutdown.
+
+See **[`PRISM-EMBEDDING.md`](PRISM-EMBEDDING.md)** for the full step-by-step
+contract, including the exact directory listing the consumer must ship.
 
 ## Non-goals
 

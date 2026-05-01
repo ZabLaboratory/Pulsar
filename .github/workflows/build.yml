@@ -84,26 +84,31 @@ jobs:
         shell: pwsh
         run: ./scripts/build-win.ps1
 
-      - name: Verify pulsar.exe exports no symbols (#3)
-        # The binary-export contract from LICENSE-INVARIANTS.md (#3) :
-        # `dumpbin /exports pulsar.exe` must return an empty exports
-        # table. Any populated table = invariant breach = block the
-        # PR / main push before consumers ever see the binary.
-        #
-        # `dumpbin` is on PATH after ilammy/msvc-dev-cmd@v1.
+      - name: Verify binary export tables (#3)
+        # LICENSE-INVARIANTS.md (#3) gate. Scans pulsar.exe (must be
+        # empty), pulsar-browser-page.exe (must be empty), and every
+        # Pulsar-owned plugin DLL (only OBS module ABI symbols allowed).
+        # See scripts/check-binary-exports.ps1 for the full policy.
         shell: pwsh
+        run: ./scripts/check-binary-exports.ps1
+
+      - name: Setup Python (for offline probes)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install probe deps
+        shell: bash
         run: |
-          $exe = Get-ChildItem -Recurse -Filter "pulsar.exe" -Path "upstream/build_x64/rundir" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $exe) {
-            Write-Error "pulsar.exe not found under upstream/build_x64/rundir/ — build did not produce the expected artefact."
-            exit 1
-          }
-          Write-Host "Inspecting $($exe.FullName)..."
-          $output = & dumpbin /exports $exe.FullName 2>&1
-          $output | ForEach-Object { Write-Host $_ }
-          $hasExports = $output | Where-Object { $_ -match '^\s+ordinal hint\s+RVA\s+name' }
-          if ($hasExports) {
-            Write-Error "pulsar.exe exports symbols. See LICENSE-INVARIANTS.md (#3). Re-run dumpbin manually for the full list."
-            exit 1
-          }
-          Write-Host "::notice::pulsar.exe exports table is empty — invariant #3 holds."
+          python -m pip install --upgrade pip
+          pip install websockets
+
+      - name: Run offline probe suite (CTest)
+        # Spawns pulsar.exe, waits for the PULSAR_READY sentinel, runs
+        # probe-{websocket,events,multi-stream,adaptive,record}.py
+        # against it, asserts exit 0. The live Twitch broadcast probe
+        # is excluded -- it lives in live-test.yml.
+        # See scripts/run-probes.ps1 + top-level CMakeLists.txt for the
+        # CTest registration.
+        shell: pwsh
+        run: ctest --test-dir build --output-on-failure -C RelWithDebInfo

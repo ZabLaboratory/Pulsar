@@ -103,37 +103,13 @@ jobs:
           # what each variant ships.
           ./scripts/build-win.ps1 -Full
 
-      - name: Verify pulsar.exe exports no symbols (#3)
-        # The binary-export contract from LICENSE-INVARIANTS.md (#3) :
-        # `dumpbin /exports pulsar.exe` must return an empty exports
-        # table. If a plugin (or upstream submodule patch) starts
-        # publishing a symbol, the build is one `LoadLibrary` call
-        # away from contaminating any consumer that calls
-        # `dlopen("pulsar.exe")`. Fail the release before any zip ships.
-        #
-        # `dumpbin` is on PATH after ilammy/msvc-dev-cmd@v1. The output
-        # we want to see is "Summary" with no preceding "ordinal hint
-        # RVA name" listing.
+      - name: Verify binary export tables (#3)
+        # LICENSE-INVARIANTS.md (#3) gate covering every Pulsar-owned
+        # binary in the rundir. pulsar.exe + pulsar-browser-page.exe
+        # must export nothing; plugin DLLs may export only the OBS
+        # module ABI. See scripts/check-binary-exports.ps1.
         shell: pwsh
-        run: |
-          $exe = Get-ChildItem -Recurse -Filter "pulsar.exe" -Path "upstream/build_x64/rundir" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $exe) {
-            Write-Error "pulsar.exe not found under upstream/build_x64/rundir/ — build did not produce the expected artefact."
-            exit 1
-          }
-          Write-Host "Inspecting $($exe.FullName)..."
-          $output = & dumpbin /exports $exe.FullName 2>&1
-          $output | ForEach-Object { Write-Host $_ }
-          # Look for a non-empty exports table. The header lines we
-          # ignore : "Microsoft (R) ...", "Copyright (C) ...",
-          # "Dump of file ...", "File Type ...", "Summary".
-          # A populated table contains a line with "ordinal hint RVA name".
-          $hasExports = $output | Where-Object { $_ -match '^\s+ordinal hint\s+RVA\s+name' }
-          if ($hasExports) {
-            Write-Error "pulsar.exe exports symbols. See LICENSE-INVARIANTS.md (#3). Re-run dumpbin manually for the full list."
-            exit 1
-          }
-          Write-Host "::notice::pulsar.exe exports table is empty — invariant #3 holds."
+        run: ./scripts/check-binary-exports.ps1
 
       - name: Package light variant
         shell: pwsh
