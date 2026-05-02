@@ -4,7 +4,7 @@
 [![npm pulsar-bundle](https://img.shields.io/npm/v/%40clodocapeo%2Fpulsar-bundle?label=%40clodocapeo%2Fpulsar-bundle&logo=npm&color=cb3837)](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle)
 [![npm pulsar-bundle-full](https://img.shields.io/npm/v/%40clodocapeo%2Fpulsar-bundle-full?label=%40clodocapeo%2Fpulsar-bundle-full&logo=npm&color=cb3837)](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle-full)
 [![GitHub release](https://img.shields.io/github/v/release/ZabLaboratory/Pulsar?logo=github)](https://github.com/ZabLaboratory/Pulsar/releases/latest)
-[![Release workflow](https://github.com/ZabLaboratory/Pulsar/actions/workflows/release.yml/badge.svg)](https://github.com/ZabLaboratory/Pulsar/actions/workflows/release.yml)
+[![Pipeline](https://github.com/ZabLaboratory/Pulsar/actions/workflows/pipeline.yml/badge.svg)](https://github.com/ZabLaboratory/Pulsar/actions/workflows/pipeline.yml)
 [![Licence GPL-2.0-or-later](https://img.shields.io/badge/licence-GPL--2.0--or--later-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-windows--x64-0078d4)](#install)
 [![libobs 32.1.2](https://img.shields.io/badge/libobs-32.1.2-7c8f9f)](https://github.com/obsproject/obs-studio/releases/tag/32.1.2)
@@ -41,7 +41,7 @@ End-to-end validated against a live Twitch ingest: 1080p60 frames + audio pushed
 
 ## Live broadcast proof
 
-Every push runs the [`live-test` workflow](.github/workflows/live-test.yml) on a clean `windows-2022` runner — it builds Pulsar from source, spawns `pulsar.exe`, opens a hand-coded HTML/CSS/JS scene through CEF + `browser_source` (Apple-keynote intro, telemetry HUD bound to live `pulsar:GetAdaptiveState` data, Web Audio sound design), and pushes a real broadcast to Twitch using the project's stream key. Throughout, an in-process `StartRecord` writes the same broadcast to a local MP4 — same encoders, same source, same frames the Twitch ingest receives. The MP4 is then re-encoded with `ffmpeg -c:v libx264 -preset fast -crf 23` (typically 5–20× smaller than the source CBR 6 Mbps) and uploaded.
+Every push runs the live-broadcast job inside the [`pipeline.yml` workflow](.github/workflows/pipeline.yml) on a clean `windows-2022` runner — it builds Pulsar from source, spawns `pulsar.exe`, opens a hand-coded HTML/CSS/JS scene through CEF + `browser_source` (Apple-keynote intro, telemetry HUD bound to live `pulsar:GetAdaptiveState` data, Web Audio sound design), and pushes a real broadcast to Twitch using the project's stream key. Throughout, an in-process `StartRecord` writes the same broadcast to a local MP4 — same encoders, same source, same frames the Twitch ingest receives. The MP4 is then re-encoded with `ffmpeg -c:v libx264 -preset fast -crf 23` (typically 5–20× smaller than the source CBR 6 Mbps) and uploaded.
 
 | Trigger | Duration | Where the MP4 lands |
 |---|---|---|
@@ -57,7 +57,7 @@ What you can play below is the broadcast produced for the **latest release-grade
   <a href="https://zablaboratory.github.io/Pulsar/pulsar-live-broadcast-proof.mp4">Stream the proof MP4 directly</a>.
 </video>
 
-[➡️ Stream inline (GitHub Pages)](https://zablaboratory.github.io/Pulsar/pulsar-live-broadcast-proof.mp4) · [download from latest release](https://github.com/ZabLaboratory/Pulsar/releases/latest/download/pulsar-live-broadcast-proof.mp4) · [browse all live-test runs](https://github.com/ZabLaboratory/Pulsar/actions/workflows/live-test.yml)
+[➡️ Stream inline (GitHub Pages)](https://zablaboratory.github.io/Pulsar/pulsar-live-broadcast-proof.mp4) · [download from latest release](https://github.com/ZabLaboratory/Pulsar/releases/latest/download/pulsar-live-broadcast-proof.mp4) · [browse all pipeline runs](https://github.com/ZabLaboratory/Pulsar/actions/workflows/pipeline.yml)
 
 The probe asserts on the metric side too: `GetDestinations[id].active == true` every 5 s, `GetAdaptiveState.samples` strictly increasing, frame drop ratio < 5 %. The MP4 is the visible byproduct; the gate is the assertion suite.
 
@@ -246,9 +246,10 @@ Pulsar/
 │   ├── PRISM-EMBEDDING.md    consumer-side spawn / handshake / lifecycle contract
 │   └── DEVELOPMENT.md
 ├── .github/workflows/
-│   ├── ci.yml               PR-time lint + tests on packages/
-│   ├── release.yml          tag push -> Windows build + lean + full zips + GitHub Release
-│   └── publish-npm.yml      tag push -> publish all three packages to npm
+│   └── pipeline.yml         single workflow, 9 jobs (lint, build, binary-gate,
+│                            offline-probes, live-broadcast, publish-gh-pages,
+│                            package, release-attach, npm-publish). One build,
+│                            shared artefact across the gates.
 ├── CMakeLists.txt           top-level entry; adds plugins, reads VERSION
 ├── VERSION                  single source of truth (consumed by C++ + npm + scripts)
 └── CHANGELOG.md
@@ -309,14 +310,18 @@ Three documents you must read before bundling Pulsar :
 - ➡️ **[`docs/PRISM-EMBEDDING.md`](docs/PRISM-EMBEDDING.md)** — the consumer-side spawn / handshake / lifecycle contract. Mandatory `cwd`, `PULSAR_PORT` / `PULSAR_PASSWORD` env knobs, `PULSAR_READY` stdout sentinel parsing, shutdown protocol. Read this before writing the spawn helper.
 - ➡️ **[`CONSUMER-AUDIT.md`](CONSUMER-AUDIT.md)** — the empirical checklist your consumer repo must enforce in CI. Every claim is a runnable script, every script has a pass/fail signal. Includes a copy-pasteable bash script + GitHub Actions workflow for static + binary-linkage checks (Windows / macOS / Linux). **If you have not run the scripts, you have not passed the audit.**
 
-Pulsar's own CI enforces the source-side and binary-side invariants for its own artefacts :
+Pulsar's own CI enforces the source-side and binary-side invariants on every push and PR. Everything lives in the single [`pipeline.yml`](.github/workflows/pipeline.yml) workflow — one build, multiple gates that share its artefact.
 
-| Workflow | Trigger | What it gates |
+| Job (in `pipeline.yml`) | Trigger | What it gates |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | every PR + push to main | patches apply cleanly, plugins carry metadata |
-| [`license-isolation.yml`](.github/workflows/license-isolation.yml) | every PR + push to main | source-grep (FFI / NAPI / node-gyp / staging dirs), npm tarball content audit |
-| [`build.yml`](.github/workflows/build.yml) | every PR + push to main | full Windows build + `dumpbin /exports pulsar.exe` empty |
-| [`release.yml`](.github/workflows/release.yml) | tag `v*.*.*` push | re-runs source-grep + dumpbin before publishing the GitHub Release |
-| [`publish-npm.yml`](.github/workflows/publish-npm.yml) | tag `v*.*.*` push | re-runs source-grep + tarball audit before publishing the three npm packages |
+| `lint` | every PR + push to main | source-grep (no `__declspec(dllexport)` / `napi_*` / `node-gyp` / `prism` / `electron`), patches apply cleanly, plugins carry metadata, npm tarball content audit |
+| `build` | every PR + push to main | full Windows build via `scripts/build-win.ps1 -Full`, uploads `pulsar-rundir` artefact consumed by the rest |
+| `binary-gate` | every PR + push to main | `scripts/check-binary-exports.ps1` over `pulsar.exe`, `pulsar-browser-page.exe`, and every plugin DLL (only the OBS module ABI symbols allowed) |
+| `offline-probes` | every PR + push to main | ctest run (`scripts/run-probes.ps1`) — websocket handshake, source kinds, events, adaptive bitrate, recording |
+| `live-broadcast` | every PR + push to main | end-to-end Twitch broadcast probe with diagnostic JSON + MP4 recording |
+| `publish-gh-pages` | push to main + tag | publishes the broadcast MP4 to GitHub Pages so the README inline player streams the latest run |
+| `package` | tag `v*.*.*` push | runs `scripts/package-win.ps1 -Zip` for both light + full variants |
+| `release-attach` | tag `v*.*.*` push | `softprops/action-gh-release` with the zips + MP4 + diagnostic JSON attached |
+| `npm-publish` | tag `v*.*.*` push | publishes the three packages (`pulsar-client`, `pulsar-bundle`, `pulsar-bundle-full`) to npm |
 
-Inside this repo, `scripts/check-binary-exports.ps1` (binary-export gate covering `pulsar.exe`, `pulsar-browser-page.exe`, and every plugin DLL) plus the source-grep guarantees the boundary on Pulsar's side. The boundary on YOUR side is yours to enforce — that's what `CONSUMER-AUDIT.md` is for.
+The four invariants (process boundary / WebSocket-only IPC / no FFI / no copy-paste) are enforced **on Pulsar's side** by `lint` + `binary-gate`. The boundary on YOUR side (the consumer that bundles Pulsar) is yours to enforce — that's what `CONSUMER-AUDIT.md` is for.

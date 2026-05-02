@@ -1,205 +1,240 @@
 # Pulsar — Development
 
-## Phase plan
-
-| Phase | Scope | Status |
-|---|---|---|
-| 0 | Repo scaffold (this doc, layout, READMEs, CMake skeleton, CI placeholders) | in progress |
-| 1 | Build pipeline Win — clone upstream, apply patches, configure CMake, produce a runnable headless binary that does nothing useful yet | next |
-| 2 | `pulsar-headless` + `pulsar-websocket` plugins functional — service starts, accepts WebSocket connections, responds to obs-websocket v5 baseline | |
-| 3 | Window-capture source from Prism's hidden BrowserWindow + local MP4 record output | |
-| 4 | `pulsar-multi-stream` plugin — destinations API, Twitch + RTMP custom + VOD local working | |
-| 5 | YouTube destination — OAuth Live Streaming API + Helix-equivalent for Twitch | |
-| 6 | Audio: mic + app-audio + Meet peer audio via WASAPI process loopback | |
-| 7 | Mac build + CI matrix expansion | |
-| 8 | Linux build (additional patches likely required, upstream Linux story is uneven) | |
-| 9 | 60fps end-to-end + bitrate adaptive | |
+V1 ships Windows x64 only. macOS and Linux are deferred. The build
+scripts live in `scripts/`; everything they wrap is reproducible by
+hand for debugging.
 
 ## Toolchain
 
-### Windows (target Phase 1 platform)
+| | |
+|---|---|
+| OS | Windows 10/11 x64 |
+| Compiler | Visual Studio 2022 Build Tools — workload "Desktop development with C++" + Windows 11 SDK |
+| CMake | 3.28+ |
+| Generator | Visual Studio 17 2022 (default) or Ninja |
+| Yarn | 4.x via Corepack (used by upstream's build scripts) |
+| Git | with submodule + LFS support |
+| Python | 3.11+ for the probe scripts |
+| ffmpeg | for the live broadcast probe (the runner uses `FedericoCarboni/setup-ffmpeg`) |
+| PowerShell | the build / probe orchestrators are `.ps1` |
 
-- Visual Studio 2022 Build Tools — workload "Desktop development with C++"
-  + Windows 11 SDK
-- CMake 3.24+
-- Yarn 4.x via Corepack (used by upstream's build scripts)
-- Git with submodule support
-- Ninja or MSBuild generator
+`scripts/build-win.ps1` prefers `D:\DevTools\CMake\bin\cmake.exe` and
+falls back to `PATH`. Override with `-CMakeExe <path>` if needed.
 
-### macOS (Phase 7)
+## Local build
 
-- Xcode 15+ (Command Line Tools at minimum)
-- CMake, Ninja
-- Apple Silicon and Intel both supported by upstream
-
-### Linux (Phase 8)
-
-- GCC 11+ or Clang 14+
-- Per-distro dependencies — upstream documents for Ubuntu / Fedora /
-  Arch in `upstream/CI/linux/`
-
-## Local build (Phase 1, Windows)
-
-Phase 1 deliberately reuses obs-studio's own CMake preset
-(`windows-x64`) against the vendored `upstream/` submodule. No patches
-applied, no Pulsar plugins built, no headless mode yet. The goal is to
-prove the toolchain integration end-to-end and produce a runnable
-`obs64.exe` (full GUI obs-studio at this stage).
-
-```
-git clone --recurse-submodules git@github.com:ZabLaboratory/Pulsar.git
+```powershell
+git clone --recurse-submodules https://github.com/ZabLaboratory/Pulsar
 cd Pulsar
-scripts\build-win.ps1
+.\scripts\build-win.ps1                    # configure + build (light)
+.\scripts\build-win.ps1 -Full              # full build (CEF + obs-browser)
+.\scripts\build-win.ps1 -Clean             # wipe build dir, keep dependency caches
+.\scripts\build-win.ps1 -GuiBuild          # restore upstream's full obs64.exe (debugging only)
+.\scripts\package-win.ps1 -Zip             # produce the light distributable zip
+.\scripts\package-win.ps1 -Zip -Full       # produce the full distributable zip
 ```
 
-What `build-win.ps1` does:
+What `build-win.ps1` does, in order:
 
-1. Locates CMake (prefers `D:\DevTools\CMake\bin\cmake.exe`, falls back
-   to `PATH`).
-2. Invokes `cmake --preset windows-x64 -S upstream` — the preset fetches
-   the prebuilt obs-deps + Qt6 + CEF tarballs from
-   `obsproject/obs-deps` based on hashes pinned in
-   `upstream/CMakePresets.json`.
-3. Generates a Visual Studio 17 2022 solution under
-   `upstream/build_x64/`.
-4. Invokes `cmake --build --preset windows-x64 --config RelWithDebInfo`.
-5. Resulting binary lands under
-   `upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs64.exe`.
+1. Reset `upstream/` to `git submodule status --cached` (the recorded SHA).
+2. Replay every `patches/*.patch` lexically via `git am`.
+3. Configure: `cmake --preset windows-x64 -S upstream` + Pulsar overrides
+   (`ENABLE_FRONTEND=OFF`, `ENABLE_UI=OFF`, `ENABLE_BROWSER=OFF` in
+   light mode; `-Full` flips them on).
+4. Build: `cmake --build --preset windows-x64 --config RelWithDebInfo`.
+5. Compile Pulsar plugins under `plugins/` against the just-built libobs.
+6. Output lands in `upstream/build_x64/rundir/RelWithDebInfo/`.
 
-Phase 1 success criteria: that binary launches and runs the obs-studio
-UI. We are not (yet) touching its behaviour — only proving we can
-build it ourselves.
+First run is ~25–30 min on a typical machine — the obs-deps + Qt6 +
+CEF tarballs (a few hundred MB) download once into the local cache.
+Incremental rebuilds are seconds.
 
-## Phases 2+ (planned)
+## Running it
 
-- **Phase 2:** DONE. Patch pipeline lives in `scripts/build-win.ps1`:
-  resets `upstream/` to the recorded submodule SHA (via `git
-  submodule status --cached`), applies every `patches/*.patch` in
-  lexical order via `git am`, then runs configure. First patch
-  (`0001-build-tag-OBS_VERSION-with-pulsar-suffix.patch`) appends
-  `-pulsar` to the runtime version string so the fork is observable
-  in `obs64.exe` window titles and logs.
-- **Phase 3a:** DONE. `build-win.ps1` defaults to headless mode --
-  passes `ENABLE_FRONTEND=OFF`, `ENABLE_UI=OFF`, `ENABLE_BROWSER=OFF`
-  on the cmake invocation so the Qt frontend and CEF browser plugin
-  are excluded at build time. `obs64.exe` is no longer produced.
-  libobs core + 25 modules (encoders, capture, websocket, virtualcam,
-  audio etc.) still build. `-GuiBuild` switch restores the original
-  obs-studio behaviour. `-Clean` switch wipes the build directory
-  while preserving dependency caches.
-- **Phase 3b:** DONE. `pulsar.exe` produced from
-  `plugins/pulsar-headless/main.cpp`, linked against the libobs
-  upstream built. First headless run.
-- **Phase 4a:** DONE. `pulsar.exe` is now a real service:
-  default 1080p30 video / 48 kHz stereo audio, `obs_load_all_modules`
-  loads 20 plugins from libobs's built-in default search paths,
-  console-control handler flips an atomic flag for graceful
-  shutdown, 100 ms idle loop polls it. ~66 MB RAM idle.
-- **Phase 4b:** DONE. Qt infrastructure: `pulsar-headless`
-  constructs a `QApplication` (forced `QT_QPA_PLATFORM=minimal`
-  so no display server / platform plugin DLL is required for
-  rendering -- only the Qt event loop + QString/QJson machinery).
-  Build pipeline stages Qt6 runtime + minimal/windows platform
-  plugins. Upstream obs-websocket disabled
-  (`-DENABLE_WEBSOCKET=OFF`) because it hardcodes Qt UI +
-  frontend-api migration calls that crash without a real
-  frontend.
-- **Phase 4c:** DONE for the source side. `plugins/pulsar-websocket/`
-  vendored from upstream obs-websocket v5.7.3 with `src/forms/`
-  dropped, `obs-websocket.cpp` stripped of the Qt menu /
-  SettingsDialog wiring, and `Config.cpp` migrate functions
-  reduced to no-ops. The CMakeLists is still a stub.
-- **Phase 4d:** DONE. `obs-websocket.dll` produced from our fork,
-  loads inside `pulsar.exe`, listens on `0.0.0.0:4455` and
-  `[::]:4455`. Two extra patches beyond Phase 4c: ServerEnabled
-  defaults to `true` (Pulsar opts users in by default since there
-  is no SettingsDialog to consent), and `Qt6::Widgets` / `Qt6::Gui`
-  came back into the link list (source pulls QSystemTrayIcon,
-  QImageWriter, QGuiApplication, QMainWindow even outside the
-  forms/ directory). Plugin sources, the obs-deps lookup, and the
-  Qt6 lookup all flow through
-  `plugins/pulsar-websocket/CMakeLists.txt`.
-- **Phase 4e:** DONE. `scripts/probe-websocket.py` does the v5
-  handshake (Hello -> Identify -> Identified), issues a
-  `GetVersion`, prints the response. Run with:
+```powershell
+cd upstream\build_x64\rundir\RelWithDebInfo\bin\64bit
+$env:PULSAR_PORT     = "4455"
+$env:PULSAR_PASSWORD = "dev-only-do-not-ship-this"
+.\pulsar.exe
+# look for: PULSAR_READY ws=ws://127.0.0.1:4455 password=dev-only-...
+```
 
-  ```
-  pip install websockets
-  python scripts/probe-websocket.py
-  ```
+Then drive it from any v5 client. With the typed client in this repo:
 
-  Pulsar speaks obs-websocket v5 end-to-end -- 137 v5 request
-  types are advertised in the GetVersion response.
-- **Phase 4:** wire the `pulsar-websocket` plugin (fork of
-  obs-websocket v5). Service speaks v5 baseline.
-- See ARCHITECTURE.md for the full phase plan.
+```powershell
+cd packages\pulsar-client
+npm install
+node -e "
+import('./dist/index.js').then(async ({ PulsarClient }) => {
+  const p = new PulsarClient();
+  await p.connect({ url: 'ws://127.0.0.1:4455', password: 'dev-only-do-not-ship-this' });
+  console.log(await p.video.get());
+  await p.disconnect();
+});
+"
+```
 
-## CI
+## Probes
 
-GitHub Actions matrix (Phase 1+):
+Six Python probe scripts live under `scripts/`. Each is self-contained
+and is the source of truth for what it asserts.
 
-- `ci.yml` — lightweight checks on every PR (patches/ apply cleanly on
-  the pinned upstream SHA; every plugins/* carries CMakeLists.txt + README).
-- `build.yml` — Windows x64 build on every PR + push to main. Runs the
-  full `-Full` build (CEF + obs-browser) and the binary-export gate
-  (`scripts/check-binary-exports.ps1`). **macOS / Linux are deferred
-  to Phase 7 / Phase 8 — V1 ships Windows-only.**
-- `license-isolation.yml` — source-tree audit for forbidden patterns
-  (`__declspec(dllexport)`, `napi_*`, `prism`, `electron`).
-- `live-test.yml` — end-to-end Twitch broadcast probe on tag push +
-  manual dispatch.
-- `release.yml` — on `vX.Y.Z` tag push, builds Windows x64 once and
-  packages two variants (light + full) into a GitHub Release.
+| Probe | What it covers |
+|---|---|
+| `probe-websocket.py` | v5 handshake (Hello → Identify → Identified), `GetVersion` round-trip. |
+| `probe-source-kinds.py` | `GetInputKindList` against the expected V1 source matrix. |
+| `probe-events.py` | scene/input/source CRUD + the matching v5 events. |
+| `probe-record.py` | `StartRecord` / `StopRecord` lifecycle, ffprobes the resulting MP4 (codec=h264, audio=aac, fps, bitrate). |
+| `probe-adaptive.py` | adaptive bitrate worker — drives a destination, induces drops by stress, checks `pulsar:BitrateAdjusted` event ordering. |
+| `probe-multi-stream.py` | multi-destination CRUD + start/stop. **Excluded** from `run-probes.ps1` because of upstream-obs races; covered by the live broadcast probe instead. |
+
+`scripts/run-probes.ps1` orchestrates the offline suite end-to-end:
+spawns `pulsar.exe`, waits for `PULSAR_READY`, runs each probe
+sequentially, collects exit codes, prints the tail of stdout/stderr on
+failure, and shuts the process down. Used by:
+
+- `ctest` (top-level `CMakeLists.txt` adds `add_test(NAME probes ...)`).
+- The `offline-probes` job in `.github/workflows/pipeline.yml`.
+- Local development — just run it directly.
+
+```powershell
+.\scripts\run-probes.ps1
+```
+
+The live broadcast probe (`scripts/probe-twitch-live.py`) is **not**
+part of the offline suite — it needs a real Twitch stream key + ~1 min
+of network bandwidth. It runs from the `live-broadcast` job in
+`pipeline.yml` against the project's Twitch credentials, produces a
+local MP4 + a diagnostic JSON, and uploads them as artefacts.
+
+## CI — `.github/workflows/pipeline.yml`
+
+A single workflow with 9 jobs. One build, multiple gates that share
+its artefact via `upload-artifact` / `download-artifact`.
+
+| Job | Runs on | Triggers | What it does |
+|---|---|---|---|
+| `lint` | ubuntu-latest | every PR + push to main | source-grep (no `__declspec(dllexport)` / `napi_*` / `node-gyp` / `prism` / `electron`), patches apply cleanly, plugins carry metadata, npm tarball content audit |
+| `build` | windows-2022 | every PR + push to main | `scripts/build-win.ps1 -Full`, uploads `pulsar-rundir` artefact consumed by all subsequent gates |
+| `binary-gate` | windows-2022 | every PR + push to main | `scripts/check-binary-exports.ps1` over `pulsar.exe`, `pulsar-browser-page.exe`, and every plugin DLL |
+| `offline-probes` | windows-2022 | every PR + push to main | `ctest` with retry, runs the offline probe suite |
+| `live-broadcast` | windows-2022 | every PR + push to main | end-to-end Twitch broadcast — 60 s on PR, 600 s on main / tag — produces MP4 + diagnostic JSON |
+| `publish-gh-pages` | ubuntu-latest | push to main + tag | `peaceiris/actions-gh-pages` — publishes the broadcast MP4 to `gh-pages` so the README inline player streams the latest run |
+| `package` | windows-2022 | tag `v*.*.*` push | `scripts/package-win.ps1 -Zip` for both light + full variants |
+| `release-attach` | ubuntu-latest | tag push | `softprops/action-gh-release` with the zips + MP4 + diagnostic JSON |
+| `npm-publish` | ubuntu-latest | tag push | `npm publish` for the three packages (parallel to `build` — does not need the Windows artefact) |
+
+Triggers (deduped to avoid duplicate runs):
+
+- `push: branches: [main]` + `tags: ['v*.*.*']`
+- `pull_request: branches: [main]`
+- `workflow_dispatch` with toggles for `enable_package`,
+  `enable_release_attach`, `enable_npm_publish`, and a custom
+  `live_test_duration_seconds`.
+
+Skip a run from a docs-only commit by appending `[skip ci]` to the
+commit message — GitHub Actions honours that natively.
 
 ## Adding a patch
 
 The build pipeline replays `patches/*.patch` onto the recorded
-submodule SHA on every run, so authoring a new patch is a matter of
-producing a clean `format-patch` artefact.
+submodule SHA on every run, so authoring a new patch is producing a
+clean `format-patch` artefact.
 
-1. Make sure `upstream/` is at the recorded SHA (run
-   `scripts/build-win.ps1 -Stage configure` once if unsure — it
-   resets and re-applies whatever patches are present).
-2. `cd upstream` and edit the files you want to change. The branch
-   you are on does not matter; `git am` will create commits on
-   detached HEAD when the build script next runs.
+1. Make sure `upstream/` is at the recorded SHA. If unsure, run
+   `scripts/build-win.ps1 -Stage configure` once — it resets and
+   re-applies whatever patches are present.
+2. `cd upstream` and edit. Branch identity does not matter; `git am`
+   creates commits on detached HEAD when the build script next runs.
 3. Stage and commit with a meaningful message — include
-   `Pulsar-Patch: NNNN` and `Upstream-Candidate: yes/no` trailers
-   so the patch metadata stays self-describing.
-4. `git format-patch -1 --start-number NNNN -o ../patches HEAD`.
-   Pick the next free number (gaps are fine — see
-   `../patches/README.md`).
-5. `git reset --hard <recorded-sha>` to clean upstream/ back to the
-   pinned commit. The patch lives in `patches/` now; the build
-   script will re-apply it next configure.
+   `Pulsar-Patch: NNNN` and `Upstream-Candidate: yes/no` trailers so
+   the patch metadata stays self-describing.
+4. `git format-patch -1 --start-number NNNN -o ../patches HEAD`. Pick
+   the next free number (gaps are fine).
+5. `git reset --hard <recorded-sha>` to restore upstream/. The patch
+   lives in `patches/` now; the build script will re-apply it on the
+   next configure.
 6. Run `scripts/build-win.ps1 -Stage configure` to verify the patch
-   applies cleanly via the build pipeline. Rebuild and validate
-   the change is observable at runtime.
-7. Open a PR against Pulsar `main` with the patch file. If the
-   patch is upstream-eligible, also open the corresponding PR on
-   `obsproject/obs-studio` and link it from the patch header.
+   applies cleanly. Rebuild and validate the change is observable at
+   runtime.
+7. Open a PR. If the patch is upstream-eligible, also open the
+   corresponding PR on `obsproject/obs-studio` and link it from the
+   patch header.
 
 ## Adding a plugin
 
-1. Create `plugins/pulsar-<name>/` with `CMakeLists.txt` + `README.md`.
+1. Create `plugins/pulsar-<name>/` with `CMakeLists.txt` + `README.md`
+   + your sources.
 2. Register it in the top-level `CMakeLists.txt` under the
    `PULSAR_BUILD_PLUGINS` block.
-3. Document the plugin's protocol surface (if any) in `docs/PROTOCOL.md`.
-4. Add a CI build step verifying the plugin compiles in isolation.
+3. If the plugin adds a vendor request handler or event, document the
+   surface in [`PROTOCOL.md`](PROTOCOL.md) and add a typed wrapper to
+   `packages/pulsar-client/src/`.
+4. Add a probe script under `scripts/probe-<name>.py` if the surface
+   is non-trivial. Wire it into `scripts/run-probes.ps1`.
 
 ## Versioning
 
-Semver. Pinned in Prism via exact version match.
+Semver. Pinned in consumers via exact version match.
 
-- Patch (`0.0.x`): bug fixes, no protocol change.
-- Minor (`0.x.0`): new features, additive `pulsar:*` requests, new
-  destinations. Prism may need to consume the new version to expose
-  the feature.
-- Major (`x.0.0`): breaking changes to `pulsar:*` extensions or to
-  the embedding contract. Coordinated bump with Prism.
+- **Patch** (`x.y.Z`): bug fix, no protocol change, no env-var rename.
+- **Minor** (`x.Y.0`): new feature — additive `pulsar:*` request,
+  new destination kind, new env var. Consumers may need to consume
+  the new version to expose the feature.
+- **Major** (`X.0.0`): breaking change to `pulsar:*` extensions, env
+  var rename, or embedding contract change. Coordinated bump with
+  consumers.
 
-## Pre-alpha caveat
+The single source of truth for the version string is the top-level
+`VERSION` file. C++ reads it via the build, npm reads it via
+`package.json`, and the postinstall scripts read it to fetch the
+matching binary. Bump it, commit, tag.
 
-Until Phase 1 produces a building binary, this document describes
-**intent**, not behaviour. Steps marked "Phase N deliverable" are not
-yet implemented.
+## Troubleshooting
+
+### `pulsar.exe did not signal ready within 30000ms`
+
+The most common cause is `cwd` being wrong — libobs cannot find
+`data/libobs/default.effect`. Always spawn with
+`cwd = <pulsar root>/bin/64bit`.
+
+Other causes: a port conflict (another Pulsar / OBS Studio instance
+on the same port), an antivirus quarantining a fresh `pulsar.exe`,
+or the obs-websocket plugin failing to load (check `obs-plugins/64bit/`
+exists and contains `obs-websocket.dll`).
+
+### `Failed to find file 'default.effect'`
+
+Same root cause: wrong `cwd`. The error appears in pulsar's stdout
+before the READY sentinel.
+
+### `obs_output_start declined silently`
+
+The v5 `StartStream` request returns success but no actual stream
+is opened. Either configure a service via `SetStreamServiceSettings`
+first, or — better — use `pulsar:CreateDestination` +
+`pulsar:StartDestination` from the multi-stream API.
+
+### `WARN: download failed: 404` during `npm install`
+
+The matching `pulsar-windows-x64-v<version>.zip` GitHub Release does
+not exist yet (or the version you bumped to has not been tagged).
+The postinstall soft-fails so `npm install` completes; the bundle is
+unusable until you publish the matching release. For monorepo dev,
+override `binariesPath` in `spawn()` to point at a local
+`upstream/build_x64/rundir/RelWithDebInfo/` instead.
+
+### `npm install ... EBADPLATFORM` on Linux/macOS
+
+`pulsar-bundle` declares `os: ["win32"]` and `cpu: ["x64"]`. On other
+platforms `npm install` skips it cleanly. If you need to install on a
+non-target platform anyway (CI matrix, test scaffolding), pass
+`--force` to npm install — the package's own `postinstall` then
+detects the platform mismatch and exits 0 without downloading.
+
+### Probe times out / `pulsar.exe FAILED (exit 1)` in CI
+
+The `live-broadcast` job uploads the full pulsar stdout/stderr +
+diagnostic JSON as workflow artefacts. Download them from the failed
+run page. The JSON includes per-poll perf samples (active fps, render
+time, drops) so you can attribute lag to encoder vs network.

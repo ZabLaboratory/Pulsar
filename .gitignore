@@ -72,3 +72,6 @@ __pycache__/
 # Live-broadcast probe output / staging
 artefacts/
 probe-output.log
+
+# Local agent constitution (untracked, kept locally)
+/CLAUDE.md

@@ -30,8 +30,9 @@ forces it under GPL.
 
 ## 2. What ships in the bundle
 
-Use `scripts/package-win.ps1 -Variant <light|full>` (run on the Pulsar
-side) to produce a self-contained directory:
+Use `scripts/package-win.ps1 -Zip [-Full]` (run on the Pulsar side) to
+produce a self-contained zip — light by default, full with `-Full`. The
+extracted directory layout is:
 
 ```
 pulsar-windows-x64-v<version>/         (light, ~100 MB, 989 files)
@@ -280,5 +281,5 @@ check has pass/fail signal. CI must run those checks on every PR.
 | Spawn | `bin/64bit/pulsar.exe`, `cwd=bin/64bit/`, env `PULSAR_PORT` + `PULSAR_PASSWORD`. |
 | Wait | Read stdout until `PULSAR_READY ws=<url> password=<pw>` arrives (≤60s). |
 | Connect | Open WebSocket v5 to `<url>`, authenticate with `<pw>`. |
-| Use | Send v5 requests + Pulsar vendor extensions (`pulsar:*`, `pulsar-scene:*`). |
+| Use | Send v5 requests + Pulsar vendor extensions (`pulsar:*`). |
 | Stop | WS close → wait 5s → `taskkill /F /T /PID` only as fallback. |
