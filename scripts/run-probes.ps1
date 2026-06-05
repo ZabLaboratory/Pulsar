@@ -1,9 +1,21 @@
 # run-probes.ps1 -- offline probe orchestrator.
 #
-# Spawns pulsar.exe with cwd=bin/64bit, waits for the PULSAR_READY
-# sentinel, then runs each offline probe sequentially against it.
-# Exit 0 = every probe passed. Non-zero = exit code of the first
-# probe that failed.
+# Two phases:
+#   1. The self-spawning smoke probe (probe-websocket.py, M1) runs
+#      STANDALONE first. It spawns and reaps its OWN pulsar.exe child
+#      to prove the freshly-built binary boots end to end. It is NOT
+#      run against the shared instance because its child re-seeds
+#      bin/64bit/obs-websocket/config.json with that child's ephemeral
+#      port/password (pulsar-headless/main.cpp seed_websocket_config),
+#      then dies -- which would leave config.json pointing at a dead
+#      port for every connect-only probe that follows.
+#   2. AFTER the smoke probe, a SINGLE shared pulsar.exe is spawned.
+#      Its boot re-seeds config.json with the session port/password
+#      below, so the connect-only probes (which read config.json) all
+#      connect to the live shared instance. They run sequentially
+#      against it.
+#
+# Exit 0 = every probe passed. Non-zero = the first probe that failed.
 #
 # Used by:
 #   - CTest (top-level CMakeLists.txt -- `add_test(NAME probes ...)`)
@@ -34,6 +46,31 @@ if (-not (Test-Path $pulsar)) {
     exit 1
 }
 
+# --------------------------------------------------------------------
+# Phase 1 -- self-spawning smoke probe (probe-websocket.py, M1).
+#
+# This probe is self-contained: it spawns its OWN pulsar.exe child
+# (fresh ephemeral port + password) to prove the binary boots end to
+# end, then reaps it. Because that child runs seed_websocket_config()
+# (pulsar-headless/main.cpp), it rewrites bin/64bit/obs-websocket/
+# config.json to ITS port/password and then dies -- so it must run
+# BEFORE the shared instance is spawned. The shared instance's boot
+# (Phase 2) is the last writer of config.json, leaving it pointing at
+# the live connect-only target.
+#
+# Run it standalone here, NOT inside the shared $probes loop.
+# --------------------------------------------------------------------
+$smokeProbe = Join-Path $repoRoot "scripts/probe-websocket.py"
+Write-Host "==> Running probe-websocket.py (self-spawn smoke)"
+& python $smokeProbe --exe $pulsar
+$smokeCode = $LASTEXITCODE
+if ($smokeCode -ne 0) {
+    Write-Host "==> probe-websocket.py FAILED (exit $smokeCode)"
+    Write-Host "==> The freshly-built pulsar.exe did not boot cleanly -- aborting before the shared suite."
+    exit 1
+}
+Write-Host "==> probe-websocket.py OK"
+
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
 # Port 0 -> bind a random free port so back-to-back ctest runs don't
@@ -62,7 +99,10 @@ $stdoutLog = Join-Path $repoRoot "build/probe-pulsar-stdout.log"
 $stderrLog = Join-Path $repoRoot "build/probe-pulsar-stderr.log"
 New-Item -ItemType Directory -Path (Split-Path $stdoutLog) -Force | Out-Null
 
-Write-Host "==> Spawning pulsar.exe (cwd=$binDir, port=$sessionPort)"
+# --------------------------------------------------------------------
+# Phase 2 -- shared instance for the connect-only probes.
+# --------------------------------------------------------------------
+Write-Host "==> Spawning shared pulsar.exe (cwd=$binDir, port=$sessionPort)"
 # pulsar.exe is built /SUBSYSTEM:WINDOWS so spawning it never allocates
 # a console window, regardless of redirection. Start-Process with
 # -RedirectStandard* drains stdio at OS level (file redirection),
@@ -96,8 +136,14 @@ if (-not $ready) {
 }
 Write-Host "==> PULSAR_READY received"
 
+# Connect-only probes. Each reads the shared instance's port/password
+# from bin/64bit/obs-websocket/config.json (seeded by the Phase 2 boot
+# above) and connects to the single live pulsar.exe.
+#
+# probe-websocket.py is NOT here -- it is the self-spawning smoke probe
+# and runs standalone in Phase 1 (see top of file). Adding it back here
+# would re-poison config.json mid-suite and break every probe after it.
 $probes = @(
-    'probe-websocket.py',
     'probe-source-kinds.py',
     'probe-events.py',
     # probe-multi-stream.py is INTENTIONALLY excluded.
