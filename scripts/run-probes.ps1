@@ -6,6 +6,8 @@
 #        - probe-websocket.py  (M1) -- binary boots + v5 GetVersion.
 #        - probe-record-m2.py  (M2) -- scene+source driven over WS to a
 #          verified MP4 (h264 + aac + duration > 0).
+#        - probe-browser-m3.py (M3) -- CEF browser_source renders a local
+#          page; the frame is captured + verified non-blank.
 #      They are NOT run against the shared instance because each child
 #      re-seeds bin/64bit/obs-websocket/config.json with that child's
 #      ephemeral port/password (pulsar-headless/main.cpp
@@ -95,6 +97,37 @@ if ($recordCode -ne 0) {
     exit 1
 }
 Write-Host "==> probe-record-m2.py OK"
+
+# --------------------------------------------------------------------
+# Phase 1c -- self-spawning CEF browser-source capture probe
+# (probe-browser-m3.py, M3).
+#
+# Serves a local HTML page from a throwaway http.server, drives a
+# browser_source pointed at it over WS, lets CEF paint, then captures
+# the frame via GetSourceScreenshot and asserts it is non-blank +
+# carries real content. Self-spawns its OWN pulsar.exe child (fresh
+# ephemeral port + password) for the same config.json-reseed reason as
+# the smoke probe -- so it must run before the shared instance is
+# spawned. It reaps its child and stops its http.server.
+#
+# A LIGHT build (no CEF) makes browser_source absent; the probe exits 3
+# (typed skip) which we tolerate here so the offline suite still passes
+# on a light build. release.yml / live-test.yml build -Full where CEF
+# is present and M3 asserts for real.
+# --------------------------------------------------------------------
+$browserProbe = Join-Path $repoRoot "scripts/probe-browser-m3.py"
+Write-Host "==> Running probe-browser-m3.py (self-spawn CEF capture, M3)"
+& python $browserProbe --exe $pulsar
+$browserCode = $LASTEXITCODE
+if ($browserCode -eq 3) {
+    Write-Host "==> probe-browser-m3.py SKIPPED (light build -- browser_source absent, no CEF)"
+} elseif ($browserCode -ne 0) {
+    Write-Host "==> probe-browser-m3.py FAILED (exit $browserCode)"
+    Write-Host "==> CEF could not render + capture a page -- aborting before the shared suite."
+    exit 1
+} else {
+    Write-Host "==> probe-browser-m3.py OK"
+}
 
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
