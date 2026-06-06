@@ -1,19 +1,21 @@
 # run-probes.ps1 -- offline probe orchestrator.
 #
 # Two phases:
-#   1. The self-spawning smoke probe (probe-websocket.py, M1) runs
-#      STANDALONE first. It spawns and reaps its OWN pulsar.exe child
-#      to prove the freshly-built binary boots end to end. It is NOT
-#      run against the shared instance because its child re-seeds
-#      bin/64bit/obs-websocket/config.json with that child's ephemeral
-#      port/password (pulsar-headless/main.cpp seed_websocket_config),
-#      then dies -- which would leave config.json pointing at a dead
-#      port for every connect-only probe that follows.
-#   2. AFTER the smoke probe, a SINGLE shared pulsar.exe is spawned.
-#      Its boot re-seeds config.json with the session port/password
-#      below, so the connect-only probes (which read config.json) all
-#      connect to the live shared instance. They run sequentially
-#      against it.
+#   1. The self-spawning probes run STANDALONE first, each spawning and
+#      reaping its OWN pulsar.exe child:
+#        - probe-websocket.py  (M1) -- binary boots + v5 GetVersion.
+#        - probe-record-m2.py  (M2) -- scene+source driven over WS to a
+#          verified MP4 (h264 + aac + duration > 0).
+#      They are NOT run against the shared instance because each child
+#      re-seeds bin/64bit/obs-websocket/config.json with that child's
+#      ephemeral port/password (pulsar-headless/main.cpp
+#      seed_websocket_config), then dies -- which would leave config.json
+#      pointing at a dead port for every connect-only probe that follows.
+#   2. AFTER the self-spawning probes, a SINGLE shared pulsar.exe is
+#      spawned. Its boot re-seeds config.json with the session
+#      port/password below, so the connect-only probes (which read
+#      config.json) all connect to the live shared instance. They run
+#      sequentially against it.
 #
 # Exit 0 = every probe passed. Non-zero = the first probe that failed.
 #
@@ -61,7 +63,7 @@ if (-not (Test-Path $pulsar)) {
 # Run it standalone here, NOT inside the shared $probes loop.
 # --------------------------------------------------------------------
 $smokeProbe = Join-Path $repoRoot "scripts/probe-websocket.py"
-Write-Host "==> Running probe-websocket.py (self-spawn smoke)"
+Write-Host "==> Running probe-websocket.py (self-spawn smoke, M1)"
 & python $smokeProbe --exe $pulsar
 $smokeCode = $LASTEXITCODE
 if ($smokeCode -ne 0) {
@@ -70,6 +72,29 @@ if ($smokeCode -ne 0) {
     exit 1
 }
 Write-Host "==> probe-websocket.py OK"
+
+# --------------------------------------------------------------------
+# Phase 1b -- self-spawning media-output probe (probe-record-m2.py, M2).
+#
+# Drives a scene + synthetic source over WS and records it to a verified
+# MP4 (h264 + aac + duration > 0). Self-spawns its OWN pulsar.exe child
+# (fresh ephemeral port + password, isolated PULSAR_RECORD_DIR temp dir)
+# for the same config.json-reseed reason as M1 -- so it must run before
+# the shared instance is spawned. It cleans up its temp MP4 and reaps
+# its child. Uses the v5 StartRecord path (CI-stable), NOT the vod_local
+# rtmp destination lifecycle that keeps probe-multi-stream.py out of the
+# shared suite.
+# --------------------------------------------------------------------
+$recordProbe = Join-Path $repoRoot "scripts/probe-record-m2.py"
+Write-Host "==> Running probe-record-m2.py (self-spawn media output, M2)"
+& python $recordProbe --exe $pulsar
+$recordCode = $LASTEXITCODE
+if ($recordCode -ne 0) {
+    Write-Host "==> probe-record-m2.py FAILED (exit $recordCode)"
+    Write-Host "==> The binary could not be driven to produce a valid MP4 -- aborting before the shared suite."
+    exit 1
+}
+Write-Host "==> probe-record-m2.py OK"
 
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
