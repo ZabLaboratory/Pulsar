@@ -1,0 +1,245 @@
+# Pulsar compliance gates -- étage-0 merge-gate conformance.
+#
+# These are the conformance checks required by the org-wide merge gate
+# (docs/rules/git.md §1 + docs/rules/security.md §Détection). The build
+# pipeline (pipeline.yml) proves pulsar.exe builds and broadcasts; this
+# workflow proves the change is mergeable per policy: no leaked secret,
+# no high/critical dependency CVE, a lockfile that is in sync, and a
+# valid CODEOWNERS.
+#
+# Kept in a SEPARATE workflow from pipeline.yml on purpose:
+#   - different concern (governance vs build), different runners (all
+#     ubuntu, cheap + fast -- no MSVC, no Windows),
+#   - independent failure surface : a red secret-scan must not be tangled
+#     with the C++ build graph, and vice versa. Each job is its own check
+#     in `gh pr checks` so the reviewer sees exactly which gate broke.
+#
+# HARD RULE : no error-suppression anywhere (the step-skip toggle is
+# banned per docs/rules/git.md). Every job here is allowed -- and intended
+# -- to turn the PR red and block the merge.
+#
+# Trigger parity with pipeline.yml : pull_request to main fires once per
+# push (the dedup reason pipeline.yml documents), plus push to main and
+# tags so post-merge / release refs are re-checked. paths-ignore mirrors
+# pipeline.yml: a docs-only / changelog / licence change can't introduce
+# a secret-in-code, a dep CVE, a lockfile drift or a CODEOWNERS break.
+
+name: compliance
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*.*.*'
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+      - '.gitignore'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+      - '.gitignore'
+      - 'LICENSE'
+
+concurrency:
+  group: compliance-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ── secret-scan : trufflehog (filesystem + git history) + detect-secrets ──
+  # Two complementary scanners :
+  #   - trufflehog scans the full git history of the diff range (PR : base
+  #     ..head ; push : the pushed range) AND the working tree, with
+  #     --only-verified so a finding is a credential that actually
+  #     authenticates somewhere -- not an entropy false-positive.
+  #   - detect-secrets audits the working tree against .secrets.baseline.
+  #     Any NEW finding not already in the baseline fails the job; this is
+  #     the entropy/keyword net trufflehog's verified-only mode skips.
+  # Either scanner flagging a real/new secret turns the job red. A leaked
+  # secret => rotate + purge (security.md), never just revert.
+  secret-scan:
+    name: secret-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog (history + filesystem, verified secrets)
+        uses: trufflesecurity/trufflehog@main
+        with:
+          # PR : scan base..head. push : the action infers the pushed
+          # range from the event. Defaulting both to the repo path also
+          # scans the checked-out working tree.
+          path: ./
+          base: ${{ github.event.pull_request.base.sha || github.event.before }}
+          head: ${{ github.event.pull_request.head.sha || github.sha }}
+          extra_args: --only-verified
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install detect-secrets
+        run: python -m pip install --upgrade "detect-secrets==1.5.0"
+
+      - name: detect-secrets audit against baseline
+        # scan the tree, then diff against the committed baseline. If the
+        # scan surfaces any finding absent from .secrets.baseline, the
+        # baseline is out of date *because a new secret-shaped string
+        # appeared* -> fail. New legitimate allowlist entries must be added
+        # to the baseline in the same PR (detect-secrets scan > .secrets.baseline).
+        run: |
+          set -euo pipefail
+          detect-secrets scan --baseline .secrets.baseline
+          # `scan --baseline` updates the file in place; a non-empty diff
+          # means new findings were detected that were not in the baseline.
+          if ! git diff --quiet -- .secrets.baseline; then
+            echo "::error::detect-secrets found secret-shaped strings not present in .secrets.baseline."
+            echo "Review them. If legitimate, run 'detect-secrets scan > .secrets.baseline' and audit; if a real secret, ROTATE + purge per security.md."
+            git --no-pager diff -- .secrets.baseline
+            exit 1
+          fi
+          echo "detect-secrets: no new findings beyond the baseline."
+
+  # ── deps-audit : npm high/critical CVE gate ──────────────────────────
+  # Dependency scope = npm. The repo's runtime deps are the @clodocapeo/
+  # pulsar-* JS packages (package.json + package-lock.json). The Python
+  # side is dev-only probe glue (`websockets`), not a shipped/pinned
+  # dependency surface, so there is no requirements lock to pip-audit --
+  # the deps gate that matters for what ships is npm. --omit=dev so the
+  # gate reflects what consumers actually install (dev-only advisories,
+  # e.g. the vitest test toolchain, do not block a merge). --audit-level
+  # =high : moderate/low advise but do not block; high+critical block.
+  deps-audit:
+    name: deps-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: npm audit (production deps, high+critical block)
+        run: npm audit --omit=dev --audit-level=high
+
+  # ── lockfile-check : package-lock.json is in sync + committed ────────
+  # `npm ci` refuses to run if package.json and package-lock.json are out
+  # of sync, so `npm ci --dry-run` is the canonical "lockfile drift"
+  # detector -- it errors on any divergence or unpinned dependency without
+  # touching node_modules. We then assert the working tree is still clean
+  # so a lockfile that gets rewritten on install (e.g. a non-deterministic
+  # or stale lock) is caught as an uncommitted change.
+  lockfile-check:
+    name: lockfile-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Assert no stray yarn.lock (npm is the lock of record)
+        run: |
+          set -euo pipefail
+          if [ -f yarn.lock ]; then
+            echo "::error::yarn.lock present but Pulsar uses npm (package-lock.json) as the lock of record. Remove yarn.lock or migrate intentionally."
+            exit 1
+          fi
+          echo "no yarn.lock -- npm is the sole lockfile."
+
+      - name: npm ci --dry-run (lockfile in sync, deps pinned)
+        env:
+          PULSAR_BUNDLE_SKIP_POSTINSTALL: '1'
+        run: npm ci --dry-run
+
+      - name: Assert lockfile unchanged after resolution
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- package-lock.json; then
+            echo "::error::package-lock.json drifted during resolution -- regenerate with 'npm install' and commit."
+            git --no-pager diff -- package-lock.json
+            exit 1
+          fi
+          echo "package-lock.json is in sync and committed."
+
+  # ── codeowners-check : CODEOWNERS exists and is syntactically valid ──
+  # A merge gate that relies on CODEOWNERS for review routing is only as
+  # good as the file being present + parseable. We assert it exists, then
+  # lint it with the same parser semantics GitHub uses (pattern + at least
+  # one @owner / team / email per non-comment line). No external network
+  # call -- the validation is purely structural.
+  codeowners-check:
+    name: codeowners-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate + validate CODEOWNERS
+        run: |
+          set -euo pipefail
+          file=""
+          for cand in CODEOWNERS .github/CODEOWNERS docs/CODEOWNERS; do
+            if [ -f "$cand" ]; then file="$cand"; break; fi
+          done
+          if [ -z "$file" ]; then
+            echo "::error::No CODEOWNERS found (looked in /, /.github, /docs)."
+            exit 1
+          fi
+          echo "Validating $file"
+          # disable pathname expansion : CODEOWNERS patterns like '*' or
+          # '/plugins/*' must be treated literally, not glob-expanded
+          # against the runner's working tree by the unquoted `set --`.
+          set -f
+          fail=0
+          lineno=0
+          while IFS= read -r line || [ -n "$line" ]; do
+            lineno=$((lineno+1))
+            # strip leading/trailing whitespace
+            trimmed="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            # skip blank + comment lines
+            [ -z "$trimmed" ] && continue
+            case "$trimmed" in \#*) continue;; esac
+            # a rule line is: <pattern> <owner> [<owner>...]
+            # every token after the first must be @user, @org/team, or an email
+            set -- $trimmed
+            pattern="$1"; shift
+            if [ "$#" -eq 0 ]; then
+              echo "::error::$file:$lineno: rule '$pattern' has no owner."
+              fail=1; continue
+            fi
+            for owner in "$@"; do
+              case "$owner" in
+                @*/*) : ;;                              # @org/team
+                @*)   : ;;                              # @user
+                *@*.*) : ;;                             # email
+                *)
+                  echo "::error::$file:$lineno: invalid owner token '$owner' (expected @user, @org/team, or email)."
+                  fail=1 ;;
+              esac
+            done
+          done < "$file"
+          [ "$fail" -eq 0 ] || exit 1
+          echo "CODEOWNERS is syntactically valid."
