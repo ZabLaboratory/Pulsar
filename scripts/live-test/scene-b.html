@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Pulsar — SCENE B</title>
+<!-- ─────────────────────────────────────────────────────────────────────────
+     SCENE B  (probe-twitch-scene-switch)
+
+     CRIMSON twin of scene-a.html. Same SILENT, dependency-free shell: no Web
+     Audio, no React, no telemetry socket — a single static frame. SCENE A is
+     cobalt blue, SCENE B is crimson red, so a scene switch at ~t=15s is
+     unmistakable to the eye on the Twitch VOD.
+
+     "Zero PC sound" strategy: identical to scene-a.html — this page emits no
+     audio whatsoever.
+─────────────────────────────────────────────────────────────────────────── -->
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden;
+    background: #6b0f1a;                        /* crimson red */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: #ffeaea;
+  }
+  #root {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 2vh;
+    background:
+      radial-gradient(circle at 50% 35%, rgba(255,90,90,0.45), transparent 60%),
+      #6b0f1a;
+  }
+  .label {
+    font-size: 18vh; font-weight: 800; letter-spacing: 0.04em;
+    text-shadow: 0 0 6vh rgba(255,120,120,0.6);
+  }
+  .sub  { font-size: 4vh; font-weight: 500; opacity: 0.82; letter-spacing: 0.3em; }
+  .dot  {
+    width: 2.2vh; height: 2.2vh; border-radius: 50%;
+    background: #30d158; box-shadow: 0 0 2vh #30d158;
+    animation: blink 1.4s ease-in-out infinite;
+  }
+  .live { display: flex; align-items: center; gap: 1.4vh; font-size: 3vh; font-weight: 700; letter-spacing: 0.2em; }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="label">SCENE B</div>
+  <div class="sub">CRIMSON · PULSAR</div>
+  <div class="live"><span class="dot"></span>LIVE</div>
+</div>
+</body>
+</html>
