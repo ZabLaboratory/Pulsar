@@ -9,7 +9,7 @@ hand for debugging.
 | | |
 |---|---|
 | OS | Windows 10/11 x64 |
-| Compiler | Visual Studio 2022 Build Tools — workload "Desktop development with C++" + Windows 11 SDK |
+| Compiler | Visual Studio 2022 Build Tools — workload "Desktop development with C++" + Windows 11 SDK. The optional "C++ ATL" component (`Microsoft.VisualStudio.Component.VC.ATL`) is **not** required for the headless path but enables `obs-qsv11` / `win-dshow` locally (see [ATL runbook](runbooks/atl-missing-build-failure.md)). |
 | CMake | 3.28+ |
 | Generator | Visual Studio 17 2022 (default) or Ninja |
 | Yarn | 4.x via Corepack (used by upstream's build scripts) |
@@ -191,6 +191,15 @@ The single source of truth for the version string is the top-level
 matching binary. Bump it, commit, tag.
 
 ## Troubleshooting
+
+### `error C1083: Cannot open include file: 'atlbase.h'` (or `atlcomcli.h` / `atlstr.h`)
+
+ATL headers missing — the "C++ ATL" VS component is not installed on this machine.
+`scripts/build-win.ps1` detects this automatically and skips the three affected
+plugins (`obs-qsv11`, `win-dshow`, `virtualcam-module`) with `PULSAR_HAVE_ATL=OFF`.
+If you are invoking CMake directly (bypassing the script) the build will fail.
+Full diagnosis, gate mechanics, rollback, and optional ATL install instructions:
+[docs/runbooks/atl-missing-build-failure.md](runbooks/atl-missing-build-failure.md).
 
 ### `pulsar.exe did not signal ready within 30000ms`
 
