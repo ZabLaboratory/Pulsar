@@ -1,8 +1,8 @@
 # ADR 001 — ATL build-gate & CI compliance gates
 
-- **Status**: proposed
+- **Status**: accepted
 - **Date**: 2026-06-08
-- **Decided**: —
+- **Decided**: 2026-06-08
 - **Deciders**: @ClodoCapeo (maintainer)
 - **Author**: Atlas (architect agent)
 - **Supersedes**: —
