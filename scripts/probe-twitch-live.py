@@ -88,6 +88,21 @@ SPAWN_TIMEOUT_SEC     = 60.0    # pulsar to print PULSAR_READY + drop config.jso
 POLL_INTERVAL_SEC     = 5.0
 DESTINATION_NAME      = "pulsar-live-test"
 
+# StartDestination can race the engine boot : the frontend streaming
+# output is wired asynchronously after pulsar.exe spawns, and a probe
+# that reaches StartDestination within a few seconds of boot can hit a
+# transient `frontend streaming output unavailable` before the output
+# exists. This is a boot-ordering race, not a broadcast failure (same
+# binary/key passes on retry). We poll StartDestination for a bounded
+# budget, but ONLY while the error is exactly that transient string —
+# any other error (bad key, RTMP reject, etc.) fails immediately, and
+# exhausting the budget is a hard failure. No masking : a genuinely
+# broken streaming path never produces this exact transient and would
+# still fail.
+START_DEST_BOOT_ERROR   = "frontend streaming output unavailable"
+START_DEST_RETRY_BUDGET = 20.0   # seconds to wait out the boot race
+START_DEST_RETRY_DELAY  = 1.0    # poll cadence between attempts
+
 # Benign log substrings that do not constitute failure.
 BENIGN_LOG_SUBSTRINGS = [
     "no target (set PULSAR_CAPTURE_WINDOW)",  # frontend-stub default boot warning
@@ -616,17 +631,40 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                 return 1
             print(f"[live-test] destination created : id={dest_id}")
 
-            # 3. StartDestination.
-            r = await vendor_call(ws, inbox, "start-dest", "pulsar",
-                "StartDestination", {"id": dest_id})
-            dump_response("start-dest", r)
-            sd = vendor_response_data(r)
-            if not sd.get("started"):
+            # 3. StartDestination — poll out the boot race (see
+            #    START_DEST_BOOT_ERROR note above). Only the exact
+            #    transient boot error is retried ; everything else fails
+            #    on the first attempt.
+            deadline = time.time() + START_DEST_RETRY_BUDGET
+            attempt = 0
+            while True:
+                attempt += 1
+                r = await vendor_call(ws, inbox, f"start-dest-{attempt}",
+                    "pulsar", "StartDestination", {"id": dest_id})
+                sd = vendor_response_data(r)
+                if sd.get("started"):
+                    break
+                err = str(sd.get("error", ""))
+                transient = (err == START_DEST_BOOT_ERROR)
+                if transient and time.time() < deadline:
+                    print(f"[live-test] start-dest attempt #{attempt} : "
+                          f"streaming output not ready yet "
+                          f"('{err}'), retrying in {START_DEST_RETRY_DELAY}s")
+                    await asyncio.sleep(START_DEST_RETRY_DELAY)
+                    continue
+                # Either a non-transient error, or the boot race never
+                # cleared within budget — both are hard failures.
+                dump_response("start-dest", r)
                 status = vendor_request_status(r)
+                reason = ("boot race unresolved after "
+                          f"{START_DEST_RETRY_BUDGET}s ({attempt} attempts)"
+                          if transient else "not started")
                 fail_log("start-dest",
-                    f"not started ; requestStatus={status} responseData={sd}")
+                    f"{reason} ; requestStatus={status} responseData={sd}")
                 return 1
-            print(f"[live-test] destination STARTED -- going live")
+            dump_response("start-dest", r)
+            print(f"[live-test] destination STARTED -- going live "
+                  f"(attempt #{attempt})")
 
             # 3b. StartRecord -- record the broadcast locally so the CI
             # workflow can upload the MP4 as the live-test proof. Standard
