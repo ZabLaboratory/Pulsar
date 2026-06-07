@@ -169,9 +169,16 @@ jobs:
           echo "no yarn.lock -- npm is the sole lockfile."
 
       - name: npm ci --dry-run (lockfile in sync, deps pinned)
+        # --force : @clodocapeo/pulsar-bundle declares os:["win32"]
+        # cpu:["x64"], so on the ubuntu runner npm aborts with
+        # EBADPLATFORM before it ever checks lockfile sync. --force
+        # bypasses the os/cpu gate (same reason npm-publish in
+        # pipeline.yml uses it) WITHOUT weakening the sync check: a real
+        # lockfile drift surfaces as a distinct EUSAGE/"can only install
+        # with an up to date package-lock" error, not EBADPLATFORM.
         env:
           PULSAR_BUNDLE_SKIP_POSTINSTALL: '1'
-        run: npm ci --dry-run
+        run: npm ci --dry-run --force
 
       - name: Assert lockfile unchanged after resolution
         run: |
