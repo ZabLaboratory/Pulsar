@@ -96,23 +96,41 @@ jobs:
         run: python -m pip install --upgrade "detect-secrets==1.5.0"
 
       - name: detect-secrets audit against baseline
-        # scan the tree, then diff against the committed baseline. If the
-        # scan surfaces any finding absent from .secrets.baseline, the
-        # baseline is out of date *because a new secret-shaped string
-        # appeared* -> fail. New legitimate allowlist entries must be added
-        # to the baseline in the same PR (detect-secrets scan > .secrets.baseline).
+        # Re-scan the tree against the committed baseline, then compare ONLY
+        # the `results` block (the actual findings) -- NOT the whole file --
+        # against what is committed. `scan --baseline` rewrites the file in
+        # place and always refreshes the volatile `generated_at` timestamp
+        # (and may reorder plugin metadata), so a raw `git diff` on the file
+        # would fail on the timestamp alone with zero new secrets. By diffing
+        # the `results` map alone we ignore that noise and fail only when a
+        # finding appears that is not already in the audited baseline -- i.e.
+        # a genuinely new secret-shaped string. To add a legitimate new
+        # allowlist entry: `detect-secrets scan > .secrets.baseline`, audit,
+        # commit. A real secret => ROTATE + purge per security.md.
         run: |
           set -euo pipefail
+          # Snapshot the committed baseline OUTSIDE the repo tree so the
+          # re-scan below doesn't pick the copy up as a new file.
+          cp .secrets.baseline "${RUNNER_TEMP}/baseline.committed.json"
           detect-secrets scan --baseline .secrets.baseline
-          # `scan --baseline` updates the file in place; a non-empty diff
-          # means new findings were detected that were not in the baseline.
-          if ! git diff --quiet -- .secrets.baseline; then
-            echo "::error::detect-secrets found secret-shaped strings not present in .secrets.baseline."
-            echo "Review them. If legitimate, run 'detect-secrets scan > .secrets.baseline' and audit; if a real secret, ROTATE + purge per security.md."
-            git --no-pager diff -- .secrets.baseline
-            exit 1
-          fi
-          echo "detect-secrets: no new findings beyond the baseline."
+          python - <<PY
+          import json, os, sys
+          def results(path):
+              with open(path) as f:
+                  return json.load(f).get("results", {})
+          before = results(os.path.join(os.environ["RUNNER_TEMP"], "baseline.committed.json"))
+          after  = results(".secrets.baseline")
+          if before != after:
+              print("::error::detect-secrets found findings not present in the audited .secrets.baseline.")
+              before_keys = {(fn, x["hashed_secret"]) for fn, lst in before.items() for x in lst}
+              after_keys  = {(fn, x["hashed_secret"]) for fn, lst in after.items()  for x in lst}
+              for fn, h in sorted(after_keys - before_keys):
+                  print(f"::error::NEW finding in {fn} (hash {h[:12]}...). Review: real secret => rotate+purge; false positive => re-baseline.")
+              for fn, h in sorted(before_keys - after_keys):
+                  print(f"::warning::baseline finding no longer present in {fn} (hash {h[:12]}...). Re-baseline to prune.")
+              sys.exit(1)
+          print("detect-secrets: no findings beyond the audited baseline.")
+          PY
 
   # ── deps-audit : npm high/critical CVE gate ──────────────────────────
   # Dependency scope = npm. The repo's runtime deps are the @clodocapeo/
