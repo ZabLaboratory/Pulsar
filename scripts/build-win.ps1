@@ -163,6 +163,17 @@ function Test-AtlAvailable {
 
 $haveAtl = Test-AtlAvailable
 if (-not $haveAtl) {
+    # CI must build the full plugin set (windows-2022 ships the C++ ATL
+    # component), so a missing-ATL result on a CI runner is NOT a benign
+    # "dev box without ATL" -- it is a detection false-negative or a
+    # broken runner image. Silently dropping to the OFF branch there would
+    # amputate qsv11/virtualcam/win-dshow from the build and ship a thinner
+    # binary while CI stays green. Fail loud instead: turn the CI red so the
+    # gap is visible rather than masked. Locally (no GITHUB_ACTIONS / CI),
+    # keep the warning + skip -- that path is the intended dev convenience.
+    if ($env:GITHUB_ACTIONS -or $env:CI) {
+        throw "ATL not found in a CI context (GITHUB_ACTIONS/CI set). CI runners must have the MSVC 'C++ ATL' component so qsv11/virtualcam/win-dshow build. This is a detection false-negative or a broken runner image, not an expected skip -- failing the build instead of silently dropping plugins. See docs/runbooks/atl-missing-build-failure.md."
+    }
     Write-Warning "ATL not found -> skipping qsv11/virtualcam/win-dshow ; headless browser_source path unaffected"
 }
 
