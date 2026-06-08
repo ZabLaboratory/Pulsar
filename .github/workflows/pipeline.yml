@@ -421,6 +421,81 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # ── Stage 3d : M8 Canvas-authored provenance pre-flight ──────────
+  # M8 (ADR Pulsar-002 + Orion-001) authors a multi-blueprint Canvas+Blue
+  # scene, pushes it through the REAL Orion compile, drives the active
+  # scene, mints a viewer show-token, and PROVES the on-air Solar frame is
+  # that authoring (round-trip active_scene_id + modal-colour). This job
+  # runs the PROVENANCE PRE-FLIGHT only (--preflight-only via run-m8.ps1):
+  # it needs a reachable deployed stack (VPS via tunnel, Orion in dual mode
+  # serving Solar v0.2.0) + a short-TTL operator JWT, so it is GATED on the
+  # M8 secrets being present and is non-blocking when they are absent
+  # (the full broadcast leg + the VPS bring-up are a separate, serialised
+  # run Probe/Keeper drive — ADR §A1.7). Mirrors the M6 job: typed skip
+  # (exit 3) on a LIGHT build, fail (1) on any assertion, pass (0) only on
+  # a confirmed provenance pre-flight. The wrapper grep-asserts no
+  # credential leaks (criterion 7) regardless of probe exit.
+  m8-provenance:
+    name: M8 Canvas-authored provenance pre-flight
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Download pulsar-rundir
+        uses: actions/download-artifact@v4
+        with:
+          name: pulsar-rundir
+          path: .
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install probe deps
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install websockets
+
+      - name: Run M8 provenance pre-flight (grep-asserted wrapper)
+        # The wrapper tees stdout, runs the probe in --preflight-only, then
+        # FAILS the run if any credential leaks to stdout / PNG / VOD —
+        # redaction is a gate here, not a nicety (Bastion PV-1/CC-1).
+        # Skip cleanly when the M8 secrets aren't configured on this repo.
+        env:
+          M8_OPERATOR_TOKEN: ${{ secrets.M8_OPERATOR_TOKEN }}
+          M8_GATEWAY_URL:    ${{ secrets.M8_GATEWAY_URL }}
+        shell: pwsh
+        run: |
+          if (-not $env:M8_OPERATOR_TOKEN -or -not $env:M8_GATEWAY_URL) {
+            Write-Host "::notice::M8 secrets (M8_OPERATOR_TOKEN / M8_GATEWAY_URL) not configured — skipping the provenance pre-flight (non-blocking; the real run is the serialised VPS go-live driven by Probe/Keeper)."
+            exit 0
+          }
+          pwsh scripts/run-m8.ps1 -PreflightOnly -ShowStreamPath stream.lsdp -SolarVersion 0.2.0 -PythonExe python
+          $rc = $LASTEXITCODE
+          if ($rc -eq 3) {
+            Write-Host "::notice::M8 typed skip (exit 3) — LIGHT build without CEF. Needs scripts/build-win.ps1 -Full."
+            exit 0
+          }
+          exit $rc
+
+      - name: Upload M8 provenance proof PNG
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsar-m8-provenance-proof
+          path: |
+            build/m8-canvas-scene.png
+            build/m8-probe-stdout.log
+          retention-days: 30
+          if-no-files-found: ignore
+
   # ── Stage 4 : publish proof MP4 to gh-pages ──────────────────────
   publish-gh-pages:
     name: publish proof to gh-pages
