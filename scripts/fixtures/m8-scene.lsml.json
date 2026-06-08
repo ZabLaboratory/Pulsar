@@ -1,0 +1,44 @@
+{
+  "lsml": "1.1",
+  "scene_id": "0c8a9e57-0000-4000-8000-000000000m80",
+  "scene_version": "sha256:c2e52819d3f465b8228a23f764249b8c86d06f1d5887e68bcaba47bc3dac59c7",
+  "layout": {
+    "kind": "frame",
+    "id": "root",
+    "size": { "w": 1920, "h": 1080 },
+    "background": "#1A9E57",
+    "children": [
+      {
+        "kind": "stack",
+        "id": "col",
+        "direction": "vertical",
+        "gap": 24,
+        "align": "center",
+        "justify": "center",
+        "children": [
+          {
+            "kind": "text",
+            "id": "score-label",
+            "style": { "fontSize": 96, "fontWeight": 800, "color": "#FFFFFF", "textAlign": "center", "fontFamily": "Inter" },
+            "bind": { "value": "score.value" }
+          },
+          {
+            "kind": "text",
+            "id": "timer-label",
+            "style": { "fontSize": 48, "fontWeight": 600, "color": "#0A0A0A", "textAlign": "center", "fontFamily": "Inter" },
+            "bind": { "value": "timer.value" }
+          },
+          {
+            "kind": "shape",
+            "id": "chip",
+            "geometry": "rect",
+            "size": { "w": 320, "h": 96 },
+            "fill": "#0AF0C8",
+            "cornerRadius": 16,
+            "stroke": { "color": "#0A0A0A", "width": 3 }
+          }
+        ]
+      }
+    ]
+  }
+}

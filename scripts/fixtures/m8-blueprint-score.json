@@ -1,0 +1,54 @@
+{
+  "_fixture": "M8 score blueprint (Pulsar #45). A pure, bounded compute graph: two core.literal@1 constants (40 + 2) feed a core.math.add@1, whose result is written to the core.output@1 sink leaf `value`. Bound in the scene under blueprint key `score` -> leaf path `score.value` (40 + 2 = 42, the deterministic 'M8 OK 42' marker). Every node is is_pure/is_bounded in Blue's stdlib manifest, so Orion's compiler accepts it by construction (no IMPURE_COMPUTE / COMPILE_FAILED). Field names mirror Blue's graph schema (src/blue/schemas/graph.py) which Orion's FetchBlueprint reads two-call: GET /blueprints/{id} -> current_version, GET /blueprints/{id}/versions/{n} -> graph.{nodes,edges}.",
+  "blueprint": {
+    "slug": "pulsar-m8-score",
+    "name": "Pulsar M8 — score",
+    "kind": "function",
+    "tags": ["pulsar-m8", "fixture"],
+    "interface": {
+      "inputs": [],
+      "outputs": [
+        { "name": "value", "type": "core.primitive.number" }
+      ],
+      "side_effects": []
+    }
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "lit.a",
+        "definition": "core.literal@1",
+        "config": { "value": 40 },
+        "outputs": [{ "id": "lit.a.out", "name": "out", "type": "core.primitive.number" }]
+      },
+      {
+        "id": "lit.b",
+        "definition": "core.literal@1",
+        "config": { "value": 2 },
+        "outputs": [{ "id": "lit.b.out", "name": "out", "type": "core.primitive.number" }]
+      },
+      {
+        "id": "add",
+        "definition": "core.math.add@1",
+        "config": {},
+        "inputs": [
+          { "id": "add.x", "name": "x", "type": "core.primitive.number" },
+          { "id": "add.y", "name": "y", "type": "core.primitive.number" }
+        ],
+        "outputs": [{ "id": "add.out", "name": "out", "type": "core.primitive.number" }]
+      },
+      {
+        "id": "out.value",
+        "definition": "core.output@1",
+        "config": { "name": "value" },
+        "inputs": [{ "id": "out.value.in", "name": "in", "type": "core.primitive.number" }]
+      }
+    ],
+    "edges": [
+      { "id": "e.a", "from_node": "lit.a", "from_port": "out", "to_node": "add", "to_port": "x" },
+      { "id": "e.b", "from_node": "lit.b", "from_port": "out", "to_node": "add", "to_port": "y" },
+      { "id": "e.out", "from_node": "add", "from_port": "out", "to_node": "out.value", "to_port": "in" }
+    ],
+    "variables": []
+  }
+}

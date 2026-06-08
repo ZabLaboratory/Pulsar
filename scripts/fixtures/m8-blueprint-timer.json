@@ -1,0 +1,36 @@
+{
+  "_fixture": "M8 timer blueprint (Pulsar #45). The SECOND, DISTINCT Blue blueprint that makes the M8 scene a genuine N>=2 multi-blueprint scene (ADR Orion-001 / ADR Pulsar-002 A1.3). A single pure core.literal@1 constant feeds a core.output@1 sink leaf `value`. Bound under blueprint key `timer` -> leaf path `timer.value`. Distinct blueprint id + distinct scene-local key from `score`, both declaring leaf `value`: without the <key>. prefix the two would collide; with it they split into score.value / timer.value (ADR Orion-001 §3.3). Pure/bounded by construction.",
+  "blueprint": {
+    "slug": "pulsar-m8-timer",
+    "name": "Pulsar M8 — timer",
+    "kind": "function",
+    "tags": ["pulsar-m8", "fixture"],
+    "interface": {
+      "inputs": [],
+      "outputs": [
+        { "name": "value", "type": "core.primitive.string" }
+      ],
+      "side_effects": []
+    }
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "lit.t",
+        "definition": "core.literal@1",
+        "config": { "value": "12:00" },
+        "outputs": [{ "id": "lit.t.out", "name": "out", "type": "core.primitive.string" }]
+      },
+      {
+        "id": "out.value",
+        "definition": "core.output@1",
+        "config": { "name": "value" },
+        "inputs": [{ "id": "out.value.in", "name": "in", "type": "core.primitive.string" }]
+      }
+    ],
+    "edges": [
+      { "id": "e.t", "from_node": "lit.t", "from_port": "out", "to_node": "out.value", "to_port": "in" }
+    ],
+    "variables": []
+  }
+}
