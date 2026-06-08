@@ -1,79 +1,110 @@
-# `scene_control` cross-service contract (M10)
+# `scene_control` cross-service contract (M10 — overlay form)
 
 **Owner:** Conduit (integration / contracts).
-**Authority:** ADR 003 Amendment 2 §A2.1 (Pulsar `docs/adr/003-blue-driven-obs-scene-transition.md`)
-— frozen, Bastion-cleared (veto R7 lifted at design level), Vigil-reviewed.
-This package **formalises** that schema; it does not re-open it.
-**Issue:** ZabLaboratory/Pulsar#59.
+**Authority:** ADR 003 **Amendment 4 §A4.2** (Pulsar `docs/adr/003-blue-driven-obs-scene-transition.md`)
+— the PIVOT-FINALISED leaf shape. §A4.2 is the authority; this package
+**formalises** it, it does not re-open it. §A4.7 #70 pins the cut-window
+invariant. Surface sensible (broadcast-control) → Bastion re-clearance **#80**.
+**Issue:** ZabLaboratory/Pulsar#74.
+
+## The pivot (why this shape, not the old stinger one)
+
+The transition is **no longer an OBS-native media transition**. Our engine
+(Solar/CEF) animates a full-screen **opaque overlay** layered *over* two
+`monitor_capture` captures; the screen-1→screen-2 change of the content
+underneath is an **instantaneous hard-cut** hidden under the overlay's opaque
+plateau. So the leaf co-specifies the **overlay animation** (Solar reads) AND
+the **`cut_at_ms`** (Prism executes). **Gone:** the OBS-native transition, the
+media `asset_id`, any `path`, any OBS action verb (`action` /
+`switch_program_scene` / `transition`). Those belong to the superseded
+Amendment 1/2 OBS-native approach, now **dormant behind a flag** (Q4) and OFF
+the live contract.
 
 ## What this is
 
 The single source of truth for the `scene_control` contract that travels:
 
 ```
-Blue (#58, producer)  →  Orion leaf  __inputs.blue.<slug>.scene_control  →  Prism (#63) / m10 probe (#61) (consumers)
+Blue (#71, producer)  →  Orion leaf  __inputs.blue.<slug>.scene_control  →  Solar #73 + Prism #72 + m10 probe #75
 ```
 
 - `__init__.py` — the canonical **validator** (`validate_scene_control`) and
   **leaf-path** helpers (`build_leaf_path`, `assert_canonical_leaf_path`).
   Pure stdlib, no network, no OBS, no Pydantic.
-- `fixtures/valid.json`, `fixtures/malicious.json` — the **shared corpus**
-  both producer and consumer reference. Drift between sides is caught here,
-  exactly like the platform's `blue.models.canonical` convention.
+- `fixtures/valid.json`, `fixtures/malicious.json` — the **shared corpus** all
+  consumers reference. Drift between sides is caught here, exactly like the
+  platform's `blue.models.canonical` convention.
 - `test_scene_control_contract.py` — the **contract test**: round-trips the
-  fixtures through Blue's *real* `leaf_mapper` (producer) and the canonical
-  validator (consumer), and proves every malicious payload is rejected.
+  fixtures through Blue's *real* `leaf_mapper` (producer PATH machinery) and
+  the canonical validator (consumer), proves every malicious payload is
+  rejected, and asserts the cut-window invariant both directions.
 
 ## The frozen schema (leaf VALUE)
 
 ```jsonc
 __inputs.blue.<slug>.scene_control = {
-  "action": "switch_program_scene",      // allowlisted verb — ONLY this value
-  "target_scene": "scene-screen-2",      // ∈ closed scene allowlist (#60)
-  "transition": {
-    "kind": "stinger",                   // ∈ {stinger, fade}
-    "asset_id": "stinger-demo",          // allowlist KEY — NEVER a path
-    "point_ms": 300,                     // int, 0..20000
-    "duration_ms": 600                   // int, 50..20000 (obs-ws clamp)
-  }
+  "target_scene": "scene-screen-2",   // OBS content scene the hard-cut switches to;
+                                       // ∈ closed scene allowlist (#74). Read by Prism #72.
+  "overlay": {                         // the Solar animation (M9 render input). Read by Solar #73.
+    "kind": "wipe-cover",              // ∈ closed overlay-kind allowlist (authored Solar element)
+    "reveal_ms": 250,                  // int 1..20000 — 0 → fully opaque
+    "hold_ms": 200,                    // int 1..20000 — fully-opaque plateau (the cut window)
+    "retract_ms": 250                  // int 1..20000 — opaque → 0
+  },
+  "cut_at_ms": 250                     // int 0..20000 — offset from leaf-apply when Prism fires the
+                                       // hard-cut. MUST satisfy reveal_ms <= cut_at_ms <= reveal_ms+hold_ms
 }
 ```
 
 **Canonical leaf path is 3 segments** (`__inputs.blue.<slug>.scene_control`,
-ADR §A2.2 / F1). The 2-segment `__inputs.blue.scene_control` is a bug and is
-rejected — Blue's `leaf_mapper` (`leaf_mapper.py:38,160`) makes it structurally
-impossible to write.
+ADR §A2.2 / F1 — unchanged by the pivot). The 2-segment
+`__inputs.blue.scene_control` is a bug and is rejected — Blue's `leaf_mapper`
+(`leaf_mapper.py:46,168`, `\Z`-anchored) makes it structurally impossible to
+write.
 
-## Security invariants (Bastion — non-negotiable)
+## Invariants (encoded as hard rejects)
 
-| Condition | The contract enforces |
+| Invariant | The contract enforces |
 |---|---|
-| **C-PATH** | No `path` field anywhere. `transition` carries an allowlisted `asset_id` key only; a path-shaped id (`/`, `\`, `..`, UNC `\\`) or an off-allowlist id is rejected. The real media path is resolved **locally** by the consumer (`asset_id → ASSET_ALLOWLIST[id]`), never from the leaf. |
-| **C-INJ** | `action`, `target_scene`, `transition.kind` are each validated against closed allowlists. Any miss ⇒ reject ⇒ **0 obs-ws calls**. |
-| **C-PATHREAL** | The consumer matches the real 3-segment leaf path; the 2-segment / wrong-port / dotted-slug forms are rejected. |
+| **NO-OBS-NATIVE** | No `path`, no `asset_id`, no `action` / OBS verb, no old `transition` object — anywhere. Reject-unknown-fields is **strict at BOTH levels** (top + `overlay`), as Bastion validated on the prior contract; any of those constructs is caught as an unknown key. |
+| **SCENE-ALLOWLIST** | `target_scene` ∈ a closed set (injected by the consumer — `{scene-screen-1, scene-screen-2}` for #72). No arbitrary scene-name into `SetCurrentProgramScene`. |
+| **OVERLAY-KIND-ALLOWLIST** | `overlay.kind` ∈ a closed set (authored Solar elements; v1 `{wipe-cover}`). No unauthored overlay element key. |
+| **CUT-WINDOW** | `reveal_ms <= cut_at_ms <= reveal_ms + hold_ms` — the hard-cut **must** land inside the opaque plateau, or it is **seen** on air. The visual-safety core. SPIKE-CUT (#75) measures the real skew margin; the contract guarantees at least that the VALUE is internally coherent. |
+| **bounds** | `reveal_ms`/`hold_ms`/`retract_ms` ∈ [1, 20000]; `cut_at_ms` ∈ [0, 20000]; all **strict ints** (no bool, no float — no silent coercion). |
+| **C-PATHREAL** | The consumer matches the real 3-segment leaf path; the 2-segment / wrong-port / dotted-slug / trailing-newline forms are rejected (`\Z` anchor). |
 
-## How #58 (Blue) and #63 (Prism) consume this WITHOUT divergence
+## How the three consumers stay aligned (no divergent validator)
 
-- **Blue #58** produces the leaf VALUE shown above and writes it to
-  `__inputs.blue.<slug>.scene_control` via its existing `leaf_mapper` +
-  `orion_client.push_leaf`. Blue's CI imports `fixtures/valid.json` (vendor or
-  git-submodule-free copy) and asserts each `value` matches what its
-  scene-control blueprint emits. **Blue does not re-implement the validator** —
-  it produces; this contract validates.
-- **Prism #63** imports the **validation rules** of `validate_scene_control`
-  (port the logic to TS as a `isSceneControl(value): value is SceneControl`
-  guard, the same convention as `scene-events-bridge.ts` / `animation-bridge.ts`),
-  driven by **the same `fixtures/*.json`** so the TS guard and this Python
-  validator are proven to agree case-for-case. Prism owns the
-  `asset_id → local absolute path` `ASSET_ALLOWLIST` map (#64) and the
-  `target_scene` allowlist (#60) — it passes them into the validator.
-  The fixtures are the contract; the guard is a faithful re-expression, not a
-  fork.
+- **Blue #71 (producer)** rewrites `build_scene_control`
+  (`Blue/src/blue/services/scene_control.py`) to emit the VALUE above and writes
+  it to `__inputs.blue.<slug>.scene_control` via its existing `leaf_mapper` +
+  `orion_client.push_leaf`. Blue's CI imports `fixtures/valid.json` and asserts
+  each `value` matches what its scene-control blueprint emits. **Blue does not
+  re-implement the validator** — it produces; this contract validates. *(On
+  `main` today `build_scene_control` still emits the OLD stinger value; its
+  rewrite is #71, separate from this Conduit re-freeze.)*
+- **Solar #73 (overlay consumer)** reads the **`overlay`** sub-object as an M9
+  reactive render input and animates the opaque cover in-DOM (opacity/transform,
+  GPU-friendly) — reveal/hold/retract played on leaf-apply. **Not** the runtime
+  `<Crossfade>` (A4.0 row 2: a plain leaf delta does not flip the runtime
+  crossfade key). It does not need `target_scene` or `cut_at_ms`.
+- **Prism #72 (cut-only executor)** reads **`cut_at_ms`** + **`target_scene`**,
+  validates via a faithful TS re-expression of `validate_scene_control` driven by
+  **the same `fixtures/*.json`**, then after `cut_at_ms` fires the **hard-cut**
+  (`SetCurrentProgramScene{target_scene}` / `SetSceneItemEnabled`) on the
+  loopback obs-ws — **never** an OBS-native transition (C-MECH). It pins
+  `SCENE_ALLOWLIST = {scene-screen-1, scene-screen-2}` and passes it in.
+  *(On `main` today Prism's `scene-control/{contract,executor,asset-allowlist}.ts`
+  still carry the OLD stinger guard + obs-ws transition executor; the rewrite to
+  the overlay guard + cut-only executor is #72, separate from this re-freeze.)*
 
-> Promotion path (deferred, same as `canonical.py`): if a third consumer lands
-> or the copies drift painfully, promote `fixtures/` + the validator to a shared
-> package. Until then, shared fixtures + this contract test are the cheapest
-> thing that holds the contract.
+The fixtures are the contract; each consumer guard is a faithful re-expression,
+not a fork.
+
+> Promotion path (deferred, same as `canonical.py`): if the copies drift
+> painfully, promote `fixtures/` + the validator to a shared package. Until
+> then, shared fixtures + this contract test are the cheapest thing that holds
+> the contract.
 
 ## Run
 

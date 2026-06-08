@@ -1,30 +1,43 @@
-"""Contract test — `scene_control` round-trip Blue → leaf → Prism/probe.
+r"""Contract test — `scene_control` round-trip Blue → leaf → Solar/Prism (overlay form).
 
-This is the **Conduit deliverable** for ZabLaboratory/Pulsar#59. It proves
-the cross-service `scene_control` contract (ADR 003 Amendment 2 §A2.1)
-holds end-to-end at the *shape* level, independent of OBS, the network,
-or a live broadcast — pure logic, runnable on a bare ubuntu runner.
+This is the **Conduit deliverable** for ZabLaboratory/Pulsar#74 (re-freeze the
+`scene_control` contract on the Amendment 4 §A4.2 OVERLAY form). It proves the
+cross-service contract holds end-to-end at the *shape* level, independent of
+OBS, Solar's CEF runtime, the network, or a live broadcast — pure logic,
+runnable on a bare ubuntu runner.
 
-It exercises BOTH sides of the seam against the SAME shared fixtures
+It exercises ALL THREE sides of the seam against the SAME shared fixtures
 (`fixtures/valid.json`, `fixtures/malicious.json`):
 
-  PRODUCER (Blue, #58)            LEAF                       CONSUMER (Prism #63 / probe #61)
-  ----------------------         -----------------------     -------------------------------
-  leaf_mapper.map_outputs   →    __inputs.blue.<slug>.   →   validate_scene_control(value)
-  {"scene_control": value}       scene_control               + assert_canonical_leaf_path
+  PRODUCER (Blue, #71)           LEAF                       CONSUMERS
+  ----------------------         -----------------------    --------------------------------
+  leaf_mapper.map_outputs   →    __inputs.blue.<slug>.  →   Solar #73 reads `overlay`
+  {"scene_control": value}       scene_control              Prism #72 reads `cut_at_ms`
+                                                            + `target_scene`
+                                 ↑ validate_scene_control is the ONE validator both
+                                   consumers agree with — no divergent copy.
 
 Producer half — wiring to Blue's REAL code, no divergent copy:
   If Blue is checked out as a sibling repo, this test imports its REAL
   `leaf_mapper` and proves Blue composes EXACTLY the canonical path the
-  consumer matches. If Blue is absent (CI runs Pulsar in isolation), a
-  faithful in-test mirror of the two load-bearing `leaf_mapper` rules
-  (`_SEGMENT_RE`, the 3-segment `__inputs.blue.<slug>.<port>` shape) is
-  used and a system note is emitted — the path RULE is identical on both
-  sides by construction (both derive from ADR §A2.2). The mirror is a
-  declared blind spot when Blue is not inspectable, never a silent pass.
+  consumers match. If Blue is absent (CI runs Pulsar in isolation), a faithful
+  in-test mirror of the two load-bearing `leaf_mapper` rules (`_SEGMENT_RE`,
+  the 3-segment `__inputs.blue.<slug>.<port>` shape) is used and a system note
+  is emitted — the path RULE is identical on both sides by construction (both
+  derive from ADR §A2.2, unchanged by the pivot). The mirror is a DECLARED
+  blind spot when Blue is not inspectable, never a silent pass.
 
-Consumer half — the canonical `validate_scene_control` from this package,
-which is the SAME validator Prism #63 and probe #61 import. The shared
+Note on the producer's VALUE builder: Blue's `build_scene_control`
+(`Blue/src/blue/services/scene_control.py`) still emits the OLD OBS-native
+stinger shape on `main` — its rewrite to the overlay value is issue #71
+(Forge), out of this Conduit contract's scope. This test therefore round-trips
+the FIXTURE values (the frozen overlay shape) through the real leaf_mapper PATH
+machinery; it does NOT import `build_scene_control` (which would couple this
+contract to a not-yet-pivoted producer). When #71 lands, Blue's own contract
+test asserts its builder emits these fixtures.
+
+Consumer half — the canonical `validate_scene_control` from this package, the
+SAME validator Solar #73 / Prism #72 / probe #75 agree with. The shared
 fixtures are the drift-catcher (the platform's `canonical.py` convention).
 
 Run:  pytest scripts/contracts/scene_control/test_scene_control_contract.py
@@ -40,14 +53,16 @@ from typing import Any
 
 import pytest
 
-# Make the contract package importable when run directly (CI invokes
-# pytest from the repo root; this keeps `python -m pytest <file>` working
-# from anywhere too).
+# Make the contract package importable when run directly (CI invokes pytest
+# from the repo root; this keeps `python -m pytest <file>` working from
+# anywhere too).
 _HERE = Path(__file__).resolve().parent
 if str(_HERE.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent))
 
 from scene_control import (  # noqa: E402
+    ALLOWED_OVERLAY_KINDS,
+    DEFAULT_SCENE_ALLOWLIST,
     LEAF_PORT,
     SceneControlContractError,
     assert_canonical_leaf_path,
@@ -62,18 +77,20 @@ _FIXTURES = _HERE / "fixtures"
 # PRODUCER HALF — Blue's real leaf_mapper, or a faithful mirror.
 # ---------------------------------------------------------------------------
 
-# `__inputs.blue.<slug>.<port>` with `_SEGMENT_RE = ^[a-z0-9][a-z0-9_-]*$`
-# — these two facts ARE the contract's producer side (leaf_mapper.py:38,160).
-_MIRROR_SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# `__inputs.blue.<slug>.<port>` with `_SEGMENT_RE = ^[a-z0-9][a-z0-9_-]*\Z`
+# — these two facts ARE the contract's producer side (leaf_mapper.py:46,168),
+# UNCHANGED by the overlay pivot (the path is the same; only the VALUE shape
+# changed).
+_MIRROR_SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*\Z")
 _MIRROR_PREFIX = "__inputs.blue"
 
 
 def _import_real_leaf_mapper() -> Any | None:
     """Return Blue's real `map_outputs` if a sibling Blue repo is present.
 
-    Layout assumption mirrors the Zab structure: Pulsar and Blue are
-    sibling repos under the same structure dir
-    (``<Structure>/Pulsar`` and ``<Structure>/Blue``).
+    Layout assumption mirrors the Zab structure: Pulsar and Blue are sibling
+    repos under the same structure dir (``<Structure>/Pulsar`` and
+    ``<Structure>/Blue``).
     """
     blue_src = _HERE.parents[3] / "Blue" / "src"
     if not (blue_src / "blue" / "services" / "leaf_mapper.py").is_file():
@@ -94,9 +111,9 @@ PRODUCER_IS_REAL_BLUE = _REAL_MAP_OUTPUTS is not None
 def producer_compose_leaf(slug: str, value: Any) -> tuple[str, Any]:
     """Emulate Blue emitting ``outputs={"scene_control": value}`` for ``slug``.
 
-    Returns ``(leaf_path, leaf_value)`` exactly as the Blue→Orion push
-    would carry them. Uses Blue's REAL ``map_outputs`` when available;
-    otherwise a mirror enforcing the identical 3-segment rule.
+    Returns ``(leaf_path, leaf_value)`` exactly as the Blue→Orion push would
+    carry them. Uses Blue's REAL ``map_outputs`` when available; otherwise a
+    mirror enforcing the identical 3-segment rule.
     """
     if _REAL_MAP_OUTPUTS is not None:
         mapped = _REAL_MAP_OUTPUTS(slug=slug, outputs={LEAF_PORT: value})
@@ -113,9 +130,9 @@ def test_producer_provenance_is_declared() -> None:
     """Make the producer-half provenance explicit (declared blind spot).
 
     Not an assertion of correctness — a guard so a green run always states
-    whether the round-trip ran against Blue's REAL leaf_mapper or the
-    in-test mirror. If Blue is absent, that is a *declared* limitation, per
-    the Conduit "two real sides" rule.
+    whether the round-trip ran against Blue's REAL leaf_mapper or the in-test
+    mirror. If Blue is absent, that is a *declared* limitation, per the Conduit
+    "two real sides" rule.
     """
     if not PRODUCER_IS_REAL_BLUE:
         print(
@@ -143,18 +160,21 @@ _MALICIOUS = _load("malicious.json")
 
 
 # ---------------------------------------------------------------------------
-# POSITIVE — a valid payload survives the FULL round-trip.
+# POSITIVE — a valid payload survives the FULL round-trip, and BOTH consumers
+# can read what they need.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("case", _VALID, ids=[c["name"] for c in _VALID])
 def test_valid_payload_round_trips(case: dict[str, Any]) -> None:
-    """Producer → leaf → consumer: a valid payload passes end-to-end.
+    """Producer → leaf → both consumers: a valid overlay payload passes.
 
     1. Blue composes the leaf path + value from the output port.
     2. The path is the canonical 3-segment form (consumer matcher agrees).
     3. The consumer validator accepts the value and echoes it unchanged.
-    4. The echoed value carries NO `path` — only an `asset_id` key.
+    4. The echoed value carries NO OBS-native construct (path/asset_id/action).
+    5. Solar (#73) can read `overlay`; Prism (#72) can read `cut_at_ms` +
+       `target_scene` — both from the SAME validated value.
     """
     slug = case["slug"]
     value = case["value"]
@@ -162,7 +182,7 @@ def test_valid_payload_round_trips(case: dict[str, Any]) -> None:
     # (1) producer
     leaf_path, leaf_value = producer_compose_leaf(slug, value)
 
-    # (2) the path both sides agree on (C-PATHREAL), 3 segments
+    # (2) the path both sides agree on (C-PATHREAL), 3 segments — unchanged.
     assert leaf_path == build_leaf_path(slug)
     recovered_slug = assert_canonical_leaf_path(leaf_path)
     assert recovered_slug == slug
@@ -173,11 +193,36 @@ def test_valid_payload_round_trips(case: dict[str, Any]) -> None:
     # (3) consumer accepts
     validated = validate_scene_control(leaf_value)
 
-    # (4) no path leaked through; asset_id stays an opaque key (C-PATH)
+    # (4) no OBS-native construct leaked through
     assert "path" not in validated
-    assert "path" not in validated["transition"]
-    assert validated["transition"]["asset_id"] == value["transition"]["asset_id"]
-    assert validated["action"] == "switch_program_scene"
+    assert "asset_id" not in validated
+    assert "action" not in validated
+    assert "transition" not in validated
+    assert "path" not in validated["overlay"]
+    assert "asset_id" not in validated["overlay"]
+
+    # (5) Solar reads `overlay`; Prism reads `cut_at_ms` + `target_scene`.
+    overlay = validated["overlay"]
+    assert overlay["kind"] in ALLOWED_OVERLAY_KINDS
+    assert isinstance(overlay["reveal_ms"], int)
+    assert isinstance(overlay["hold_ms"], int)
+    assert isinstance(overlay["retract_ms"], int)
+    assert validated["target_scene"] in DEFAULT_SCENE_ALLOWLIST
+    assert isinstance(validated["cut_at_ms"], int)
+
+
+@pytest.mark.parametrize("case", _VALID, ids=[c["name"] for c in _VALID])
+def test_valid_payload_satisfies_cut_window(case: dict[str, Any]) -> None:
+    """Every VALID case obeys reveal_ms <= cut_at_ms <= reveal_ms+hold_ms.
+
+    The window invariant (§A4.2 / §A4.7) is the visual-safety core: a valid
+    fixture must, by construction, schedule the cut inside the opaque plateau.
+    This asserts the corpus itself is coherent (a fixture that violated the
+    window would be a contract-authoring bug).
+    """
+    overlay = case["value"]["overlay"]
+    cut_at = case["value"]["cut_at_ms"]
+    assert overlay["reveal_ms"] <= cut_at <= overlay["reveal_ms"] + overlay["hold_ms"]
 
 
 def test_round_trip_value_is_byte_stable() -> None:
@@ -189,21 +234,22 @@ def test_round_trip_value_is_byte_stable() -> None:
 
 
 # ---------------------------------------------------------------------------
-# NEGATIVE — every malicious / malformed payload is REJECTED (0 obs-ws calls).
+# NEGATIVE — every malicious / malformed payload is REJECTED.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("case", _MALICIOUS, ids=[c["name"] for c in _MALICIOUS])
 def test_malicious_payload_is_rejected(case: dict[str, Any]) -> None:
-    """C-PATH / C-INJ / C-PATHREAL: the contract rejects the case.
+    """The contract rejects the case (consumers issue zero obs-ws calls).
 
-    A path-targeting case (`bad_path` set) must be rejected by the leaf
-    PATH matcher; every other case must be rejected by the VALUE
-    validator. A reject == the consumer issues zero obs-ws calls.
+    A path-targeting case (`bad_path` set) must be rejected by the leaf PATH
+    matcher; every other case must be rejected by the VALUE validator. A reject
+    == the cut consumer (#72) issues zero obs-ws calls and the overlay consumer
+    (#73) renders nothing.
     """
     if "bad_path" in case:
-        # C-PATHREAL — the leaf path itself is illegal; the consumer's
-        # path matcher must refuse to treat it as a scene_control leaf.
+        # C-PATHREAL — the leaf path itself is illegal; the consumer's path
+        # matcher must refuse to treat it as a scene_control leaf.
         with pytest.raises(SceneControlContractError):
             assert_canonical_leaf_path(case["bad_path"])
     else:
@@ -212,67 +258,108 @@ def test_malicious_payload_is_rejected(case: dict[str, Any]) -> None:
 
 
 def test_every_invariant_has_negative_coverage() -> None:
-    """Guard: the corpus proves all three Bastion conditions, not just one.
+    """Guard: the corpus proves every contract guarantee, not just one.
 
-    A regression that dropped, say, every C-PATH case would otherwise pass
-    silently. This asserts each invariant label is exercised.
+    A regression that dropped, say, every CUT-WINDOW case would otherwise pass
+    silently. This asserts each invariant label is exercised by the corpus.
     """
     seen = {c["invariant"] for c in _MALICIOUS}
-    for required in ("C-PATH", "C-INJ", "C-PATHREAL"):
+    for required in (
+        "NO-OBS-NATIVE",
+        "SCENE-ALLOWLIST",
+        "OVERLAY-KIND-ALLOWLIST",
+        "CUT-WINDOW",
+        "bounds",
+        "C-PATHREAL",
+    ):
         assert required in seen, f"no negative case for {required}"
 
 
-def test_no_path_field_ever_validates() -> None:
-    """Belt-and-braces: a `path` anywhere is rejected regardless of allowlist.
+def test_cut_window_is_asserted_both_directions() -> None:
+    """Belt-and-braces: the window invariant rejects too-early AND too-late.
 
-    Independent of the fixtures, prove the validator structurally refuses a
-    `path` at both levels even when everything else is allowlisted — the
-    core of the lifted veto (R7 / C-PATH).
+    Independent of the fixtures, prove the validator structurally enforces
+    BOTH bounds of `reveal_ms <= cut_at_ms <= reveal_ms+hold_ms` even when
+    every other field is well-formed — the visual-safety core (§A4.2).
     """
     base = {
-        "action": "switch_program_scene",
         "target_scene": "scene-screen-1",
-        "transition": {
-            "kind": "stinger",
-            "asset_id": "stinger-demo",
-            "point_ms": 0,
-            "duration_ms": 600,
+        "overlay": {
+            "kind": "wipe-cover",
+            "reveal_ms": 250,
+            "hold_ms": 200,
+            "retract_ms": 250,
         },
     }
-    top_with_path = {**base, "path": "C:\\x"}
-    tr_with_path = {
-        **base,
-        "transition": {**base["transition"], "path": "C:\\x"},
+    too_early = {**base, "cut_at_ms": 249}  # < reveal_ms
+    too_late = {**base, "cut_at_ms": 451}  # > reveal_ms + hold_ms
+    on_lower = {**base, "cut_at_ms": 250}  # == reveal_ms (valid)
+    on_upper = {**base, "cut_at_ms": 450}  # == reveal_ms + hold_ms (valid)
+    with pytest.raises(SceneControlContractError):
+        validate_scene_control(too_early)
+    with pytest.raises(SceneControlContractError):
+        validate_scene_control(too_late)
+    # boundaries inclusive — accepted
+    assert validate_scene_control(on_lower)["cut_at_ms"] == 250
+    assert validate_scene_control(on_upper)["cut_at_ms"] == 450
+
+
+def test_no_obs_native_construct_ever_validates() -> None:
+    """Belt-and-braces: path/asset_id/action/transition are structurally refused.
+
+    Independent of the fixtures, prove the validator refuses each superseded
+    OBS-native construct at the level it could appear, even when everything
+    else is a valid overlay payload — the pivot's defining guarantee (no
+    OBS-native shape on the live contract, §A4.2).
+    """
+    base = {
+        "target_scene": "scene-screen-1",
+        "overlay": {
+            "kind": "wipe-cover",
+            "reveal_ms": 250,
+            "hold_ms": 200,
+            "retract_ms": 250,
+        },
+        "cut_at_ms": 250,
     }
-    with pytest.raises(SceneControlContractError):
-        validate_scene_control(top_with_path)
-    with pytest.raises(SceneControlContractError):
-        validate_scene_control(tr_with_path)
+    variants = [
+        {**base, "path": "C:\\x"},
+        {**base, "asset_id": "stinger-demo"},
+        {**base, "action": "switch_program_scene"},
+        {**base, "transition": {"kind": "stinger"}},
+        {**base, "overlay": {**base["overlay"], "asset_id": "stinger-demo"}},
+        {**base, "overlay": {**base["overlay"], "path": "C:\\x"}},
+    ]
+    for v in variants:
+        with pytest.raises(SceneControlContractError):
+            validate_scene_control(v)
 
 
 def test_consumer_injects_its_own_allowlists() -> None:
     """The allowlist is an INTERFACE, not a hard-coded coupling.
 
-    Proves #63 can pass its own pinned scene/asset sets — the mechanism is
-    the contract, the names are downstream (#60 scenes, #64 asset).
+    Proves #72/#73 can pass their own pinned scene/overlay sets — the
+    mechanism is the contract, the names are downstream (#74 scenes, #73
+    overlay element). Mirrors the prior contract's interface-not-coupling rule.
     """
     value = {
-        "action": "switch_program_scene",
         "target_scene": "prod-scene-a",
-        "transition": {
-            "kind": "stinger",
-            "asset_id": "prod-stinger",
-            "point_ms": 100,
-            "duration_ms": 800,
+        "overlay": {
+            "kind": "prod-wipe",
+            "reveal_ms": 250,
+            "hold_ms": 200,
+            "retract_ms": 250,
         },
+        "cut_at_ms": 300,
     }
-    # Rejected under the default demo allowlist...
+    # Rejected under the default demo allowlists...
     with pytest.raises(SceneControlContractError):
         validate_scene_control(value)
     # ...accepted when the consumer supplies the matching pinned sets.
     out = validate_scene_control(
         value,
         scene_allowlist=frozenset({"prod-scene-a", "prod-scene-b"}),
-        asset_allowlist=frozenset({"prod-stinger"}),
+        overlay_kind_allowlist=frozenset({"prod-wipe"}),
     )
     assert out["target_scene"] == "prod-scene-a"
+    assert out["overlay"]["kind"] == "prod-wipe"
