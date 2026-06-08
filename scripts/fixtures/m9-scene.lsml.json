@@ -1,0 +1,47 @@
+{
+  "lsml": "1.1",
+  "scene_id": "0c8a9e57-0000-4000-8000-000000000m90",
+  "scene_version": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "operator_inputs": [
+    {
+      "path": "__inputs.blue.pulsar-m9-bg.colour",
+      "label": "M9 background (Blue-driven)",
+      "type": "colour",
+      "default": "#1A9E57"
+    }
+  ],
+  "layout": {
+    "kind": "frame",
+    "id": "root",
+    "size": { "w": 1920, "h": 1080 },
+    "background": "#1A9E57",
+    "bind": { "background": "__inputs.blue.pulsar-m9-bg.colour" },
+    "children": [
+      {
+        "kind": "stack",
+        "id": "col",
+        "direction": "vertical",
+        "gap": 24,
+        "align": "center",
+        "justify": "center",
+        "children": [
+          {
+            "kind": "text",
+            "id": "m9-marker",
+            "value": "M9 reactive repaint",
+            "style": { "fontSize": 96, "fontWeight": 800, "color": "#FFFFFF", "textAlign": "center", "fontFamily": "Inter" }
+          },
+          {
+            "kind": "shape",
+            "id": "chip",
+            "geometry": "rect",
+            "size": { "w": 320, "h": 96 },
+            "fill": "#0A0A0A",
+            "cornerRadius": 16,
+            "stroke": { "color": "#FFFFFF", "width": 3 }
+          }
+        ]
+      }
+    ]
+  }
+}

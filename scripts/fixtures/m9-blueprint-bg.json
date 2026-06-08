@@ -1,0 +1,52 @@
+{
+  "_fixture": "M9 background-colour blueprint (Pulsar #53, Blue ADR 001 §3.2). A trigger-driven passthrough: a core.event.on-start@1 fires a core.output@1 sink whose `value` is wired from a single core.input@1 named `colour`. The output node config.name = `colour`, so a /trigger run with inputs={'colour': '#C81E5A'} produces outputs={'colour': '#C81E5A'} (executor.py:192-201: core.input reads state.inputs[name]; core.output writes state.outputs[name]=inputs['value']). Blue's leaf_mapper then maps outputs -> __inputs.blue.<slug>.<port>, i.e. __inputs.blue.pulsar-m9-bg.colour = the trigger input. This is the VALUE B the M9 repaint proves on screen; the scene seeds the leaf's default A (#1A9E57) via operator_inputs. Unlike the M8 fixtures this blueprint is NOT bound into the scene by blueprint-key and is NEVER compiled by Orion — it runs only in Blue's in-process interpreter at trigger time and pushes a leaf. core.input/core.output/core.event.on-start@1 are all in Blue's stdlib seeder (stdlib_seeder.py:651-705), so the version publishes on any deployed Blue. Node body mirrors Blue's graph schema (config/inputs/outputs, definition=namespace.name@version) and the trigger-endpoint test's _pipe_graph (tests/test_trigger_endpoint.py:92-104).",
+  "blueprint": {
+    "slug": "pulsar-m9-bg",
+    "name": "Pulsar M9 — background colour",
+    "kind": "function",
+    "tags": ["pulsar-m9", "fixture"],
+    "interface": {
+      "inputs": [
+        { "name": "colour", "type": "core.primitive.string" }
+      ],
+      "outputs": [
+        { "name": "colour", "type": "core.primitive.string" }
+      ],
+      "side_effects": []
+    }
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "evt",
+        "definition": "core.event.on-start@1",
+        "config": {},
+        "position": { "x": 0, "y": 0 },
+        "outputs": [{ "id": "evt.then", "name": "then", "type": "core.exec", "kind": "exec" }]
+      },
+      {
+        "id": "in.colour",
+        "definition": "core.input@1",
+        "config": { "name": "colour" },
+        "position": { "x": 1, "y": 0 },
+        "outputs": [{ "id": "in.colour.value", "name": "value", "type": "core.primitive.json", "kind": "data" }]
+      },
+      {
+        "id": "out.colour",
+        "definition": "core.output@1",
+        "config": { "name": "colour" },
+        "position": { "x": 2, "y": 0 },
+        "inputs": [
+          { "id": "out.colour.in", "name": "in", "type": "core.exec", "kind": "exec" },
+          { "id": "out.colour.value", "name": "value", "type": "core.primitive.json", "kind": "data" }
+        ],
+        "outputs": [{ "id": "out.colour.then", "name": "then", "type": "core.exec", "kind": "exec" }]
+      }
+    ],
+    "edges": [
+      { "id": "e.fire", "from_node": "evt", "from_port": "then", "to_node": "out.colour", "to_port": "in" },
+      { "id": "e.val", "from_node": "in.colour", "from_port": "value", "to_node": "out.colour", "to_port": "value" }
+    ],
+    "variables": []
+  }
+}
