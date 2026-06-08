@@ -52,6 +52,20 @@ plugin-registered factories) is built *after* `obs_post_load_modules()`.
 
 - One scene `Default` with one `window_capture` source (target read from `PULSAR_CAPTURE_WINDOW` env var, format `<title>:<class>:<exe>`, method=WGC). Unset = source emits black frames.
 - One `fade_transition`.
+- **Native stinger compositing — DORMANT by default (ADR 003 §A4.3, #73).** The
+  OBS-native stinger path added in #67 (a registered `obs_stinger_transition`
+  source + the transition-through-output compositing on a program-scene change)
+  is gated behind the boot env flag `PULSAR_NATIVE_STINGER` (**default off**).
+  Flag **off** (default): no stinger source is registered, no transition is bound
+  to the program output, and a `SetCurrentProgramScene` performs a brute hard cut
+  (`obs_set_output_source(0, scene)`, the pre-#67 behaviour) — the M10 animated
+  transition is rendered by Solar/CEF as an overlay, never by OBS (C-MECH). Flag
+  **on** (`1`/`true`/`on`/`yes`): the #67 compositing runs, kept for a future
+  capability. The flag is **operator/env-controlled only**, resolved once at boot
+  in `setup()` from `std::getenv` — it is **never** derived from or reachable by a
+  leaf / obs-websocket / network value (Bastion #76 invariant). The
+  `stinger-demo.webm` asset (#64, sha256-pinned) is retained but only decoded
+  under the flag.
 - Single immutable `Default` scene_collection and profile.
 - Video pipeline at **1080p60** by default (Phase 12a). `PULSAR_FPS` (24/30/48/60/120) and `PULSAR_RESOLUTION` (`<W>x<H>`) override at boot.
 - `obs_x264` configured CBR at **6000 kbps** by default, keyint 2 s, preset `veryfast`, profile `high`, tune `zerolatency`. `PULSAR_VIDEO_BITRATE` (200..50000 kbps) overrides at boot. `pulsar-multi-stream` exposes `GetVideoSettings` / `SetVideoSettings` to mutate the bitrate live via `obs_encoder_update`.

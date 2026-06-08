@@ -59,6 +59,7 @@
 #include <util/util.hpp>
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -489,6 +490,31 @@ private:
         return std::filesystem::weakly_canonical(p, ec).string();
     }
 
+    // M10 PIVOT (ADR 003 Amendment 4 §A4.3 / §A4.7 #69, issue #73): the OBS-native
+    // stinger compositing built in #67 is DORMANT by default. The M10 transition is
+    // rendered by Solar/CEF as an overlay; OBS only ever performs a hard cut. This
+    // flag guards the #67 native path so it survives in `main` for a future
+    // capability without ever running in the M10 chain.
+    //
+    // SECURITY INVARIANT (Bastion #76 / ADR §A4.5 R1′·R7): the flag is resolved
+    // EXCLUSIVELY from the process environment at boot -- it is operator/env-
+    // controlled and NEVER derived from, or reachable by, a leaf / obs-websocket /
+    // network value. There is no obs-ws request, no leaf field, and no scene/
+    // transition setting that can flip it; the only input is std::getenv below.
+    // Default OFF means an unset env => dormant => no native transition, no media
+    // decode. Any value other than the explicit truthy set ("1"/"true"/"on"/"yes",
+    // case-insensitive) keeps it OFF.
+    static bool resolve_native_stinger_flag()
+    {
+        const char *e = std::getenv("PULSAR_NATIVE_STINGER");
+        if (!e || !*e)
+            return false; // default OFF: dormant
+        std::string v;
+        for (const char *p = e; *p; ++p)
+            v.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(*p))));
+        return v == "1" || v == "true" || v == "on" || v == "yes";
+    }
+
     // Bind `transition` as output source 0, seeded to hold `scene` so the
     // encoder always sees frames (passthrough when idle, blend mid-switch).
     // Mirrors upstream OBSBasic::SetTransition + InitTransition.
@@ -542,6 +568,11 @@ private:
     int tbarPosition = 0;
     bool studioMode = false;
     bool previewEnabled = true;
+    // M10 dormant native-stinger flag (ADR 003 §A4.3, issue #73). Resolved ONCE
+    // at setup() from PULSAR_NATIVE_STINGER (env-only, never leaf-reachable).
+    // Default false => OBS performs a raw hard cut, the #67 stinger compositing
+    // is inert and the stinger source is never registered.
+    bool nativeStingerEnabled = false;
     std::atomic<bool> recordingPaused{false};
     std::string lastRecording;
     std::string lastReplay;
@@ -573,13 +604,21 @@ bool PulsarFrontendAPI::setup()
     currentTransition = fade; // owns 1 ref
     transitions.push_back(obs_source_get_ref(currentTransition));
 
-    // M10 (ADR 003 Amendment 1 §A1.1): register a STINGER transition source so
-    // SetCurrentSceneTransition{name:"Stinger"} resolves and the active
-    // transition can be a media-backed stinger. Its `path` is the locally
-    // pinned demo asset (#64) -- resolved on this box, NEVER from a leaf value
-    // (Amendment 2 §A2.1, R7 / C-PATH). transition_point defaults to the
-    // asset's documented mid-point (300 ms); tp_type=0 means milliseconds.
-    {
+    // M10 PIVOT (ADR 003 §A4.3, issue #73): resolve the dormant native-stinger
+    // flag ONCE here, from the environment only (operator-controlled, never
+    // leaf-reachable -- see resolve_native_stinger_flag). Default OFF.
+    nativeStingerEnabled = resolve_native_stinger_flag();
+    blog(LOG_INFO, "[pulsar-frontend-stub] native stinger compositing %s (PULSAR_NATIVE_STINGER)",
+         nativeStingerEnabled ? "ENABLED (dormant path active)" : "disabled (default; OBS hard-cut)");
+
+    if (nativeStingerEnabled) {
+        // ---- DORMANT NATIVE PATH (flag ON only, ADR §A4.3) ----
+        // M10 (ADR 003 Amendment 1 §A1.1): register a STINGER transition source so
+        // SetCurrentSceneTransition{name:"Stinger"} resolves and the active
+        // transition can be a media-backed stinger. Its `path` is the locally
+        // pinned demo asset (#64) -- resolved on this box, NEVER from a leaf value
+        // (Amendment 2 §A2.1, R7 / C-PATH). transition_point defaults to the
+        // asset's documented mid-point (300 ms); tp_type=0 means milliseconds.
         std::string stingerPath = resolve_stinger_asset_path();
         OBSDataAutoRelease stingerSettings = obs_data_create();
         obs_data_set_string(stingerSettings, "path", stingerPath.c_str());
@@ -599,16 +638,23 @@ bool PulsarFrontendAPI::setup()
             blog(LOG_INFO, "[pulsar-frontend-stub] stinger transition registered (path=%s)",
                  stingerPath.c_str());
         }
-    }
 
-    // Channel 0 is libobs's main video output. M10 Gap B' fix (ADR 003 §3.3):
-    // bind the ACTIVE TRANSITION -- not the raw scene -- as output source 0,
-    // seeded to hold the current scene. When idle the transition renders its
-    // held scene 1:1 (passthrough, obs-source-transition.c:534), so the encoder
-    // always sees frames; on a scene change obs_transition_start animates the
-    // blend through this same bound source. This is how upstream OBS feeds the
-    // program output (OBSBasic::SetTransition).
-    bindTransitionOutput(currentTransition, currentScene);
+        // Channel 0 is libobs's main video output. M10 Gap B' fix (ADR 003 §3.3):
+        // bind the ACTIVE TRANSITION -- not the raw scene -- as output source 0,
+        // seeded to hold the current scene. When idle the transition renders its
+        // held scene 1:1 (passthrough, obs-source-transition.c:534), so the encoder
+        // always sees frames; on a scene change obs_transition_start animates the
+        // blend through this same bound source. This is how upstream OBS feeds the
+        // program output (OBSBasic::SetTransition).
+        bindTransitionOutput(currentTransition, currentScene);
+    } else {
+        // ---- DEFAULT PATH (flag OFF, ADR §A4.3 / §A4.7 #69): pre-#67 hard cut ----
+        // No stinger source is registered and no transition is bound to the
+        // program output. Channel 0 holds the raw current scene; a program-scene
+        // change does a brute hard cut (obs_set_output_source). The M10
+        // transition is rendered by Solar/CEF as an overlay, never by OBS.
+        obs_set_output_source(0, currentScene);
+    }
 
     // Streaming output (rtmp_output). Created without encoders -- a Phase 7+
     // plugin (pulsar-multi-stream) configures encoders + service before
@@ -974,6 +1020,22 @@ void PulsarFrontendAPI::obs_frontend_set_current_scene(obs_source_t *scene)
     obs_source_t *prev = currentScene;
     currentScene = obs_source_get_ref(scene);
 
+    if (!nativeStingerEnabled) {
+        // ---- DEFAULT PATH (flag OFF, ADR 003 §A4.3 / §A4.7 #69) ----
+        // Brute hard cut, the pre-#67 behaviour: bind the raw scene to the
+        // program output. NO transition is started, the stinger source is never
+        // touched, and the encoder is never blanked (output 0 swaps atomically
+        // from one held scene to the next). The M10 animated transition is
+        // rendered by Solar/CEF as an overlay, not by OBS (C-MECH: zero native
+        // transition fires in the M10 chain).
+        obs_set_output_source(0, currentScene);
+        if (prev)
+            obs_source_release(prev);
+        emit(OBS_FRONTEND_EVENT_SCENE_CHANGED);
+        return;
+    }
+
+    // ---- DORMANT NATIVE PATH (flag ON only) ----
     // M10 Gap B' fix (ADR 003 §3.3 / Amendment 1 §A1.1): composite the ACTIVE
     // transition through the program output instead of a raw hard cut. The
     // transition is already bound to output source 0 (bindTransitionOutput),
@@ -1031,14 +1093,21 @@ void PulsarFrontendAPI::obs_frontend_set_current_transition(obs_source_t *transi
     obs_source_t *prev = currentTransition;
     currentTransition = obs_source_get_ref(transition);
 
-    // M10: route the newly selected transition through the program output so a
-    // subsequent SetCurrentProgramScene composites IT (e.g. switch Fade->
-    // Stinger over obs-websocket). Seed it with the current scene and bind it
-    // to output 0; if a transition is mid-animation we still re-point so the
-    // next switch uses the new transition. Encoder is never blanked: the new
-    // transition holds currentScene 1:1 the moment it is bound.
-    if (!(prev && obs_transition_is_active(prev)))
-        bindTransitionOutput(currentTransition, currentScene);
+    // M10 PIVOT (ADR 003 §A4.3, issue #73): only the dormant native path routes
+    // the active transition through the program output. With the flag OFF the
+    // transition is purely bookkeeping for the obs-ws Get/SetCurrentSceneTransition
+    // API -- output 0 keeps holding the raw scene and a program-scene change stays
+    // a hard cut, so selecting a transition can never composite one.
+    if (nativeStingerEnabled) {
+        // M10: route the newly selected transition through the program output so a
+        // subsequent SetCurrentProgramScene composites IT (e.g. switch Fade->
+        // Stinger over obs-websocket). Seed it with the current scene and bind it
+        // to output 0; if a transition is mid-animation we still re-point so the
+        // next switch uses the new transition. Encoder is never blanked: the new
+        // transition holds currentScene 1:1 the moment it is bound.
+        if (!(prev && obs_transition_is_active(prev)))
+            bindTransitionOutput(currentTransition, currentScene);
+    }
 
     if (prev)
         obs_source_release(prev);
