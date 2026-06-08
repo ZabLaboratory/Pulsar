@@ -340,7 +340,12 @@ def main() -> int:
     print(f"spawning: {exe}")
     print(f"  PULSAR_PORT={port}  PULSAR_PASSWORD=<redacted {len(password)} chars>")
 
+    # Point the reused M6 core at the M8 artefact paths + destination name
+    # BEFORE spawn (PulsarProcess.spawn reads LIVE_VOD_DIR for PULSAR_RECORD_DIR).
     m6.LIVE_VOD_DIR = LIVE_VOD_DIR
+    m6.PROOF_PNG = PROOF_PNG
+    m6.BUILD_DIR = BUILD_DIR
+    m6.DESTINATION_NAME = "pulsar-m8-canvas-live"
     pulsar = m6.PulsarProcess(exe, port, password, args.fps)
     rc = 1
     try:
