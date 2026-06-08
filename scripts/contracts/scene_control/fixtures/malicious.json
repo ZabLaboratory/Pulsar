@@ -1,186 +1,295 @@
 {
-  "description": "Canonical REJECT corpus for scene_control (ADR 003 Amendment 2 §A2.1 / Bastion C-PATH, C-INJ, C-PATHREAL). Every payload here MUST be rejected by validate_scene_control; the consumer (#63) issues ZERO obs-ws calls. `invariant` names which Bastion condition the case proves. `value` is the leaf value unless the case targets the leaf PATH (then `bad_path` is set).",
+  "description": "Canonical REJECT corpus for scene_control (ADR 003 Amendment 4 §A4.2 — overlay form). Every payload here MUST be rejected by validate_scene_control; the cut consumer (#72) issues ZERO obs-ws calls and the overlay consumer (#73) renders nothing. `invariant` names which contract guarantee the case proves. `value` is the leaf value unless the case targets the leaf PATH (then `bad_path` is set).",
   "cases": [
     {
       "name": "leaf-level-path-field-present",
-      "invariant": "C-PATH",
-      "reason": "a top-level `path` is the forbidden free-path construct (vetoed R7)",
+      "invariant": "NO-OBS-NATIVE",
+      "reason": "a top-level `path` (the superseded free-path media construct) is forbidden — strict schema rejects the unknown key",
       "value": {
-        "action": "switch_program_scene",
         "target_scene": "scene-screen-2",
         "path": "C:\\Users\\op\\id_rsa",
-        "transition": {
-          "kind": "stinger",
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
+      }
+    },
+    {
+      "name": "overlay-level-asset_id-present",
+      "invariant": "NO-OBS-NATIVE",
+      "reason": "an `asset_id` inside `overlay` is the old OBS media construct; there is no OBS media in the overlay form — rejected as an unknown overlay key",
+      "value": {
+        "target_scene": "scene-screen-2",
+        "overlay": {
+          "kind": "wipe-cover",
           "asset_id": "stinger-demo",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
       }
     },
     {
-      "name": "transition-path-field-present",
-      "invariant": "C-PATH",
-      "reason": "transition.path is the exact construct Bastion vetoed (R7); media path must never travel the leaf",
+      "name": "top-level-asset_id-present",
+      "invariant": "NO-OBS-NATIVE",
+      "reason": "a top-level `asset_id` is forbidden — no OBS media asset travels the leaf",
+      "value": {
+        "target_scene": "scene-screen-2",
+        "asset_id": "stinger-demo",
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
+      }
+    },
+    {
+      "name": "obs-action-verb-present",
+      "invariant": "NO-OBS-NATIVE",
+      "reason": "the superseded OBS action verb `action: switch_program_scene` must not appear; there is no leaf-carried OBS verb in the overlay form — rejected as an unknown top-level key",
       "value": {
         "action": "switch_program_scene",
         "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "stinger-demo",
-          "path": "C:\\Users\\op\\evil.webm",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
       }
     },
     {
-      "name": "asset_id-is-unc-path",
-      "invariant": "C-PATH",
-      "reason": "asset_id shaped as a UNC network path → local-file-read / SSRF-to-disk at the antenna",
+      "name": "old-transition-object-present",
+      "invariant": "NO-OBS-NATIVE",
+      "reason": "the old `transition` sub-object (kind:stinger/asset_id/point_ms/duration_ms) is the superseded OBS-native shape and is rejected as an unknown top-level key",
       "value": {
-        "action": "switch_program_scene",
-        "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "\\\\attacker\\share\\evil.webm",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
-      }
-    },
-    {
-      "name": "asset_id-is-traversal",
-      "invariant": "C-PATH",
-      "reason": "asset_id with `..` traversal markers",
-      "value": {
-        "action": "switch_program_scene",
-        "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "../../../../etc/passwd",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
-      }
-    },
-    {
-      "name": "asset_id-is-absolute-windows-path",
-      "invariant": "C-PATH",
-      "reason": "asset_id shaped as an absolute Windows path (contains backslash)",
-      "value": {
-        "action": "switch_program_scene",
-        "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "C:\\Users\\op\\id_rsa",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
-      }
-    },
-    {
-      "name": "asset_id-not-in-allowlist",
-      "invariant": "C-PATH",
-      "reason": "well-formed key but not a member of the closed asset allowlist",
-      "value": {
-        "action": "switch_program_scene",
-        "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "stinger-unknown",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
-      }
-    },
-    {
-      "name": "action-not-allowlisted",
-      "invariant": "C-INJ",
-      "reason": "arbitrary obs-ws verb dispatch must be impossible; only switch_program_scene",
-      "value": {
-        "action": "RemoveScene",
         "target_scene": "scene-screen-2",
         "transition": {
           "kind": "stinger",
           "asset_id": "stinger-demo",
           "point_ms": 300,
           "duration_ms": 600
-        }
+        },
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
+      }
+    },
+    {
+      "name": "unknown-top-level-key",
+      "invariant": "NO-OBS-NATIVE",
+      "reason": "any unknown top-level key is rejected (reject-unknown-fields, strict schema, as Bastion validated on the prior contract)",
+      "value": {
+        "target_scene": "scene-screen-2",
+        "evil_extra": true,
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
+      }
+    },
+    {
+      "name": "unknown-overlay-key",
+      "invariant": "NO-OBS-NATIVE",
+      "reason": "any unknown overlay key is rejected (reject-unknown-fields at the nested level too)",
+      "value": {
+        "target_scene": "scene-screen-2",
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250,
+          "opacity_hack": 9000
+        },
+        "cut_at_ms": 250
       }
     },
     {
       "name": "target_scene-not-allowlisted",
-      "invariant": "C-INJ",
-      "reason": "arbitrary scene-name injection into SetCurrentProgramScene",
+      "invariant": "SCENE-ALLOWLIST",
+      "reason": "arbitrary scene-name injection into SetCurrentProgramScene must be impossible; off the closed 2-scene set",
       "value": {
-        "action": "switch_program_scene",
         "target_scene": "scene-attacker-overlay",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "stinger-demo",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
       }
     },
     {
-      "name": "transition-kind-not-allowlisted",
-      "invariant": "C-INJ",
-      "reason": "unknown transition kind",
+      "name": "overlay-kind-not-allowlisted",
+      "invariant": "OVERLAY-KIND-ALLOWLIST",
+      "reason": "an unauthored / unknown overlay element key must not address Solar's overlay renderer",
       "value": {
-        "action": "switch_program_scene",
         "target_scene": "scene-screen-2",
-        "transition": {
+        "overlay": {
           "kind": "wipe-evil",
-          "asset_id": "stinger-demo",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
       }
     },
     {
-      "name": "duration-out-of-bounds-high",
-      "invariant": "bounds",
-      "reason": "duration_ms above the 20000 clamp ceiling",
+      "name": "cut-window-violated-too-early",
+      "invariant": "CUT-WINDOW",
+      "reason": "cut_at_ms < reveal_ms: the cut fires before the overlay is fully opaque — the content snap is SEEN. THE visual-safety core (§A4.2)",
       "value": {
-        "action": "switch_program_scene",
         "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "stinger-demo",
-          "point_ms": 300,
-          "duration_ms": 999999
-        }
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 100
       }
     },
     {
-      "name": "duration-out-of-bounds-low",
-      "invariant": "bounds",
-      "reason": "duration_ms below the 50 ms floor",
+      "name": "cut-window-violated-too-late",
+      "invariant": "CUT-WINDOW",
+      "reason": "cut_at_ms > reveal_ms+hold_ms: the overlay has begun retracting (transparent again) when the cut fires — the content snap is SEEN",
       "value": {
-        "action": "switch_program_scene",
         "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "stinger-demo",
-          "point_ms": 300,
-          "duration_ms": 10
-        }
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 600
       }
     },
     {
-      "name": "point_ms-not-integer",
+      "name": "cut-window-violated-zero-cut-nonzero-reveal",
+      "invariant": "CUT-WINDOW",
+      "reason": "cut_at_ms=0 while reveal_ms>0: the cut fires at leaf-apply before any opacity — fully visible",
+      "value": {
+        "target_scene": "scene-screen-2",
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 0
+      }
+    },
+    {
+      "name": "reveal_ms-out-of-bounds-high",
+      "invariant": "bounds",
+      "reason": "reveal_ms above the 20000 ms ceiling",
+      "value": {
+        "target_scene": "scene-screen-2",
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 999999,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
+      }
+    },
+    {
+      "name": "hold_ms-out-of-bounds-low-zero",
+      "invariant": "bounds",
+      "reason": "hold_ms=0 is below the 1 ms floor — a zero-width opaque plateau leaves no cut window",
+      "value": {
+        "target_scene": "scene-screen-2",
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 0,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
+      }
+    },
+    {
+      "name": "cut_at_ms-out-of-bounds-high",
+      "invariant": "bounds",
+      "reason": "cut_at_ms above the 20000 ms ceiling",
+      "value": {
+        "target_scene": "scene-screen-2",
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 999999
+      }
+    },
+    {
+      "name": "reveal_ms-not-integer-string",
       "invariant": "bounds",
       "reason": "timing fields must be integers, not strings",
       "value": {
-        "action": "switch_program_scene",
         "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "stinger-demo",
-          "point_ms": "300",
-          "duration_ms": 600
-        }
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": "250",
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
+      }
+    },
+    {
+      "name": "cut_at_ms-is-float",
+      "invariant": "bounds",
+      "reason": "cut_at_ms must be a strict int, not a float — no silent truncation of a millisecond offset",
+      "value": {
+        "target_scene": "scene-screen-2",
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250.5
+      }
+    },
+    {
+      "name": "hold_ms-is-bool",
+      "invariant": "bounds",
+      "reason": "a bool must not coerce to 1 — a timing field is a number, not a flag",
+      "value": {
+        "target_scene": "scene-screen-2",
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": true,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
+      }
+    },
+    {
+      "name": "overlay-missing",
+      "invariant": "bounds",
+      "reason": "overlay sub-object absent — not an object",
+      "value": {
+        "target_scene": "scene-screen-2",
+        "cut_at_ms": 250
       }
     },
     {
@@ -189,14 +298,14 @@
       "reason": "the F1 bug: 2-segment __inputs.blue.scene_control is structurally impossible for Blue to write and must be rejected by the consumer's path matcher",
       "bad_path": "__inputs.blue.scene_control",
       "value": {
-        "action": "switch_program_scene",
         "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "stinger-demo",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
       }
     },
     {
@@ -205,14 +314,14 @@
       "reason": "a 3-segment leaf whose final segment is not scene_control must not be matched as a scene_control leaf",
       "bad_path": "__inputs.blue.m10-scene-control.something_else",
       "value": {
-        "action": "switch_program_scene",
         "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "stinger-demo",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
       }
     },
     {
@@ -221,14 +330,14 @@
       "reason": "a `.` inside the slug segment would forge a deeper path; Blue's _SEGMENT_RE forbids it and the consumer matcher must too",
       "bad_path": "__inputs.blue.evil.sub.scene_control",
       "value": {
-        "action": "switch_program_scene",
         "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "stinger-demo",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
       }
     },
     {
@@ -237,29 +346,14 @@
       "reason": "an otherwise-canonical leaf path with a trailing newline must be rejected; Python's `$` matches before a final `\\n`, so the path matcher MUST anchor with `\\Z` (this case fails unless the regex rejects the trailing newline)",
       "bad_path": "__inputs.blue.m10-scene-control.scene_control\n",
       "value": {
-        "action": "switch_program_scene",
         "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "stinger-demo",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
-      }
-    },
-    {
-      "name": "trailing-newline-asset-id",
-      "invariant": "C-PATH",
-      "reason": "an allowlisted asset_id with a trailing newline (`stinger-demo\\n`) must be rejected — a sloppy `$`-anchored or non-exact match would let the newline smuggle through; the closed-set check rejects it, proving symmetry with the path-side `\\Z` fix",
-      "value": {
-        "action": "switch_program_scene",
-        "target_scene": "scene-screen-2",
-        "transition": {
-          "kind": "stinger",
-          "asset_id": "stinger-demo\n",
-          "point_ms": 300,
-          "duration_ms": 600
-        }
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 250,
+          "hold_ms": 200,
+          "retract_ms": 250
+        },
+        "cut_at_ms": 250
       }
     }
   ]
