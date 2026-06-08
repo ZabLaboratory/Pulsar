@@ -163,6 +163,36 @@ jobs:
       - name: npm tarball audit
         run: bash scripts/check-npm-pack-audit.sh
 
+  # ── Stage 1b : cross-service contract tests ──────────────────────
+  # Pure-logic contract tests (no OBS binary, no network) — they prove
+  # the inter-service `scene_control` schema (M10, ADR 003 Amd 2 §A2.1)
+  # holds Blue→leaf→Prism/probe. Runs on ubuntu, parallel to `lint`, so
+  # a contract break fails fast WITHOUT the 30-min Windows build. Owned
+  # by Conduit (#59).
+  contract-tests:
+    name: contract tests (scene_control)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install test deps
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Run scene_control contract test
+        # Blue is not checked out in Pulsar CI: the test binds its
+        # in-test leaf_mapper MIRROR (identical 3-segment rule, ADR
+        # §A2.2) and prints a declared blind-spot note. The mirror is
+        # bound to the REAL Blue leaf_mapper when both repos are present
+        # (developer machine; Blue's own CI cross-checks the fixtures).
+        run: pytest scripts/contracts/scene_control/ -v
+
   # ── Stage 2 : build pulsar.exe (THE ONE BUILD) ────────────────────
   # Every downstream Windows job consumes the `pulsar-rundir` artefact
   # this job uploads. retention-days is short -- the artefact only

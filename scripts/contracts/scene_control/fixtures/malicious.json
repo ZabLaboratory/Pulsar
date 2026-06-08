@@ -1,0 +1,235 @@
+{
+  "description": "Canonical REJECT corpus for scene_control (ADR 003 Amendment 2 §A2.1 / Bastion C-PATH, C-INJ, C-PATHREAL). Every payload here MUST be rejected by validate_scene_control; the consumer (#63) issues ZERO obs-ws calls. `invariant` names which Bastion condition the case proves. `value` is the leaf value unless the case targets the leaf PATH (then `bad_path` is set).",
+  "cases": [
+    {
+      "name": "leaf-level-path-field-present",
+      "invariant": "C-PATH",
+      "reason": "a top-level `path` is the forbidden free-path construct (vetoed R7)",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "path": "C:\\Users\\op\\id_rsa",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "stinger-demo",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "transition-path-field-present",
+      "invariant": "C-PATH",
+      "reason": "transition.path is the exact construct Bastion vetoed (R7); media path must never travel the leaf",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "stinger-demo",
+          "path": "C:\\Users\\op\\evil.webm",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "asset_id-is-unc-path",
+      "invariant": "C-PATH",
+      "reason": "asset_id shaped as a UNC network path → local-file-read / SSRF-to-disk at the antenna",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "\\\\attacker\\share\\evil.webm",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "asset_id-is-traversal",
+      "invariant": "C-PATH",
+      "reason": "asset_id with `..` traversal markers",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "../../../../etc/passwd",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "asset_id-is-absolute-windows-path",
+      "invariant": "C-PATH",
+      "reason": "asset_id shaped as an absolute Windows path (contains backslash)",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "C:\\Users\\op\\id_rsa",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "asset_id-not-in-allowlist",
+      "invariant": "C-PATH",
+      "reason": "well-formed key but not a member of the closed asset allowlist",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "stinger-unknown",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "action-not-allowlisted",
+      "invariant": "C-INJ",
+      "reason": "arbitrary obs-ws verb dispatch must be impossible; only switch_program_scene",
+      "value": {
+        "action": "RemoveScene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "stinger-demo",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "target_scene-not-allowlisted",
+      "invariant": "C-INJ",
+      "reason": "arbitrary scene-name injection into SetCurrentProgramScene",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-attacker-overlay",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "stinger-demo",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "transition-kind-not-allowlisted",
+      "invariant": "C-INJ",
+      "reason": "unknown transition kind",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "wipe-evil",
+          "asset_id": "stinger-demo",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "duration-out-of-bounds-high",
+      "invariant": "bounds",
+      "reason": "duration_ms above the 20000 clamp ceiling",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "stinger-demo",
+          "point_ms": 300,
+          "duration_ms": 999999
+        }
+      }
+    },
+    {
+      "name": "duration-out-of-bounds-low",
+      "invariant": "bounds",
+      "reason": "duration_ms below the 50 ms floor",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "stinger-demo",
+          "point_ms": 300,
+          "duration_ms": 10
+        }
+      }
+    },
+    {
+      "name": "point_ms-not-integer",
+      "invariant": "bounds",
+      "reason": "timing fields must be integers, not strings",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "stinger-demo",
+          "point_ms": "300",
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "two-segment-leaf-path-F1",
+      "invariant": "C-PATHREAL",
+      "reason": "the F1 bug: 2-segment __inputs.blue.scene_control is structurally impossible for Blue to write and must be rejected by the consumer's path matcher",
+      "bad_path": "__inputs.blue.scene_control",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "stinger-demo",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "wrong-port-leaf-path",
+      "invariant": "C-PATHREAL",
+      "reason": "a 3-segment leaf whose final segment is not scene_control must not be matched as a scene_control leaf",
+      "bad_path": "__inputs.blue.m10-scene-control.something_else",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "stinger-demo",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    },
+    {
+      "name": "dotted-slug-escape-leaf-path",
+      "invariant": "C-PATHREAL",
+      "reason": "a `.` inside the slug segment would forge a deeper path; Blue's _SEGMENT_RE forbids it and the consumer matcher must too",
+      "bad_path": "__inputs.blue.evil.sub.scene_control",
+      "value": {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-2",
+        "transition": {
+          "kind": "stinger",
+          "asset_id": "stinger-demo",
+          "point_ms": 300,
+          "duration_ms": 600
+        }
+      }
+    }
+  ]
+}
