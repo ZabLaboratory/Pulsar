@@ -87,9 +87,13 @@ POINT_MS_MAX = 20000
 #: port is fixed to `scene_control`. The 2-segment form
 #: `__inputs.blue.scene_control` is the F1 bug and is rejected.
 LEAF_PORT = "scene_control"
-_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# `\Z` (end of string), NOT `$` — in Python `$` also matches *before* a
+# trailing `\n`, so `$` would accept `...scene_control\n` / a slug `x\n`.
+# A consumer-facing path matcher (#63) must reject any trailing byte,
+# newline included; `\Z` anchors at the true end of string (C-PATHREAL).
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*\Z")
 _LEAF_PATH_RE = re.compile(
-    r"^__inputs\.blue\.(?P<slug>[a-z0-9][a-z0-9_-]*)\.scene_control$"
+    r"^__inputs\.blue\.(?P<slug>[a-z0-9][a-z0-9_-]*)\.scene_control\Z"
 )
 
 #: Markers that make an `asset_id` look like a path rather than an
@@ -120,8 +124,8 @@ def build_leaf_path(slug: str) -> str:
     """
     if not isinstance(slug, str) or not _SLUG_RE.match(slug):
         raise SceneControlContractError(
-            f"invalid blueprint slug {slug!r}: must match ^[a-z0-9][a-z0-9_-]*$ "
-            "(no '.', no empty) — C-PATHREAL"
+            f"invalid blueprint slug {slug!r}: must match ^[a-z0-9][a-z0-9_-]*\\Z "
+            "(no '.', no empty, no trailing newline) — C-PATHREAL"
         )
     return f"__inputs.blue.{slug}.{LEAF_PORT}"
 
