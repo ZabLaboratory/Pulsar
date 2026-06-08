@@ -468,12 +468,53 @@ private:
         }
     }
 
+    // ---------- transition compositing (M10 Gap B' fix, ADR 003 §3.3) ----------
+    // Resolve the demo stinger asset to a LOCAL path. The path is NEVER taken
+    // from a leaf / network value (ADR 003 Amendment 2 §A2.1, R7 / C-PATH):
+    // it is an operator-pinned env override, else a default packaged location.
+    // The fork registers the stinger source with THIS path; obs-websocket's
+    // SetCurrentSceneTransitionSettings only ever drives transition_point /
+    // duration, never a remote path.
+    static std::string resolve_stinger_asset_path()
+    {
+        if (const char *e = std::getenv("PULSAR_STINGER_ASSET"); e && *e)
+            return e;
+        // Default: <cwd>/../../data/pulsar/stinger-demo.webm. pulsar.exe runs
+        // with cwd=bin/64bit (PRISM-EMBEDDING.md), so ../../data is the bundle
+        // data root. Absent asset => the stinger simply decodes nothing; the
+        // fade fallback still composites and the encoder is never blanked.
+        std::error_code ec;
+        std::filesystem::path p =
+            std::filesystem::current_path(ec) / ".." / ".." / "data" / "pulsar" / "stinger-demo.webm";
+        return std::filesystem::weakly_canonical(p, ec).string();
+    }
+
+    // Bind `transition` as output source 0, seeded to hold `scene` so the
+    // encoder always sees frames (passthrough when idle, blend mid-switch).
+    // Mirrors upstream OBSBasic::SetTransition + InitTransition.
+    void bindTransitionOutput(obs_source_t *transition, obs_source_t *scene)
+    {
+        if (!transition)
+            return;
+        // Size the transition to the program canvas so a fixed-size stinger
+        // media composites at full output resolution (obs-scene.c:4072-4074).
+        obs_video_info ovi;
+        if (obs_get_video_info(&ovi)) {
+            obs_transition_set_size(transition, ovi.base_width, ovi.base_height);
+            obs_transition_set_alignment(transition, OBS_ALIGN_CENTER);
+            obs_transition_set_scale_type(transition, OBS_TRANSITION_SCALE_ASPECT);
+        }
+        if (scene)
+            obs_transition_set(transition, scene); // hold the current scene
+        obs_set_output_source(0, transition);      // transition feeds the encoder
+    }
+
     // state
     obs_source_t *currentScene = nullptr;
     obs_source_t *previewScene = nullptr;
     obs_source_t *currentTransition = nullptr;
     std::vector<obs_source_t *> scenes;     // one entry, owned (refcount held).
-    std::vector<obs_source_t *> transitions; // one entry, owned.
+    std::vector<obs_source_t *> transitions; // fade + stinger, owned.
 
     obs_output_t *streamOutput = nullptr;
     obs_output_t *recordOutput = nullptr;
@@ -523,11 +564,6 @@ bool PulsarFrontendAPI::setup()
     obs_scene_release(scene); // currentScene holds the ref now
     scenes.push_back(obs_source_get_ref(currentScene));
 
-    // Channel 0 is libobs's main video output. Without a source bound,
-    // the encoder receives no frames and obs_output_start declines
-    // silently. Bind the default scene now and rebind on set_current_scene.
-    obs_set_output_source(0, currentScene);
-
     // Default transition (fade).
     obs_source_t *fade = obs_source_create_private("fade_transition", "Fade", nullptr);
     if (!fade) {
@@ -536,6 +572,43 @@ bool PulsarFrontendAPI::setup()
     }
     currentTransition = fade; // owns 1 ref
     transitions.push_back(obs_source_get_ref(currentTransition));
+
+    // M10 (ADR 003 Amendment 1 §A1.1): register a STINGER transition source so
+    // SetCurrentSceneTransition{name:"Stinger"} resolves and the active
+    // transition can be a media-backed stinger. Its `path` is the locally
+    // pinned demo asset (#64) -- resolved on this box, NEVER from a leaf value
+    // (Amendment 2 §A2.1, R7 / C-PATH). transition_point defaults to the
+    // asset's documented mid-point (300 ms); tp_type=0 means milliseconds.
+    {
+        std::string stingerPath = resolve_stinger_asset_path();
+        OBSDataAutoRelease stingerSettings = obs_data_create();
+        obs_data_set_string(stingerSettings, "path", stingerPath.c_str());
+        obs_data_set_int(stingerSettings, "transition_point", 300); // ms
+        obs_data_set_int(stingerSettings, "tp_type", 0);            // 0 = time (ms)
+        obs_data_set_bool(stingerSettings, "hw_decode", false);
+        obs_source_t *stinger =
+            obs_source_create_private("obs_stinger_transition", "Stinger", stingerSettings);
+        if (!stinger) {
+            // Non-fatal: the obs-transitions plugin registers
+            // obs_stinger_transition on load_all_modules; if a build lacks it,
+            // the fade still composites and the encoder is never blanked.
+            blog(LOG_WARNING,
+                 "[pulsar-frontend-stub] obs_stinger_transition unavailable; stinger not registered");
+        } else {
+            transitions.push_back(stinger); // owns 1 ref
+            blog(LOG_INFO, "[pulsar-frontend-stub] stinger transition registered (path=%s)",
+                 stingerPath.c_str());
+        }
+    }
+
+    // Channel 0 is libobs's main video output. M10 Gap B' fix (ADR 003 §3.3):
+    // bind the ACTIVE TRANSITION -- not the raw scene -- as output source 0,
+    // seeded to hold the current scene. When idle the transition renders its
+    // held scene 1:1 (passthrough, obs-source-transition.c:534), so the encoder
+    // always sees frames; on a scene change obs_transition_start animates the
+    // blend through this same bound source. This is how upstream OBS feeds the
+    // program output (OBSBasic::SetTransition).
+    bindTransitionOutput(currentTransition, currentScene);
 
     // Streaming output (rtmp_output). Created without encoders -- a Phase 7+
     // plugin (pulsar-multi-stream) configures encoders + service before
@@ -770,6 +843,14 @@ void PulsarFrontendAPI::teardown()
     obs_set_output_source(2, nullptr);
     obs_set_output_source(3, nullptr);
 
+    // M10: output 0 is now a transition holding the scene (and possibly a
+    // stinger media source as an active child). Clear each transition's held
+    // sources before releasing so libobs drops those child refs cleanly and
+    // does not warn about a leaked scene/media source at obs_shutdown.
+    for (obs_source_t *t : transitions)
+        if (t)
+            obs_transition_clear(t);
+
     if (streamOutput) {
         signal_handler_t *sh = obs_output_get_signal_handler(streamOutput);
         if (sh) {
@@ -892,7 +973,36 @@ void PulsarFrontendAPI::obs_frontend_set_current_scene(obs_source_t *scene)
         return;
     obs_source_t *prev = currentScene;
     currentScene = obs_source_get_ref(scene);
-    obs_set_output_source(0, currentScene);
+
+    // M10 Gap B' fix (ADR 003 §3.3 / Amendment 1 §A1.1): composite the ACTIVE
+    // transition through the program output instead of a raw hard cut. The
+    // transition is already bound to output source 0 (bindTransitionOutput),
+    // holding the previous scene; obs_transition_start runs the fade/stinger
+    // from that held scene to `currentScene` over transitionDuration ms.
+    //
+    // The encoder is NEVER blanked: output 0 stays the transition the whole
+    // time (it renders the from-scene, then the blend, then the to-scene --
+    // obs-source-transition.c). A media-backed stinger decodes its .webm and
+    // composites it over the switch window; on completion the transition holds
+    // the new scene 1:1.
+    bool animated = false;
+    if (currentTransition) {
+        // Re-bind defensively in case the active transition changed since the
+        // last frame (obs_frontend_set_current_transition rebinds too, but a
+        // direct set keeps output 0 correct and self-sizes to the canvas).
+        OBSSourceAutoRelease bound = obs_get_output_source(0);
+        if (bound.Get() != currentTransition)
+            bindTransitionOutput(currentTransition, prev ? prev : currentScene);
+        animated = obs_transition_start(currentTransition, OBS_TRANSITION_MODE_AUTO,
+                                        transitionDuration, currentScene);
+    }
+    if (!animated) {
+        // Fallback hard cut (dev checkpoint only, Amendment 1 §A1.5): no
+        // transition available, or transition_start declined. Bind the scene
+        // directly so the encoder still gets frames.
+        obs_set_output_source(0, currentScene);
+    }
+
     if (prev)
         obs_source_release(prev);
     emit(OBS_FRONTEND_EVENT_SCENE_CHANGED);
@@ -920,6 +1030,16 @@ void PulsarFrontendAPI::obs_frontend_set_current_transition(obs_source_t *transi
         return;
     obs_source_t *prev = currentTransition;
     currentTransition = obs_source_get_ref(transition);
+
+    // M10: route the newly selected transition through the program output so a
+    // subsequent SetCurrentProgramScene composites IT (e.g. switch Fade->
+    // Stinger over obs-websocket). Seed it with the current scene and bind it
+    // to output 0; if a transition is mid-animation we still re-point so the
+    // next switch uses the new transition. Encoder is never blanked: the new
+    // transition holds currentScene 1:1 the moment it is bound.
+    if (!(prev && obs_transition_is_active(prev)))
+        bindTransitionOutput(currentTransition, currentScene);
+
     if (prev)
         obs_source_release(prev);
     emit(OBS_FRONTEND_EVENT_TRANSITION_CHANGED);
