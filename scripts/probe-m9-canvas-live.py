@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Pulsar M9 live probe — a Blue **trigger** repaints a live scene on air,
-proven pixel-by-pixel (ADR Blue 001 §6 criterion 4, the M9 proof).
+"""Pulsar M9 live probe — a Blue **trigger** repaints a live scene **on air,
+in direct**, proven pixel-by-pixel (ADR Blue 001 §6 criterion 4, the M9 proof).
 
 M9 is M8's authored Canvas scene reaching the wire (the SETUP + non-blank
 provenance pre-flight are reused wholesale), PLUS the reactive step ADR
 Blue 001 exists to prove: firing ``POST /api/v1/blueprints/{id}/trigger``
-mutates a **live** scene **with no reload**.
+mutates a **live** scene **with no reload** — and the porteur must be able to
+**watch that swap happen on the broadcast**, exactly like M8's mid-stream
+scene-switch (probe-twitch-scene-switch.py fires its switch at duration/2
+*while live*). So in M9 the **trigger fires mid-broadcast**, not before it:
+the VOD shows a hard green→magenta cut on air, not a static magenta field.
 
 The decisive chain (ADR Blue 001 §3.2.5):
 
@@ -14,35 +18,40 @@ The decisive chain (ADR Blue 001 §3.2.5):
     service-token WS → Orion CanWritePath + write leaf → recompute →
     delta → LSDP wire → Solar repaints the bound region, no reload.
 
-THE PROOF (capture-A / fire / capture-B):
+THE PROOF — live by default (broadcast → capture-A → trigger@mid → capture-B):
 
   1. SETUP (m9_setup) authors a scene whose **frame background** is bound
      to ``__inputs.blue.pulsar-m9-bg.colour``, declared as an operator-input
      with default colour **A** (#1A9E57). Orion seeds A on boot.
   2. The reused M6 CEF core points a browser_source at the live Solar URL
-     (SetCaptureSource — called ONCE; never re-created between A and B, so
-     the later change is a live repaint, not a reload).
-  3. Pre-flight: poll the captured frame until non-blank AND its modal
-     colour ≈ **A**. This is capture-A (``build/m9-before.png``) — it ties
-     the on-air pixels to the seeded leaf default before any trigger.
-  4. Fire ``/trigger`` with the operator Bearer **header** and
-     ``inputs={"colour": B}`` (#C81E5A). ADR Blue 001 R6 — operator/admin
-     only; the JWT rides as ``Authorization: Bearer`` (header, never query).
-  5. Poll the *same* browser_source until its modal colour moves to ≈ **B**
-     within Orion's input-to-delta budget (+ CEF render/screenshot slack).
-     This is capture-B (``build/m9-after.png``).
-  6. Assert **B ≈ target-B** AND **Manhattan(B, A) > REPAINT_MIN_DELTA** —
-     the bound region demonstrably changed on screen, caused by the trigger,
-     with no reload. A frame that never leaves A (push lost / leaf rejected /
-     scene didn't bind) FAILS; a frame that changed to something other than
-     B (wrong scene / ambient) FAILS.
+     (SetCaptureSource — called ONCE in the pre-flight; never re-created
+     between A and B, so the later change is a live repaint, not a reload).
+  3. Pre-flight (before going live): poll the captured frame until non-blank
+     so the green field A is demonstrably rendering.
+  4. **StartDestination → the broadcast goes live on the GREEN A frame.**
+  5. **capture-A** *during the live broadcast*: grab the on-air frame, assert
+     modal ≈ **A**, save ``build/m9-before.png`` — the stream starts green.
+  6. Poll metrics ~duration/2 (the live + VOD show green) — destination
+     active, drop ratio within budget.
+  7. **At t≈duration/2, fire ``/trigger``** with the operator Bearer
+     **header** and ``inputs={"colour": B}`` (#C81E5A) — ADR Blue 001 R6,
+     operator/admin only; the JWT rides as ``Authorization: Bearer`` (header,
+     never query). The bound background flips to magenta **on air, in direct**.
+  8. **capture-B** *during the live broadcast*: poll the *same* browser_source
+     until its modal moves to ≈ **B**, save ``build/m9-after.png``, and assert
+     **B ≈ target-B** AND **Manhattan(B, A) > REPAINT_MIN_DELTA** — the bound
+     region demonstrably changed on screen, on the live wire, no reload. A
+     frame that never leaves A (push lost / leaf rejected / scene didn't bind)
+     FAILS; a frame that changed to something other than B FAILS.
+  9. Poll ~the remaining duration (the live + VOD show magenta),
+     StopDestination. **The VOD shows the green→magenta transition on air.**
 
-Broadcast: M9's core IS the repaint proof and runs in the pre-flight
-(``--preflight-only`` is the default-meaningful mode). The 30s Twitch
-broadcast leg is reused verbatim from M6/M8 and is OPTIONAL (``--broadcast``)
-— going live is not what M9 proves; the proven repaint is (so a CI run needs
-no Twitch key). When broadcasting, the M6 bounded anti-boot-race
-StartDestination retry applies as in M8.
+The M6 bounded anti-boot-race StartDestination retry applies as in M8.
+
+Broadcast vs proof-only: the live broadcast with the **mid-stream trigger** is
+the DEFAULT (porteur preference: à l'antenne par défaut). ``--no-broadcast``
+keeps the original "prove the repaint without going live" mode (pre-flight →
+trigger → capture-B, no Twitch), useful for a CI run with no Twitch key.
 
 SECRET HYGIENE (ADR Blue 001 R4 / R6, M8 parity — load-bearing):
   - NO token committed anywhere (no baked Solar URL / JWT).
@@ -59,14 +68,14 @@ Usage (from the repo root, against the built -Full rundir):
     pip install websockets
     export M8_OPERATOR_TOKEN=...        # étage-1 admin JWT, short-TTL (SETUP + /trigger)
     export M8_GATEWAY_URL=http://127.0.0.1:8099   # tunnel'd gateway base
-    python scripts/probe-m9-canvas-live.py                # author+push+capture-A+trigger+capture-B (the proof)
-    export TWITCH_STREAM_KEY=...        # étage-1, broadcast leg only
-    python scripts/probe-m9-canvas-live.py --broadcast    # + 30s Twitch broadcast
+    export TWITCH_STREAM_KEY=...        # étage-1 (required for the default live run)
+    python scripts/probe-m9-canvas-live.py                 # LIVE: broadcast→capture-A→trigger@mid→capture-B→stop
+    python scripts/probe-m9-canvas-live.py --no-broadcast  # prove the repaint without going live (no Twitch key)
 
 Exit codes (mirror M8):
-  0  pass (repaint proven A→B; if --broadcast, live ok too)
+  0  pass (repaint proven A→B on air; if live, broadcast ok too)
   1  fail (setup / provenance / repaint / broadcast assertion failed)
-  2  config error (no operator token, no exe, no key for broadcast, bad args)
+  2  config error (no operator token, no exe, no key for the live run, bad args)
   3  typed skip (browser_source not registered — LIGHT build, needs -Full)
 """
 from __future__ import annotations
@@ -140,6 +149,19 @@ REPAINT_MIN_DELTA = 80
 REPAINT_DEADLINE_S = 8.0
 REPAINT_POLL_INTERVAL_S = 0.5
 
+# Live-broadcast leg (mid-stream trigger). The trigger fires at duration/2 so
+# the VOD shows roughly equal halves: green A, then magenta B. The metric poll
+# cadence + the destination-active / drop-ratio thresholds are M6/M8 verbatim
+# (m6.POLL_INTERVAL_SEC / m6.FRAME_DROP_RATIO_MAX), so this leg makes no new
+# claim about broadcast health — it reuses the proven M8 live assertions and
+# only inserts capture-A (right after going live) and the trigger@mid + capture-B.
+LIVE_POLL_INTERVAL_S = m6.POLL_INTERVAL_SEC
+
+# Minimum broadcast duration that leaves room for: go-live + capture-A, a green
+# half, the trigger + capture-B, a magenta half. Below this the mid-stream swap
+# has no visible runway on either side.
+MIN_LIVE_DURATION_S = 12
+
 
 def _manhattan(a: tuple[int, int, int], b: tuple[int, int, int]) -> int:
     return abs(a[0] - b[0]) + abs(a[1] - b[1]) + abs(a[2] - b[2])
@@ -177,41 +199,55 @@ async def _grab_modal(inbox, ws) -> tuple[Optional[tuple[int, int, int]], Option
     return metrics.get("modal"), png, metrics
 
 
-async def capture_before(inbox, ws, solar_url: str,
-                         rgb_a: tuple[int, int, int]) -> tuple[int, Optional[bytes]]:
-    """Pre-flight: render the live Solar scene, confirm non-blank AND modal
-    ≈ A, save build/m9-before.png. Returns (rc, before_png). rc=0 means the
-    scene is on-air at the seeded default A — the baseline the trigger will
-    move. Reuses M6's SetCaptureSource + non-blank poll (the browser_source
-    is created HERE, once, and never re-created)."""
+async def preflight_render(inbox, ws, solar_url: str) -> int:
+    """Pre-flight, BEFORE going live: create the browser_source (ONCE) and poll
+    until the live Solar scene renders a non-blank frame. rc=0 means the green
+    A field is on screen and ready to broadcast. No modal-A assertion here —
+    that is capture-A, taken *after* the broadcast starts (so the proof is that
+    the LIVE stream opened on green). The browser_source created here is never
+    re-created, so the later A→B change is a repaint, not a reload."""
     # Point M6's module proof path + dirs at the M9 BEFORE artefact so the
     # reused non-blank core writes where the M9 wrapper/CI expect.
     m6.PROOF_PNG = PROOF_BEFORE_PNG
     m6.BUILD_DIR = BUILD_DIR
 
-    rc, metrics = await m6.preflight_non_blank(inbox, ws, solar_url)
+    rc, _metrics = await m6.preflight_non_blank(inbox, ws, solar_url)
     if rc != 0:
-        print("[M9] capture-A FAILED at the non-blank stage — the live Solar "
-              "scene never produced a frame. NOT proceeding to the trigger. "
+        print("[M9] pre-flight FAILED at the non-blank stage — the live Solar "
+              "scene never produced a frame. NOT going live / NOT triggering. "
               "Diagnose: LSDP WS to the gateway failed (token/.lsdp gate?), "
               "Solar bundle 404, or the active scene never streamed. See the "
               "m6 diagnosis above + the saved PNG.")
-        return 1, None
+        return 1
+    print("[M9] pre-flight PASSED — the Solar scene renders non-blank; the "
+          "green A field is ready to broadcast.")
+    return 0
 
-    modal = metrics.get("modal")
+
+async def assert_capture_a(inbox, ws, rgb_a: tuple[int, int, int],
+                           *, on_air: bool) -> tuple[int, Optional[bytes]]:
+    """capture-A: grab the captured frame, assert modal ≈ A, save
+    build/m9-before.png. Returns (rc, before_png). When ``on_air`` this is
+    taken *during the live broadcast* — the proof that the stream STARTED green
+    (the baseline the mid-stream trigger will move). No SetCaptureSource: the
+    pre-flight's browser_source is untouched."""
+    where = "on air (live)" if on_air else "pre-flight"
+    modal, png, _ = await _grab_modal(inbox, ws)
     ok, dist = _modal_ok(modal, rgb_a)
-    print(f"[M9] capture-A modal-colour check: captured modal={modal} "
+    print(f"[M9] capture-A ({where}) modal-colour check: captured modal={modal} "
           f"target_A={rgb_a} manhattan={dist} tol={MODAL_COLOUR_TOL}")
     if not ok:
-        print("[M9] capture-A FAILED — the frame is non-blank but its modal "
-              "colour does NOT match the seeded leaf default A "
+        print("[M9] capture-A FAILED — the frame's modal colour does NOT match "
+              "the seeded leaf default A "
               f"(#{rgb_a[0]:02X}{rgb_a[1]:02X}{rgb_a[2]:02X}). The scene on "
               "air is not M9's, or the leaf was not seeded from its declared "
               "default. NOT firing the trigger. Inspect: " + str(PROOF_BEFORE_PNG))
         return 1, None
-
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    if png is not None:
+        PROOF_BEFORE_PNG.write_bytes(png)
     before_png = PROOF_BEFORE_PNG.read_bytes() if PROOF_BEFORE_PNG.exists() else None
-    print(f"[M9] capture-A PROVEN — non-blank AND modal ≈ seeded default A. "
+    print(f"[M9] capture-A PROVEN ({where}) — modal ≈ seeded default A. "
           f"Baseline frame: {PROOF_BEFORE_PNG}")
     return 0, before_png
 
@@ -283,6 +319,185 @@ async def capture_after(inbox, ws,
     return 1, last_png
 
 
+async def broadcast_with_live_trigger(
+    inbox, ws, setup: "m9_setup.SetupResult", gateway_url: str,
+    operator_token: str, scrub: list[str], stream_key: str,
+    duration_sec: int, pulsar) -> int:
+    """The LIVE M9 proof: broadcast on the GREEN A frame, capture-A on air,
+    fire the trigger at t≈duration/2 so the swap happens **in direct**, then
+    capture-B on air and assert the repaint. The VOD records green→magenta.
+
+    Structure mirrors probe-twitch-scene-switch.py's broadcast(): the switch
+    fires at ``duration/2`` *inside* the live poll loop. Here the "switch" is
+    the Blue /trigger; capture-A / capture-B straddle it on the live wire. The
+    destination lifecycle (CreateDestination, anti-boot-race StartDestination
+    retry, StartRecord, GetDestinations/GetAdaptiveState poll, Stop*) is the
+    M6/M8 core reused verbatim.
+
+    The pre-flight (browser_source create + non-blank) MUST have already run
+    against ``setup.solar_url`` so the green field is on screen before we go
+    live."""
+    import json
+    trigger_at = duration_sec / 2.0
+    key = stream_key
+
+    # 1. CreateDestination(twitch) — key passed opaquely, never printed.
+    r = await m6.vendor_call(inbox, ws, "create-dest", "pulsar",
+        "CreateDestination", {
+            "name": m6.DESTINATION_NAME, "kind": "twitch", "key": key,
+        })
+    dest_id = m6.vendor_response_data(r).get("id")
+    if not dest_id:
+        status = m6.vendor_request_status(r)
+        print(f"FAIL: CreateDestination returned no id; "
+              f"status={m6.redact(json.dumps(status), key)}")
+        return 1
+    print(f"-> CreateDestination(twitch) id={dest_id}")
+
+    # 2. StartDestination with the bounded anti-boot-race retry (M8 parity).
+    #    The broadcast goes live on the GREEN A frame (pre-flight rendered it).
+    if not await m6.start_destination_with_retry(inbox, ws, dest_id, key):
+        await m6.vendor_call(inbox, ws, "rm-dest", "pulsar",
+            "RemoveDestination", {"id": dest_id})
+        return 1
+
+    # 2b. StartRecord — the offline VOD that will show the green→magenta cut.
+    recording = False
+    r = await m6.request(inbox, ws, "StartRecord", "start-rec")
+    if r.get("requestStatus", {}).get("result"):
+        recording = True
+        print(f"-> StartRecord ok (writing under {LIVE_VOD_DIR}) — the VOD will "
+              f"capture the on-air green→magenta transition")
+    else:
+        print(f"   warn: StartRecord declined: {r.get('requestStatus')}")
+
+    rc = 0
+    try:
+        # 3. capture-A DURING the live broadcast — the stream started green.
+        print("\n[M9] capturing A on the LIVE wire (the broadcast opened on green) ...")
+        rc_a, _ = await assert_capture_a(inbox, ws, setup.rgb_a, on_air=True)
+        if rc_a != 0:
+            rc = 1
+
+        triggered = False
+        repaint_ok = False
+        start_t = time.time()
+        poll = 0
+        adaptive_seen = 0
+        while rc == 0 and time.time() - start_t < duration_sec:
+            await asyncio.sleep(LIVE_POLL_INTERVAL_S)
+            poll += 1
+            elapsed = time.time() - start_t
+
+            # 4. MID-STREAM TRIGGER at t≈duration/2 — the swap, on air.
+            if not triggered and elapsed >= trigger_at:
+                print(f"\n** BLUE TRIGGER @ t={elapsed:.1f}s (mid-stream) : firing "
+                      f"/trigger {{'colour': B}} — the bound background flips "
+                      f"GREEN→MAGENTA on air, in direct ...")
+                try:
+                    m9_setup.fire_trigger(
+                        gateway_url=gateway_url,
+                        operator_token=operator_token,
+                        secrets=scrub,
+                        blueprint_id=setup.blueprint_id,
+                        colour_b=setup.colour_b,
+                        log=print,
+                    )
+                except m9_setup.SetupError as exc:
+                    print(f"FAIL: [M9] trigger FAILED on air: {exc}")
+                    rc = 1
+                    break
+                triggered = True
+
+                # 5. capture-B DURING the live broadcast — assert the repaint
+                #    happened on the wire (modal→B, Manhattan(A→B) > floor).
+                print("[M9] capturing B on the LIVE wire (the repaint is on air) ...")
+                rc_b, _ = await capture_after(inbox, ws, setup.rgb_a, setup.rgb_b)
+                if rc_b != 0:
+                    rc = 1
+                    break
+                repaint_ok = True
+
+            # Live-health poll — M6/M8 verbatim assertions.
+            r = await m6.vendor_call(inbox, ws, f"get-dest-{poll}", "pulsar",
+                "GetDestinations", {})
+            lst = m6.vendor_response_data(r).get("destinations", [])
+            ours = next((d for d in lst if d.get("id") == dest_id), None)
+            if not ours or not ours.get("active"):
+                print(f"FAIL: destination not active at poll #{poll}: {ours}")
+                await asyncio.sleep(0.3)
+                rtmp = m6._scan_rtmp_diagnostic(pulsar.lines)  # noqa: SLF001
+                if rtmp:
+                    print("  RTMP ingest diagnostic (pulsar log):")
+                    for ln in rtmp[-6:]:
+                        print(f"    {m6.redact(ln, key)}")
+                rc = 1
+                break
+
+            r = await m6.vendor_call(inbox, ws, f"get-adapt-{poll}", "pulsar",
+                "GetAdaptiveState", {})
+            adapt = m6.vendor_response_data(r)
+            samples = int(adapt.get("samples", 0))
+            adaptive_seen = max(adaptive_seen, samples)
+            drop_ratio = float(adapt.get("last_drop_ratio", 0.0))
+            cur_kbps = adapt.get("current_kbps")
+
+            sr = await m6.request(inbox, ws, "GetStats", f"stats-{poll}")
+            stats = sr.get("responseData", {}) or {}
+            fps = stats.get("activeFps")
+            fps_str = f"{fps:.1f}" if isinstance(fps, (int, float)) else "—"
+            phase = "MAGENTA(B)" if triggered else "GREEN(A)"
+
+            print(f"   poll #{poll} t={elapsed:.0f}s active=true phase={phase} "
+                  f"samples={samples} drop_ratio={drop_ratio:.4f} "
+                  f"bitrate={cur_kbps} fps={fps_str}")
+
+            if drop_ratio > m6.FRAME_DROP_RATIO_MAX:
+                print(f"FAIL: frame drop ratio {drop_ratio:.4f} > "
+                      f"{m6.FRAME_DROP_RATIO_MAX} at poll #{poll}")
+                rc = 1
+                break
+
+        if rc == 0 and not triggered:
+            print("FAIL: broadcast ended before the mid-stream trigger fired "
+                  "(duration too short?)")
+            rc = 1
+        elif rc == 0 and not repaint_ok:
+            print("FAIL: the trigger fired but the on-air repaint was not proven")
+            rc = 1
+    finally:
+        # 6. Stop cleanly (best-effort even on a failed poll) — leaves no orphan.
+        if recording:
+            try:
+                r = await m6.request(inbox, ws, "StopRecord", "stop-rec")
+                vod = (r.get("responseData", {}) or {}).get("outputPath")
+                if vod:
+                    print(f"-> StopRecord finalised: {vod}")
+                    print(f"LIVE_VOD_PATH={vod}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"   warn: StopRecord error: {exc}")
+        try:
+            await m6.vendor_call(inbox, ws, "stop-dest", "pulsar",
+                "StopDestination", {"id": dest_id})
+            print("-> StopDestination ok")
+        except Exception as exc:  # noqa: BLE001
+            print(f"   warn: StopDestination error: {exc}")
+        try:
+            await m6.vendor_call(inbox, ws, "rm-dest", "pulsar",
+                "RemoveDestination", {"id": dest_id})
+        except Exception:
+            pass
+
+    if rc == 0 and adaptive_seen <= 0:
+        print(f"FAIL: adaptive worker never reported samples (saw {adaptive_seen})")
+        rc = 1
+    if rc == 0:
+        print(f"-> LIVE M9 clean: broadcast opened GREEN, trigger fired mid-stream, "
+              f"on-air repaint to MAGENTA proven, adaptive_samples={adaptive_seen}. "
+              f"The VOD shows the green→magenta transition.")
+    return rc
+
+
 async def run(ws_url: str, password: str, setup: "m9_setup.SetupResult",
               gateway_url: str, operator_token: str, scrub: list[str],
               stream_key: str, duration_sec: int, broadcast: bool,
@@ -323,13 +538,32 @@ async def run(ws_url: str, password: str, setup: "m9_setup.SetupResult",
             return 3
         print(f"browser_source registered ({len(kinds)} input kinds total)")
 
-        # --- capture-A: scene on air at the seeded default A ---------------
-        rc, _ = await capture_before(inbox, ws, setup.solar_url, setup.rgb_a)
+        # --- pre-flight: create the browser_source ONCE + render green A -----
+        # The green field must be on screen BEFORE we go live (live path) or
+        # before we trigger (no-broadcast path). SetCaptureSource happens here
+        # and is never re-issued, so the later A→B change is a repaint.
+        if await preflight_render(inbox, ws, setup.solar_url) != 0:
+            return 1
+
+        if broadcast:
+            # === LIVE: broadcast → capture-A → trigger@mid → capture-B → stop.
+            # The trigger fires IN the broadcast (t≈duration/2) so the swap is
+            # visible on air + in the VOD, exactly like M8's scene-switch.
+            print("\n[M9] going live to Twitch — the green A frame, then the "
+                  "mid-stream Blue trigger flips it to magenta ON AIR ...")
+            m6.LIVE_VOD_DIR = LIVE_VOD_DIR
+            return await broadcast_with_live_trigger(
+                inbox, ws, setup, gateway_url, operator_token, scrub,
+                stream_key, duration_sec, pulsar)
+
+        # === --no-broadcast: prove the repaint without going live (no Twitch).
+        # capture-A → trigger → capture-B, all in the pre-flight CEF, no wire.
+        print("\n[M9] --no-broadcast: proving the repaint without going live ...")
+        rc, _ = await assert_capture_a(inbox, ws, setup.rgb_a, on_air=False)
         if rc != 0:
             return 1
 
-        # --- fire the trigger (operator Bearer header, R6) -----------------
-        print("\n[M9] firing the Blue trigger (the live mutation) ...")
+        print("\n[M9] firing the Blue trigger (the mutation) ...")
         try:
             m9_setup.fire_trigger(
                 gateway_url=gateway_url,
@@ -343,18 +577,11 @@ async def run(ws_url: str, password: str, setup: "m9_setup.SetupResult",
             print(f"[M9] trigger FAILED: {exc}")
             return 1
 
-        # --- capture-B: prove the bound region repainted to B --------------
         rc, _ = await capture_after(inbox, ws, setup.rgb_a, setup.rgb_b)
         if rc != 0:
             return 1
-
-        if not broadcast:
-            print("[M9] repaint proven; --broadcast not set, skipping go-live.")
-            return 0
-
-        print("\n[M9] going live to Twitch (repaint proven) ...")
-        m6.LIVE_VOD_DIR = LIVE_VOD_DIR
-        return await m6.broadcast(inbox, ws, stream_key, duration_sec, pulsar)
+        print("[M9] repaint proven; --no-broadcast set, skipping go-live.")
+        return 0
 
 
 def pick_free_port() -> int:
@@ -387,13 +614,16 @@ def main() -> int:
                     choices=["stream.lsdp", "stream"],
                     help="show-stream wire path: stream.lsdp (LSDP, default) or "
                          "stream (bespoke fallback).")
-    ap.add_argument("--broadcast", action="store_true",
-                    help="after proving the repaint, also broadcast 30s to Twitch "
-                         "(needs TWITCH_STREAM_KEY). Off by default — M9 proves "
-                         "the repaint, not the go-live.")
+    ap.add_argument("--no-broadcast", dest="broadcast", action="store_false",
+                    help="prove the repaint WITHOUT going live (no Twitch key): "
+                         "pre-flight → capture-A → trigger → capture-B. By "
+                         "default M9 goes LIVE and fires the trigger mid-stream "
+                         "so the green→magenta swap is visible on air + in the VOD.")
+    ap.set_defaults(broadcast=True)
     ap.add_argument("--duration", type=int,
                     default=int(os.environ.get("LIVE_TEST_DURATION", "30")),
-                    help="broadcast duration in seconds (default 30, --broadcast only)")
+                    help="broadcast duration in seconds (default 30); the "
+                         "mid-stream trigger fires at duration/2 (live run only)")
     ap.add_argument("--fps", type=int,
                     default=int(os.environ.get("LIVE_TEST_FPS", "60")),
                     help="encoder fps target (default 60)")
@@ -425,14 +655,24 @@ def main() -> int:
 
     stream_key = os.environ.get("TWITCH_STREAM_KEY", "").strip()
     if args.broadcast and not stream_key:
-        print("error: --broadcast set but TWITCH_STREAM_KEY env var is empty. "
-              "Set it from the étage-1 secret; never commit. (Omit --broadcast "
-              "to prove the repaint without going live.)")
+        print("error: live run requires TWITCH_STREAM_KEY (it broadcasts and "
+              "fires the trigger mid-stream so the swap is on air). Set it from "
+              "the étage-1 secret; never commit. (Pass --no-broadcast to prove "
+              "the repaint without going live, no Twitch key.)")
+        return 2
+
+    if args.broadcast and args.duration < MIN_LIVE_DURATION_S:
+        print(f"error: --duration must be >= {MIN_LIVE_DURATION_S}s for the live "
+              "run so the mid-stream trigger (at duration/2) has a green half "
+              "before and a magenta half after.")
         return 2
 
     print("=== M9 SETUP leg (gateway-first authoring + activation) ===")
     print(f"  gateway: {args.gateway_url}")
     print(f"  wire: {args.show_stream_path}  solar: v{args.solar_version}")
+    print(f"  mode: {'LIVE (broadcast + trigger@mid-stream, on air)' if args.broadcast else 'prove-only (--no-broadcast)'}")
+    if args.broadcast:
+        print(f"  duration: {args.duration}s  trigger@: {args.duration/2:.0f}s (mid-stream)")
     print(f"  M8_OPERATOR_TOKEN: <set, redacted> (SETUP + /trigger)")
     print(f"  TWITCH_STREAM_KEY: {'<set, redacted>' if stream_key else '<unset>'}"
           f"{'' if args.broadcast else ' (broadcast off)'}")
@@ -469,7 +709,11 @@ def main() -> int:
 
     port = pick_free_port()
     password = secrets.token_urlsafe(16)
-    print(f"\n=== M9 PROOF: capture-A → trigger → capture-B (reused M6 CEF core) ===")
+    if args.broadcast:
+        print("\n=== M9 PROOF (LIVE): broadcast → capture-A → trigger@mid → "
+              "capture-B → stop (reused M6 CEF core) ===")
+    else:
+        print(f"\n=== M9 PROOF: capture-A → trigger → capture-B (reused M6 CEF core) ===")
     print(f"spawning: {exe}")
     print(f"  PULSAR_PORT={port}  PULSAR_PASSWORD=<redacted {len(password)} chars>")
 

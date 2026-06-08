@@ -19,13 +19,18 @@
 # Usage (from the repo root):
 #   $env:M8_OPERATOR_TOKEN = "..."                # etage-1 admin short-TTL JWT
 #   $env:M8_GATEWAY_URL    = "http://127.0.0.1:8099"
-#   pwsh scripts/run-m9.ps1                        # prove the repaint (no Twitch)
-#   $env:TWITCH_STREAM_KEY = "..."                # etage-1 (broadcast leg only)
-#   pwsh scripts/run-m9.ps1 -Broadcast            # + 30s broadcast
+#   $env:TWITCH_STREAM_KEY = "..."                # etage-1 (required for the live run)
+#   pwsh scripts/run-m9.ps1                        # LIVE: broadcast + trigger mid-stream (on air)
+#   pwsh scripts/run-m9.ps1 -NoBroadcast          # prove the repaint without going live (no Twitch)
+#
+# DEFAULT = live, on air: the broadcast opens on the green A frame and the Blue
+# /trigger fires at duration/2 so the green->magenta swap is visible on the
+# stream + in the VOD (porteur preference). -NoBroadcast keeps the old
+# prove-only mode for a CI run with no Twitch key.
 
 [CmdletBinding()]
 param(
-    [switch] $Broadcast,
+    [switch] $NoBroadcast,
     [string] $GatewayUrl = $env:M8_GATEWAY_URL,
     [string] $ShowStreamPath = "stream.lsdp",
     [string] $SolarVersion = "0.2.0",
@@ -42,8 +47,9 @@ $vodDir     = Join-Path $repoRoot "build\m9-canvas-vod"
 New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "build") | Out-Null
 
 # --- Build the probe argument list ---------------------------------------
+$Broadcast = -not $NoBroadcast
 $probeArgs = @("scripts/probe-m9-canvas-live.py")
-if ($Broadcast)  { $probeArgs += "--broadcast" }
+if ($NoBroadcast) { $probeArgs += "--no-broadcast" }
 if ($GatewayUrl) { $probeArgs += @("--gateway-url", $GatewayUrl) }
 $probeArgs += @("--show-stream-path", $ShowStreamPath)
 $probeArgs += @("--solar-version", $SolarVersion)
@@ -53,7 +59,7 @@ if (-not $env:M8_OPERATOR_TOKEN) {
     Write-Error "M8_OPERATOR_TOKEN is not set (etage-1 admin short-TTL JWT; drives SETUP + /trigger). Refusing to run."
 }
 if ($Broadcast -and -not $env:TWITCH_STREAM_KEY) {
-    Write-Error "TWITCH_STREAM_KEY is not set (etage-1) and -Broadcast requested. Refusing to run."
+    Write-Error "TWITCH_STREAM_KEY is not set (etage-1) and a LIVE run was requested (default). Refusing to run. Pass -NoBroadcast to prove the repaint without going live."
 }
 
 # --- Run the probe, tee stdout -------------------------------------------
