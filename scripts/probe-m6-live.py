@@ -166,6 +166,16 @@ FRAME_DROP_RATIO_MAX = 0.05
 POLL_INTERVAL_SEC = 5.0
 DESTINATION_NAME = "pulsar-m6-live"
 
+# StartDestination boot-race retry (ported verbatim from
+# probe-twitch-live.py's START_DEST_* pattern, validated by Vigil on the
+# scene-switch). The frontend streaming output can briefly be unavailable
+# right after a scene-switch/boot; that ONE exact transient error is polled
+# out within a bounded budget. Any OTHER error is a hard failure on the first
+# attempt, and an exhausted budget is a hard failure too -- zero masking.
+START_DEST_BOOT_ERROR   = "frontend streaming output unavailable"
+START_DEST_RETRY_BUDGET = 20.0   # seconds to wait out the boot race
+START_DEST_RETRY_DELAY  = 1.0    # poll cadence between attempts
+
 LIVE_VOD_DIR = (BUILD_DIR / "m6-live-vod")
 
 BENIGN_LOG_SUBSTRINGS = [
@@ -649,6 +659,48 @@ def _scan_rtmp_diagnostic(lines: list[str]) -> list[str]:
     return hits
 
 
+async def start_destination_with_retry(inbox: Inbox, ws, dest_id: str,
+                                       stream_key: str) -> bool:
+    """StartDestination, polling out the post-boot/scene-switch race.
+
+    Ported from probe-twitch-live.py (START_DEST_* pattern). Returns True once
+    the destination reports started=true. Returns False on a HARD failure:
+    either a non-transient StartDestination error (failed on the first
+    attempt) OR the boot race never cleared within START_DEST_RETRY_BUDGET.
+
+    Strict semantics (validated by Vigil on the scene-switch): the retry fires
+    ONLY when the error is exactly START_DEST_BOOT_ERROR. Any other error ends
+    the loop immediately. No error string is ever masked or swallowed.
+    """
+    deadline = time.time() + START_DEST_RETRY_BUDGET
+    attempt = 0
+    while True:
+        attempt += 1
+        r = await vendor_call(inbox, ws, f"start-dest-{attempt}", "pulsar",
+            "StartDestination", {"id": dest_id})
+        sd = vendor_response_data(r)
+        if sd.get("started"):
+            print(f"-> StartDestination started=true -- LIVE on Twitch "
+                  f"(attempt #{attempt})")
+            return True
+        err = str(sd.get("error", ""))
+        transient = (err == START_DEST_BOOT_ERROR)
+        if transient and time.time() < deadline:
+            print(f"   start-dest attempt #{attempt}: streaming output not "
+                  f"ready yet ('{err}'), retrying in {START_DEST_RETRY_DELAY}s")
+            await asyncio.sleep(START_DEST_RETRY_DELAY)
+            continue
+        # Either a non-transient error, or the boot race never cleared within
+        # budget -- both are hard failures.
+        status = vendor_request_status(r)
+        reason = ("boot race unresolved after "
+                  f"{START_DEST_RETRY_BUDGET}s ({attempt} attempts)"
+                  if transient else "not started")
+        print(f"FAIL: StartDestination {reason}; "
+              f"status={redact(json.dumps(status), stream_key)}")
+        return False
+
+
 async def broadcast(inbox: Inbox, ws, stream_key: str, duration_sec: int,
                     pulsar: "PulsarProcess") -> int:
     # 1. CreateDestination(twitch). The key is passed opaquely; it never
@@ -669,18 +721,14 @@ async def broadcast(inbox: Inbox, ws, stream_key: str, duration_sec: int,
         return 1
     print(f"-> CreateDestination(twitch) id={dest_id}")
 
-    # 2. StartDestination -> live.
-    r = await vendor_call(inbox, ws, "start-dest", "pulsar",
-        "StartDestination", {"id": dest_id})
-    sd = vendor_response_data(r)
-    if not sd.get("started"):
-        status = vendor_request_status(r)
-        print(f"FAIL: StartDestination not started; "
-              f"status={redact(json.dumps(status), stream_key)}")
+    # 2. StartDestination -> live, with the bounded anti-boot-race retry
+    #    (the frontend streaming output can be briefly unavailable right after
+    #    a boot/scene-switch -- see start_destination_with_retry). A hard
+    #    failure rolls the destination back, exactly as the single-shot did.
+    if not await start_destination_with_retry(inbox, ws, dest_id, stream_key):
         await vendor_call(inbox, ws, "rm-dest", "pulsar",
             "RemoveDestination", {"id": dest_id})
         return 1
-    print("-> StartDestination started=true -- LIVE on Twitch")
 
     # 2b. StartRecord -- local MP4 as an offline broadcast proof.
     recording = False

@@ -28,8 +28,12 @@ Two things make M8 strictly stronger than M6:
 Everything below the SETUP/provenance is the proven M6 broadcast core,
 reused verbatim by importing probe-m6-live.py: CEF spawn/reap, pure-stdlib
 PNG decode + analyse_frame, the RTMP metrics loop, secret redaction. The
-StartDestination retry (bounded anti-boot-race) is reused from
-probe-twitch-live.py's pattern.
+bounded anti-boot-race StartDestination retry lives in that shared core
+(probe-m6-live.py's start_destination_with_retry, ported from
+probe-twitch-live.py's START_DEST_* pattern): m6.broadcast goes live through
+it, so the M8 broadcast path retries the exact transient
+'frontend streaming output unavailable' error within a bounded budget and
+hard-fails on anything else.
 
 SECRET HYGIENE (Bastion PV-1 / CC-1, ADR §A1.5 — load-bearing):
   - NO token committed anywhere (no DEFAULT_SOLAR_URL with a baked JWT, the
@@ -222,8 +226,10 @@ async def run(ws_url: str, password: str, setup: "m8_setup.SetupResult",
             print("[M8] --preflight-only set: skipping broadcast.")
             return 0
 
-        # Broadcast core reused verbatim from M6 (which itself reuses the
-        # probe-twitch-live.py bounded StartDestination retry pattern).
+        # Broadcast core reused verbatim from M6. m6.broadcast now goes live
+        # through start_destination_with_retry (the bounded anti-boot-race
+        # StartDestination retry ported from probe-twitch-live.py), so this
+        # M8 path is robust to the post-scene-switch boot race observed in CI.
         print("\n[M8] going live to Twitch (provenance proven) ...")
         m6.LIVE_VOD_DIR = LIVE_VOD_DIR
         return await m6.broadcast(inbox, ws, stream_key, duration_sec, pulsar)

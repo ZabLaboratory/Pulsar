@@ -9,8 +9,8 @@
 # best-effort log nicety here, it is a gate.
 #
 # The credentials come from the étage-1 environment (M8_OPERATOR_TOKEN,
-# TWITCH_STREAM_KEY); the show-token is minted at runtime, so we scan for it
-# by reading it back out of the probe's own redaction is NOT possible — we
+# TWITCH_STREAM_KEY); the show-token is minted at runtime. Reading the minted
+# token back out of the probe to scan for it is not possible from here, so we
 # instead assert the KNOWN secrets never appear, and that no raw
 # `?token=<jwt-looking>` or `token%3DeyJ` substring survives in the log.
 #
