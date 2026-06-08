@@ -159,6 +159,41 @@ if ($stingerCode -eq 3) {
     Write-Host "==> probe-stinger-smoke.py OK"
 }
 
+# --------------------------------------------------------------------
+# Phase 1e -- self-spawning M10 live end-to-end probe in PROOF-ONLY mode
+# (probe-m10-canvas-live.py, #61).
+#
+# Runs the FULL M10 chain WITHOUT going live to Twitch and WITHOUT the VPS:
+#   --no-broadcast    no Twitch key, no StartDestination (the on-air leg is
+#                     Keeper's antenna run).
+#   --loopback-leaf   injects the exact scene_control leaf Orion would fan out
+#                     into the SAME in-process consumer code path (validate →
+#                     executor → obs-ws → switch → capture), so the integration
+#                     is proven on a box with no VPS reach.
+#   --allow-blank     a CI runner has no real desktop content behind
+#                     monitor_capture and (usually) a single display, so the
+#                     A/B frames coincide; the wire + the switch + the anti-
+#                     injection (C-INJ) + C-FANOUT(F2) + C-SEC are all still
+#                     asserted. The VISUAL mid-transition blend proof
+#                     (criterion 5) needs a 2-monitor operator box with real
+#                     content -- that is Keeper's antenna run, by doctrine.
+# Self-spawns + reaps its own pulsar.exe (config.json-reseed reason) so it runs
+# in Phase 1. A LIGHT build (no stinger/monitor_capture) -> exit 3, tolerated.
+# --------------------------------------------------------------------
+$m10Probe = Join-Path $repoRoot "scripts/probe-m10-canvas-live.py"
+Write-Host "==> Running probe-m10-canvas-live.py (self-spawn M10 e2e, proof-only, #61)"
+& python $m10Probe --exe $pulsar --no-broadcast --loopback-leaf --allow-blank --duration 12
+$m10Code = $LASTEXITCODE
+if ($m10Code -eq 3) {
+    Write-Host "==> probe-m10-canvas-live.py SKIPPED (light build -- stinger/monitor_capture absent)"
+} elseif ($m10Code -ne 0) {
+    Write-Host "==> probe-m10-canvas-live.py FAILED (exit $m10Code)"
+    Write-Host "==> The M10 Blue->leaf->consumer->switch chain did not wire/compose cleanly -- aborting before the shared suite."
+    exit 1
+} else {
+    Write-Host "==> probe-m10-canvas-live.py OK"
+}
+
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
 # Port 0 -> bind a random free port so back-to-back ctest runs don't
