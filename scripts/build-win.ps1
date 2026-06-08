@@ -98,6 +98,85 @@ Write-Host "Using cmake: $cmake"
 Write-Host "Preset:       $preset"
 Write-Host "Source:       $upstream"
 
+# --- ATL detection ---------------------------------------------------------
+#
+# Three upstream plugins -- obs-qsv11, win-dshow and its virtualcam-module
+# -- compile sources that require the MSVC ATL component (atlbase.h /
+# atlcomcli.h / atlstr.h). ATL ships as a separate Visual Studio
+# workload/component under the MSVC toolset (VC/Tools/MSVC/<ver>/atlmfc/
+# include/), NOT with the Windows SDK. The CI windows-2022 runner has it;
+# a dev box without the "C++ ATL" component does not.
+#
+# We probe every installed VS instance via vswhere, then check each MSVC
+# toolset's atlmfc/include for the three headers. If found -> full build
+# (PULSAR_HAVE_ATL=ON, identical to upstream / CI). If not -> we pass
+# -DPULSAR_HAVE_ATL=OFF so patch 0002 registers those three plugins as
+# disabled stubs instead of failing configure on the missing headers.
+#
+# None of the three are on the headless browser_source live path
+# (x264/nvenc encode + CEF browser source), so the OFF branch has zero
+# functional impact on the Pulsar probe.
+function Test-AtlAvailable {
+    $atlHeaders = @('atlbase.h', 'atlcomcli.h', 'atlstr.h')
+
+    # Candidate VS installation roots. Prefer vswhere (authoritative);
+    # fall back to common fixed paths if vswhere is unavailable.
+    $vsRoots = @()
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path $vswhere) {
+        $found = & $vswhere -products '*' -property installationPath 2>$null
+        if ($LASTEXITCODE -eq 0 -and $found) {
+            $vsRoots += @($found | Where-Object { $_ -and (Test-Path $_) })
+        }
+    }
+    if ($vsRoots.Count -eq 0) {
+        foreach ($p in @(
+            'C:\Program Files\Microsoft Visual Studio\2022\Enterprise',
+            'C:\Program Files\Microsoft Visual Studio\2022\Professional',
+            'C:\Program Files\Microsoft Visual Studio\2022\Community',
+            'C:\Program Files\Microsoft Visual Studio\2022\BuildTools',
+            'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools'
+        )) {
+            if (Test-Path $p) { $vsRoots += $p }
+        }
+    }
+
+    foreach ($vsRoot in $vsRoots) {
+        $msvcRoot = Join-Path $vsRoot 'VC\Tools\MSVC'
+        if (-not (Test-Path $msvcRoot)) { continue }
+        $toolsets = Get-ChildItem $msvcRoot -Directory -ErrorAction SilentlyContinue
+        foreach ($ts in $toolsets) {
+            $atlInclude = Join-Path $ts.FullName 'atlmfc\include'
+            if (-not (Test-Path $atlInclude)) { continue }
+            $allPresent = $true
+            foreach ($h in $atlHeaders) {
+                if (-not (Test-Path (Join-Path $atlInclude $h))) { $allPresent = $false; break }
+            }
+            if ($allPresent) {
+                Write-Host "ATL headers found: $atlInclude"
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+$haveAtl = Test-AtlAvailable
+if (-not $haveAtl) {
+    # CI must build the full plugin set (windows-2022 ships the C++ ATL
+    # component), so a missing-ATL result on a CI runner is NOT a benign
+    # "dev box without ATL" -- it is a detection false-negative or a
+    # broken runner image. Silently dropping to the OFF branch there would
+    # amputate qsv11/virtualcam/win-dshow from the build and ship a thinner
+    # binary while CI stays green. Fail loud instead: turn the CI red so the
+    # gap is visible rather than masked. Locally (no GITHUB_ACTIONS / CI),
+    # keep the warning + skip -- that path is the intended dev convenience.
+    if ($env:GITHUB_ACTIONS -or $env:CI) {
+        throw "ATL not found in a CI context (GITHUB_ACTIONS/CI set). CI runners must have the MSVC 'C++ ATL' component so qsv11/virtualcam/win-dshow build. This is a detection false-negative or a broken runner image, not an expected skip -- failing the build instead of silently dropping plugins. See docs/runbooks/atl-missing-build-failure.md."
+    }
+    Write-Warning "ATL not found -> skipping qsv11/virtualcam/win-dshow ; headless browser_source path unaffected"
+}
+
 # --- Apply Pulsar patches onto upstream/ -----------------------------------
 #
 # Reset upstream/ to the SHA recorded by Pulsar's submodule pointer, then
@@ -186,6 +265,15 @@ if ($Stage -in @('configure', 'all')) {
     #   ENABLE_BROWSER   - default OFF in obs-browser, but the windows-x64
     #                      preset forces it ON in cacheVariables. Override.
     $extraArgs = @()
+    # ATL gate (see Test-AtlAvailable). Default ON in the patched
+    # CMakeLists, so we only ever need to force OFF; passing ON
+    # explicitly when ATL is present keeps the cache value unambiguous
+    # across re-configures.
+    if ($haveAtl) {
+        $extraArgs += '-DPULSAR_HAVE_ATL=ON'
+    } else {
+        $extraArgs += '-DPULSAR_HAVE_ATL=OFF'
+    }
     if (-not $GuiBuild) {
         $extraArgs += '-DENABLE_FRONTEND=OFF'
         $extraArgs += '-DENABLE_UI=OFF'
