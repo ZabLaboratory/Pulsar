@@ -340,7 +340,10 @@ class GatewayClient:
         )
 
     def get_show(self) -> dict:
-        _, show = self._request("GET", "/orion/api/v1/show", auth=False, expect=(200,))
+        # Operator-gated on the public gateway: GET /orion/api/v1/show is 401
+        # without a Bearer, 200 with the operator Bearer. Ride the operator
+        # JWT (auth=True) like every other SETUP leg.
+        _, show = self._request("GET", "/orion/api/v1/show", auth=True, expect=(200,))
         return show
 
     # -- ZabAuth ---------------------------------------------------------
