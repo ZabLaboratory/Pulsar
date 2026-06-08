@@ -3,7 +3,7 @@
 - **Status**: accepted
 - **Date**: 2026-06-08
 - **Decided**: 2026-06-08
-- **Deciders**: @ClodoCapeo (maintainer), Vigil (review), Bastion (security clearance — conditional, veto R7 lifted at design level via Amendment 2)
+- **Deciders**: @ClodoCapeo (maintainer), Vigil (design re-validation of Amendment 4 — pivot finalised, approved at design level), Bastion (security clearance — R7 veto lifted at design level via Amendment 2; R6 re-raised by Amendment 4 → re-clearance #76 required before build). The build is gated on SPIKE-GPU + SPIKE-CUT (A4.6) and Bastion re-clearance #76.
 - **Author**: Atlas (architect agent)
 - **Supersedes**: —
 - **Superseded by**: —
@@ -778,3 +778,611 @@ criterion:
   Prism green on the real diff, lockfiles pinned). C-NET (Orion reachable via
   ZabGate only, no inbound port on the operator box — owned by Keeper/Conduit,
   cleared under #62).
+
+---
+
+## Amendment 3 — PIVOT: the transition is rendered by OUR engine (Solar/CEF), not OBS-native. Supersedes the OBS-native transition mechanism of §3.2/§3.3, Amendment 1 §A1.1/§A1.2, and Amendment 2 §A2.1's obs-ws executor
+
+- **Date**: 2026-06-08
+- **Author**: Atlas (architect agent)
+- **Status of the ADR**: returns to **proposed** (Vigil re-validates; Bastion
+  re-clears the reduced surface). This amendment is a **mechanism pivot** ordered by
+  the porteur mid-build. It **supersedes the transition-rendering mechanism** of all
+  prior sections (the OBS-native `SetCurrentSceneTransition{Stinger}` +
+  fork-composited stinger). It does **not** rewrite §1–§6 or Amendments 1–2 in place;
+  the prior text remains the audit trail of the *abandoned* approach, and every
+  superseded construct is named explicitly below. **What survives unchanged**: the
+  milestone goal (Blue drives a screen-1→screen-2 transition, live, mid-broadcast,
+  fired from the VPS), the VPS→operator **pull** delivery via the existing leaf
+  stream, the broadcast-control authorisation chain, and the proof doctrine.
+
+### A3.0 The porteur's correction (verbatim, 2026-06-08, mid-build)
+
+> « D'ailleurs erreur, la transition doit aussi être gérer par nous dans ce cas.
+> Sinon la preuve tout marche ne fonctionne pas. En gros animation par notre moteur
+> a nous et via cef pas de natif media obs. »
+
+**Interpretation (confirmed against the code).** The screen-1→screen-2 **animation
+must be rendered by our own engine (Solar) inside a CEF `browser_source`, driven
+reactively by the blueprint** — the **M9 model** (Blue→Orion leaf delta→LSDP→Solar
+repaint), **not** an OBS-native transition. The point of M10 is to **prove the whole
+Blue→Orion→Solar pipeline animates end-to-end on air**; an OBS-native compositor
+transition proves none of that pipeline — it short-circuits our engine. Therefore the
+merged OBS-native mechanism (fork stinger compositing #67, Prism obs-ws executor #63,
+the `SetCurrentSceneTransition{Stinger}` path) is the **wrong** mechanism for this
+milestone and is retired here.
+
+### A3.1 The pivot is feasible and grounded — Solar already animates leaf-driven scene transitions
+
+The mechanism the porteur points at **already exists and is proven** (M8/M9). Three
+code facts decide it:
+
+1. **Solar's runtime ships a leaf-driven transition engine.** Since ADR 007 (Lumencast
+   convergence) Solar delegates to `@lumencast/runtime`, whose lifecycle is exactly
+   *"subscribe → snapshot → bundle fetch → delta → scene_changed → crossfade →
+   teardown"* (`Solar/src/mount.ts:22-23`). The runtime exposes a `<Crossfade
+   trackKey durationMs>` that **mounts both scene roots during the transition window,
+   one fading out as the other fades in, opacity-only / GPU-friendly**
+   (`Solar/node_modules/@lumencast/runtime/dist/animate/crossfade.d.ts`), and a
+   wire-format `TransitionSpec` (LSDP/1.1 §3.2.2) parsed into `tween | spring |
+   crossfade | none` (`…/animate/transitions.d.ts`, `parseWireTransition`). **A leaf
+   change → Solar runs a real animated transition. This is the engine.**
+2. **Pulsar renders Solar in a CEF `browser_source` that loads the live show URL.**
+   The `pulsar-scene-source` plugin owns a managed `browser_source`
+   (`kCaptureSourceName = "PulsarSceneSource"`, `probe-m6-live.py:141`) whose `url` is
+   the Solar live page composed from the LSDP show-stream
+   (`Prism/src/main/broadcast-url.ts:55-96`, `getSolarSceneUrl` →
+   `…/orion/api/v1/show/stream.lsdp?token=<viewer>` → `host.html?orion=…&mode=broadcast`).
+   M6/M8/M9 all prove this CEF browser_source captures to the encoder and to Twitch.
+3. **The reactive bridge that drives it is in prod (M9).** Blue writes a leaf via its
+   long-lived service-token WS (`Blue/src/blue/core/orion_client.py:206-231`,
+   `push_leaf` → `__inputs.blue.<slug>.<port>`); Orion fans the delta on `/show/stream`
+   to all subscribers (the same fan-out §A1.3 already documents); the Solar CEF
+   subscriber repaints. **M9 proved a leaf change repaints Solar live, no reload.**
+
+**Verdict: the M10 transition is a Solar/LSDP transition, keyed and progressed by a
+Blue-written leaf, rendered in the existing CEF browser_source — identical in wire and
+trust to M9.** No OBS program-scene switch, no OBS-native transition, no fork
+compositing change is needed for the animation.
+
+### A3.2 The mechanism, code-anchored (supersedes §3.1, §3.2, §3.3, §A1.1, §A1.2)
+
+**Scene composition — VERDICT: ONE CEF browser_source, NOT two `monitor_capture`
+scenes with an OBS switch.** The two "screens" are **two Solar scene roots** (or two
+states of one root) rendered inside the single `PulsarSceneSource` browser_source.
+Solar's `<Crossfade trackKey>` mounts both during the window and animates between them.
+
+- **On the porteur's real GPU desktop**, if a "screen" must show *actual desktop /
+  monitor content* (not authored web content), the resolved primitive is Solar's
+  **`Image`** leaf (`…/render/primitives/image.d.ts` — `src`, `fit`, opacity animated
+  under a declared transition) fed a captured/served image, **or** the screen-1/screen-2
+  visuals are authored Canvas content (the M8 path). **Which of the two the porteur
+  wants is the one open product question — §A3.6 Q3.** Either way the *transition* is
+  Solar's, in CEF.
+- **`monitor_capture` is dropped from the transition mechanism.** Capturing physical
+  monitors as OBS sources and switching OBS scenes is the abandoned approach. The two
+  `monitor_capture` scenes (#68/#60) are **not** the M10 deliverable anymore (see
+  §A3.4 disposition). This also **dissolves the GPU conflict** (§A3.3): with no
+  `monitor_capture`, the D3D11 desktop-duplication that `--disable-gpu` broke is no
+  longer on the path.
+
+**Transition progression — VERDICT: keyed by a Blue leaf, M9-style.** The blueprint
+emits a leaf that names the **target scene/state** and a **transition spec**; Solar
+reads it as the `trackKey` (+ `durationMs`) of its `<Crossfade>` / `TransitionSpec`.
+The leaf is an `__inputs.blue.<slug>.*` value Solar consumes as a render input —
+exactly the M9 reactive input mechanism, **not** a control envelope. Solar decides
+*what is visible* (the rendered crossfade/wipe), entirely in-DOM; **OBS composites
+nothing transition-specific** — it just captures the CEF surface as it always has.
+
+### A3.3 GPU reconciliation — the conflict dissolves; `--disable-gpu` stays headless-only
+
+The block was: the probe spawns `pulsar.exe --disable-gpu`
+(`probe-m10-canvas-live.py:300`, inherited M8/M9 for headless CEF), which breaks the
+D3D11 `DuplicateOutput1` (`887A0004 UNSUPPORTED`) that `monitor_capture` needs → black
+frames. The probe **already documents this exact failure**
+(`probe-m10-canvas-live.py:749-758`: "blank capture … DXGI desktop duplication
+unavailable … needs an interactive operator desktop").
+
+**Reconciliation (decided):**
+- The pivot **removes `monitor_capture` from the path** → the only GPU consumer left is
+  the CEF browser_source (Solar), which M8/M9 already run successfully **with
+  `--disable-gpu` in headless/CI** and would run **GPU-on on the porteur's real
+  desktop**. CEF does not need DXGI desktop-duplication.
+- **`--disable-gpu` is a headless/CI concern only.** On the operator's real GPU desktop
+  the antenna run should spawn **GPU-on** (no `--disable-gpu`); in CI/agent headless the
+  flag stays. This is a launch-flag branch in the run scripts, **not** a design risk
+  anymore — because nothing on the path now needs both GPU desktop-duplication *and* a
+  GPU CEF simultaneously. The original coexistence question (CEF-GPU + capture-GPU) is
+  **moot** under the pivot. *(If a future milestone re-introduces real `monitor_capture`
+  alongside CEF, the coexistence spike returns — out of scope here.)*
+
+### A3.4 Disposition of the merged OBS-native work (precise: revert / dormant / reuse)
+
+The OBS-native approach is already on `main` + Blue deployed. Recommended disposition,
+per artefact:
+
+| Artefact (merged) | What it is | Disposition | Why |
+|---|---|---|---|
+| **#67 — fork stinger compositing** (`pulsar-frontend-stub.cpp:471-610`: `bindTransitionOutput`, stinger source registration, transition-through-output fix) | C++ change making OBS composite a media stinger through the program output | **REVERT** (open a `forge/` revert PR; keep the commit in history). The transition-through-output change and the `obs_stinger_transition` registration are **not used** by the Solar/CEF mechanism. | The whole point of the pivot is *no native OBS transition*. Dead, load-bearing C++ on the encoder path = risk with no caller. Revert removes R1′/R7 entirely. **Exception:** if the porteur foresees a near-future native-stinger need, mark dormant behind an env flag instead — §A3.6 Q4. Default recommendation: **revert.** |
+| **#64 — pinned stinger `.webm` asset** (`scripts/assets/stinger-demo.webm`) | demo media for the native stinger | **REVERT/REMOVE** with #67. No media is decoded in the Solar mechanism (Solar animates opacity/transform, no media plane). If §A3.6 Q3 picks a *media wipe* rendered by Solar, a small asset may return as a **Solar/Canvas** asset (web-served), not an OBS-decoded one — different artefact. | The R7 decoder-fuzz surface disappears with the asset. |
+| **#63 — Prism obs-ws executor** (`Prism/src/main/scene-control/{consumer,executor,asset-allowlist}.ts`) | main-process consumer that reads the leaf and issues `SetCurrentSceneTransition{Stinger}` → `SetCurrentProgramScene` | **REUSE the subscriber half, REPLACE the executor half.** The `/show/stream` **subscriber** + the **C-INJ/C-PATHREAL validation gate** are exactly the VPS→operator pull consumer we still need (§A1.3 path is unchanged). But the **executor** (the four obs-ws calls) is **deleted** — under the pivot Prism issues **no OBS transition/scene call**; the leaf is consumed by **Solar in CEF**, not by Prism. *Re-scope #63 to: subscribe + validate + (if anything) forward to nothing — the leaf reaches Solar directly via the same `/show/stream` fan-out.* See §A3.5 for the sharpened seam. | Prism owning the obs-ws executor was only meaningful for a native switch. With Solar consuming the leaf, **Prism may have nothing to execute** — the consumer collapses to "Solar already gets the delta". This is the biggest simplification of the pivot; confirm scope in §A3.6 Q2. |
+| **#66/#59 — frozen `scene_control` contract** (`Pulsar/scripts/contracts/scene_control/`, Blue `scene_control.py`) | the `{action:switch_program_scene, target_scene, transition:{kind:stinger,asset_id,point_ms,duration_ms}}` shape | **REPLACE the schema, KEEP the Conduit contract discipline.** `action:switch_program_scene`, `target_scene` (OBS scene name), `transition.kind:stinger`, `asset_id` no longer have meaning — there is no OBS scene to switch, no stinger, no media asset. The leaf becomes a **Solar render input** (§A3.5). The *contract machinery* (frozen shape + producer/consumer round-trip test, #59) is good and stays; its **payload** is redefined. | A contract that names OBS constructs is wrong for a Solar-rendered transition. Conduit re-freezes the new shape. |
+| **#68/#60 — `m10_setup` two `monitor_capture` scenes + U1 spike (#56)** | harness creating two OBS scenes pinned to displays | **RETIRE as the M10 deliverable; KEEP as dormant reference.** The two-monitor scene harness is not used by the Solar mechanism. The U1 monitor-selection spike (#56) result stays documented for any future `monitor_capture` milestone. The M10 harness instead **declares the new Solar-input leaf on the active Orion scene** (the F2 obligation, §A2.3 — *that* part survives and is essential). | The OBS scene graph is the wrong artefact; the Orion-scene leaf declaration is the right one and is reused. |
+| **#28 — Blue `scene_control` output** | Blue emits the typed output → leaf | **KEEP the leaf-write path, REDEFINE the value.** Blue still emits a typed output mapped to `__inputs.blue.<slug>.<port>` via `leaf_mapper` (unchanged, proven M9). Only `build_scene_control` (`Blue/src/blue/services/scene_control.py`) is rewritten to build the **Solar render-input** value instead of the OBS `scene_control` value. | The producer mechanism is correct (it's the M9 mechanism); the value shape pivots. |
+| **#61 — `probe-m10-canvas-live.py`** | end-to-end OBS-native proof | **REWRITE around the Solar mechanism.** Drop `--disable-gpu` for the antenna run, drop the obs-ws executor calls, drop `monitor_capture` setup, drop the stinger-registered guard. Keep: VPS-fired trigger, leaf-delivery-causes-the-effect ordering, the **mid-transition blend** frame proof (now proving *Solar's* crossfade composited, captured off the CEF browser_source — the same `is_blend` analysis, just on the CEF surface), Solar-receives-and-acts, secret hygiene. | The proof skeleton (capture A / MID / B, blend assertion, live mid-broadcast) is exactly right; only the *cause* of the animation changes from OBS to Solar. |
+
+**Net:** revert #67+#64 (native compositing + media asset), re-scope #63 to a thin
+subscriber (executor deleted), re-freeze the contract (#59/#66) to a Solar-input shape,
+retire the `monitor_capture` scene harness (keep the leaf-declaration half), keep Blue's
+leaf-write (redefine the value), rewrite the probe (#61). This is a **surface
+reduction**: the two hardest/most-dangerous builds (fork C++ on the encoder path R1′,
+on-air media decode R7) are **deleted**, not rebuilt.
+
+### A3.5 The new leaf / contract shape (supersedes §3.5, §A2.1)
+
+The leaf stops being an OBS command and becomes a **Solar render input**, consumed
+**by Solar in CEF** exactly like any M9 `__inputs.blue.*` value. The canonical path is
+unchanged — `__inputs.blue.<slug>.scene_control` (the F1 3-segment form, §A2.2 still
+holds; the port name may be renamed e.g. `scene` / `transition` — small Conduit call).
+Indicative shape (Conduit freezes the exact one in #59):
+
+```
+__inputs.blue.<slug>.scene_control = {
+    "target": "screen-2",                 // Solar scene/state key → <Crossfade trackKey>
+    "transition": {
+        "kind": "crossfade",              // Solar TransitionKind: none|tween|spring|crossfade
+        "duration_ms": 600,               // → durationMs / TransitionSpec
+        "ease": "ease-in-out"             // optional, LSDP/1.1 §3.2.2 wire easing
+    }
+}
+```
+
+- **No `action`, no OBS `target_scene`, no `asset_id`, no `path`.** The value is a
+  render input Solar reads; it carries **no remote-control verb** and **cannot address
+  OBS**. This is a *strictly smaller* trust surface than the OBS `scene_control` (which
+  could switch what is on air) — see §A3.7.
+- **Solar consumes it** via the runtime's leaf/`TransitionSpec` path (`parseWireTransition`,
+  `<Crossfade>`); the value must conform to the runtime's `TransitionKind` /
+  `TransitionSpec` (`transitions.d.ts`) — Conduit aligns the frozen Blue shape to the
+  LSDP/1.1 §3.2.2 wire transition so producer (Blue) and consumer (Solar runtime)
+  agree. **This is the real new contract boundary** (Blue ↔ Solar/runtime via Orion),
+  replacing the Blue ↔ Prism-obs-ws boundary.
+- **#56 F2 obligation survives and is essential**: the active Orion scene **must
+  declare** `__inputs.blue.<slug>.scene_control` (`operator_input` / binding
+  `target_path`) or `Inbox.Write` silently drops the delta (`Orion inbox.go`
+  `sceneAcceptsPath`, §A2.3). The harness (#60) declares it; the probe proves no
+  silent-drop.
+
+### A3.6 Open product questions — porteur only (do not self-decide)
+
+The pivot resolves the *mechanism*; two genuine **product** choices remain that the
+architecture cannot make:
+
+- **Q3 (what the two "screens" actually show) — PRODUCT.** Are screen-1 / screen-2
+  **(a)** two authored Canvas scenes/states (pure web content, the M8 lineage — fully
+  in our engine, no desktop capture), or **(b)** representations of *real desktop /
+  game content* that Solar must display (via an `Image`/video leaf fed a captured
+  frame/stream)? (a) is clean and proves the pipeline outright; (b) re-introduces a
+  "get the desktop pixels into Solar" sub-problem (a capture→serve→`Image` path) that
+  is a **separate spike** and may re-open R4 (real desktop on air) inside our engine.
+  **The porteur's "screen 1 / screen 2" wording suggests real screens; confirm.** This
+  is the single most load-bearing unknown of the pivot.
+- **Q4 (fate of the native-stinger work) — PRODUCT/STRATEGY.** Revert #67/#64 outright
+  (recommended — dead code on the encoder path), or keep them **dormant behind a flag**
+  because a native OBS stinger is a foreseen *future* capability independent of M10?
+  Atlas recommends **revert**; the porteur owns the roadmap call.
+
+### A3.7 Risks (supersedes §5 R1′, R7; revises R6, R4)
+
+- **R1′ / R7 — DELETED by the pivot.** No fork C++ change on the encoder path (R1′
+  gone), no on-air media decode (R7 gone). The two heaviest engineering/security risks
+  of the OBS-native approach **disappear** with #67/#64 reverted. **Net risk
+  reduction.**
+- **R6 (broadcast-control channel) — DOWNGRADED.** The leaf no longer carries an OBS
+  remote-control verb; it is a Solar **render input** (a crossfade key + duration),
+  identical in kind to every M9 `__inputs.blue.*` leaf. A forged/compromised leaf can
+  at worst **change what our overlay renders** — the *same* surface M9 already accepted
+  and Bastion already cleared for M9 (#54). It can **no longer switch what OBS has on
+  air** (there is no OBS switch). The trigger stays operator-gated; the service token
+  stays `__inputs.blue.*`-scoped; the subscription stays read-only. → **Bastion
+  re-clears the reduced surface; this should be a lighter clearance than #62.**
+- **R4 (real desktop on air) — CONDITIONAL on Q3.** If Q3 picks (a) authored content,
+  **R4 is eliminated** (no desktop capture anywhere). If Q3 picks (b) real
+  desktop/game pixels into Solar, R4 returns **inside our engine** and the porteur
+  records it as before. **Bastion + porteur revisit only if Q3=(b).**
+- **R-GPU (new, low, engineering) — launch-flag branch.** The antenna run must spawn
+  GPU-on on the real desktop (no `--disable-gpu`), headless/CI stays `--disable-gpu`.
+  A wrong flag on the operator box degrades CEF rendering but cannot blank the encoder
+  the way the reverted native path could. Guarded by the probe's non-blank assertion.
+- **R-SOLAR-CAP (new, spike, only if Q3=(b)) — desktop→Solar capture path.** Getting
+  real monitor pixels *into* a Solar primitive (capture → serve → `Image`/video leaf)
+  is unproven; it is a **spike**, not a wiring task, and may itself need GPU/perf work.
+  Only opens if Q3=(b).
+
+### A3.8 Resolution criteria delta (supersedes §6.1, §6.3, §6.5 mechanism; §A1.7)
+
+- **C5′ (the M10 proof, rewritten).** The probe captures frames off the **CEF
+  `PulsarSceneSource` browser_source** across the transition window; the MID frame is a
+  **blend** (Solar's crossfade compositing in-DOM), neither pure screen-1 nor pure
+  screen-2 — proving **our engine** animated the transition. Same `is_blend` analysis
+  (`probe-m10-canvas-live.py:727-763`), now on the CEF surface, GPU-on on the real box.
+- **C-MECH (new, the pivot's defining criterion).** The proof asserts **no OBS-native
+  transition and no `SetCurrentProgramScene` is issued** during the switch — the
+  animation is caused *only* by the Solar leaf delta. (Negative assertion: zero
+  transition/scene-switch obs-ws calls in the run.)
+- **§6.1 retired:** no two `monitor_capture` scenes required. **§6.3/§6.4 retired:** no
+  `SetCurrentSceneTransition` / `SetCurrentProgramScene` flip.
+- **C2 / C6 / C7 / C10 survive verbatim:** Blue drives it (leaf written, operator-gated,
+  VPS-fired), live mid-broadcast, secret hygiene, pull-delivered (no inbound port,
+  Solar receives the delta). **C8 (contract) survives** with the new Solar-input shape.
+- **C-FANOUT survives** (§A2.3): the active scene declares the leaf path or the delta
+  is silent-dropped; the probe proves end-to-end delivery.
+
+### A3.9 Revised issue cut (for Eleven → Forge / Probe / Conduit / Bastion / Keeper)
+
+Issues to **open**:
+- **#69 (Forge) — revert #67 + #64.** Revert the fork stinger compositing and the
+  pinned `.webm` from `main` (or flag-dormant if Q4 says so). CI full build green
+  post-revert. *Blocks nothing; do first to shrink surface.*
+- **#70 (Conduit) — re-freeze the `scene_control` contract as a Solar render input.**
+  New shape (§A3.5) aligned to the runtime `TransitionSpec` / LSDP/1.1 §3.2.2;
+  producer (Blue) ↔ consumer (Solar runtime) round-trip contract test; canonical
+  3-segment path retained. Supersedes #59/#66 payload.
+- **#71 (Forge, Blue) — rewrite `build_scene_control`** to emit the Solar-input value;
+  keep the `leaf_mapper` write path (proven M9). Supersedes #58/#28 value.
+- **#72 (Forge, Prism) — re-scope #63: delete the obs-ws executor;** keep only the thin
+  `/show/stream` subscriber + validation if Prism needs to observe the leaf at all
+  (likely **Prism does nothing** — Solar in CEF consumes the leaf directly; confirm via
+  Q2/§A3.4). Possibly closes #63 as "no Prism executor needed".
+- **#73 (Forge, Pulsar/Canvas) — the two Solar scene roots/states + `<Crossfade>`
+  wiring** keyed by the leaf. Pending **Q3**: (a) authored Canvas content, or (b)
+  desktop-pixels-into-Solar (then add the §A3.7 R-SOLAR-CAP spike as a blocker).
+- **#74 (Forge, harness #60) — m10_setup declares the Solar-input leaf** on the active
+  Orion scene (F2/C-FANOUT); **drop** the two `monitor_capture` scenes from the M10
+  deliverable.
+- **#75 (Probe, #61 rewrite) — Solar-rendered transition proof**: GPU-on antenna run,
+  no `monitor_capture`, no obs-ws executor; capture A/MID/B off the CEF source, blend
+  assertion (C5′), C-MECH negative assertion, VPS-fired + pull (C10), secret hygiene.
+- **#76 (Bastion) — re-clearance of the REDUCED surface.** R1′/R7 deleted; R6
+  downgraded to "M9-equivalent render input"; R4 conditional on Q3. Confirm the leaf
+  carries no control verb and cannot address OBS. Lighter than #62.
+- **#77 (Keeper) — antenna run launch-flag branch** (GPU-on real desktop vs
+  `--disable-gpu` headless) + the VPS-fired trigger run on the real box.
+
+Issues to **close/retire**: #57 (reverted by #69), #62 (superseded by #76), the
+native-transition halves of #56/#60/#61. **Spike to add if Q3=(b):** desktop→Solar
+capture (R-SOLAR-CAP).
+
+---
+
+## Amendment 4 — PIVOT FINALISED (Q3=(b), Q4=dormant): real `monitor_capture` content + Solar-overlay animation + a hidden hard-cut. Supersedes Amendment 3 §A3.2/§A3.3/§A3.4 mechanism and corrects its `monitor_capture`-is-removed hypothesis
+
+- **Date**: 2026-06-08
+- **Author**: Atlas (architect agent)
+- **Status of the ADR**: stays **proposed** (Vigil re-validates; Bastion re-clears
+  the surface). This amendment records the porteur's two product answers to §A3.6
+  (Q3, Q4) and **finalises the coordination design** the answers force. It **does not
+  rewrite** §1–§6 or Amendments 1–3 in place — those remain the audit trail. It
+  **supersedes the Amendment 3 mechanism** in three precise places (named in A4.0) and
+  **corrects one load-bearing A3 hypothesis** (`monitor_capture` is NOT removed). What
+  survives from A3: the **animation is rendered by our engine (Solar/CEF), leaf-driven,
+  M9-style**, never an OBS-native media transition; the VPS→operator **pull** delivery;
+  the broadcast-control authorisation chain.
+
+### A4.0 What A4 supersedes / corrects in Amendment 3 (precise)
+
+| A3 construct | A4 disposition |
+|---|---|
+| §A3.2 "drop `monitor_capture` from the path; the two `monitor_capture` scenes are not the deliverable" | **CORRECTED — `monitor_capture` STAYS.** Under Q3=(b) the two screens show **real desktop/monitor content** via `monitor_capture`. The 2-scene `monitor_capture` harness (#68/#60) is **REUSED**, not retired. |
+| §A3.2 "the leaf is the `<Crossfade trackKey>`; Solar reads the leaf as `trackKey`" | **CORRECTED (factually wrong against the runtime).** A plain `__inputs.blue.*` leaf delta goes through `onDelta`→`applyDelta` and **does NOT flip** the runtime's top-level crossfade key. `crossfadeKeySignal` flips **only on a `scene_changed`→new snapshot** (`@lumencast/runtime/dist/mount.js:122`, `${sceneId}::${sceneVersion}`). The Solar overlay animation is therefore an **in-DOM, signal-driven primitive animation** (opacity/transform under a leaf), **not** the runtime `<Crossfade>`. See A4.2. |
+| §A3.3 "the GPU conflict dissolves; no `monitor_capture` → no D3D11 duplication on the path" | **CORRECTED — the GPU conflict is BACK and is verification #1.** With `monitor_capture` retained AND a CEF browser_source (Solar overlay) rendering simultaneously on a real GPU-on desktop, the D3D11 desktop-duplication ⟷ CEF-GPU coexistence is exactly the thing that failed before. A4.4 designs it and marks it the run's first gate. |
+| §A3.4 "REVERT #67 (fork stinger) + #64 (asset)" | **CHANGED to FLAG-DORMANT (Q4).** No revert. Neutralise behind an inert-by-default flag. A4.3. |
+| §A3.4 "REUSE the subscriber half of #63, DELETE the executor" | **REFINED — the executor RETURNS, reduced.** Prism #63 keeps the subscriber + validation AND regains a **reduced executor**: it fires the **hard-cut** (`SetCurrentProgramScene` / `SetSceneItemEnabled` — a cut, NOT a transition) at the synchronised moment. A4.2/A4.3. |
+| §A3.7 "R1′/R7 DELETED; R4 conditional" | **REVISED — R1′/R7 become DORMANT-behind-flag (not deleted); R4 RETURNS (Q3=(b)), already accepted by the porteur.** A4.5. |
+
+### A4.1 The porteur's two decisions (verbatim intent, 2026-06-08)
+
+- **Q3 = (b).** Both screens show **real screen content via `monitor_capture`**
+  (physical capture, GPU-on on the real desktop). The transition is animated by
+  **Solar in a CEF browser_source layered *over* those captures**. *Corrects A3:*
+  `monitor_capture` is the **content** and stays; there is **no** capture→Solar bridge
+  (the A3 R-SOLAR-CAP spike for Q3=(c) is **moot** — Solar never displays the desktop
+  pixels; it renders an opaque overlay *on top of* them).
+- **Q4 = dormant behind a flag.** Do **not** revert the OBS-native work (#67 fork
+  stinger, #64 webm asset, #128/#63 obs-ws executor). **Neutralise it behind a flag**
+  (inert by default), preserved as a possible future native-stinger capability.
+
+### A4.2 The coordination — overlay Solar (animation) ⟷ OBS content (hidden hard-cut). THE core of this finalisation.
+
+The composition is **two planes**:
+
+1. **Content plane (below) — OBS `monitor_capture`.** Two OBS scenes (or one scene
+   with two capture sources), `scene-screen-1` / `scene-screen-2`, each pinned to a
+   physical display (the #68/#60 harness, U1/#56 monitor-pinning — **reused verbatim**).
+2. **Animation plane (above) — Solar in the `PulsarSceneSource` CEF browser_source.**
+   Solar renders a **full-screen opaque wipe/cover** (an authored overlay element whose
+   opacity/transform is animated), layered over the capture(s). **Solar composes web
+   with alpha on top of OBS sources; it never reads the pixels of the captures below**
+   — confirmed by the architecture (the porteur's own constraint). So the overlay can
+   *cover* the content but cannot *crossfade between two captures*.
+
+**Therefore the visible animation = the Solar overlay; the screen-1→screen-2 change of
+the content underneath = an instantaneous HARD-CUT, hidden under the overlay's opaque
+peak.** OBS performs only a cut (no OBS-native transition); 100 % of the visible
+animation is our engine.
+
+**The timeline (the synchro problem, solved):**
+
+```
+t0 ───────────── t_peak ───────────── t_end
+ overlay reveal    overlay fully       overlay retract
+ (0→opaque)        OPAQUE (covers       (opaque→0)
+                   the content)
+                        │
+                        ▼  HARD-CUT here: SetCurrentProgramScene{scene-screen-2}
+                           (or SetSceneItemEnabled toggle) — invisible, the
+                           opaque overlay is covering the content at t_peak
+```
+
+The cut MUST land inside the opaque window `[t_opaque_start, t_opaque_end]` around
+`t_peak`, or the cut is seen. **This is the hard unknown the porteur flagged.**
+
+**The runtime gives us NO transition-lifecycle callback — verified, decisive.** I read
+the runtime: the crossfade is `framer-motion` `AnimatePresence mode="sync"`, opacity-only,
+**hardcoded `duration: 0.4`, no `onAnimationComplete`, no progress/midpoint event, no
+emitted metric at start/peak/end** (`@lumencast/runtime/dist/app.js:27`,
+`animate/crossfade.js:6-9`). `onMetric` emits only `scene_changed` *at the start* of a
+snapshot swap (`mount.js:57-68`), never a transition-complete. **So Solar cannot signal
+its own mid-animation to an external consumer, and the runtime crossfade isn't even
+leaf-drivable** (A4.0 row 2). This kills the "Solar emits a mid-animation signal" option
+outright.
+
+**VERDICT — option (T1): a single leaf carries BOTH the overlay animation AND an
+explicit cut schedule; ONE timing authority (the Prism consumer) owns the cut clock.**
+
+The `scene_control` leaf (still `__inputs.blue.m10-scene-control.scene_control`, the F1
+3-segment path, fixture-pinned) carries a self-describing overlay timing the consumer
+can reproduce **without any callback from Solar**:
+
+```
+__inputs.blue.<slug>.scene_control = {
+    "target_scene": "scene-screen-2",       // OBS content scene to cut to (allowlisted)
+    "overlay": {                             // the Solar animation (M9 render input)
+        "kind": "wipe-cover",                // authored overlay element key Solar renders
+        "reveal_ms": 250,                    // 0 → fully-opaque
+        "hold_ms": 200,                      // fully-opaque plateau (the cut window)
+        "retract_ms": 250                    // opaque → 0
+    },
+    "cut_at_ms": 250                         // offset from leaf-apply: when the consumer fires the hard-cut
+                                             // (must satisfy reveal_ms ≤ cut_at_ms ≤ reveal_ms+hold_ms)
+}
+```
+
+- **Solar (CEF, below-the-overlay-engine) consumes the `overlay` sub-object as an M9
+  reactive render input** and animates the opaque cover purely in-DOM (opacity/transform,
+  GPU-friendly, the Solar conventions). No `scene_changed`, no runtime `<Crossfade>` —
+  an **authored Canvas/Solar overlay element keyed off the leaf**, exactly the M9
+  repaint mechanism Quasar/Blue already drive. The overlay's reveal/hold/retract is a
+  declared timeline the Solar element plays on leaf-apply.
+- **The Prism consumer (#63, socket holder) consumes the SAME leaf delta** off
+  `/show/stream` (it is already a subscriber), reads `cut_at_ms`, and after that delay
+  **fires the hard-cut on the loopback obs-ws**: `SetCurrentProgramScene{target_scene}`
+  (or `SetSceneItemEnabled` toggling the two capture sources within one scene — a
+  **cut**, never a transition). Because both Solar and Prism receive the **same leaf at
+  ~the same instant** over the same Orion fan-out, and the overlay timeline + `cut_at_ms`
+  are **co-specified in that one leaf**, the cut is scheduled relative to the overlay's
+  own clock without any cross-process callback.
+
+**Why one leaf with co-specified timings, not two signals.** The alternative ("Solar
+emits a mid-animation signal that triggers the cut") is **impossible** with the current
+runtime (no callback — verified above) and would require a Solar→Prism reverse channel
+that does not exist. Co-specifying `reveal/hold/cut_at` in the single leaf makes the
+**leaf itself the synchronisation contract**: the same authored numbers drive the
+overlay (in Solar) and the cut clock (in Prism). The residual risk is **clock skew
+between the two consumers' receipt of the leaf** and Solar's render latency vs Prism's
+timer — bounded by `hold_ms` (the opaque plateau). Sized generously (`hold_ms` ≥ 150–200
+ms vs the M9 delta→DOM budget ≤ 50 ms and a sub-frame obs-ws call), the cut lands well
+inside the opaque window. **This margin is the thing the spike must measure on the real
+box** (A4.6 SPIKE-CUT).
+
+**Who fires the cut — VERDICT: Prism #63 keeps a REDUCED executor (the cut).** Prism is
+the obs-ws socket holder (loopback, session-random password) — it is the *only*
+component that can issue an obs-ws call. Under the pivot it issues **no transition and no
+`SetCurrentSceneTransition`** (those stay dormant, A4.3); it issues **only the hard-cut**
+(`SetCurrentProgramScene` / `SetSceneItemEnabled`) at `cut_at_ms`. Routing the cut
+anywhere else is impossible (loopback socket, A3.4(C)/§3.4(C) unchanged). So #63 is NOT
+collapsed to a pure subscriber (A3 §A3.4 was wrong on this under Q3=(b)): it is
+**subscriber + validation gate + cut-only executor**.
+
+### A4.3 Disposition revised — flag-dormant, not revert (Q4); harness reused
+
+| Artefact | A3 said | **A4 final (Q3=(b)/Q4=dormant)** |
+|---|---|---|
+| #67 fork stinger compositing (`pulsar-frontend-stub.cpp` transition-through-output, stinger source registration) | revert | **FLAG-DORMANT.** Guard the stinger-source registration + the transition-through-output change behind an env flag (e.g. `PULSAR_NATIVE_STINGER`, **default off**). Inert by default → no native transition runs; the code stays in `main` for a future capability. CI full build green with the flag off (and, ideally, a smoke with it on). |
+| #64 stinger `.webm` asset | revert/remove | **KEEP, referenced only under the dormant flag.** sha256-pinned; no decode happens with the flag off → R7 dormant, not live. |
+| #128/#63 Prism obs-ws executor (`SetCurrentSceneTransition{Stinger}`→`SetCurrentProgramScene`) | reuse subscriber, delete executor | **KEEP subscriber + validation; REPLACE the executor body** with the **hard-cut** (`SetCurrentProgramScene`/`SetSceneItemEnabled`, no transition). The `SetCurrentSceneTransition{Stinger}` call is **behind the dormant flag** (off → never issued). |
+| #68/#60 two `monitor_capture` scenes + U1/#56 | retire as deliverable | **REUSED AS THE CONTENT PLANE.** This is now load-bearing again (Q3=(b)). U1/#56 monitor-pinning is required, not archived. The harness also keeps the **Orion-scene leaf declaration** (#74/A2.3 C-FANOUT) for the overlay leaf. |
+| #66/#59 frozen contract | replace schema | **RE-FREEZE (Conduit, #70) to the A4.2 shape**: `target_scene` (OBS cut target) + `overlay{kind,reveal_ms,hold_ms,retract_ms}` (Solar render input) + `cut_at_ms`. No `asset_id`/`path` in the live path (those exist only under the dormant native flag). |
+| #28/#71 Blue `build_scene_control` | redefine value | **REDEFINE** to emit the A4.2 value (overlay timeline + `target_scene` + `cut_at_ms`); keep the proven `leaf_mapper` write path. |
+| #61/#75 probe | rewrite | **REWRITE per A4.6 criteria**: GPU-on, `monitor_capture` content present, overlay-blend proof on the CEF surface, cut-invisibility proof, zero-native-transition assertion. |
+
+**Net:** nothing is reverted; the native path is **dormant behind a flag**; the
+`monitor_capture` harness is **reused as content**; the executor is **reduced to a cut**;
+the contract is **re-frozen** to overlay-timeline + cut schedule.
+
+### A4.4 GPU coexistence — the verification-#1 risk, code-anchored
+
+This is what failed before and is back under Q3=(b). On the real GPU-on desktop, **two
+GPU consumers run simultaneously**: (1) `monitor_capture` (DXGI/D3D11 `DuplicateOutput1`)
+and (2) the CEF browser_source (Solar overlay). Code facts:
+
+- The probe today spawns `pulsar.exe --disable-gpu` (`probe-m10-canvas-live.py:300`),
+  inherited from headless M8/M9. **`--disable-gpu` breaks DXGI desktop-duplication**
+  (`887A0004 UNSUPPORTED`) → `monitor_capture` returns all-black; the probe already
+  documents this exact failure (`probe-m10-canvas-live.py:743-746`, 752-754: "needs an
+  interactive operator desktop").
+- The fork's CEF browser uses **D3D11 shared textures** (`ENABLE_BROWSER_SHARED_TEXTURE`,
+  `plugins/pulsar-browser/CMakeLists.txt:129`; `browser-client.cpp:443-469`
+  `gs_texture_open_nt_shared`), and only falls back to `disable-gpu-compositing` when
+  shared-texture is unavailable (`browser-app.cpp:73-80`). So a healthy GPU-on CEF wants
+  the GPU; a process-wide `--disable-gpu` degrades both the CEF path and kills DXGI
+  duplication.
+
+**Design (decided):** the antenna run spawns **GPU-on (no `--disable-gpu`)** on the real
+interactive desktop, so DXGI duplication works for `monitor_capture` AND CEF shared-texture
+compositing works for the Solar overlay. `--disable-gpu` stays **headless/CI only**
+(where there is no real monitor to capture anyway → typed skip, exit 3). This is the
+launch-flag branch (Keeper #77).
+
+**RISK R-GPU (engineering, elevated to verification #1):** that `monitor_capture` D3D11
+duplication and CEF D3D11 shared-texture compositing **coexist** GPU-on on the operator's
+real desktop is **plausible but not proven on this fork** (it is the precise combination
+the prior run never got to because `--disable-gpu` masked it). **This is the run's first
+gate (A4.6 SPIKE-GPU):** before any overlay/cut work is trusted, prove on the real box
+that, GPU-on, a `monitor_capture` source is non-black AND the CEF browser_source renders —
+**simultaneously**, in the same `pulsar.exe`. If they cannot coexist (e.g. CEF needs
+`disable-gpu-compositing` which then degrades duplication), that is a **hard finding**
+that reopens the mechanism — hence it gates the build.
+
+### A4.5 Risks (supersedes A3 §A3.7; revises §5)
+
+- **R4 — RETURNS, already accepted.** `monitor_capture` of the real displays puts the
+  operator's actual desktop on the public Twitch VOD (notifications, private windows,
+  on-screen secrets). Under Q3=(b) this is **certain**, not hypothetical. **The porteur
+  already accepts it** ("écran propre" — clean screen before go-live); operator
+  responsibility, outside platform code. Recorded as accepted residual (A2.4 R4 text
+  stands, now firmly in force). Bastion notes it; no new mitigation owed by the platform.
+- **R1′ / R7 — DORMANT behind a flag, NOT deleted (Q4).** The fork stinger compositing
+  (R1′) and the on-air media decode (R7) survive in `main` but are **inert by default**
+  (flag off → no transition-through-output, no media decode). Live risk while off ≈ 0;
+  the residual is "the flag is accidentally on in prod". Mitigation: default-off, the
+  probe's C-MECH negative assertion proves no native transition fires in the M10 run, and
+  CI builds/smokes with the flag off. **Bastion: confirm the dormant code path cannot be
+  reached by a leaf value** (the flag is operator/env-controlled, never leaf-controlled).
+- **R6 — broadcast-control channel, RE-RAISED (not the A3 downgrade).** A3 downgraded R6
+  to "M9-equivalent render input" on the premise that the leaf carried *no* OBS verb.
+  **Under A4 that premise is false:** the leaf again carries `target_scene` (an OBS scene
+  to cut to) and the Prism consumer again issues an obs-ws call (`SetCurrentProgramScene`)
+  — a real broadcast-control action, fired from the VPS. So R6 is **back at roughly its
+  Amendment-2 weight**, MINUS the stinger/`path`/`asset_id` decode surface (which is now
+  dormant). Mitigations unchanged and still required: operator-gated `/trigger`,
+  `__inputs.blue.*`-scoped service token, read-only viewer subscription, **`target_scene`
+  allowlist at the consumer** (C-INJ, `SCENE_ALLOWLIST = {scene-screen-1, scene-screen-2}`),
+  rate-limit. → **Bastion clearance required (not the "lighter than #62" of A3 — closer
+  to #62 itself, minus R7-live).**
+- **R-CUT (new, engineering) — the hard-cut may be visible if it lands outside the opaque
+  window.** If clock skew between Solar's overlay render and Prism's `cut_at_ms` timer, or
+  Solar render latency, pushes the cut outside `[reveal_ms, reveal_ms+hold_ms]`, the
+  audience sees the content snap. Mitigation: generous `hold_ms` (opaque plateau) sized
+  against measured skew (SPIKE-CUT); the probe proves cut-invisibility by capturing a
+  frame at `cut_at_ms` and asserting the overlay is opaque there (A4.6 C-CUT).
+- **R-GPU (new, engineering, verification #1)** — A4.4: `monitor_capture` D3D11
+  duplication ⟷ CEF shared-texture coexistence GPU-on, unproven on this fork. Gates the
+  build (SPIKE-GPU).
+
+No residual is implicit. R4 accepted (porteur). R1′/R7 dormant. R6 to Bastion. R-CUT and
+R-GPU are engineering gates proven by the probe/spikes.
+
+### A4.6 Resolution criteria (supersedes A3 §A3.8 mechanism criteria)
+
+- **SPIKE-GPU (gate, do first).** On the real interactive GPU-on desktop, in one
+  `pulsar.exe` spawned **without `--disable-gpu`**, a `monitor_capture` source returns a
+  **non-black** frame AND the `PulsarSceneSource` CEF browser_source renders content —
+  **simultaneously**. PASS = both planes live at once. FAIL = hard finding, reopen
+  mechanism. (Owner: Keeper run + Probe assertion.)
+- **SPIKE-CUT (gate, before trusting the cut).** Measure, on the real box, the skew
+  between Solar overlay-opaque-onset and the Prism `cut_at_ms`-fired obs-ws cut; confirm
+  the cut lands inside the opaque window for the chosen `hold_ms`. Output: a validated
+  `hold_ms` floor. (Owner: Probe.)
+- **C5″ (the M10 proof — overlay blend on the CEF surface).** The probe captures frames
+  across the transition window off the **CEF `PulsarSceneSource`**; mid-animation the
+  frame shows the **Solar overlay compositing** (the opaque cover present, not pure
+  content) — proving **our engine** animated it. Same `is_blend`/modal analysis
+  (`probe-m10-canvas-live.py:727-763`), GPU-on.
+- **C-CUT (new — the cut is invisible).** A frame captured at `cut_at_ms` shows the
+  overlay **opaque** over the content (the cut is hidden); and the content underneath,
+  sampled before reveal vs after retract, has changed screen-1→screen-2 (the cut
+  happened). Negative: no frame in `[reveal_ms, reveal_ms+hold_ms]` shows a content snap.
+- **C-MECH (the pivot's defining criterion, retained).** The run issues **no OBS-native
+  transition**: zero `SetCurrentSceneTransition`/`TriggerStudioModeTransition` /
+  no transition-through-output. The only obs-ws scene call is the **hard-cut**
+  (`SetCurrentProgramScene`/`SetSceneItemEnabled`). The native-stinger flag is **off**
+  (asserted). Animation is caused only by the Solar overlay leaf.
+- **C2 / C6 / C7 / C10 survive verbatim** (Blue drives it, operator-gated, VPS-fired;
+  live mid-broadcast; secret hygiene; pull-delivered, Solar AND Prism both receive the
+  leaf). **C8 (contract)** survives with the A4.2 shape. **C-FANOUT survives** (the active
+  Orion scene declares `__inputs.blue.m10-scene-control.scene_control` — fixture already
+  does, `scripts/fixtures/m10-orion-scene.lsml.json`).
+- **C-CONTENT (new, Q3=(b)).** Both `monitor_capture` scenes pin distinct displays (U1/#56);
+  `GetInputSettings` confirms distinct `monitor` targets; on a LIGHT/headless build →
+  typed skip (exit 3). Reused from original §6.1.
+
+### A4.7 Revised final issue cut (supersedes A3 §A3.9)
+
+**Open / re-scope:**
+
+- **#69 (Forge) — flag-dormant the native-stinger work (NOT revert, Q4).** Guard #67's
+  stinger-source registration + transition-through-output and #128's
+  `SetCurrentSceneTransition{Stinger}` behind `PULSAR_NATIVE_STINGER` (default off). CI
+  full build green flag-off; the dormant path unreachable by any leaf value. *Do first
+  (shrinks live surface without losing the code).* RC: flag off ⇒ C-MECH holds; #64 asset
+  kept, sha256-pinned, decoded only under the flag.
+- **#70 (Conduit) — re-freeze the `scene_control` contract to the A4.2 shape.**
+  `target_scene` (OBS cut target, allowlisted) + `overlay{kind,reveal_ms,hold_ms,
+  retract_ms}` (Solar render input) + `cut_at_ms`, with the invariant
+  `reveal_ms ≤ cut_at_ms ≤ reveal_ms+hold_ms`. Canonical 3-segment path
+  `__inputs.blue.m10-scene-control.scene_control` retained; producer (Blue) ↔ two
+  consumers (Solar overlay, Prism cut) round-trip contract test. RC: contract test asserts
+  the shape and the `cut_at_ms` invariant; both consumers parse it.
+- **#71 (Forge, Blue) — `build_scene_control` emits the A4.2 value;** keep `leaf_mapper`.
+  RC: emits overlay timeline + `target_scene` + `cut_at_ms`; operator-gated; round-trips
+  through #70's contract.
+- **#72 (Forge, Prism #63) — reduced executor + subscriber.** Keep the `/show/stream`
+  subscriber + C-INJ validation (`SCENE_ALLOWLIST={scene-screen-1,scene-screen-2}`); the
+  executor fires **only the hard-cut** (`SetCurrentProgramScene`/`SetSceneItemEnabled`) at
+  `cut_at_ms`; the `SetCurrentSceneTransition{Stinger}` call only behind the dormant flag.
+  RC: off-allowlist `target_scene` ⇒ 0 obs-ws calls (negative test); cut fired at
+  `cut_at_ms` ±tolerance; zero native-transition call (C-MECH).
+- **#73 (Forge, Solar/Canvas) — the authored overlay element (`wipe-cover`)** keyed off the
+  leaf `overlay` sub-object, animating opacity/transform in-DOM (Solar GPU-only convention),
+  playing reveal/hold/retract on leaf-apply. **Not** the runtime `<Crossfade>` (A4.0 row 2).
+  RC: a leaf delta repaints the overlay live (M9 parity); the overlay reaches full opacity
+  during `hold_ms`; tree-shakable in broadcast mode.
+- **#74 (Forge, harness) — m10_setup KEEPS the two `monitor_capture` scenes (content,
+  Q3=(b)) AND declares the overlay leaf on the active Orion scene** (C-FANOUT, fixture
+  already declares it). RC: two scenes pin distinct displays (U1/#56); the Orion scene
+  declares the leaf path; no silent-drop end-to-end.
+- **#75 (Probe) — Solar-overlay + hidden-cut proof.** GPU-on antenna run; `monitor_capture`
+  content present; C5″ overlay blend on CEF; **C-CUT** cut-invisibility; C-MECH
+  zero-native-transition + flag-off; VPS-fired + pull (C10); secret hygiene. Owns
+  **SPIKE-CUT**.
+- **#76 (Bastion) — re-clearance.** R4 accepted (porteur); R6 re-raised to ~#62 weight
+  (leaf carries `target_scene` + drives an obs-ws cut), minus live R7; R1′/R7 dormant —
+  confirm the flag is env-controlled, never leaf-reachable; confirm `SCENE_ALLOWLIST` at
+  the consumer; confirm the leaf carries **no** `path`/`asset_id` in the live (flag-off)
+  path. **Not lighter than #62 — comparable, minus live decode.**
+- **#77 (Keeper) — antenna run launch-flag branch (GPU-on real desktop vs `--disable-gpu`
+  headless) + VPS-fired trigger on the real box.** Owns **SPIKE-GPU (verification #1)**.
+
+**Retire/close:** the A3 plan to *revert* #67/#64 is dropped (now flag-dormant under #69);
+the A3 R-SOLAR-CAP spike (capture→Solar) is **dropped as moot** (Q3=(b): Solar overlays,
+never displays the desktop pixels). #56/#60/#68 (monitor_capture harness) are **retained**,
+not retired.
+
+### A4.8 Residual unknowns / spikes / product questions
+
+- **SPIKE-GPU (verification #1, build gate)** — `monitor_capture` D3D11 duplication ⟷ CEF
+  D3D11 shared-texture coexistence, GPU-on, on the real box (A4.4). **If this fails, the
+  whole pivot's content plane fails** — it must be proven before #72–#75 are trusted.
+- **SPIKE-CUT (build gate)** — measured skew Solar-overlay-opaque ⟷ Prism-`cut_at_ms`,
+  sizing `hold_ms` so the cut is provably invisible (A4.2 / R-CUT). **Recommendation: a
+  small prototype of just (overlay opacity timeline in Solar) + (a `cut_at_ms`-timed
+  `SetSceneItemEnabled` from Prism) + (a CEF frame grab at `cut_at_ms`) should be built
+  and measured BEFORE the full #71–#75 build** — the coordination is non-trivial enough
+  (no Solar callback, two independent consumers of one leaf, frame-accurate timing) that
+  proving the timing margin first de-risks the whole milestone. This is the one place I
+  recommend a prototype-before-build.
+- **Product questions: NONE remain.** Q1/Q2 (Amendment 1), Q3/Q4 (this amendment) are all
+  decided. The mechanism, the disposition, the contract shape, and the risk acceptances are
+  fully specified. What is left is **engineering proof** (the two spikes), not product
+  choice.
