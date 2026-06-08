@@ -1,4 +1,4 @@
-# run-m9.ps1 - wrapper for the M9 Blue-trigger live-repaint probe with a
+﻿# run-m9.ps1 - wrapper for the M9 Blue-trigger live-repaint probe with a
 # hard secret grep-assert (ADR Blue 001 R4/R6, M8 parity).
 #
 # It runs scripts/probe-m9-canvas-live.py, tees stdout to a log, then
