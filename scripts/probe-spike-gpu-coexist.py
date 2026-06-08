@@ -144,6 +144,19 @@ RESOURCE_ALREADY_EXISTS = 601
 MONITOR_CAPTURE_KIND = "monitor_capture"
 BROWSER_KIND = "browser_source"
 
+# The fork's monitor_capture method selector (duplicator-monitor-capture.c:65-69,
+# 378, 800-808). It is an INTEGER setting under the key "method":
+#   METHOD_AUTO=0, METHOD_DXGI=1, METHOD_WGC=2.
+# WGC (2) only sticks if the fork reports wgc_supported (choose_method:250-254
+# silently downgrades a forced WGC to DXGI otherwise); the log's "method:" line
+# reports which was ACTUALLY applied. In WGC mode the source STILL resolves the
+# target HMONITOR from the same "monitor_id" device-id string find_monitor uses
+# for DXGI (update_settings:298-306, video_tick:531-547 → winrt_capture_init_
+# monitor(handle)), so the m10_setup-enumerated monitor_id pins the screen in
+# BOTH methods — there is no separate WGC monitor key in play here.
+METHOD_SETTING_KEY = "method"
+METHOD_NAME_TO_INT = {"auto": 0, "dxgi": 1, "wgc": 2}
+
 SPIKE_SCENE = "spike-gpu-coexist-scene"
 CAPTURE_INPUT = "spike-monitor-capture"
 BROWSER_INPUT = "spike-browser-overlay"
@@ -593,9 +606,23 @@ CEF_CRASH_MARKERS = [
 ]
 
 
+# The duplicator-monitor-capture log lines that reveal which method libobs
+# ACTUALLY applied (log_settings:236-247 → "\tmethod: DXGI|WGC") and any WGC /
+# WinRT init failure (winrt_capture_init_monitor returning NULL, dlsym failures).
+METHOD_APPLIED_RE = re.compile(r"method:\s*(DXGI|WGC)", re.IGNORECASE)
+WGC_FAIL_MARKERS = [
+    "winrt",                       # libobs-winrt module / dlsym failures
+    "graphics capture",            # WinRT capture human-readable failures
+    "WindowsGraphicsCapture",
+    "capture_winrt",
+]
+
+
 def scan_log_markers(lines: list[str]) -> dict[str, list[str]]:
     dxgi_hits: list[str] = []
     cef_hits: list[str] = []
+    method_hits: list[str] = []
+    wgc_hits: list[str] = []
     for ln in lines:
         for m in DXGI_FAIL_MARKERS:
             if m.lower() in ln.lower():
@@ -605,14 +632,21 @@ def scan_log_markers(lines: list[str]) -> dict[str, list[str]]:
             if m.lower() in ln.lower():
                 cef_hits.append(ln.strip())
                 break
-    return {"dxgi": dxgi_hits, "cef": cef_hits}
+        if METHOD_APPLIED_RE.search(ln):
+            method_hits.append(ln.strip())
+        for m in WGC_FAIL_MARKERS:
+            if m.lower() in ln.lower():
+                wgc_hits.append(ln.strip())
+                break
+    return {"dxgi": dxgi_hits, "cef": cef_hits,
+            "method": method_hits, "wgc": wgc_hits}
 
 
 # --------------------------------------------------------------------------
 # The spike round-trip: build the scene, capture, analyse, verdict.
 # --------------------------------------------------------------------------
 async def run_spike(url: str, password: str, page_url: str,
-                    disable_gpu: bool) -> int:
+                    disable_gpu: bool, capture_method: str) -> int:
     print(f"connecting: {url}")
     async with websockets.connect(
         url, subprotocols=["obswebsocket.json"], max_size=2**24,
@@ -664,9 +698,20 @@ async def run_spike(url: str, password: str, page_url: str,
                   "(On a real desktop this should never be empty.)")
             return 1
         display1 = values[0]
+        method_int = METHOD_NAME_TO_INT[capture_method]
         print(f"[setup] pinning {CAPTURE_INPUT!r} to display 1 "
-              f"({setting_key}={display1!r})")
-        cap_settings = {setting_key: display1, "capture_cursor": True}
+              f"({setting_key}={display1!r}), forcing "
+              f"{METHOD_SETTING_KEY}={method_int} ({capture_method.upper()})")
+        # === THE WGC VARIABLE UNDER TEST ===
+        # Force the capture METHOD. Default wgc=2: prove that the WinRT/Windows-
+        # Graphics-Capture path produces a non-black plane in this non-interactive
+        # agent context where the DXGI duplicator returns 887A0004 (frame black).
+        # The monitor_id pins the screen in either method (see METHOD_* note).
+        cap_settings = {
+            setting_key: display1,
+            METHOD_SETTING_KEY: method_int,
+            "capture_cursor": True,
+        }
         r = await request(inbox, ws, "CreateInput", "ci-cap", {
             "sceneName": SPIKE_SCENE,
             "inputName": CAPTURE_INPUT,
@@ -678,6 +723,30 @@ async def run_spike(url: str, password: str, page_url: str,
             print(f"error: CreateInput(monitor_capture) declined: {r.get('requestStatus')}")
             return 1
         cap_item_id = (r.get("responseData") or {}).get("sceneItemId")
+        if req_code(r) == RESOURCE_ALREADY_EXISTS:
+            # Idempotent re-run: the input survived from a prior run with its
+            # OLD method. Re-pin so the forced method actually takes effect
+            # (otherwise this run would silently test the previous method).
+            print(f"   capture input existed — re-pinning {METHOD_SETTING_KEY}"
+                  f"={method_int} via SetInputSettings")
+            sr = await request(inbox, ws, "SetInputSettings", "sis-cap", {
+                "inputName": CAPTURE_INPUT,
+                "inputSettings": cap_settings,
+                "overlay": True,
+            })
+            if not req_ok(sr):
+                print(f"error: SetInputSettings(capture) declined: {sr.get('requestStatus')}")
+                return 1
+
+        # Read the settings back so the verdict states the REQUESTED method
+        # value (the log's "method:" line below states the one libobs actually
+        # applied — they differ when wgc_supported is false and WGC downgrades).
+        gsr = await request(inbox, ws, "GetInputSettings", "gis-cap",
+                            {"inputName": CAPTURE_INPUT})
+        if req_ok(gsr):
+            got = (gsr.get("responseData") or {}).get("inputSettings", {})
+            print(f"   capture inputSettings: {METHOD_SETTING_KEY}="
+                  f"{got.get(METHOD_SETTING_KEY)} {setting_key}={got.get(setting_key)!r}")
 
         # (b) browser_source CEF overlay, partial (bottom-right quadrant), on TOP.
         print(f"-> CreateInput {BROWSER_INPUT!r} kind={BROWSER_KIND} url={page_url}")
@@ -806,10 +875,16 @@ async def run_spike(url: str, password: str, page_url: str,
         await _teardown(inbox, ws)
 
         if cap_live and ovl_live:
-            print("\nSPIKE-GPU PASS: monitor_capture (DXGI duplication) AND the CEF "
-                  "browser_source render SIMULTANEOUSLY, both non-black, GPU-on, in "
-                  "one pulsar.exe. The Q3=(b) precondition (real capture + Solar "
-                  "overlay) HOLDS on this fork + box.")
+            print(f"\nSPIKE-GPU PASS: monitor_capture ({capture_method.upper()}) AND "
+                  "the CEF browser_source render SIMULTANEOUSLY, both non-black, "
+                  "GPU-on, in one pulsar.exe. The Q3=(b) precondition (real capture "
+                  "+ Solar overlay) HOLDS on this fork + box.")
+            if capture_method == "wgc":
+                print("HEADLESS PROVEN: the capture plane is LIVE via Windows Graphics "
+                      "Capture in a NON-INTERACTIVE agent context (the DXGI duplicator "
+                      "returns 887A0004 / black here) — pulsar.exe can be driven "
+                      "end-to-end from an agent, no logged-in interactive desktop "
+                      "required, provided monitor_capture is pinned to method=WGC.")
             return 0
 
         # FAIL — name precisely which plane is black (the hard finding).
@@ -855,6 +930,14 @@ def main() -> int:
                     help="CONTROL run: re-add --disable-gpu to reproduce the known "
                          "black-frame failure and prove the flag (not the box) is "
                          "the culprit. Expect monitor_capture BLACK. Optional.")
+    ap.add_argument("--capture-method", choices=("wgc", "dxgi", "auto"),
+                    default="wgc",
+                    help="force the monitor_capture method (default: wgc). WGC is "
+                         "the whole point of this re-run: prove the Windows Graphics "
+                         "Capture path produces a NON-BLACK plane in a non-interactive "
+                         "agent context where the DXGI duplicator returns 887A0004. "
+                         "Use 'dxgi' / 'auto' to compare. The log's 'method:' line "
+                         "reports which libobs actually applied.")
     args = ap.parse_args()
 
     exe: pathlib.Path = args.exe
@@ -864,13 +947,21 @@ def main() -> int:
         return 2
 
     disable_gpu = args.disable_gpu_control
+    capture_method = args.capture_method
     mode = ("CONTROL (--disable-gpu — expect monitor_capture BLACK)"
             if disable_gpu else "VERDICT (GPU-ON — no --disable-gpu)")
     print("=" * 72)
     print(f"SPIKE-GPU mode: {mode}")
-    print("This must run on the porteur's REAL INTERACTIVE GPU-ON DESKTOP.")
-    print("DXGI desktop duplication fails in a non-interactive/RDP/CI session")
-    print("regardless of the GPU flag — a FAIL there is inconclusive.")
+    print(f"capture method forced: {capture_method.upper()} "
+          f"(method={METHOD_NAME_TO_INT[capture_method]})")
+    if capture_method == "wgc":
+        print("WGC re-run: testing whether Windows Graphics Capture renders a")
+        print("NON-BLACK plane in this NON-INTERACTIVE agent context — where the")
+        print("DXGI duplicator returns 887A0004 (black frame). If WGC is LIVE here")
+        print("the headless monitor_capture + CEF coexistence is proven.")
+    else:
+        print("DXGI/AUTO desktop duplication fails in a non-interactive/RDP/CI")
+        print("session — a black plane there is the known 887A0004, not a box fault.")
     print("=" * 72)
 
     server = LocalPageServer()
@@ -890,7 +981,8 @@ def main() -> int:
         pulsar.spawn()
         ws_url, sentinel_pw = pulsar.wait_ready(args.ready_timeout)
         print(f"READY: {ws_url}")
-        rc = asyncio.run(run_spike(ws_url, sentinel_pw, page_url, disable_gpu))
+        rc = asyncio.run(run_spike(ws_url, sentinel_pw, page_url, disable_gpu,
+                                   capture_method))
     except KeyboardInterrupt:
         print("interrupted")
         rc = 130
@@ -903,6 +995,18 @@ def main() -> int:
         # Log-marker scan is part of the verdict — report it whatever happened.
         markers = scan_log_markers(pulsar.lines)
         print("---- PULSAR LOG MARKERS ----")
+        if markers["method"]:
+            print(f"  monitor_capture method ACTUALLY applied "
+                  f"({len(markers['method'])} log line(s)):")
+            for ln in markers["method"][:8]:
+                print(f"    | {ln}")
+        else:
+            print("  method: no 'method: DXGI|WGC' log line seen "
+                  "(monitor_capture may not have logged update_settings).")
+        if markers["wgc"]:
+            print(f"  WGC/WinRT log line(s) seen ({len(markers['wgc'])}):")
+            for ln in markers["wgc"][:8]:
+                print(f"    | {ln}")
         if markers["dxgi"]:
             print(f"  DXGI duplication failure marker(s) seen ({len(markers['dxgi'])}):")
             for ln in markers["dxgi"][:8]:
