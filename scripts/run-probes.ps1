@@ -129,6 +129,36 @@ if ($browserCode -eq 3) {
     Write-Host "==> probe-browser-m3.py OK"
 }
 
+# --------------------------------------------------------------------
+# Phase 1d -- self-spawning stinger transition smoke (probe-stinger-
+# smoke.py, M10 #57).
+#
+# Proves the Gap B' fix loads on the full build: the frontend-stub
+# registers a "Stinger" transition (obs_stinger_transition), the obs-ws
+# transition-config requests are accepted, and a program-scene change
+# with the stinger active does NOT error and does NOT blank the encoder
+# (record stays active, activeFps>0, drop ratio low across the switch).
+# Self-spawns its OWN pulsar.exe child (pins PULSAR_STINGER_ASSET to the
+# committed demo asset, fresh ephemeral port) for the config.json-reseed
+# reason as the other Phase-1 probes -- so it runs before the shared
+# instance. The full VISUAL mid-transition proof is the M10 live probe
+# (#61), not this smoke. A LIGHT build (no obs_stinger_transition kind)
+# makes the probe exit 3 (typed skip), tolerated here.
+# --------------------------------------------------------------------
+$stingerProbe = Join-Path $repoRoot "scripts/probe-stinger-smoke.py"
+Write-Host "==> Running probe-stinger-smoke.py (self-spawn stinger seam, M10 #57)"
+& python $stingerProbe --exe $pulsar
+$stingerCode = $LASTEXITCODE
+if ($stingerCode -eq 3) {
+    Write-Host "==> probe-stinger-smoke.py SKIPPED (light build -- obs_stinger_transition absent)"
+} elseif ($stingerCode -ne 0) {
+    Write-Host "==> probe-stinger-smoke.py FAILED (exit $stingerCode)"
+    Write-Host "==> The stinger transition seam did not load/compose cleanly -- aborting before the shared suite."
+    exit 1
+} else {
+    Write-Host "==> probe-stinger-smoke.py OK"
+}
+
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
 # Port 0 -> bind a random free port so back-to-back ctest runs don't
