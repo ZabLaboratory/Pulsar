@@ -125,6 +125,60 @@ def test_f2_default_is_the_overlay_form_not_the_superseded_stinger():
     assert "overlay" in default and "cut_at_ms" in default
 
 
+def test_render_root_is_the_wipe_cover_authoring_element():
+    """#64 / Amendment 5 §A5.3: the scene's RENDER ROOT is the `wipe-cover`
+    AUTHORING element Orion's lowerWipeCover (Orion/internal/compiler/
+    lower_wipe_cover.go) intercepts and lowers to a keyframed full-screen
+    frame. The element carries its props SPREAD at the LSML node's top level
+    (Orion's EmitLSML node form: node[k]=raw, not a nested `props` object),
+    and the prop NAMES must match what lowerWipeCover reads off node.Props
+    EXACTLY — leaf / reveal_ms / hold_ms / retract_ms / fill — or the lowering
+    falls through to an inert node that renders nothing."""
+    bundle = json.loads(m10.ORION_SCENE_FIXTURE.read_text(encoding="utf-8"))
+    root = bundle["layout"]
+    assert root["kind"] == "wipe-cover", (
+        "render root must be the wipe-cover authoring element Orion#65 lowers "
+        f"to keyframes, got kind={root.get('kind')!r}"
+    )
+    # The replay is keyed on the SAME leaf the scene declares (C-FANOUT) — the
+    # scene_control delta remounts the KeyframePlayer.
+    assert root["leaf"] == m10.M10_LEAF_PATH
+    # Timings are the fixture's authored 400/500/400 (parity with the Orion
+    # lower_wipe_cover_test oracle + the operator_input default overlay).
+    assert root["reveal_ms"] == 400
+    assert root["hold_ms"] == 500
+    assert root["retract_ms"] == 400
+    # The franc-magenta cover the M10 probe asserts as MID (Solar's
+    # DEFAULT_COVER_FILL; the lowering honours an authored `fill`).
+    assert root["fill"] == "#C81E5A"
+    # Props are SPREAD at the node top level, never nested under `props` —
+    # that is the LSML 1.1 node form Orion's lsmlNode emits and the compiler
+    # parses back into node.Props. A nested `props` block would leave the
+    # lowering's stringProp/positiveIntProp lookups empty → inert fall-through.
+    assert "props" not in root, (
+        "wipe-cover props must be spread at the LSML node top level, not "
+        "nested under a `props` object (Orion lsmlNode form)"
+    )
+
+
+def test_render_root_timings_match_the_seeded_overlay_default():
+    """The render-root element timings and the operator_input overlay default
+    are ONE timeline — they must agree, or the seeded boot value would replay
+    a different cover than the authored render root. (The render root carries
+    the authoritative geometry; the leaf only triggers the replay — A5.5.)"""
+    bundle = json.loads(m10.ORION_SCENE_FIXTURE.read_text(encoding="utf-8"))
+    root = bundle["layout"]
+    overlay = next(
+        oi["default"]["overlay"] for oi in bundle["operator_inputs"]
+        if oi["path"] == m10.M10_LEAF_PATH
+    )
+    for k in ("reveal_ms", "hold_ms", "retract_ms"):
+        assert root[k] == overlay[k], (
+            f"render-root {k}={root[k]} disagrees with the seeded overlay "
+            f"default {k}={overlay[k]}"
+        )
+
+
 def test_f2_rejects_a_seed_with_an_unknown_target_scene():
     """Defence: a declaration seeding an off-allowlist target_scene must be
     caught by the same guard the consumer runs (C-INJ)."""

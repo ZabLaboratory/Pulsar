@@ -1,5 +1,5 @@
 {
-  "_fixture": "M10 Orion fan-out scene (Pulsar #79 / pivot, ADR 003 Amendment 4 §A4.2 + Amendment 2 §A2.3 / F2). This is NOT the OBS scene graph the monitor_capture sources live in (those are created over obs-websocket by m10_setup.py against pulsar.exe). This is the ORION show scene whose ONLY job is to DECLARE the scene_control leaf path so Orion's Inbox.Write fans the Blue delta out to the /show/stream subscribers (Solar overlay + Prism cut consumer). Orion's sceneAcceptsPath (Orion/internal/adapters/inbox.go) drops any leaf no loaded scene declares in defaults / operator_inputs / bindings.target_paths. So the active M10 scene MUST declare __inputs.blue.m10-scene-control.scene_control or the switch silently no-ops (C-FANOUT precondition). The slug 'm10-scene-control' and the 3-segment path are pinned by the scene_control contract (scripts/contracts/scene_control/, fixtures/valid.json) and Blue #71; Prism #72 (SCENE_ALLOWLIST = {scene-screen-1, scene-screen-2}) reads cut_at_ms+target_scene, Solar #73 reads the overlay sub-object. The leaf type is 'json' because the scene_control value is a structured object (target_scene/overlay/cut_at_ms), not a scalar; Orion seeds the declared default on boot and it MUST round-trip the re-frozen overlay-form contract (the prior OBS-native action/transition shape is rejected — Amendment 4). This scene renders nothing OBS-visible itself (it is the wire-declaration scene); the on-air composition is the two OBS monitor_capture scenes + the Solar/CEF overlay above them. scene_version is a zeroed placeholder the harness stamps with the real content hash (m9 parity).",
+  "_fixture": "M10 Orion fan-out scene (Pulsar #64 / pivot, ADR 003 Amendment 5 §A5.3 + Amendment 4 §A4.2 + Amendment 2 §A2.3 / F2). This is NOT the OBS scene graph the monitor_capture sources live in (those are created over obs-websocket by m10_setup.py against pulsar.exe). This is the ORION show scene with TWO jobs. (1) C-FANOUT: it DECLARES the scene_control leaf path so Orion's Inbox.Write fans the Blue delta out to the /show/stream subscribers. Orion's sceneAcceptsPath (Orion/internal/adapters/inbox.go) drops any leaf no loaded scene declares in defaults / operator_inputs / bindings.target_paths; so the active M10 scene MUST declare __inputs.blue.m10-scene-control.scene_control (operator_inputs below) or the switch silently no-ops. (2) RENDER ROOT: its render root is the `wipe-cover` AUTHORING element (Amendment 5 §A5.3). Orion's lowerWipeCover (Orion/internal/compiler/lower_wipe_cover.go, #65) intercepts kind:'wipe-cover' at lowering time and lowers it to a keyframed full-screen frame (RenderNode.keyframes keyed on the declared leaf, fill #C81E5A franc magenta, opacity 0->1 reveal ->1 hold ->0 retract). The authoring props are read off node.Props by name EXACTLY: leaf / reveal_ms / hold_ms / retract_ms / fill (fill optional, defaults to the same magenta). In LSML 1.1 node form these props are SPREAD at the node's top level (matching Orion's EmitLSML lsmlNode: node[k]=raw), NOT nested under a `props` object. The leaf path keys the replay (keyframes.key), so a scene_control delta remounts the KeyframePlayer and re-plays reveal->hold->retract (the M9 reactive path). The keyframes block lives ONLY on the lowered Root; the authoring node keeps kind:'wipe-cover' for EmitLSML, so the C4 LSML content-hash is unperturbed (A5.5). The operator_inputs.default below is a scene_control VALUE in the re-frozen Amendment 4 OVERLAY shape (target_scene + overlay{kind,reveal_ms,hold_ms,retract_ms} + cut_at_ms) that Orion seeds on boot and that MUST round-trip the frozen scene_control contract (scripts/contracts/scene_control/) — the prior OBS-native action/transition shape is rejected. This scene renders nothing OBS-visible itself (the on-air composition is the two OBS monitor_capture scenes + the Solar/CEF overlay above them); the wipe-cover render root is what Solar paints as the opaque cover. scene_version is a zeroed placeholder the harness stamps with the real content hash (m9 parity).",
   "lsml": "1.1",
   "scene_id": "0c8a9e57-0000-4000-8000-0000000000a0",
   "scene_version": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -21,17 +21,12 @@
     }
   ],
   "layout": {
-    "kind": "frame",
-    "id": "root",
-    "size": { "w": 1920, "h": 1080 },
-    "background": "#000000",
-    "children": [
-      {
-        "kind": "text",
-        "id": "m10-marker",
-        "value": "M10 scene-control wire (OBS composition is the two monitor_capture scenes)",
-        "style": { "fontSize": 48, "fontWeight": 700, "color": "#FFFFFF", "textAlign": "center", "fontFamily": "Inter" }
-      }
-    ]
+    "kind": "wipe-cover",
+    "id": "wipe-cover",
+    "leaf": "__inputs.blue.m10-scene-control.scene_control",
+    "reveal_ms": 400,
+    "hold_ms": 500,
+    "retract_ms": 400,
+    "fill": "#C81E5A"
   }
 }
