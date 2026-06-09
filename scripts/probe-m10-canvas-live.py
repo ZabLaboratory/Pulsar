@@ -39,9 +39,23 @@ THE STAND-IN CUT CONSUMER IS THE FROZEN CONTRACT, NOT A FORK
   ``scripts/contracts/scene_control/fixtures/*`` — they cannot drift.
 
 DELIVERY MODES — so the chain is provable WITHOUT the VPS
-  --live-wire     (default, Keeper's antenna run): the real POST /trigger on
-                  the VPS writes the Blue leaf; the stand-in subscribes to the
-                  REAL gateway /show/stream and reads the Orion-fanned delta.
+  --live-wire     (default): the real POST /trigger on the VPS writes the Blue
+                  leaf; the probe subscribes to the REAL gateway /show/stream
+                  and reads the Orion-fanned delta. The CEF still renders from
+                  the LOOPBACK Orion-WS stand-in (the standin serves the scene +
+                  re-fans the leaf locally) — so the overlay is the stand-in's
+                  wipe-cover, not the VPS Solar's.
+  --real-orion    (TRUE-WIRE antenna run, #79): the CEF browser_source loads the
+                  REAL Solar bundle the VPS serves at
+                  /orion/static/solar/v{N}/index.html, wired to the REAL Orion
+                  /show/stream (orion=wss://<gateway>/orion/api/v1/show/stream,
+                  token=<M10_SHOW_TOKEN viewer>). NO loopback stand-in is
+                  started. The CEF subscribes to the REAL Orion, receives the
+                  REAL M10 scene (render root = wipe-cover), and replays the
+                  overlay off the REAL leaf delta Blue pushes through the VPS.
+                  The hard-cut stays LOCAL (the probe fires SetCurrentProgramScene
+                  at cut_at_ms, read from the leaf it observes on its own
+                  read-only /show/stream subscription) — see deliver_leaf.
   --loopback-leaf (dry-run / CI proof-only): the probe INJECTS the exact leaf
                   Orion would fan out into BOTH the in-process stand-in AND the
                   overlay page (via the loopback /leaf.json endpoint), against
@@ -98,6 +112,9 @@ Usage (from the repo root):
     export M10_BLUEPRINT_ID=...            # the scene-control blueprint id
     export M10_SHOW_TOKEN=...              # viewer show-token (etage-1)
     python scripts/probe-m10-canvas-live.py --broadcast --live-wire
+    # TRUE-WIRE antenna run — CEF on the REAL VPS Solar + REAL Orion (#79):
+    export SOLAR_VPS_VERSION=v0.2.2        # optional; defaults to the pinned bundle
+    python scripts/probe-m10-canvas-live.py --broadcast --real-orion
 """
 from __future__ import annotations
 
@@ -285,6 +302,56 @@ DEMO_SCENE_CONTROL_VALUE: dict[str, Any] = {
     },
     "cut_at_ms": 650,  # mid-plateau: reveal(400) <= 650 <= reveal+hold(900)
 }
+
+# --------------------------------------------------------------------------
+# --real-orion delivery (#79 true-wire): the CEF browser_source loads the REAL
+# Solar bundle the VPS serves at /orion/static/solar/v{N}/index.html and points
+# its mount() at the REAL Orion /show/stream over the gateway — NOT the loopback
+# stand-in. The CEF then receives the REAL M10 scene (render root = wipe-cover,
+# TROU 1) and replays the overlay off the REAL leaf delta Blue pushes through the
+# VPS. The loopback Orion-WS stand-in is NOT started in this mode.
+# --------------------------------------------------------------------------
+# The static Solar bundle version Orion serves at /orion/static/solar/v{N}/* —
+# the same immutable-served version Prism vendors (Orion CLAUDE.md endpoints
+# table: GET /static/solar/v{N.N.N}/*). Overridable via SOLAR_VPS_VERSION for an
+# antenna run that vendors a newer bundle, so a Solar release does not need a
+# probe edit. Pinned default tracks the M10 antenna bundle (Solar #77/#12).
+SOLAR_VPS_VERSION = os.environ.get("SOLAR_VPS_VERSION", "v0.2.2").strip()
+
+
+def build_real_orion_overlay_url(*, gateway_url: str, show_token: str,
+                                 solar_version: str = SOLAR_VPS_VERSION) -> str:
+    """Build the browser_source URL that loads the REAL VPS Solar bundle pointed
+    at the REAL Orion /show/stream.
+
+    Shape (the antenna wire, no loopback):
+        {gateway}/orion/static/solar/{ver}/index.html
+            ?mode=broadcast
+            &orion={wss-gateway}/orion/api/v1/show/stream
+            &token={viewer show-token}
+
+    - The page is the bundle Orion static-serves (immutable, long-TTL). The CEF
+      Solar host reads ``orion=`` (its mount() bootstrap: orionUrl = the param)
+      and ``mode=broadcast`` exactly as on the loopback path; only the host it
+      connects to changes (loopback 127.0.0.1 -> the gateway's real Orion).
+    - ``orion=`` is the gateway WS scheme (https->wss / http->ws) so mount()'s
+      deriveBaseUrl resolves the bundle fetch back to the same gateway origin
+      (mount.ts: ws://h:p -> http://h:p) — the bundle is same-origin with the WS,
+      so no CORS seam (unlike the two-port loopback stand-in).
+    - The viewer ``token`` is the M10 show-token; it is URL-encoded and only ever
+      logged through ``redact_show_stream_url`` (C-SEC). It is a VIEWER token —
+      it cannot write a leaf (the runtime never sends input on it).
+    """
+    base = gateway_url.rstrip("/")
+    ws_base = base.replace("https://", "wss://").replace("http://", "ws://")
+    orion_ws = f"{ws_base}/orion/api/v1/show/stream"
+    return (
+        f"{base}/orion/static/solar/{solar_version}/index.html"
+        f"?mode=broadcast"
+        f"&orion={urllib.parse.quote(orion_ws, safe='')}"
+        f"&token={urllib.parse.quote(show_token, safe='')}"
+    )
+
 
 # obs-ws requests that constitute an OBS-NATIVE transition. C-MECH asserts the
 # stand-in NEVER issues any of these — the cut is a bare SetCurrentProgramScene.
@@ -1761,7 +1828,15 @@ def main() -> int:
                     const="live-wire",
                     help="fire the real VPS Blue trigger + read off /show/stream "
                          "(needs M8_GATEWAY_URL/M8_OPERATOR_TOKEN/M10_BLUEPRINT_ID/"
-                         "M10_SHOW_TOKEN)")
+                         "M10_SHOW_TOKEN); CEF renders from the LOOPBACK stand-in")
+    ap.add_argument("--real-orion", dest="delivery", action="store_const",
+                    const="real-orion",
+                    help="TRUE-WIRE: point the CEF browser_source at the REAL VPS "
+                         "Solar bundle (/orion/static/solar/v{N}/index.html) wired "
+                         "to the REAL Orion /show/stream — NO loopback stand-in. "
+                         "Blue VPS trigger pushes the leaf, the real Orion fans it "
+                         "out, the real Solar replays the overlay; the cut stays "
+                         "local. Needs the same env as --live-wire.")
     ap.add_argument("--gateway-url", default=os.environ.get("M8_GATEWAY_URL", ""))
     ap.add_argument("--blueprint-id", default=os.environ.get("M10_BLUEPRINT_ID", ""))
     ap.add_argument("--allow-blank", action="store_true",
@@ -1799,43 +1874,74 @@ def main() -> int:
             return 2
         redactor.add(stream_key, "stream-key")
 
-    # Resolve what to serve to CEF + start the overlay HTTP server.
-    serve_dir, entry, engine = resolve_overlay_serving(log)
+    # In --real-orion mode the CEF loads the REAL VPS Solar bundle wired to the
+    # REAL Orion — NO local overlay server, NO loopback stand-in. The scene
+    # (render root = wipe-cover) and the leaf both come from the antenna. In the
+    # other modes we serve a local page and a loopback Orion-WS stand-in.
+    real_orion = args.delivery == "real-orion"
+
     leaf_state = _LeafState()
-    http_port = find_free_port()
-    httpd = start_overlay_server(http_port, serve_dir, leaf_state)
-
-    # Start the loopback Orion-WS stand-in (#79). The REAL Solar bundle gets its
-    # scene + leaf deltas ONLY from this stream in mode=broadcast; the bundle
-    # GET is served on the SAME port so the runtime's baseUrl (derived from the
-    # orion= host) resolves the wipe-cover RenderBundle. The fallback page does
-    # not need it (it polls /leaf.json) but the extra orion= param is harmless.
+    httpd = None
+    http_port = 0
+    serve_dir: Optional[pathlib.Path] = None
+    engine = "real-orion-vps"
     orion: Optional[OrionStandIn] = None
-    ws_standin_port = find_free_port()
-    try:
-        orion = OrionStandIn(port=ws_standin_port, leaf_path=M10_LEAF_PATH, log=log)
-        orion.start()
-        log(f"[orion] loopback Orion-WS stand-in on {orion.orion_ws_url} "
-            "(LSDP/1.1 snapshot+delta + bundle GET; the real Solar bundle "
-            "renders wipe-cover from THIS stream).")
-    except Exception as exc:  # noqa: BLE001 — fall back to the leaf-poll path
-        log(f"[orion] could not start the Orion-WS stand-in ({type(exc).__name__}: "
-            f"{redactor(str(exc))}); the real Solar bundle will have no scene "
-            "source — only the /leaf.json fallback page can render.")
-        orion = None
 
-    # The overlay URL CEF loads. The REAL Solar host reads `orion=` (its mount()
-    # bootstrap: orionUrl = params.get('orion') ?? wss://${host}/orion/...) and
-    # `mode=broadcast`; a dummy viewer token satisfies the subscribe frame. The
-    # fallback page ignores both and polls /leaf.json off the same origin.
-    orion_q = ""
-    if orion is not None:
-        orion_q = "&orion=" + urllib.parse.quote(orion.orion_ws_url, safe="") \
-            + "&token=m10-viewer-standin"
-    overlay_url = f"http://127.0.0.1:{http_port}/{entry}?mode=broadcast{orion_q}"
-    log(f"[overlay] serving {serve_dir} on http://127.0.0.1:{http_port} "
-        f"(engine={engine}); CEF loads {entry} "
-        f"{'(scene via orion= stand-in)' if orion else '(no orion stand-in)'}")
+    if real_orion:
+        gw = args.gateway_url.strip()
+        show_token = os.environ.get("M10_SHOW_TOKEN", "").strip()
+        if not (gw and show_token):
+            log("error: --real-orion needs M8_GATEWAY_URL + M10_SHOW_TOKEN "
+                "(etage-1) to build the VPS Solar URL. Missing one — refusing.")
+            return 2
+        # Redact the show-token NOW: it is embedded in the overlay URL that is
+        # built and logged below, before deliver_leaf adds it (C-SEC).
+        redactor.add(show_token, "show-token")
+        overlay_url = build_real_orion_overlay_url(
+            gateway_url=gw, show_token=show_token)
+        log(f"[overlay] REAL-ORION: CEF loads the VPS Solar bundle "
+            f"{redact_show_stream_url(overlay_url)} (engine={engine}); the bundle "
+            "subscribes to the REAL Orion /show/stream, fetches the REAL M10 "
+            "scene (render root = wipe-cover), and replays the overlay off the "
+            "real Blue-VPS leaf delta. NO loopback stand-in started.")
+    else:
+        # Resolve what to serve to CEF + start the overlay HTTP server.
+        serve_dir, entry, engine = resolve_overlay_serving(log)
+        http_port = find_free_port()
+        httpd = start_overlay_server(http_port, serve_dir, leaf_state)
+
+        # Start the loopback Orion-WS stand-in (#79). The REAL Solar bundle gets
+        # its scene + leaf deltas ONLY from this stream in mode=broadcast; the
+        # bundle GET is served on the SAME port so the runtime's baseUrl (derived
+        # from the orion= host) resolves the wipe-cover RenderBundle. The fallback
+        # page does not need it (it polls /leaf.json) but the extra orion= param
+        # is harmless.
+        ws_standin_port = find_free_port()
+        try:
+            orion = OrionStandIn(port=ws_standin_port, leaf_path=M10_LEAF_PATH, log=log)
+            orion.start()
+            log(f"[orion] loopback Orion-WS stand-in on {orion.orion_ws_url} "
+                "(LSDP/1.1 snapshot+delta + bundle GET; the real Solar bundle "
+                "renders wipe-cover from THIS stream).")
+        except Exception as exc:  # noqa: BLE001 — fall back to the leaf-poll path
+            log(f"[orion] could not start the Orion-WS stand-in ({type(exc).__name__}: "
+                f"{redactor(str(exc))}); the real Solar bundle will have no scene "
+                "source — only the /leaf.json fallback page can render.")
+            orion = None
+
+        # The overlay URL CEF loads. The REAL Solar host reads `orion=` (its
+        # mount() bootstrap: orionUrl = params.get('orion') ?? wss://${host}/orion/
+        # ...) and `mode=broadcast`; a dummy viewer token satisfies the subscribe
+        # frame. The fallback page ignores both and polls /leaf.json off the same
+        # origin.
+        orion_q = ""
+        if orion is not None:
+            orion_q = "&orion=" + urllib.parse.quote(orion.orion_ws_url, safe="") \
+                + "&token=m10-viewer-standin"
+        overlay_url = f"http://127.0.0.1:{http_port}/{entry}?mode=broadcast{orion_q}"
+        log(f"[overlay] serving {serve_dir} on http://127.0.0.1:{http_port} "
+            f"(engine={engine}); CEF loads {entry} "
+            f"{'(scene via orion= stand-in)' if orion else '(no orion stand-in)'}")
 
     port = find_free_port()
     password = _secrets.token_urlsafe(16)
@@ -1865,10 +1971,11 @@ def main() -> int:
             log(redactor(pulsar.diag()))
         rc = 1
     finally:
-        try:
-            httpd.shutdown()
-        except Exception:
-            pass
+        if httpd is not None:
+            try:
+                httpd.shutdown()
+            except Exception:
+                pass
         if orion is not None:
             try:
                 orion.stop()

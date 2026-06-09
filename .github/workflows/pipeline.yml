@@ -183,7 +183,12 @@ jobs:
           python-version: '3.11'
 
       - name: Install test deps
-        run: python -m pip install --upgrade pip pytest
+        # websockets: the M10 probe module imports it at top level, so the
+        # offline probe tests (test_m10_setup.py, test_probe_m10_real_orion.py)
+        # can only be collected with it present. No OBS binary / no VPS reach
+        # is needed for these — they assert pure logic (leaf path, scene_control
+        # default, the --real-orion URL the CEF loads).
+        run: python -m pip install --upgrade pip pytest websockets
 
       - name: Run scene_control contract test
         # Blue is not checked out in Pulsar CI: the test binds its
@@ -192,6 +197,14 @@ jobs:
         # bound to the REAL Blue leaf_mapper when both repos are present
         # (developer machine; Blue's own CI cross-checks the fixtures).
         run: pytest scripts/contracts/scene_control/ -v
+
+      - name: Run offline M10 harness + probe tests
+        # Provable without pulsar.exe and without the VPS: the F2 Orion
+        # declaration fixture (scene_control leaf path + valid default) and
+        # the --real-orion true-wire URL the CEF browser_source loads. The
+        # on-air legs are the CTest integration suite (needs the build) +
+        # Keeper's antenna run (needs the VPS).
+        run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py -v
 
   # ── Stage 2 : build pulsar.exe (THE ONE BUILD) ────────────────────
   # Every downstream Windows job consumes the `pulsar-rundir` artefact
