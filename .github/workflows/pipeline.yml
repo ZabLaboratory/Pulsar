@@ -203,7 +203,9 @@ jobs:
         # declaration fixture (scene_control leaf path + valid default), the
         # --real-orion true-wire URL the CEF browser_source loads, and the
         # reusable zab-transition Canvas scene (LSML round-trip + embedded logo
-        # data-URI + franc-cut playout helpers, #79). The on-air legs are the
+        # data-URI + smooth-fade playout helpers: Fade-transition resolution +
+        # the Blue-rule-leaf target resolution, #79). The on-air legs (the Fade
+        # actually compositing, the leaf actually read off /show/stream) are the
         # CTest integration suite (needs the build) + Keeper's antenna run.
         run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py scripts/test_zab_transition.py -v
 

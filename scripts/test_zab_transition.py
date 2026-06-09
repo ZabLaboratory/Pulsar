@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Offline tests for the reusable ``zab-transition`` Canvas scene + the
-franc-cut playout helpers (Pulsar #79 fast-track).
+smooth-fade playout helpers (Pulsar #79).
 
-These cover everything provable **without a live ``pulsar.exe``** / VPS — the
-only #79 risk the brief flags (does the ``image`` primitive + the embedded
-data-URI survive as valid LSML):
+These cover everything provable **without a live ``pulsar.exe``** / VPS:
 
   - the ``scripts/fixtures/zab-transition.lsml.json`` scene is well-formed
     LSML 1.1, round-trips byte-for-byte, and is a STATIC render scene (no
@@ -16,17 +14,26 @@ data-URI survive as valid LSML):
   - the logo rides as a complete base64 data-URI in ``image.src`` (a full
     JPEG/PNG, not a truncated URI) — no asset hosting, no Solar rebuild;
   - the white-MID check helper classifies a white frame as covered and a
-    black / busy frame as not (the franc passage is white, not magenta/black).
+    black / busy frame as not (the passage is white, not magenta/black);
+  - the SMOOTH-FADE helpers: ``resolve_fade_transition_name`` picks the OBS Fade
+    transition (by ``fade_transition`` kind, with a name fallback), and
+    ``resolve_transition_target`` drives the playout's target scene off the REAL
+    Blue rule leaf in live-wire (the brief's core) vs the demo target in the dry
+    path.
 
 Run:
     pytest scripts/test_zab_transition.py -v
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import importlib.util
 import json
 import pathlib
+import types
+
+import pytest
 
 _HERE = pathlib.Path(__file__).resolve().parent
 FIXTURE = _HERE / "fixtures" / "zab-transition.lsml.json"
@@ -144,7 +151,109 @@ def test_white_check_classifies_white_logo_black_and_busy():
 
 def test_transition_scene_name_is_not_a_scene_control_target():
     """The transition scene is a local OBS-scene name, NOT a scene_control
-    allowlist member (the allowlist is the leaf-driven cut contract; the franc
-    playout has no leaf). It must stay out of the frozen allowlist."""
+    allowlist member (the allowlist is the leaf-driven target contract; the
+    transition is the scene we fade THROUGH). It must stay out of the allowlist."""
     assert probe.TRANSITION_SCENE == "scene-transition"
     assert probe.TRANSITION_SCENE not in probe.SCENE_ALLOWLIST
+
+
+# --------------------------------------------------------------------------
+# SMOOTH FADE (#79, this branch) — the playout crossfades via the OBS Fade
+# transition instead of hard-cutting, and the target scene B is driven by the
+# REAL Blue rule leaf.
+# --------------------------------------------------------------------------
+def _silent(*_a) -> None:
+    pass
+
+
+def test_resolve_fade_transition_name_picks_by_kind():
+    """The Fade is identified by its stable ``fade_transition`` kind, NOT a
+    hard-coded display name (the name is localisable)."""
+    transitions = [
+        {"transitionName": "Cut", "transitionKind": "cut_transition"},
+        {"transitionName": "Fondu", "transitionKind": "fade_transition"},  # localised
+        {"transitionName": "Swipe", "transitionKind": "swipe_transition"},
+    ]
+    assert probe.resolve_fade_transition_name(transitions) == "Fondu"
+
+
+def test_resolve_fade_transition_name_falls_back_to_literal_name():
+    """If no entry carries the fade kind but one is literally named "Fade"
+    (a build that reports an empty kind), fall back to that name."""
+    transitions = [
+        {"transitionName": "Cut", "transitionKind": "cut_transition"},
+        {"transitionName": "Fade", "transitionKind": ""},
+    ]
+    assert probe.resolve_fade_transition_name(transitions) == "Fade"
+
+
+def test_resolve_fade_transition_name_none_when_no_fade():
+    """A stripped LIGHT build with no Fade transition yields None — the caller
+    then degrades to a bare cut (the fade is the antenna run)."""
+    transitions = [{"transitionName": "Cut", "transitionKind": "cut_transition"}]
+    assert probe.resolve_fade_transition_name(transitions) is None
+    assert probe.resolve_fade_transition_name([]) is None
+
+
+def test_fade_duration_default_and_kind_constants():
+    """The crossfade duration default sits in the brief's 400-500ms band, and
+    the Fade kind constant is OBS's ``fade_transition``."""
+    assert probe.FADE_TRANSITION_KIND == "fade_transition"
+    assert 400 <= probe.FADE_DURATION_MS_DEFAULT <= 500
+
+
+def _args(**kw) -> types.SimpleNamespace:
+    base = dict(delivery="loopback-leaf", gateway_url="", blueprint_id="")
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
+def test_resolve_transition_target_uses_demo_target_on_the_dry_path():
+    """--loopback-leaf / no-VPS: target B falls back to the demo leaf target
+    (the VPS-less structural proof) — NO Blue trigger fired."""
+    target, source = asyncio.run(probe.resolve_transition_target(
+        args=_args(delivery="loopback-leaf"),
+        redactor=probe.Redactor(), log=_silent))
+    assert target == probe.DEMO_SCENE_CONTROL_VALUE["target_scene"]
+    assert "demo leaf" in source
+
+
+def test_resolve_transition_target_consumes_the_real_blue_leaf(monkeypatch):
+    """--live-wire: target B is the ``target_scene`` the REAL Blue rule leaf
+    emits (read off /show/stream), validated through the frozen contract — NOT a
+    probe constant. We stub deliver_leaf to return the LSDP string-JSON leaf the
+    real Blue-VPS pushes, and assert the validated rule target flows through."""
+    rule_ctrl = {
+        "target_scene": "scene-screen-1",  # the RULE chose screen-1, not the demo's screen-2
+        "overlay": {"kind": "wipe-cover", "reveal_ms": 250, "hold_ms": 200,
+                    "retract_ms": 250},
+        "cut_at_ms": 250,
+    }
+    wire_value = json.dumps(rule_ctrl)  # the LSDP string envelope Blue emits (#94/#31)
+
+    async def fake_deliver_leaf(*, args, redactor, log, leaf_state, orion):
+        return 0.0, wire_value
+
+    monkeypatch.setattr(probe, "deliver_leaf", fake_deliver_leaf)
+    target, source = asyncio.run(probe.resolve_transition_target(
+        args=_args(delivery="live-wire", gateway_url="https://gw", blueprint_id="bp"),
+        redactor=probe.Redactor(), log=_silent))
+    # The target is the RULE's choice, decoded+validated — distinct from the demo.
+    assert target == "scene-screen-1"
+    assert target != probe.DEMO_SCENE_CONTROL_VALUE["target_scene"]
+    assert "Blue rule leaf" in source
+
+
+def test_resolve_transition_target_rejects_an_invalid_blue_leaf(monkeypatch):
+    """A Blue leaf that fails the frozen contract must NOT silently pick a
+    target — resolve_transition_target raises rather than fading to an
+    unvalidated scene (C-INJ posture for the target)."""
+    async def fake_deliver_leaf(*, args, redactor, log, leaf_state, orion):
+        return 0.0, json.dumps({"target_scene": "rogue-scene"})  # not in the allowlist
+
+    monkeypatch.setattr(probe, "deliver_leaf", fake_deliver_leaf)
+    with pytest.raises(RuntimeError):
+        asyncio.run(probe.resolve_transition_target(
+            args=_args(delivery="live-wire", gateway_url="https://gw",
+                       blueprint_id="bp"),
+            redactor=probe.Redactor(), log=_silent))

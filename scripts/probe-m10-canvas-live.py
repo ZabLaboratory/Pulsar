@@ -12,6 +12,19 @@ THE PIVOT THIS PROVES (Solar/CEF overlay, NOT an OBS-native transition)
   never seen. There is NO OBS-native transition (C-MECH): the native stinger is
   dormant behind PULSAR_NATIVE_STINGER (default OFF, #73/#83).
 
+TWO DISTINCT PLAYOUTS — read C-MECH narrowly
+  The C-MECH "no OBS-native transition" invariant above is the OVERLAY-CUT
+  pivot's (the default run() / --loopback-leaf / --real-orion path). The
+  SEPARATE --transition-scene playout (run_transition_*) is a SMOOTH SCENE FONDU:
+  it DELIBERATELY arms the OBS-native **Fade** transition (SetCurrentSceneTransition
+  =Fade + a ~450ms duration) so the program switches A~>zab-transition~>B
+  CROSSFADE instead of hard-cutting (C-FADE asserts the Fade IS applied — the
+  inverse of C-MECH). The transition USED there is the Fade — NOT the native
+  stinger, NOT a media/stinger transition, NOT a blend of the captures. Its
+  target B is driven by the REAL Blue rule leaf's scene_control.target_scene (in
+  --live-wire/--real-orion), validated through the same frozen contract. C-MECH
+  does not govern that playout.
+
 THE CHAIN, END TO END (ADR §A4.4):
 
     fire blueprint on the VPS  ──►  POST /blue/api/v1/blueprints/{id}/trigger
@@ -215,14 +228,27 @@ BROWSER_SOURCE_KIND = "browser_source"
 OVERLAY_SCENE = "scene-overlay"
 OVERLAY_INPUT = "m10-overlay-cef"
 
-# The franc-cut transition scene (--transition-scene). A DISTINCT third OBS
+# The smooth-fade transition scene (--transition-scene). A DISTINCT third OBS
 # program scene holding one browser_source that renders the active Orion scene
 # (zab-transition = white + centred Zab logo). It is NOT a scene_control target
 # (it is not in the frozen allowlist — that allowlist is the leaf-driven cut
-# contract, irrelevant to a franc playout), so we never validate it against the
-# contract; it is a local OBS-scene name only.
+# contract, irrelevant to which OBS scene we fade *through*), so we never validate
+# it against the contract; it is a local OBS-scene name only.
 TRANSITION_SCENE = "scene-transition"
 TRANSITION_INPUT = "zab-transition-cef"
+
+# SMOOTH-FADE PLAYOUT (#79, this branch). The playout no longer hard-cuts between
+# scenes: it sets the OBS-native **Fade** transition + a duration, so each
+# SetCurrentProgramScene CROSSFADES (A dissolves into the white+logo passage, the
+# passage dissolves into B) instead of snapping. The Fade transition kind
+# obs-websocket reports is "fade_transition"; its default display name is "Fade".
+# We resolve the actual name off the live list (GetSceneTransitionList) rather
+# than hard-coding "Fade", since the display name is localisable.
+FADE_TRANSITION_KIND = "fade_transition"
+FADE_TRANSITION_NAME_FALLBACK = "Fade"
+# Crossfade duration: long enough to read as a dissolve on air, short enough to
+# stay snappy between the two content scenes (the brief asks ~400-500ms).
+FADE_DURATION_MS_DEFAULT = 450
 # The white-with-logo MID frame check: the transition program frame must be
 # near-WHITE (the franc passage covers the screen with the white scene), NOT
 # magenta (that is the overlay-cover world) and NOT black (Solar did not paint).
@@ -425,8 +451,16 @@ def build_real_orion_overlay_url(*, gateway_url: str, show_token: str,
     )
 
 
-# obs-ws requests that constitute an OBS-NATIVE transition. C-MECH asserts the
-# stand-in NEVER issues any of these — the cut is a bare SetCurrentProgramScene.
+# obs-ws requests that constitute an OBS-NATIVE transition. SCOPE: the OVERLAY-CUT
+# pivot (the wipe-cover / --loopback-leaf / --real-orion path, run_proof →
+# _do_overlay_cut) forbids any of these — there the visible transition is OUR
+# Solar overlay and the content swap is an invisible bare SetCurrentProgramScene
+# under its plateau (C-MECH). It does NOT apply to the --transition-scene fade
+# playout, which DELIBERATELY uses the native Fade (see FADE_* + run_transition_*):
+# the porteur wants a scene fondu, so that playout SETS SetCurrentSceneTransition=
+# Fade + a duration and asserts the Fade IS applied (C-FADE), the opposite of
+# C-MECH. The two playouts are distinct pivots; the franc/no-transition assertion
+# is the overlay path's, not a global rule.
 NATIVE_TRANSITION_REQUESTS = frozenset({
     "SetCurrentSceneTransition",
     "SetCurrentSceneTransitionSettings",
@@ -1442,8 +1476,86 @@ async def setup_transition_scene(inbox: Inbox, ws, *, transition_url: str,
             f"{redact_show_stream_url(transition_url)}")
         return True
     log(f"   [transition] SetCaptureSource on {TRANSITION_SCENE!r} did not return "
-        f"a browser_source ({data}) — light build / no CEF; franc cuts still fire.")
+        f"a browser_source ({data}) — light build / no CEF; the fades still fire.")
     return False
+
+
+def resolve_fade_transition_name(transitions: list) -> Optional[str]:
+    """Find the OBS Fade transition's NAME in a GetSceneTransitionList payload.
+
+    Prefers the entry whose transitionKind is ``fade_transition`` (the stable,
+    non-localisable identity); falls back to an entry literally named "Fade".
+    Returns None if the build registers no Fade transition at all (a stripped
+    LIGHT build) — the caller then keeps the bare cut, since there is nothing to
+    crossfade with."""
+    fade_by_name = None
+    for t in transitions or []:
+        if not isinstance(t, dict):
+            continue
+        if t.get("transitionKind") == FADE_TRANSITION_KIND:
+            name = t.get("transitionName")
+            if isinstance(name, str) and name:
+                return name
+        if t.get("transitionName") == FADE_TRANSITION_NAME_FALLBACK:
+            fade_by_name = FADE_TRANSITION_NAME_FALLBACK
+    return fade_by_name
+
+
+async def setup_fade_transition(inbox: Inbox, ws, *, duration_ms: int,
+                                log: TeeLog) -> bool:
+    """Arm the OBS-native **Fade** transition so the subsequent
+    SetCurrentProgramScene calls CROSSFADE rather than hard-cut (the scene fondu
+    the porteur asked for, #79).
+
+    Reads GetSceneTransitionList, picks the Fade by its ``fade_transition`` kind,
+    SetCurrentSceneTransition=Fade + SetCurrentSceneTransitionDuration=duration_ms,
+    and verifies via GetCurrentSceneTransition that the active transition is now
+    Fade with that duration (proving the fade is APPLIED, not just requested).
+    Returns True when the Fade is armed + verified, False on a build that has no
+    Fade transition or rejected the set (the caller then degrades to a bare cut
+    and logs it; the fade is then the antenna run)."""
+    r = await request(inbox, ws, "GetSceneTransitionList", "fade-list", {})
+    if not req_ok(r):
+        log(f"   [fade] GetSceneTransitionList failed ({r.get('requestStatus')}) "
+            "— cannot arm a fade; degrading to bare cut.")
+        return False
+    rd = r.get("responseData", {}) or {}
+    transitions = rd.get("transitions", []) or []
+    fade_name = resolve_fade_transition_name(transitions)
+    if fade_name is None:
+        names = [t.get("transitionName") for t in transitions if isinstance(t, dict)]
+        log(f"   [fade] no Fade transition registered (kinds present: {names}) — "
+            "LIGHT build? degrading to bare cut; the smooth fade is the antenna run.")
+        return False
+
+    r = await request(inbox, ws, "SetCurrentSceneTransition", "fade-set",
+                      {"transitionName": fade_name})
+    if not req_ok(r):
+        log(f"   [fade] SetCurrentSceneTransition({fade_name!r}) failed "
+            f"({r.get('requestStatus')}) — degrading to bare cut.")
+        return False
+    r = await request(inbox, ws, "SetCurrentSceneTransitionDuration", "fade-dur",
+                      {"transitionDuration": int(duration_ms)})
+    if not req_ok(r):
+        log(f"   [fade] SetCurrentSceneTransitionDuration({duration_ms}) failed "
+            f"({r.get('requestStatus')}) — degrading to bare cut.")
+        return False
+
+    # VERIFY the fade is genuinely active (not just accepted) — the proof the
+    # subsequent program switches crossfade rather than snap.
+    r = await request(inbox, ws, "GetCurrentSceneTransition", "fade-cur", {})
+    cur = r.get("responseData", {}) or {}
+    cur_name = cur.get("transitionName")
+    cur_kind = cur.get("transitionKind")
+    cur_dur = cur.get("transitionDuration")
+    if cur_name != fade_name:
+        log(f"   [fade] verify FAILED: active transition is {cur_name!r}/"
+            f"{cur_kind!r}, not the Fade we set ({fade_name!r}) — degrading.")
+        return False
+    log(f"   [fade] ARMED + VERIFIED: SetCurrentSceneTransition={fade_name!r} "
+        f"(kind={cur_kind!r}), duration={cur_dur}ms. Every SetCurrentProgramScene "
+        "now CROSSFADES (scene fondu), not a hard cut.")
+    return True
 
 
 def is_white_with_logo(mid: dict) -> tuple[bool, str]:
@@ -1574,8 +1686,9 @@ async def hold_on_air_with_ingest_proof(
         if transition_settled and now >= next_loop_at and (deadline - now) > 8.0:
             loops += 1
             log(f"[on-air t={elapsed:4.0f}s] re-loop #{loops}: "
-                f"{SCENE_SCREEN_2!r} → {TRANSITION_SCENE!r} → {SCENE_SCREEN_1!r} "
-                "(franc cuts, white+logo passage) — keeps motion on air.")
+                f"{SCENE_SCREEN_2!r} ~> {TRANSITION_SCENE!r} ~> {SCENE_SCREEN_1!r} "
+                "(crossfades through the white+logo passage — the armed Fade stays "
+                "active) — keeps motion on air.")
             await obs.call("SetCurrentProgramScene", {"sceneName": TRANSITION_SCENE})
             await asyncio.sleep(max(0.4, args.hold_ms / 1000.0))
             # alternate the landing scene so both monitors get airtime
@@ -1617,14 +1730,28 @@ async def hold_on_air_with_ingest_proof(
 
 async def run_transition_playout(
     *, inbox: Inbox, ws, obs: ObsCaller, args, redactor: Redactor, log: TeeLog,
-    stream_key: str, transition_settled: bool,
+    stream_key: str, transition_settled: bool, fade_armed: bool,
+    target_scene: str, leaf_source: str,
     rtmp_lines: Optional[Callable[[], list[str]]] = None,
     transition_url: Optional[str] = None,
 ) -> int:
-    """The franc-cut playout: go-live on screen-1 → CUT to scene-transition
-    (white+logo covers) → hold ~hold_ms → CUT to screen-2. Two bare program
-    switches, no OBS-native transition (C-MECH). Captures frame A (screen-1),
-    MID (transition — must be ~white+logo, not black/magenta), B (screen-2)."""
+    """The SMOOTH-FADE playout: go-live on screen-1 → CROSSFADE to scene-transition
+    (white+logo passage) → hold ~hold_ms → CROSSFADE to ``target_scene``. Two
+    program switches, each running the OBS-native **Fade** transition armed by
+    setup_fade_transition (C-FADE — the scene fondu the porteur asked for, #79),
+    instead of the old bare hard-cuts.
+
+    ``target_scene`` is NOT a hard-coded constant: it is the value driven by the
+    REAL Blue blueprint rule (``scene_control.target_scene`` off /show/stream in
+    --live-wire/--real-orion), validated through the frozen contract; only the
+    --loopback-leaf / no-VPS dry path falls back to the demo leaf's target.
+    ``leaf_source`` labels where it came from (for the log/proof).
+
+    ``fade_armed`` is False on a LIGHT build with no Fade transition registered —
+    the switches then degrade to bare cuts and C-FADE becomes the antenna run.
+
+    Captures frame A (screen-1), MID (the white+logo passage — and, when fading,
+    a mid-fade blend of A↔white), B (target_scene)."""
     hold_ms = args.hold_ms
     FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1633,7 +1760,8 @@ async def run_transition_playout(
                                 {"sceneName": SCENE_SCREEN_1})):
         log("FAIL: could not set program scene to screen-1 pre-flight.")
         return 1
-    log(f"[playout] program scene = {SCENE_SCREEN_1!r} (Scene A, on air)")
+    log(f"[playout] program scene = {SCENE_SCREEN_1!r} (Scene A, on air); "
+        f"target B = {target_scene!r} (from {leaf_source})")
 
     dest_id: Optional[str] = None
     recording = False
@@ -1660,8 +1788,8 @@ async def run_transition_playout(
         log("-> StartDestination started=true (start ACCEPTED — async RTMP connect "
             "pending; real ingest is proven by outputBytes growth, not this flag).")
     else:
-        log("-> --no-broadcast: NOT going live to Twitch (proof-only). The franc "
-            "A→transition→B playout is proven OFF AIR.")
+        log("-> --no-broadcast: NOT going live to Twitch (proof-only). The smooth-"
+            "fade A→transition→B playout is proven OFF AIR.")
 
     r = await request(inbox, ws, "StartRecord", "fc-start-rec", {})
     if req_ok(r):
@@ -1685,25 +1813,43 @@ async def run_transition_playout(
             return 1
 
         pre_scene = await _current_scene(inbox, ws)
+        fade_ms = int(getattr(args, "fade_ms", FADE_DURATION_MS_DEFAULT))
 
         # Give the transition browser_source a brief grace to load + paint the
-        # white+logo page BEFORE the cut lands on it (the first CEF frame is blank
+        # white+logo page BEFORE the fade lands on it (the first CEF frame is blank
         # exactly like the first WGC frame). On a real desktop this lets the MID
         # capture see the white scene; on a headless box it stays blank and
         # --allow-blank defers the visual proof to the antenna run.
         if transition_settled:
             await asyncio.sleep(SOLAR_READY_GRACE_S)
 
-        # CUT #1 — franc cut A → transition. A BARE SetCurrentProgramScene
-        # (C-MECH: no SetCurrentSceneTransition); the white+logo scene covers.
-        cut1_before = len(obs.calls)
+        switch_verb = "FADE" if fade_armed else "cut(no-fade-build)"
+        # FADE #1 — A → transition. The Fade transition (armed above) makes this
+        # SetCurrentProgramScene a CROSSFADE: screen-1 DISSOLVES into the white+
+        # logo passage over ~fade_ms (no hard snap).
+        switch1_before = len(obs.calls)
         r = await obs.call("SetCurrentProgramScene", {"sceneName": TRANSITION_SCENE})
         if not req_ok(r):
-            log(f"FAIL: cut #1 to {TRANSITION_SCENE!r}: {r.get('requestStatus')}")
+            log(f"FAIL: fade #1 to {TRANSITION_SCENE!r}: {r.get('requestStatus')}")
             return 1
-        log(f"[playout] CUT #1 (franc): {SCENE_SCREEN_1!r} -> {TRANSITION_SCENE!r}")
+        log(f"[playout] FADE #1 ({switch_verb}, ~{fade_ms}ms): {SCENE_SCREEN_1!r} "
+            f"~> {TRANSITION_SCENE!r}")
 
-        # HOLD — let Solar settle + render the white+logo scene, capture MID.
+        # MID-FADE frame — grab a frame WHILE the crossfade is still in flight
+        # (well inside fade_ms), so it shows the A↔white BLEND that proves a smooth
+        # dissolve, not a snap. Best-effort: on a fast box the fade may have
+        # finished; we log it as the mid-fade blend candidate either way.
+        if fade_armed:
+            await asyncio.sleep(max(0.05, fade_ms / 1000.0 * 0.4))
+            png_blend, m_blend = await capture_program_frame(inbox, ws, "fc-blend")
+            (FRAMES_DIR / "frame-MIDFADE-blend.png").write_bytes(png_blend)
+            log(f"[frame MID-FADE] crossfade in flight: "
+                f"mean={tuple(round(x) for x in m_blend['mean'])} "
+                f"distinct={m_blend['distinct']} -> "
+                f"{FRAMES_DIR / 'frame-MIDFADE-blend.png'} (A↔white blend candidate)")
+
+        # HOLD — let the fade complete + Solar render the white+logo scene; capture
+        # the settled transition MID.
         await asyncio.sleep(max(0.3, hold_ms / 1000.0 / 2.0))
         png_mid, m_mid = await capture_program_frame(inbox, ws, "fc-mid")
         (FRAMES_DIR / "frame-MID-transition.png").write_bytes(png_mid)
@@ -1714,48 +1860,64 @@ async def run_transition_playout(
         # Finish the hold.
         await asyncio.sleep(max(0.3, hold_ms / 1000.0 / 2.0))
 
-        # CUT #2 — franc cut transition → screen-2. Again a BARE program switch.
-        r = await obs.call("SetCurrentProgramScene", {"sceneName": SCENE_SCREEN_2})
+        # FADE #2 — transition → target_scene (the Blue-leaf-driven target). Again
+        # a crossfade: the white+logo passage DISSOLVES into B.
+        r = await obs.call("SetCurrentProgramScene", {"sceneName": target_scene})
         if not req_ok(r):
-            log(f"FAIL: cut #2 to {SCENE_SCREEN_2!r}: {r.get('requestStatus')}")
+            log(f"FAIL: fade #2 to {target_scene!r}: {r.get('requestStatus')}")
             return 1
-        log(f"[playout] CUT #2 (franc): {TRANSITION_SCENE!r} -> {SCENE_SCREEN_2!r}")
+        log(f"[playout] FADE #2 ({switch_verb}, ~{fade_ms}ms): {TRANSITION_SCENE!r} "
+            f"~> {target_scene!r} (target from {leaf_source})")
 
-        # C-MECH — both cuts were bare SetCurrentProgramScene, ZERO native
-        # transition requests, exactly two program switches.
-        seq_types = [c[1] for c in obs.calls[cut1_before:]]
-        native = obs.native_transition_calls()
-        if native:
-            log(f"FAIL: C-MECH — native transition request(s) issued: {native}.")
-            return 1
+        # C-FADE — the playout did exactly two SetCurrentProgramScene program
+        # switches, AND (when the build registers a Fade) those switches run the
+        # native Fade transition we armed. This is the INVERSE of the overlay
+        # path's C-MECH: here the fondu is DELIBERATE.
+        seq_types = [c[1] for c in obs.calls[switch1_before:]]
         if seq_types != ["SetCurrentProgramScene", "SetCurrentProgramScene"]:
-            log(f"FAIL: C-MECH — playout cut sequence {seq_types} != two bare "
-                "SetCurrentProgramScene (franc cuts, no transition steps).")
+            log(f"FAIL: C-FADE — playout switch sequence {seq_types} != two "
+                "SetCurrentProgramScene (A~>transition~>B).")
             return 1
-        log(f"[C-MECH] OK: playout = {seq_types}; ZERO native-transition requests "
-            f"across the whole run ({len(obs.calls)} obs-ws call(s) total).")
+        if fade_armed:
+            cur = (await request(inbox, ws, "GetCurrentSceneTransition",
+                                 "fade-cfade", {})).get("responseData", {}) or {}
+            if cur.get("transitionKind") != FADE_TRANSITION_KIND:
+                log(f"FAIL: C-FADE — the active transition is {cur.get('transitionName')!r}"
+                    f"/{cur.get('transitionKind')!r}, not the Fade we armed "
+                    f"({FADE_TRANSITION_KIND}). The switches did NOT crossfade.")
+                return 1
+            log(f"[C-FADE] OK: playout = {seq_types}, run through the native Fade "
+                f"transition (kind={cur.get('transitionKind')!r}, "
+                f"duration={cur.get('transitionDuration')}ms) — the two program "
+                "switches CROSSFADE (scene fondu), NOT hard cuts.")
+        else:
+            log(f"[C-FADE] DEGRADED: playout = {seq_types} but no Fade transition "
+                "registered (LIGHT build) — the switches were bare cuts; the smooth "
+                "fondu is the antenna run.")
 
-        # C-CUT — the program scene actually flipped to screen-2.
-        await asyncio.sleep(0.4)
+        # C-CUT — the program scene actually flipped to the target.
+        # Wait out the fade so the program has fully settled on B before we read.
+        await asyncio.sleep(max(0.4, fade_ms / 1000.0 + 0.2))
         now = await _current_scene(inbox, ws)
-        if now != SCENE_SCREEN_2:
-            log(f"FAIL: program scene did not flip to {SCENE_SCREEN_2!r} (got {now!r}).")
+        if now != target_scene:
+            log(f"FAIL: program scene did not flip to {target_scene!r} (got {now!r}).")
             return 1
         png_b, m_b, b_ok = await warmup_capture_until_content(inbox, ws, log)
         if png_b is not None:
             (FRAMES_DIR / "frame-B-screen2.png").write_bytes(png_b)
-        log(f"[frame B] screen-2: mean={tuple(round(x) for x in (m_b['mean'] if png_b else (0,0,0)))} "
+        log(f"[frame B] {target_scene}: mean={tuple(round(x) for x in (m_b['mean'] if png_b else (0,0,0)))} "
             f"content={b_ok} -> {FRAMES_DIR / 'frame-B-screen2.png'}")
-        log(f"[C-CUT] program scene flipped {pre_scene!r} -> {TRANSITION_SCENE!r} "
-            f"-> {now!r} OK")
+        log(f"[C-CUT] program scene flipped {pre_scene!r} ~> {TRANSITION_SCENE!r} "
+            f"~> {now!r} OK (target from {leaf_source})")
 
-        # The MID frame is the white zab-transition scene (the franc passage).
+        # The settled MID frame is the white zab-transition scene (the passage the
+        # fades dissolve through).
         mid_white, mid_why = is_white_with_logo(m_mid)
         a_varied = frame_is_content(m_a)
         if not transition_settled:
             log("[MID] transition browser_source did not render (light build / no "
-                "CEF) — the white+logo visual check is the antenna run; the franc "
-                "cuts + C-MECH are proven.")
+                "CEF) — the white+logo visual check is the antenna run; the fade "
+                "sequence + C-FADE are proven.")
         elif now_mid != TRANSITION_SCENE:
             log(f"FAIL: MID frame was captured while program was {now_mid!r}, not "
                 f"{TRANSITION_SCENE!r} — the hold did not land on the transition.")
@@ -1763,8 +1925,8 @@ async def run_transition_playout(
         elif mid_white and a_varied:
             log(f"[MID] OK: A is varied screen-1 content (distinct={m_a['distinct']}), "
                 f"and MID is the near-WHITE zab-transition scene ({mid_why}) — the "
-                "franc white+logo passage visibly covered the screen between the two "
-                "cuts (NOT magenta, NOT black).")
+                "white+logo passage that the screen-1 → transition crossfade dissolved "
+                "INTO (NOT magenta, NOT black).")
         elif args.allow_blank:
             log(f"[MID] inconclusive (white={mid_white}: {mid_why}; A varied="
                 f"{a_varied}) but --allow-blank: Solar/WGC may not render on this CI "
@@ -1775,8 +1937,10 @@ async def run_transition_playout(
                 "black MID = Solar did not paint, a busy MID = a visible capture cut.")
             return 1
 
-        log("[playout] FRANC A→transition→B proven: two bare program cuts, the "
-            "white+logo Canvas scene covers between them, NO OBS-native transition.")
+        log(f"[playout] SMOOTH-FADE A~>transition~>B proven: two program switches "
+            f"run through the native Fade (armed={fade_armed}, ~{fade_ms}ms each), the "
+            f"white+logo Canvas scene dissolved between them, target B={target_scene!r} "
+            f"driven by {leaf_source}.")
         rc = 0
 
         # ---- LONG ON-AIR HOLD + REAL INGEST PROOF (keeper-m10) ----------------
@@ -2366,10 +2530,48 @@ async def deliver_leaf(*, args, redactor: Redactor, log: TeeLog,
     return recv_t, value
 
 
+async def resolve_transition_target(*, args, redactor: Redactor, log: TeeLog
+                                    ) -> tuple[str, str]:
+    """Resolve the playout's target scene B + a source label.
+
+    In --live-wire / --real-orion: FIRE the real Blue blueprint /trigger and read
+    the FIRST ``scene_control`` leaf the rule emits off the REAL gateway
+    /show/stream, then VALIDATE it through the frozen contract and return
+    ``ctrl["target_scene"]`` — so the fade lands on the scene the Blue RULE chose,
+    not a probe constant (the brief's core: consume the real Blue leaf). The leaf
+    arrives as the LSDP string-JSON envelope (#94/#31); validate_leaf decodes it.
+
+    In --loopback-leaf / no-VPS dry runs: fall back to the demo leaf's target
+    (the VPS-less proof of the playout structure + the smooth fade).
+    """
+    if args.delivery in ("live-wire", "real-orion"):
+        # deliver_leaf fires the trigger + reads /show/stream (live-wire path;
+        # real-orion uses the same env + read). No loopback orion/leaf_state needed.
+        leaf_state = _LeafState()
+        _t, value = await deliver_leaf(
+            args=args, redactor=redactor, log=log, leaf_state=leaf_state, orion=None)
+        ctrl = await validate_leaf(M10_LEAF_PATH, value, log)
+        if ctrl is None:
+            raise RuntimeError(
+                "the Blue scene_control leaf failed the frozen contract — refusing "
+                "to fade to an unvalidated target.")
+        target = ctrl["target_scene"]
+        log(f"   [target] Blue rule leaf → target_scene={target!r} "
+            f"(validated; the fade lands where the RULE chose, not a constant).")
+        return target, f"the real Blue rule leaf ({args.delivery})"
+
+    # loopback-leaf / no-VPS dry: the demo leaf's target (VPS-less structural proof).
+    target = DEMO_SCENE_CONTROL_VALUE["target_scene"]
+    log(f"   [target] no VPS wire ({args.delivery}) — using the demo leaf target "
+        f"{target!r} for the dry smooth-fade proof (the real Blue-rule target is "
+        "the --live-wire / antenna run).")
+    return target, f"the demo leaf ({args.delivery} dry)"
+
+
 # --------------------------------------------------------------------------
-# --transition-scene mode: connect, setup 3 scenes, run the franc-cut playout.
-# A parallel, simpler entry than run()/run_proof (no overlay opacity / no leaf /
-# no wipe-cover). Shares the obs-ws plumbing, C-MECH guard, frame analysis.
+# --transition-scene mode: connect, setup 3 scenes, arm the Fade transition,
+# resolve the Blue-leaf target, run the smooth-fade playout. A parallel entry
+# to run()/run_proof. Shares the obs-ws plumbing + frame analysis.
 # --------------------------------------------------------------------------
 async def run_transition_mode(*, ws_url: str, password: str, args,
                               redactor: Redactor, log: TeeLog, stream_key: str,
@@ -2399,7 +2601,8 @@ async def run_transition_mode(*, ws_url: str, password: str, args,
         log("identified (v5 auth OK)")
         inbox = Inbox()
 
-        # C-MECH precondition — the native stinger is dormant by default.
+        # The native stinger is dormant by default (#73/#83): the fade we use is
+        # the OBS Fade transition, NOT the native stinger.
         rc = await assert_no_native_stinger_default(inbox, ws, log)
         if rc != 0:
             return rc
@@ -2416,12 +2619,24 @@ async def run_transition_mode(*, ws_url: str, password: str, args,
                 inbox, ws, transition_url=transition_url, log=log)
         else:
             log("   [transition] browser_source NOT registered (light build / no "
-                "CEF) — the white scene cannot render; franc cuts still proven.")
+                "CEF) — the white scene cannot render; the fades still fire.")
+
+        # ARM the OBS Fade transition so the program switches CROSSFADE (the scene
+        # fondu, #79) instead of hard-cutting.
+        fade_ms = int(getattr(args, "fade_ms", FADE_DURATION_MS_DEFAULT))
+        fade_armed = await setup_fade_transition(inbox, ws, duration_ms=fade_ms,
+                                                 log=log)
+
+        # Resolve target B — from the REAL Blue rule leaf in live-wire/real-orion,
+        # the demo target in the dry path.
+        target_scene, leaf_source = await resolve_transition_target(
+            args=args, redactor=redactor, log=log)
 
         obs = ObsCaller(inbox, ws)
         return await run_transition_playout(
             inbox=inbox, ws=ws, obs=obs, args=args, redactor=redactor, log=log,
             stream_key=stream_key, transition_settled=transition_settled,
+            fade_armed=fade_armed, target_scene=target_scene, leaf_source=leaf_source,
             rtmp_lines=rtmp_lines, transition_url=transition_url)
 
 
@@ -2543,19 +2758,26 @@ def main() -> int:
                          "out, the real Solar replays the overlay; the cut stays "
                          "local. Needs the same env as --live-wire.")
     ap.add_argument("--transition-scene", action="store_true",
-                    help="FRANC-CUT playout (Pulsar #79 fast-track): A (screen-1) "
-                         "-> a third OBS program scene rendering the reusable "
-                         "zab-transition Canvas scene (white + centred Zab logo) "
-                         "-> B (screen-2), in two BARE program cuts (no fade, no "
-                         "OBS-native transition, no scene_control leaf). Replaces "
-                         "the overlay-cover proof with the simpler scene playout.")
+                    help="SMOOTH-FADE playout (Pulsar #79): A (screen-1) ~> a third "
+                         "OBS program scene rendering the reusable zab-transition "
+                         "Canvas scene (white + centred Zab logo) ~> B, where each "
+                         "program switch CROSSFADES via the OBS-native Fade "
+                         "transition (scene fondu). B = target_scene driven by the "
+                         "REAL Blue rule leaf in --live-wire/--real-orion (the demo "
+                         "target in the dry path).")
+    ap.add_argument("--fade-ms", type=int,
+                    default=int(os.environ.get("LIVE_TEST_FADE_MS",
+                                               str(FADE_DURATION_MS_DEFAULT))),
+                    help="crossfade duration in ms for the OBS Fade transition "
+                         f"(default {FADE_DURATION_MS_DEFAULT}; --transition-scene "
+                         "only)")
     ap.add_argument("--hold-ms", type=int,
                     default=int(os.environ.get("LIVE_TEST_HOLD_MS", "700")),
-                    help="ms to hold on the transition scene between the two franc "
-                         "cuts (default 700; --transition-scene only)")
+                    help="ms to hold on the transition scene between the two "
+                         "crossfades (default 700; --transition-scene only)")
     ap.add_argument("--on-air-secs", type=float,
                     default=float(os.environ.get("LIVE_TEST_ON_AIR_SECS", "0")),
-                    help="after the A→transition→B playout, STAY LIVE this many "
+                    help="after the A~>transition~>B playout, STAY LIVE this many "
                          "seconds, looping the playout and polling REAL ingest "
                          "(outputBytes via obs-ws GetOutputStatus on the Twitch "
                          "destination output) every 5s. 0 = off (the old fast "
