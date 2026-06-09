@@ -67,6 +67,8 @@ from scene_control import (  # noqa: E402
     SceneControlContractError,
     assert_canonical_leaf_path,
     build_leaf_path,
+    decode_scene_control_leaf,
+    encode_scene_control_leaf,
     validate_scene_control,
 )
 
@@ -231,6 +233,137 @@ def test_round_trip_value_is_byte_stable() -> None:
     _, leaf_value = producer_compose_leaf(case["slug"], case["value"])
     validated = validate_scene_control(leaf_value)
     assert json.loads(json.dumps(validated)) == case["value"]
+
+
+# ---------------------------------------------------------------------------
+# LSDP LEAF-TRANSPORT — the load-bearing M10 proof: the contract value is an
+# OBJECT, but the LSDP wire forbids object leaf values, so the value travels
+# as a JSON STRING in one scalar leaf. These tests prove the full transport
+# round-trip producer(object→string) → LSDP-legal scalar leaf → consumer
+# (string→object→validate), which the object-only tests above never proved.
+# ---------------------------------------------------------------------------
+
+
+def _leaf_value_is_lsdp_legal(v: Any) -> bool:
+    """Mirror of `@lumencast/protocol` codec.ts::assertLeafValue.
+
+    Admits exactly `str | int | float | bool | None | list[...]` (recursive)
+    — objects (dict) are FORBIDDEN. This is the rule the real Solar runtime
+    enforces at decode (transport/ws.js → decodeServerFrame), encoded here so
+    the contract test fails the moment a leaf value would be rejected on the
+    wire. (Python `bool` is a subtype of `int`; both are scalar-legal here,
+    matching JS `typeof === "boolean"/"number"`.)
+    """
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return True
+    if isinstance(v, list):
+        return all(_leaf_value_is_lsdp_legal(item) for item in v)
+    return False  # dict / object — INVALID_VALUE on the LSDP wire
+
+
+@pytest.mark.parametrize("case", _VALID, ids=[c["name"] for c in _VALID])
+def test_transport_round_trip_object_to_string_to_object(case: dict[str, Any]) -> None:
+    """Producer encodes object→STRING; consumer decodes STRING→object→validate.
+
+    The decisive cross-service proof for M10:
+
+      1. PRODUCER (Blue) calls `encode_scene_control_leaf(value)` → the leaf
+         VALUE is a JSON **string**.
+      2. That string is LSDP-legal (a plain object would be rejected by the
+         codec with INVALID_VALUE) — asserted against the codec mirror.
+      3. The string is what crosses the leaf
+         `__inputs.blue.<slug>.scene_control` (the SAME canonical path; the
+         path rule is unchanged — only the value envelope changed).
+      4. CONSUMER (Prism / probe) calls `decode_scene_control_leaf(string)`
+         → the original object, re-validated against the frozen schema.
+      5. Both consumers can read what they need from the decoded object
+         (Solar: `overlay`; Prism: `cut_at_ms` + `target_scene`).
+    """
+    slug = case["slug"]
+    value = case["value"]
+
+    # (1) producer serialises the validated object to the leaf string.
+    leaf_string = encode_scene_control_leaf(value)
+    assert isinstance(leaf_string, str)
+
+    # (2) the leaf value is LSDP-legal as a STRING; the bare object is NOT.
+    assert _leaf_value_is_lsdp_legal(leaf_string), (
+        "encoded leaf value must be an LSDP-legal scalar string"
+    )
+    assert not _leaf_value_is_lsdp_legal(value), (
+        "the raw object must be LSDP-ILLEGAL — that is the whole reason the "
+        "string envelope exists (a dict leaf is rejected by assertLeafValue)"
+    )
+
+    # (3) the leaf path is unchanged: the canonical 3-segment form carries
+    # the string value exactly as the producer's leaf_mapper composes it.
+    leaf_path, mapped_value = producer_compose_leaf(slug, leaf_string)
+    assert leaf_path == build_leaf_path(slug)
+    assert assert_canonical_leaf_path(leaf_path) == slug
+    assert mapped_value == leaf_string  # leaf_mapper carries the string as-is
+
+    # (4) consumer decodes the string back to the object + re-validates.
+    decoded = decode_scene_control_leaf(mapped_value)
+    assert decoded == value
+
+    # (5) both consumers can read their slice from the decoded object.
+    assert decoded["overlay"]["kind"] in ALLOWED_OVERLAY_KINDS  # Solar
+    assert decoded["target_scene"] in DEFAULT_SCENE_ALLOWLIST  # Prism
+    assert isinstance(decoded["cut_at_ms"], int)  # Prism
+
+
+def test_transport_encode_validates_before_emitting() -> None:
+    """The producer NEVER serialises an off-contract value onto the wire.
+
+    `encode_scene_control_leaf` runs the frozen validator before encoding, so
+    a value violating any invariant raises rather than producing a string the
+    consumer would have to reject post-transport.
+    """
+    bad = {
+        "target_scene": "scene-screen-2",
+        "overlay": {
+            "kind": "wipe-cover",
+            "reveal_ms": 250,
+            "hold_ms": 200,
+            "retract_ms": 250,
+        },
+        "cut_at_ms": 600,  # CUT-WINDOW violation (> reveal+hold = 450)
+    }
+    with pytest.raises(SceneControlContractError):
+        encode_scene_control_leaf(bad)
+
+
+def test_transport_decode_rejects_object_leaf() -> None:
+    """A consumer receiving a raw OBJECT leaf (envelope bypass) fails loud.
+
+    The contract is leaf-string-JSON; an object leaf could not have crossed
+    the LSDP codec, so receiving one means a producer bypassed the envelope.
+    The decoder rejects it rather than silently accepting an off-wire shape.
+    """
+    obj = _VALID[0]["value"]
+    with pytest.raises(SceneControlContractError):
+        decode_scene_control_leaf(obj)  # a dict, not the JSON string envelope
+
+
+def test_transport_decode_rejects_non_json_string() -> None:
+    """A malformed JSON envelope is rejected before the schema validator."""
+    with pytest.raises(SceneControlContractError):
+        decode_scene_control_leaf("{not valid json")
+
+
+def test_transport_decode_rejects_malicious_after_parse() -> None:
+    """Every malicious VALUE case is still rejected through the string envelope.
+
+    Serialising a malicious payload to a string and decoding it MUST surface
+    the SAME rejection the object validator gives — the envelope adds
+    transport, it does not weaken any invariant. (PATH cases are excluded:
+    they target the leaf path, not the value.)"""
+    for case in _MALICIOUS:
+        if "bad_path" in case:
+            continue
+        leaf_string = json.dumps(case["value"], sort_keys=True, separators=(",", ":"))
+        with pytest.raises(SceneControlContractError):
+            decode_scene_control_leaf(leaf_string)
 
 
 # ---------------------------------------------------------------------------

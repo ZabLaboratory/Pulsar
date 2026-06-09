@@ -48,6 +48,20 @@ The cut-window invariant (`reveal_ms <= cut_at_ms <= reveal_ms + hold_ms`,
 §A4.2 / §A4.7) is the visual-safety core: a cut outside the opaque plateau is
 *seen* on air, so a payload violating it is rejected here, not at the antenna.
 
+LSDP LEAF TRANSPORT (M10 amendment).  The VALUE this contract validates is an
+OBJECT, but the LSDP/1 wire (`@lumencast/protocol` `codec.ts::assertLeafValue`)
+**forbids objects as leaf values** — only `string | number | boolean | null |
+LeafValue[]` are admitted; a plain object raises `INVALID_VALUE` at the
+consumer's decode (in both `delta.patches[].value` and `snapshot.state[path]`),
+so an object leaf would be rejected on the wire and the overlay would never
+paint.  The object therefore travels **serialised as a JSON string** in the
+SAME single scalar leaf `__inputs.blue.<slug>.scene_control`:
+:func:`encode_scene_control_leaf` (producer) validates then JSON-encodes;
+:func:`decode_scene_control_leaf` (consumers) JSON-parses then runs the
+UNCHANGED :func:`validate_scene_control`.  One leaf, one delivery, atomic — and
+every frozen invariant is preserved (only the transport envelope is added).
+See the long note above the encode/decode helpers for the proof.
+
 No third-party imports, no network, no OBS, no Pydantic — pure stdlib so the
 contract test runs on a bare ubuntu runner without the Windows OBS build (it
 is *logic*, not a probe).
@@ -55,6 +69,7 @@ is *logic*, not a probe).
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -325,6 +340,118 @@ def validate_scene_control(
     }
 
 
+# ---------------------------------------------------------------------------
+# LSDP LEAF-TRANSPORT ENVELOPE (M10 — leaf-string-JSON, ADR 003 §A4.2 / the
+# transport amendment this Conduit re-freeze adds).
+#
+# THE TRANSPORT TENSION (proven in source, not deduced).  The `scene_control`
+# VALUE is an OBJECT (`{target_scene, overlay{...}, cut_at_ms}`).  But the
+# LSDP/1 wire forbids an object as a leaf value: `@lumencast/protocol`
+# `codec.ts::assertLeafValue` admits only `string | number | boolean | null |
+# LeafValue[]` and raises `INVALID_VALUE` ("objects are forbidden in patch
+# values, push leaf-grain instead") on a plain object — in BOTH `decodeDelta`
+# (`patches[].value`) and `decodeSnapshot` (`state[path]`).  `LeafValue`
+# (types.ts) structurally excludes objects.  Solar decodes EVERY inbound frame
+# through `decodeServerFrame` (`@lumencast/runtime` transport/ws.js:151,
+# mount.js → applyDelta), so an object leaf is REJECTED at decode → transport
+# error → reconnect loop → the overlay never paints.  M9 worked because its
+# leaves were SCALAR (a colour string `__inputs.blue.<slug>.colour =
+# "#1A9E57"`).
+#
+# THE MECHANISM (leaf-string JSON, the minimal LSDP-legal seam).  The object
+# travels as a JSON **string** in ONE scalar leaf at the SAME canonical path
+# `__inputs.blue.<slug>.scene_control`.  A string is LSDP-legal; the object is
+# not.  Producer (Blue) serialises with `encode_scene_control_leaf`; the
+# consumers (Solar / Prism / probe) `JSON.parse` with
+# `decode_scene_control_leaf` and run the UNCHANGED `validate_scene_control`
+# on the parsed object — every #82 invariant (CUT-WINDOW, NO-OBS-NATIVE,
+# allowlists, strict-keys, bounds) is preserved verbatim; only the transport
+# envelope is added.  Atomicity is preserved: one leaf, one delivery, one cut
+# decision — never a half-applied multi-leaf state.
+#
+# SOLAR needs no decode at all: its `KeyframePlayer` replays purely on the
+# leaf value CHANGING (`keyframe-player.js`: `lastKeyValue.current !== v`); a
+# JSON string flips by `!==` on every push exactly as a primitive does, and
+# the overlay timings live in the compiled bundle node (`buildWipeCoverNode`),
+# not in the leaf.  PRISM needs the decoded object (`cut_at_ms` +
+# `target_scene`), delivered atomically by the single string leaf.
+# ---------------------------------------------------------------------------
+
+
+def encode_scene_control_leaf(
+    payload: Any,
+    *,
+    scene_allowlist: frozenset[str] = DEFAULT_SCENE_ALLOWLIST,
+    overlay_kind_allowlist: frozenset[str] = ALLOWED_OVERLAY_KINDS,
+) -> str:
+    """Validate ``payload`` then serialise it to the LSDP-legal leaf STRING.
+
+    This is what the PRODUCER (Blue #71/#30) writes as the leaf VALUE: the
+    contract object, validated against the frozen schema, then JSON-encoded
+    so it is a *scalar* string the LSDP codec accepts (a plain object would
+    be rejected at the consumer's decode with ``INVALID_VALUE``).
+
+    The object is validated BEFORE encoding — an off-contract value never
+    reaches the wire as a string. The encoding is deterministic
+    (``sort_keys`` + compact separators) so the leaf bytes are stable for a
+    given value, which keeps the round-trip test byte-comparable and makes a
+    re-emit of the same logical value idempotent on the wire.
+
+    Returns the JSON string. Raises ``SceneControlContractError`` on any
+    invariant violation (delegated to :func:`validate_scene_control`).
+    """
+    validated = validate_scene_control(
+        payload,
+        scene_allowlist=scene_allowlist,
+        overlay_kind_allowlist=overlay_kind_allowlist,
+    )
+    return json.dumps(validated, sort_keys=True, separators=(",", ":"))
+
+
+def decode_scene_control_leaf(
+    leaf_value: Any,
+    *,
+    scene_allowlist: frozenset[str] = DEFAULT_SCENE_ALLOWLIST,
+    overlay_kind_allowlist: frozenset[str] = ALLOWED_OVERLAY_KINDS,
+) -> dict[str, Any]:
+    """Decode + validate one ``scene_control`` leaf VALUE off the LSDP wire.
+
+    This is what every CONSUMER (Solar #77 if it ever reads the object,
+    Prism #130, probe #86) runs on the leaf value it receives. The leaf is
+    the LSDP-legal STRING produced by :func:`encode_scene_control_leaf`; this
+    parses it back to the object and runs the UNCHANGED frozen validator, so
+    a consumer can never act on a value the contract rejects.
+
+    Hardening:
+      - the leaf value MUST be a ``str`` (the LSDP-legal envelope). A bare
+        object is rejected here: it could not have crossed the LSDP codec, so
+        receiving one means a producer bypassed the envelope — fail loud.
+      - a string that is not valid JSON, or whose JSON is not an object, is
+        rejected before the schema validator sees it.
+
+    Raises ``SceneControlContractError`` on a non-string leaf, a malformed
+    JSON envelope, or any frozen-schema invariant violation.
+    """
+    if not isinstance(leaf_value, str):
+        raise SceneControlContractError(
+            f"scene_control leaf value must be a JSON STRING on the LSDP wire "
+            f"(objects are forbidden as leaf values — INVALID_VALUE), got "
+            f"{type(leaf_value).__name__}; the producer must JSON-encode the "
+            "value via encode_scene_control_leaf"
+        )
+    try:
+        decoded = json.loads(leaf_value)
+    except (ValueError, TypeError) as exc:
+        raise SceneControlContractError(
+            f"scene_control leaf string is not valid JSON: {exc}"
+        ) from exc
+    return validate_scene_control(
+        decoded,
+        scene_allowlist=scene_allowlist,
+        overlay_kind_allowlist=overlay_kind_allowlist,
+    )
+
+
 __all__ = [
     "ALLOWED_OVERLAY_KINDS",
     "CUT_AT_MS_MAX",
@@ -336,5 +463,7 @@ __all__ = [
     "SceneControlContractError",
     "assert_canonical_leaf_path",
     "build_leaf_path",
+    "decode_scene_control_leaf",
+    "encode_scene_control_leaf",
     "validate_scene_control",
 ]

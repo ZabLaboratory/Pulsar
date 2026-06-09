@@ -1,5 +1,5 @@
 {
-  "description": "Canonical VALID scene_control payloads (ADR 003 Amendment 4 §A4.2 — overlay form). Each is the leaf VALUE written at __inputs.blue.<slug>.scene_control. Blue #71 produces this shape; Solar #73 reads `overlay`, Prism #72 reads `cut_at_ms`+`target_scene`. The cut-window invariant reveal_ms <= cut_at_ms <= reveal_ms+hold_ms holds in every case here. The slug is supplied per-case for the round-trip leaf-path assertion.",
+  "description": "Canonical VALID scene_control payloads (ADR 003 Amendment 4 §A4.2 — overlay form). Each `value` is the LOGICAL object the validator operates on. On the LSDP wire the leaf VALUE at __inputs.blue.<slug>.scene_control is the JSON STRING of this object (objects are forbidden as LSDP leaf values — INVALID_VALUE; Blue serialises via encode_scene_control_leaf, consumers parse via decode_scene_control_leaf). Blue #71/#30 produces+serialises; Solar #73/#77 replays on the value changing (no decode); Prism #72/#130 parses+reads `cut_at_ms`+`target_scene`. The cut-window invariant reveal_ms <= cut_at_ms <= reveal_ms+hold_ms holds in every case. The slug is supplied per-case for the round-trip leaf-path assertion.",
   "cases": [
     {
       "name": "wipe-cover-switch-to-screen-2",
