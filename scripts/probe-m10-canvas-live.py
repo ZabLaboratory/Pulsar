@@ -198,6 +198,28 @@ FRAME_DROP_RATIO_MAX = 0.05
 POLL_INTERVAL_SEC = 5.0
 DESTINATION_NAME = "pulsar-m10-live"
 
+# WGC WARMUP-POLL (#79 timing fix). SPIKE-GPU proved WGC monitor_capture renders
+# non-black GPU-on headless — but the FIRST WGC frame is black: the duplicator /
+# WinRT capture needs a few hundred ms of warmup before it yields live content
+# (probe-spike-gpu-coexist.py polls "GetSourceScreenshot ... until paint" for the
+# same reason; its attempt-1 reads nonblack=0.0% then goes live after polling).
+# capture_program_frame at a FIXED 2s sleep raced that warmup and frame A landed
+# black, hard-failing a box where the pipeline was in fact about to render. The
+# fix mirrors the spike: poll the program frame until frame_is_content (the same
+# predicate the C5″ A/B legs use) before capturing frame A, with a budget. Only a
+# budget expiry that is STILL blank is a real failure (a true dead WGC / blank
+# desktop) — and --allow-blank still downgrades that to the antenna run.
+WARMUP_POLL_BUDGET_S = 30.0
+WARMUP_POLL_INTERVAL_S = 0.5
+# After WGC content is live, give Solar (the CEF overlay bundle) a brief grace to
+# finish connecting to the Orion stream + fetching its render bundle, so the leaf
+# we deliver next is REACTED to (the wipe-cover replays) rather than missed. In
+# loopback mode this is gated on the real signal (a subscriber connected + the
+# bundle fetched on the Orion-WS stand-in); otherwise it is a flat grace.
+SOLAR_READY_BUDGET_S = 12.0
+SOLAR_READY_POLL_INTERVAL_S = 0.3
+SOLAR_READY_GRACE_S = 1.5
+
 # Frame-analysis thresholds (mirrors probe-m6-live.py).
 MODAL_MANHATTAN_TOL = 24
 MIN_DISTINCT_COLOURS = 12
@@ -843,6 +865,92 @@ async def capture_program_frame(inbox: Inbox, ws, rid: str) -> tuple[bytes, dict
     return png, metrics
 
 
+async def warmup_capture_until_content(
+    inbox: Inbox, ws, log: TeeLog, *, budget_s: float = WARMUP_POLL_BUDGET_S,
+    interval_s: float = WARMUP_POLL_INTERVAL_S,
+) -> tuple[Optional[bytes], dict, bool]:
+    """Poll the program frame until the WGC capture yields real content, then
+    return (png, metrics, content_ok). The first WGC frame is black (capture
+    warmup); a single screenshot races that and frame A lands blank. This mirrors
+    probe-spike-gpu-coexist.run_spike's poll loop — capture, decode, analyse, and
+    loop until frame_is_content (the same predicate C5″ uses for A/B) or the
+    budget expires. On expiry it returns the LAST decoded frame with
+    content_ok=False so the caller can apply its --allow-blank policy and the
+    diagnostic ('WGC warmup timed out') is precise. Capture errors / decode
+    failures are tolerated within the budget (the screenshot may not be ready on
+    the first attempts), exactly as the spike tolerates them."""
+    deadline = time.monotonic() + budget_s
+    attempt = 0
+    last_png: Optional[bytes] = None
+    last_metrics: dict = {"distinct": 0, "nonbg_ratio": 0.0, "all_same": True,
+                          "modal": None, "mean": (0.0, 0.0, 0.0)}
+    log(f"[warmup] polling the program frame until WGC capture is non-black "
+        f"(budget {budget_s:.0f}s, interval {interval_s:.1f}s) — the first WGC "
+        "frame is black (capture warmup); a fixed-sleep grab races it.")
+    while time.monotonic() < deadline:
+        attempt += 1
+        try:
+            png, metrics = await capture_program_frame(inbox, ws, f"warmup-{attempt}")
+        except Exception as exc:  # noqa: BLE001 — screenshot may not be ready yet
+            if attempt == 1 or attempt % 6 == 0:
+                log(f"   [warmup] attempt {attempt}: screenshot not ready "
+                    f"({type(exc).__name__}) — still warming up")
+            await asyncio.sleep(interval_s)
+            continue
+        last_png, last_metrics = png, metrics
+        if frame_is_content(metrics):
+            log(f"   [warmup] attempt {attempt}: capture LIVE "
+                f"(distinct={metrics['distinct']} nonbg={metrics['nonbg_ratio']*100:.1f}%) "
+                "— WGC warmed up, proceeding to frame A.")
+            return last_png, last_metrics, True
+        if attempt == 1 or attempt % 6 == 0:
+            log(f"   [warmup] attempt {attempt}: still black/blank "
+                f"(distinct={metrics['distinct']} nonbg={metrics['nonbg_ratio']*100:.1f}%) "
+                "— polling")
+        await asyncio.sleep(interval_s)
+    log(f"[warmup] WGC warmup timed out after {budget_s:.0f}s ({attempt} attempt(s)) "
+        "— the capture never produced non-black content. On a real interactive GPU "
+        "desktop this should not happen; in CI / a blank box it is expected.")
+    return last_png, last_metrics, False
+
+
+async def wait_solar_ready(
+    log: TeeLog, *, overlay_settled: bool, delivery: str,
+    orion: Optional["OrionStandIn"] = None,
+    budget_s: float = SOLAR_READY_BUDGET_S,
+) -> None:
+    """Hold until the Solar overlay (the CEF bundle) is ready to REACT to the
+    leaf, so the leaf we deliver next replays the wipe-cover instead of arriving
+    before the bundle loaded. In --loopback-leaf this gates on the real signal:
+    the Orion-WS stand-in reports a subscriber connected AND the render bundle
+    fetched (the bundle's KeyframePlayer is then live on the stream). Otherwise it
+    is a flat grace. Always best-effort: a timeout is a NOTE, never a failure —
+    delivery still happens (and --allow-blank covers a non-rendering box)."""
+    if not overlay_settled:
+        return
+    if delivery == "loopback-leaf" and orion is not None:
+        deadline = time.monotonic() + budget_s
+        while time.monotonic() < deadline:
+            if orion.subscribe_count > 0 and orion.bundle_fetch_count > 0:
+                log(f"[solar] overlay ready: Orion-WS stand-in saw "
+                    f"{orion.subscribe_count} subscriber(s) + "
+                    f"{orion.bundle_fetch_count} bundle fetch(es) — the Solar "
+                    "bundle is connected and listening; the leaf will be reacted to.")
+                await asyncio.sleep(SOLAR_READY_GRACE_S)
+                return
+            await asyncio.sleep(SOLAR_READY_POLL_INTERVAL_S)
+        log(f"[solar] NOTE: no Solar subscriber/bundle-fetch on the Orion-WS "
+            f"stand-in within {budget_s:.0f}s (subs={orion.subscribe_count} "
+            f"fetches={orion.bundle_fetch_count}) — the real bundle may not have "
+            "connected (CORS / light build); delivering anyway, the /leaf.json "
+            "fallback page still drives the overlay.")
+        return
+    # No real readiness signal available — a flat grace before delivery.
+    log(f"[solar] grace {SOLAR_READY_GRACE_S:.1f}s for the CEF overlay to settle "
+        "before delivering the leaf.")
+    await asyncio.sleep(SOLAR_READY_GRACE_S)
+
+
 def is_overlay_cover(mid: dict) -> tuple[bool, str]:
     """C5″ — the MID frame is the OVERLAY COVER (the Solar wipe-cover at its
     opaque plateau), NOT a hard cut between two captures. The cover is a
@@ -1116,17 +1224,30 @@ async def run_proof(
     else:
         log(f"   warn: StartRecord declined: {r.get('requestStatus')}")
 
-    # Settle, then capture FRAME A (screen-1, on air, overlay transparent).
-    await asyncio.sleep(2.0)
-    png_a, m_a = await capture_program_frame(inbox, ws, "frame-a")
+    # WARMUP: poll the program frame until WGC capture is live BEFORE grabbing
+    # frame A. The first WGC frame is black (capture warmup, SPIKE-GPU #70) — a
+    # fixed sleep raced it and frame A landed blank. Only a budget expiry that is
+    # STILL blank is a real failure (and --allow-blank downgrades it).
+    png_a, m_a, content_ok = await warmup_capture_until_content(inbox, ws, log)
+    if png_a is None:
+        log("FAIL: never decoded a program frame during warmup — "
+            "GetSourceScreenshot kept failing (the program scene produced none).")
+        if dest_id:
+            await _stop_broadcast(inbox, ws, dest_id, recording, log)
+        return 1
+    # Also wait for Solar to be ready to react before we deliver the leaf, so the
+    # wipe-cover actually replays (the leaf is delivered later, at deliver_at).
+    await wait_solar_ready(log, overlay_settled=overlay_settled,
+                           delivery=args.delivery, orion=orion)
     (FRAMES_DIR / "frame-A-screen1.png").write_bytes(png_a)
     log(f"[frame A] screen-1: mean={tuple(round(x) for x in m_a['mean'])} "
         f"distinct={m_a['distinct']} nonbg={m_a['nonbg_ratio']*100:.1f}% "
-        f"-> {FRAMES_DIR / 'frame-A-screen1.png'}")
-    if not frame_is_content(m_a) and not args.allow_blank:
-        log("FAIL: frame A is blank — screen-1 WGC capture produced no content. "
-            "(A CI box with no real desktop can pass --allow-blank to exercise "
-            "the wire without the visual assertion.)")
+        f"content={content_ok} -> {FRAMES_DIR / 'frame-A-screen1.png'}")
+    if not content_ok and not args.allow_blank:
+        log("FAIL: frame A is blank after WGC warmup timed out — screen-1 WGC "
+            "capture never produced content within the warmup budget. (A CI box "
+            "with no real desktop can pass --allow-blank to exercise the wire "
+            "without the visual assertion.)")
         if dest_id:
             await _stop_broadcast(inbox, ws, dest_id, recording, log)
         return 1
