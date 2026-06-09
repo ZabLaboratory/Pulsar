@@ -165,6 +165,7 @@ from contracts.scene_control import (  # noqa: E402
     SceneControlContractError,
     assert_canonical_leaf_path,
     build_leaf_path,
+    decode_scene_control_leaf,
     validate_scene_control,
 )
 
@@ -781,12 +782,30 @@ async def validate_leaf(path: str, value: Any, log: TeeLog) -> Optional[dict]:
         return None  # not our leaf (Solar overlay inputs etc. land here too)
 
     # The single gate before any obs-ws call — the FROZEN overlay-form contract.
+    # TRANSPORT SEAM (#31 leaf-string-JSON): on the REAL LSDP wire the leaf VALUE
+    # is the JSON *string* Blue's encode_scene_control_leaf produces (the LSDP
+    # codec forbids objects as leaf values). The real consumers (Prism #130,
+    # Solar where it reads the object) JSON-parse it back via
+    # decode_scene_control_leaf before validating. So when the value arrives as a
+    # str (live-wire / real-orion, off /show/stream.lsdp), decode-then-validate;
+    # when it is already an object (loopback-leaf injection + the in-process
+    # C-INJ corpus, which feed the pre-wire object form), validate it directly.
+    # Both paths run the SAME frozen validate_scene_control on the decoded object,
+    # so every invariant is preserved — only the LSDP transport envelope is
+    # peeled. A malicious / undecodable string is rejected here ⇒ 0 obs-ws (C-INJ).
     try:
-        ctrl = validate_scene_control(
-            value,
-            scene_allowlist=SCENE_ALLOWLIST,
-            overlay_kind_allowlist=OVERLAY_KIND_ALLOWLIST,
-        )
+        if isinstance(value, str):
+            ctrl = decode_scene_control_leaf(
+                value,
+                scene_allowlist=SCENE_ALLOWLIST,
+                overlay_kind_allowlist=OVERLAY_KIND_ALLOWLIST,
+            )
+        else:
+            ctrl = validate_scene_control(
+                value,
+                scene_allowlist=SCENE_ALLOWLIST,
+                overlay_kind_allowlist=OVERLAY_KIND_ALLOWLIST,
+            )
     except SceneControlContractError as exc:
         log(f"   [cut] REJECTED leaf {path!r} (slug={slug}): {exc} — 0 obs-ws calls")
         return None

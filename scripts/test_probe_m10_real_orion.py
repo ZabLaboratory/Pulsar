@@ -16,10 +16,14 @@ Run:
 """
 from __future__ import annotations
 
+import asyncio
 import importlib.util
+import json
 import pathlib
 import sys
 import urllib.parse as up
+
+import pytest
 
 _HERE = pathlib.Path(__file__).resolve().parent
 
@@ -165,3 +169,70 @@ def test_real_orion_is_a_distinct_delivery_mode():
     assert 'const="real-orion"' in src
     assert 'const="live-wire"' in src
     assert 'const="loopback-leaf"' in src
+
+
+# --------------------------------------------------------------------------
+# BUG 2 (#79 / #31) — the stand-in cut consumer decodes the LSDP string-JSON
+# scene_control leaf off the REAL wire, and validates the pre-wire object form
+# on the loopback path. Both run the SAME frozen validator; an undecodable /
+# malicious string is rejected (0 obs-ws, C-INJ).
+# --------------------------------------------------------------------------
+_VALID_CTRL = {
+    "target_scene": "scene-screen-2",
+    "overlay": {"kind": "wipe-cover", "reveal_ms": 250, "hold_ms": 200,
+                "retract_ms": 250},
+    "cut_at_ms": 250,
+}
+
+
+def _silent_log(_line: str = "") -> None:
+    pass
+
+
+def test_validate_leaf_decodes_string_json_leaf_from_the_real_wire():
+    """The real Blue-VPS pushes the scene_control leaf as a JSON STRING (LSDP
+    forbids objects as leaf values, #31). validate_leaf must JSON-decode it via
+    decode_scene_control_leaf, then run the frozen validator — yielding the same
+    ctrl the object form yields."""
+    wire_value = json.dumps(_VALID_CTRL)  # the LSDP-legal string envelope
+    assert isinstance(wire_value, str)
+    ctrl = asyncio.run(
+        probe.validate_leaf(probe.M10_LEAF_PATH, wire_value, _silent_log))
+    assert ctrl is not None
+    assert ctrl["target_scene"] == "scene-screen-2"
+    assert ctrl["overlay"]["kind"] == "wipe-cover"
+    assert ctrl["cut_at_ms"] == 250
+
+
+def test_validate_leaf_accepts_object_leaf_on_the_loopback_path():
+    """The loopback-leaf injection + the in-process C-INJ corpus feed the
+    pre-wire OBJECT form; validate_leaf must validate it directly (no decode),
+    producing the same ctrl as the string-JSON wire form."""
+    ctrl = asyncio.run(
+        probe.validate_leaf(probe.M10_LEAF_PATH, dict(_VALID_CTRL), _silent_log))
+    assert ctrl is not None
+    assert ctrl["target_scene"] == "scene-screen-2"
+
+
+def test_validate_leaf_string_and_object_forms_agree():
+    """The two transport forms of the SAME logical leaf yield identical ctrl —
+    the decode peels only the LSDP envelope, nothing else."""
+    from_str = asyncio.run(
+        probe.validate_leaf(probe.M10_LEAF_PATH, json.dumps(_VALID_CTRL),
+                            _silent_log))
+    from_obj = asyncio.run(
+        probe.validate_leaf(probe.M10_LEAF_PATH, dict(_VALID_CTRL), _silent_log))
+    assert from_str == from_obj
+
+
+@pytest.mark.parametrize("bad", [
+    "not json at all",                       # undecodable string
+    "[1, 2, 3]",                             # valid JSON but not an object
+    json.dumps({"target_scene": "rogue-scene"}),  # decodes but fails schema
+    json.dumps({"target_scene": "scene-screen-2"}),  # missing overlay/cut_at_ms
+])
+def test_validate_leaf_rejects_malicious_or_undecodable_string(bad):
+    """C-INJ: a string that is not valid JSON, not an object, or fails the frozen
+    schema is rejected ⇒ validate_leaf returns None ⇒ ZERO obs-ws calls."""
+    assert asyncio.run(
+        probe.validate_leaf(probe.M10_LEAF_PATH, bad, _silent_log)) is None
