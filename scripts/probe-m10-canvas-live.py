@@ -914,56 +914,6 @@ async def warmup_capture_until_content(
     return last_png, last_metrics, False
 
 
-async def prewarm_scene_capture(
-    inbox: Inbox, ws, log: TeeLog, *, scene: str,
-    budget_s: float = WARMUP_POLL_BUDGET_S,
-) -> bool:
-    """SETUP-PHASE pre-warm of ONE monitor_capture scene's WGC capture.
-
-    The C5″/SPIKE-CUT proof later hard-cuts screen-1 → screen-2 and captures
-    MID + B from screen-2's monitor_capture. But a WGC capture's FIRST frames
-    are black (duplicator warmup, SPIKE-GPU #70) and a capture only warms while
-    it is the PROGRAM scene — screen-2 only becomes program AT the cut, so MID/B
-    landed black ('B varied=False') even though screen-1 (warmed at go-live) was
-    fine. This pre-warms screen-2 the same way: briefly make it program, poll its
-    capture until non-black, then the CALLER restores the program scene. When the
-    cut fires later, screen-2's WGC is already hot → MID/B carry real content.
-
-    CRUCIAL (C-MECH trap): this switch is a RAW ``request`` (like ``go-s1`` and
-    the ``ov-cur-`` overlay-install switches), NOT an ``obs.call`` — it never
-    touches ``ObsCaller.calls``, so the C-MECH 'the proof issued exactly one
-    obs-ws call = the cut' assertion (which reads only ``obs.calls``) is blind to
-    every setup/warmup ``SetCurrentProgramScene``. The proof window is bracketed
-    by ``calls_before = len(obs.calls)`` at the cut; this pre-warm runs entirely
-    before that and outside ``obs``.
-
-    Returns True if the scene's capture produced content within the budget; False
-    on a budget expiry that is still blank (CI runner with no displays / no
-    content on display 2). The caller applies its --allow-blank policy."""
-    log(f"[prewarm] pre-warming {scene!r} WGC capture before the proof "
-        "(briefly making it program so its duplicator warms; this is a SETUP "
-        "switch via raw request, NOT counted as a proof obs-ws call — C-MECH "
-        "reads obs.calls only, which this never touches).")
-    if not req_ok(await request(inbox, ws, "SetCurrentProgramScene",
-                                f"prewarm-go-{scene}", {"sceneName": scene})):
-        log(f"   [prewarm] WARN: could not set program to {scene!r} for pre-warm "
-            "— skipping its warmup (the proof cut may then land MID/B blank).")
-        return False
-    _png, metrics, content_ok = await warmup_capture_until_content(
-        inbox, ws, log, budget_s=budget_s)
-    if content_ok:
-        log(f"   [prewarm] {scene!r} capture is now HOT "
-            f"(distinct={metrics['distinct']}, "
-            f"nonbg={metrics['nonbg_ratio']*100:.1f}%) — the later hard-cut to it "
-            "will land on real content, not a cold black frame.")
-    else:
-        log(f"   [prewarm] NOTE: {scene!r} capture still blank after warmup — put "
-            f"visible content on display 2. The later cut to {scene!r} will then "
-            "yield blank MID/B frames; with --allow-blank this downgrades to the "
-            "antenna run, without it the proof FAILs with this diagnostic.")
-    return content_ok
-
-
 async def wait_solar_ready(
     log: TeeLog, *, overlay_settled: bool, delivery: str,
     orion: Optional["OrionStandIn"] = None,
@@ -1246,31 +1196,15 @@ async def run_proof(
         return 1
     log(f"[proof] program scene = {SCENE_SCREEN_1!r} (on air, overlay above it)")
 
-    # PRE-WARM BOTH captures BEFORE the proof. screen-1 is warmed below (frame A);
-    # screen-2's WGC capture must ALSO be hot, because the proof hard-cuts to it
-    # and grabs MID/B there — but a capture only warms while it is PROGRAM, and
-    # screen-2 only becomes program AT the cut, so its first (MID/B) frames were
-    # black ('B varied=False'). Here we briefly make screen-2 program, poll its
-    # capture until non-black, then restore screen-1 and warm IT. This pre-warm is
-    # SETUP (raw request, not obs.call) — it does NOT enter obs.calls, so the
-    # C-MECH 'one proof obs-ws call = the cut' assertion never sees these
-    # switches (the proof window is bracketed at the cut, after this). In CI with
-    # no displays screen-2 stays blank → --allow-blank tolerates it.
-    screen2_hot = await prewarm_scene_capture(inbox, ws, log, scene=SCENE_SCREEN_2)
-    if not screen2_hot and not args.allow_blank:
-        log(f"FAIL: {SCENE_SCREEN_2!r} WGC capture never produced content during "
-            "pre-warm — the later cut to it would land MID/B blank, which cannot "
-            "prove an invisible overlay-covered cut. Put visible content on "
-            "display 2, or pass --allow-blank to exercise the wire without the "
-            "visual assertion (the antenna run does the rest).")
-        return 1
-    # Restore screen-1 as program for the go-live frame-A warmup that follows.
-    if not req_ok(await request(inbox, ws, "SetCurrentProgramScene", "go-s1-back",
-                                {"sceneName": SCENE_SCREEN_1})):
-        log("FAIL: could not restore program scene to screen-1 after pre-warm.")
-        return 1
-    log(f"[proof] program scene restored to {SCENE_SCREEN_1!r} after pre-warming "
-        f"{SCENE_SCREEN_2!r} (both monitor_capture sources now warming/hot).")
+    # NO PRE-WARM of screen-2 here (the earlier double-switch was removed, #79).
+    # WGC keeps warm ONLY the capture of the scene currently PROGRAM: pre-warming
+    # screen-2 (making it program, warming it, switching back) COOLED screen-1, so
+    # screen-1 had to re-warm and frame A landed black. The natural mechanism is
+    # the right one: screen-1 stays program through go-live and frame A (so it
+    # warms and frame A is content); screen-2 becomes program AT the cut and warms
+    # UNDER the opaque overlay plateau (invisible to the viewer), then a frame-B
+    # warmup-poll (after the cut + overlay retract, below) waits for it to deliver
+    # real content before capturing B. No screen-2 program switch happens here.
 
     dest_id: Optional[str] = None
     recording = False
@@ -1466,10 +1400,27 @@ async def _do_overlay_cut(
         log(f"FAIL: program scene did not flip to {SCENE_SCREEN_2!r} (got {now!r}) "
             "— C-CUT.")
         return 1
-    png_b, m_b = await capture_program_frame(inbox, ws, "frame-b")
+    # FRAME-B WARMUP-POLL (#79). screen-2 only became PROGRAM at the cut, and WGC
+    # keeps warm only the program scene's capture — so screen-2's duplicator starts
+    # cold here and its FIRST frame is black (SPIKE-GPU #70), exactly as screen-1's
+    # was at go-live. screen-2 has been warming UNDER the opaque overlay plateau
+    # since the cut (invisible to the viewer); we now poll its program capture until
+    # it yields real content before grabbing frame B, reusing the SAME predicate and
+    # loop as the frame-A warmup. This runs AFTER the cut/ordering/C-MECH have all
+    # been measured, so waiting here affects NO sequencing assertion — B only
+    # confirms screen-2 shows real content once the transition completes. The poll
+    # uses raw GetSourceScreenshot reads (capture_program_frame), NOT obs.call, so
+    # obs.calls (and thus C-MECH) is untouched. A budget expiry that is still blank
+    # is tolerated by --allow-blank (CI box with no displays), like frame A.
+    png_b, m_b, b_content_ok = await warmup_capture_until_content(inbox, ws, log)
+    if png_b is None:
+        log("FAIL: never decoded a screen-2 program frame during the frame-B "
+            "warmup — GetSourceScreenshot kept failing after the cut.")
+        return 1
     (FRAMES_DIR / "frame-B-screen2.png").write_bytes(png_b)
     log(f"[frame B] screen-2: mean={tuple(round(x) for x in m_b['mean'])} "
-        f"distinct={m_b['distinct']} -> {FRAMES_DIR / 'frame-B-screen2.png'}")
+        f"distinct={m_b['distinct']} nonbg={m_b['nonbg_ratio']*100:.1f}% "
+        f"content={b_content_ok} -> {FRAMES_DIR / 'frame-B-screen2.png'}")
     log(f"[C-CUT] program scene flipped {pre_scene!r} -> {now!r} OK")
 
     # ---- C-CUT + SPIKE-CUT: the cut fell UNDER the opaque plateau ----
