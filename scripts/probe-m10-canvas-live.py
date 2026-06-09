@@ -165,6 +165,7 @@ from contracts.scene_control import (  # noqa: E402
     SceneControlContractError,
     assert_canonical_leaf_path,
     build_leaf_path,
+    decode_scene_control_leaf,
     validate_scene_control,
 )
 
@@ -348,14 +349,22 @@ SOLAR_VPS_VERSION = os.environ.get("SOLAR_VPS_VERSION", "v0.2.2").strip()
 def build_real_orion_overlay_url(*, gateway_url: str, show_token: str,
                                  solar_version: str = SOLAR_VPS_VERSION) -> str:
     """Build the browser_source URL that loads the REAL VPS Solar bundle pointed
-    at the REAL Orion /show/stream.
+    at the REAL Orion /show/stream.lsdp.
 
-    Shape (the antenna wire, no loopback):
+    Shape (the antenna wire, no loopback) — the EXACT Prism contract
+    (``Prism/src/main/broadcast-url.ts`` ``getSolarSceneUrl``):
         {gateway}/orion/static/solar/{ver}/index.html
-            ?mode=broadcast
-            &orion={wss-gateway}/orion/api/v1/show/stream
-            &token={viewer show-token}
+            ?orion={wss-gateway}/orion/api/v1/show/stream.lsdp?token={show}
+            &mode=broadcast
 
+    - The token rides INSIDE the ``orion=`` WS URL (url-encoded), NOT as a
+      top-level ``&token=`` param. ZabGate gates ``/show/stream`` on the viewer
+      ``?token=`` query-string and 403s the WS upgrade before any frame; the
+      runtime (@lumencast/runtime) opens the WS on the bare ``orion=`` URL it is
+      handed, so the token MUST already be in that URL's query. A top-level
+      ``&token=`` never reaches the WS handshake — it is the bug this fixes.
+    - The endpoint is ``/show/stream.lsdp`` (the LSDP show-stream path ZabGate
+      accepts a viewer query-token on), not the bare ``/show/stream``.
     - The page is the bundle Orion static-serves (immutable, long-TTL). The CEF
       Solar host reads ``orion=`` (its mount() bootstrap: orionUrl = the param)
       and ``mode=broadcast`` exactly as on the loopback path; only the host it
@@ -364,18 +373,24 @@ def build_real_orion_overlay_url(*, gateway_url: str, show_token: str,
       deriveBaseUrl resolves the bundle fetch back to the same gateway origin
       (mount.ts: ws://h:p -> http://h:p) — the bundle is same-origin with the WS,
       so no CORS seam (unlike the two-port loopback stand-in).
-    - The viewer ``token`` is the M10 show-token; it is URL-encoded and only ever
-      logged through ``redact_show_stream_url`` (C-SEC). It is a VIEWER token —
-      it cannot write a leaf (the runtime never sends input on it).
+    - The viewer ``token`` is the M10 show-token; the whole ``orion=`` URL (token
+      included) is url-encoded and only ever logged through
+      ``redact_show_stream_url`` (C-SEC). It is a VIEWER token — it cannot write a
+      leaf (the runtime never sends input on it).
     """
     base = gateway_url.rstrip("/")
     ws_base = base.replace("https://", "wss://").replace("http://", "ws://")
-    orion_ws = f"{ws_base}/orion/api/v1/show/stream"
+    # The token is nested IN the WS URL's own query (Prism contract): the
+    # runtime opens the WS on this URL verbatim, so the ?token= ZabGate gates on
+    # is already present at upgrade time.
+    orion_ws = (
+        f"{ws_base}/orion/api/v1/show/stream.lsdp"
+        f"?token={urllib.parse.quote(show_token, safe='')}"
+    )
     return (
         f"{base}/orion/static/solar/{solar_version}/index.html"
-        f"?mode=broadcast"
-        f"&orion={urllib.parse.quote(orion_ws, safe='')}"
-        f"&token={urllib.parse.quote(show_token, safe='')}"
+        f"?orion={urllib.parse.quote(orion_ws, safe='')}"
+        f"&mode=broadcast"
     )
 
 
@@ -793,12 +808,30 @@ async def validate_leaf(path: str, value: Any, log: TeeLog) -> Optional[dict]:
         return None  # not our leaf (Solar overlay inputs etc. land here too)
 
     # The single gate before any obs-ws call — the FROZEN overlay-form contract.
+    # TRANSPORT SEAM (#31 leaf-string-JSON): on the REAL LSDP wire the leaf VALUE
+    # is the JSON *string* Blue's encode_scene_control_leaf produces (the LSDP
+    # codec forbids objects as leaf values). The real consumers (Prism #130,
+    # Solar where it reads the object) JSON-parse it back via
+    # decode_scene_control_leaf before validating. So when the value arrives as a
+    # str (live-wire / real-orion, off /show/stream.lsdp), decode-then-validate;
+    # when it is already an object (loopback-leaf injection + the in-process
+    # C-INJ corpus, which feed the pre-wire object form), validate it directly.
+    # Both paths run the SAME frozen validate_scene_control on the decoded object,
+    # so every invariant is preserved — only the LSDP transport envelope is
+    # peeled. A malicious / undecodable string is rejected here ⇒ 0 obs-ws (C-INJ).
     try:
-        ctrl = validate_scene_control(
-            value,
-            scene_allowlist=SCENE_ALLOWLIST,
-            overlay_kind_allowlist=OVERLAY_KIND_ALLOWLIST,
-        )
+        if isinstance(value, str):
+            ctrl = decode_scene_control_leaf(
+                value,
+                scene_allowlist=SCENE_ALLOWLIST,
+                overlay_kind_allowlist=OVERLAY_KIND_ALLOWLIST,
+            )
+        else:
+            ctrl = validate_scene_control(
+                value,
+                scene_allowlist=SCENE_ALLOWLIST,
+                overlay_kind_allowlist=OVERLAY_KIND_ALLOWLIST,
+            )
     except SceneControlContractError as exc:
         log(f"   [cut] REJECTED leaf {path!r} (slug={slug}): {exc} — 0 obs-ws calls")
         return None
@@ -2406,13 +2439,16 @@ def main() -> int:
 
         # The overlay URL CEF loads. The REAL Solar host reads `orion=` (its
         # mount() bootstrap: orionUrl = params.get('orion') ?? wss://${host}/orion/
-        # ...) and `mode=broadcast`; a dummy viewer token satisfies the subscribe
-        # frame. The fallback page ignores both and polls /leaf.json off the same
-        # origin.
+        # ...) and `mode=broadcast`. The dummy viewer token rides INSIDE the
+        # orion= WS URL's own query — the SAME nested form as the real-orion path
+        # (build_real_orion_overlay_url) and Prism's getSolarSceneUrl, so there is
+        # ONE url shape and the gating bug cannot re-slip in on the loopback leg.
+        # The fallback page ignores both and polls /leaf.json off the same origin.
         orion_q = ""
         if orion is not None:
-            orion_q = "&orion=" + urllib.parse.quote(orion.orion_ws_url, safe="") \
-                + "&token=m10-viewer-standin"
+            sep = "&" if "?" in orion.orion_ws_url else "?"
+            orion_ws = orion.orion_ws_url + sep + "token=m10-viewer-standin"
+            orion_q = "&orion=" + urllib.parse.quote(orion_ws, safe="")
         overlay_url = f"http://127.0.0.1:{http_port}/{entry}?mode=broadcast{orion_q}"
         log(f"[overlay] serving {serve_dir} on http://127.0.0.1:{http_port} "
             f"(engine={engine}); CEF loads {entry} "
