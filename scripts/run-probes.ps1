@@ -201,6 +201,36 @@ if ($m10Code -eq 3) {
     Write-Host "==> probe-m10-canvas-live.py OK"
 }
 
+# --------------------------------------------------------------------
+# Phase 1e' -- SMOOTH-FADE scene playout (probe-m10-canvas-live.py
+# --transition-scene, #79). Exercises the OBS Fade transition arming
+# (GetSceneTransitionList -> SetCurrentSceneTransition=Fade +
+# SetCurrentSceneTransitionDuration -> GetCurrentSceneTransition verify) and
+# the two CROSSFADE program switches A~>zab-transition~>B against the REAL CI
+# pulsar.exe, VPS-less:
+#   --loopback-leaf   target B = the demo leaf target (no VPS trigger fired).
+#   --allow-blank     a headless CI runner may not COMPOSITE the Fade / render
+#                     the white scene; the C-FADE arming + the two-switch
+#                     sequence + C-CUT are still asserted, the VISUAL dissolve
+#                     proof is the antenna run. This is the CI hedge against the
+#                     fork's hard-cut history: if the build cannot arm a Fade at
+#                     all (GetSceneTransitionList empty / Set rejected), C-FADE
+#                     degrades + logs it here rather than only at the antenna.
+# A LIGHT build (no Fade transition / no browser_source) is tolerated.
+# --------------------------------------------------------------------
+Write-Host "==> Running probe-m10-canvas-live.py --transition-scene (smooth fade, proof-only, #79)"
+& python $m10Probe --exe $pulsar --transition-scene --no-broadcast --loopback-leaf --allow-blank --hold-ms 400
+$m10FadeCode = $LASTEXITCODE
+if ($m10FadeCode -eq 3) {
+    Write-Host "==> probe-m10-canvas-live.py --transition-scene SKIPPED (light build)"
+} elseif ($m10FadeCode -ne 0) {
+    Write-Host "==> probe-m10-canvas-live.py --transition-scene FAILED (exit $m10FadeCode)"
+    Write-Host "==> The smooth-fade scene playout (Fade arm + crossfade switches) did not run cleanly -- aborting."
+    exit 1
+} else {
+    Write-Host "==> probe-m10-canvas-live.py --transition-scene OK"
+}
+
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
 # Port 0 -> bind a random free port so back-to-back ctest runs don't
