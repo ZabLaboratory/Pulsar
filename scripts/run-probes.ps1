@@ -202,23 +202,26 @@ if ($m10Code -eq 3) {
 }
 
 # --------------------------------------------------------------------
-# Phase 1e' -- SMOOTH-FADE scene playout (probe-m10-canvas-live.py
-# --transition-scene, #79). Exercises the OBS Fade transition arming
+# Phase 1e' -- ANIMATED SMOOTH-FADE scene playout (probe-m10-canvas-live.py
+# --transition-scene, #79 animated). Exercises the OBS Fade transition arming
 # (GetSceneTransitionList -> SetCurrentSceneTransition=Fade +
-# SetCurrentSceneTransitionDuration -> GetCurrentSceneTransition verify) and
-# the two CROSSFADE program switches A~>zab-transition~>B against the REAL CI
-# pulsar.exe, VPS-less:
+# SetCurrentSceneTransitionDuration -> GetCurrentSceneTransition verify), the
+# RE-MOUNT of the transition browser_source (re-SetCaptureSource with a
+# cache-busted URL -> fresh CEF load -> the logo mount fade/scale REPLAYS), the
+# capture-SEQUENCE across the mount window (prove a RAMP, anti-faux-positif),
+# and the two CROSSFADE program switches A~>zab-transition~>B against the REAL
+# CI pulsar.exe, VPS-less:
 #   --loopback-leaf   target B = the demo leaf target (no VPS trigger fired).
 #   --allow-blank     a headless CI runner may not COMPOSITE the Fade / render
-#                     the white scene; the C-FADE arming + the two-switch
-#                     sequence + C-CUT are still asserted, the VISUAL dissolve
-#                     proof is the antenna run. This is the CI hedge against the
-#                     fork's hard-cut history: if the build cannot arm a Fade at
-#                     all (GetSceneTransitionList empty / Set rejected), C-FADE
-#                     degrades + logs it here rather than only at the antenna.
+#                     the white scene / paint the CEF mount animation; the
+#                     C-FADE arming + the two-switch sequence + C-CUT + the
+#                     reload-replay are still asserted, the VISIBLE dissolve +
+#                     animation ramp are the antenna/desktop run (the verdict
+#                     degrades to INCONCLUSIVE here rather than failing). If the
+#                     build cannot arm a Fade at all, C-FADE degrades + logs it.
 # A LIGHT build (no Fade transition / no browser_source) is tolerated.
 # --------------------------------------------------------------------
-Write-Host "==> Running probe-m10-canvas-live.py --transition-scene (smooth fade, proof-only, #79)"
+Write-Host "==> Running probe-m10-canvas-live.py --transition-scene (animated smooth fade, proof-only, #79)"
 & python $m10Probe --exe $pulsar --transition-scene --no-broadcast --loopback-leaf --allow-blank --hold-ms 400
 $m10FadeCode = $LASTEXITCODE
 if ($m10FadeCode -eq 3) {

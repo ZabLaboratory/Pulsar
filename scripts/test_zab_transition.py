@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
 """Offline tests for the reusable ``zab-transition`` Canvas scene + the
-smooth-fade playout helpers (Pulsar #79).
+animated smooth-fade playout helpers (Pulsar #79 → animated).
 
 These cover everything provable **without a live ``pulsar.exe``** / VPS:
 
   - the ``scripts/fixtures/zab-transition.lsml.json`` scene is well-formed
-    LSML 1.1, round-trips byte-for-byte, and is a STATIC render scene (no
-    keyframes / no ``wipe-cover`` element / no ``scene_control`` leaf — the
-    dormant ``lower_wipe_cover`` path is genuinely unused);
+    LSML 1.1, round-trips byte-for-byte;
+  - it ANIMATES the logo on mount: the logo carries an ``animate`` directive
+    (a single transition — ``transition{duration,easing}`` + opacity /
+    ``transform.scale``), the authored mount fade/scale (NO keyframes block on
+    the render root, NO ``wipe-cover`` render element — the root stays
+    white+logo, never magenta);
+  - it DECLARES the ``scene_control`` leaf in ``operator_inputs`` so the active
+    white+logo scene fans the Blue delta out (Orion ``sceneAcceptsPath`` / F2)
+    instead of silent-dropping — no more magenta-scene workaround;
   - the node form matches what Orion's ``lsmlNode`` emits and the runtime
     primitives read: props SPREAD at the node top level (never nested under a
     ``props`` object), a white ``frame`` root, a centred ``image`` child;
   - the logo rides as a complete base64 data-URI in ``image.src`` (a full
     JPEG/PNG, not a truncated URI) — no asset hosting, no Solar rebuild;
+  - ``animate_mount_params`` derives the page's CSS mount keyframes from the
+    directive, and ``prove_mount_ramp`` proves a captured sequence is a RAMP
+    (the anti-faux-positif — neither blank nor already-settled);
   - the white-MID check helper classifies a white frame as covered and a
     black / busy frame as not (the passage is white, not magenta/black);
   - the SMOOTH-FADE helpers: ``resolve_fade_transition_name`` picks the OBS Fade
@@ -77,11 +86,11 @@ def test_root_is_a_white_frame_with_props_spread_at_top_level():
     assert "props" not in layout
 
 
-def test_scene_is_static_no_keyframes_no_wipecover_no_leaf():
-    """The franc passage is a STATIC scene — the dormant lower_wipe_cover path is
-    genuinely unused (the brief: we do NOT use lower_wipe_cover)."""
+def test_render_root_stays_white_logo_no_keyframes_no_wipecover():
+    """The render ROOT stays white+logo: NO keyframes block on any node and NO
+    wipe-cover render element — the leaf is DECLARED for fan-out, NOT lowered to a
+    magenta cover, so the passage is white, never magenta."""
     b = _bundle()
-    assert not b.get("operator_inputs"), "static scene declares no operator_inputs"
 
     def walk(n):
         yield n
@@ -89,8 +98,62 @@ def test_scene_is_static_no_keyframes_no_wipecover_no_leaf():
             yield from walk(c)
 
     for node in walk(b["layout"]):
-        assert "keyframes" not in node, "static scene carries no keyframes"
-        assert node.get("kind") != "wipe-cover", "no wipe-cover authoring element"
+        assert "keyframes" not in node, "render root carries no keyframes block"
+        assert node.get("kind") != "wipe-cover", "no wipe-cover render element"
+
+
+def test_scene_declares_the_scene_control_leaf_for_fanout():
+    """The white+logo scene DECLARES the scene_control leaf in operator_inputs so
+    Orion fans the Blue delta out while THIS scene is active (no silent-drop, no
+    magenta-scene workaround). The path must equal the canonical 3-segment leaf."""
+    b = _bundle()
+    oinputs = b.get("operator_inputs")
+    assert isinstance(oinputs, list) and oinputs, "must declare operator_inputs"
+    paths = {oi["path"] for oi in oinputs}
+    assert probe.M10_LEAF_PATH in paths, (
+        f"must declare {probe.M10_LEAF_PATH!r} (got {sorted(paths)})")
+    # The declaration is the SAME canonical leaf the m10-orion-scene fixture uses
+    # and the probe consumes — they cannot drift.
+    assert probe.M10_LEAF_PATH == "__inputs.blue.m10-scene-control.scene_control"
+
+
+def test_logo_carries_an_animate_mount_directive():
+    """The logo carries an ``animate`` directive — a SINGLE transition (the
+    authored mount play): transition{duration(ms),easing} + opacity/transform.scale.
+    No multi-step keyframes (no compiler). The duration is in MS (>= a visible
+    band) and the easing is a known LSML easing token."""
+    img = probe._find_node(_bundle()["layout"], "image")
+    animate = img.get("animate")
+    assert isinstance(animate, dict), "logo must carry an `animate` directive"
+    tx = animate.get("transition")
+    assert isinstance(tx, dict) and tx.get("duration"), "non-zero transition.duration"
+    # MS unit (compiler reads duration_ms = transition.duration; runtime /1000).
+    assert tx["duration"] >= 300, "a visible mount fade is >= ~300ms"
+    assert tx.get("easing") in {"linear", "ease-in", "ease-out", "ease-in-out",
+                                "spring"}
+    # The directive animates at least opacity or scale (the fade/scale-in).
+    assert animate.get("opacity") is not None or (
+        animate.get("transform") or {}).get("scale") is not None
+
+
+def test_animate_mount_params_derives_a_visible_ramp():
+    """``animate_mount_params`` turns the directive into the page's CSS mount
+    keyframes: opacity 0→settled, scale <1→settled, the directive's duration+easing.
+    A FROM start strictly below the TO target is what makes the mount VISIBLE."""
+    img = probe._find_node(_bundle()["layout"], "image")
+    mp = probe.animate_mount_params(img)
+    assert mp["duration_ms"] >= 300
+    assert mp["opacity_from"] < mp["opacity_to"], "the logo FADES in"
+    assert mp["scale_from"] < mp["scale_to"], "the logo SCALES up"
+    assert mp["easing"] in {"linear", "ease-in", "ease-out", "ease-in-out",
+                            "cubic-bezier(0.34,1.56,0.64,1)"}
+
+
+def test_animate_mount_params_noop_without_directive():
+    """A logo with no ``animate`` directive yields a no-op (duration 0) so the page
+    degrades to the prior static render — the helper never invents an animation."""
+    mp = probe.animate_mount_params({"kind": "image", "src": "data:image/png,x"})
+    assert mp["duration_ms"] == 0
 
 
 def test_logo_is_a_complete_embedded_data_uri_image():
@@ -147,6 +210,63 @@ def test_white_check_classifies_white_logo_black_and_busy():
     busy_mid = {"mean": (90.0, 70.0, 40.0), "distinct": 5000}
     ok, _ = probe.is_white_with_logo(busy_mid)
     assert not ok
+
+
+# --------------------------------------------------------------------------
+# ANIMATION proof (anti-faux-positif) — prove_mount_ramp + the reload primitive.
+# --------------------------------------------------------------------------
+def _seq(footprints: list[float]) -> list[dict]:
+    """Build a fake capture sequence from a list of nonbg_ratio footprints."""
+    return [
+        {"i": i, "t_ms": i * 80.0, "nonbg_ratio": f, "distinct": int(2 + f * 1000),
+         "mean": (255 - f * 80, 255 - f * 80, 255 - f * 80), "path": f"seq-{i}.png"}
+        for i, f in enumerate(footprints)
+    ]
+
+
+def test_prove_mount_ramp_accepts_a_real_ramp():
+    """A footprint that grows from ~0 to a settled peak (the logo materialising)
+    is a RAMP — animation VISIBLE."""
+    ok, why = probe.prove_mount_ramp(
+        _seq([0.0, 0.02, 0.08, 0.16, 0.22, 0.25, 0.25, 0.25]), settled_white=True)
+    assert ok, why
+    assert "RAMP proven" in why
+
+
+def test_prove_mount_ramp_rejects_already_settled():
+    """Every frame identical/settled ⇒ the animation is NOT visible — the helper
+    must say so (no faux-positif)."""
+    ok, why = probe.prove_mount_ramp(
+        _seq([0.25, 0.25, 0.25, 0.25, 0.25]), settled_white=True)
+    assert not ok
+    assert "already-settled" in why or "did not RAMP" in why
+
+
+def test_prove_mount_ramp_rejects_all_blank():
+    """A flat empty field (the logo never rendered — blank CEF) is not a ramp."""
+    ok, why = probe.prove_mount_ramp(
+        _seq([0.0, 0.0, 0.0, 0.0]), settled_white=False)
+    assert not ok
+    assert "never rendered" in why or "FLAT field" in why
+
+
+def test_prove_mount_ramp_rejects_too_few_frames():
+    """Fewer than 3 frames cannot prove a ramp — be honest, don't guess."""
+    ok, why = probe.prove_mount_ramp(_seq([0.0, 0.25]), settled_white=True)
+    assert not ok
+    assert "too few" in why
+
+
+def test_bust_url_forces_a_distinct_url():
+    """The reload primitive appends a distinct `_replay` param so obs-browser's
+    same-URL early-return does NOT fire (a fresh CEF load → the mount replays)."""
+    u0 = probe._bust_url("http://127.0.0.1:9/zab-transition.html", 1)
+    u1 = probe._bust_url("http://127.0.0.1:9/zab-transition.html", 2)
+    assert u0 != u1, "different tokens → different URLs (forces a reload each time)"
+    assert "_replay=1" in u0 and "_replay=2" in u1
+    # An existing query keeps its params (we append with &).
+    u2 = probe._bust_url("http://h/solar?orion=wss://x&mode=broadcast", 7)
+    assert u2.endswith("&_replay=7") and "orion=" in u2
 
 
 def test_transition_scene_name_is_not_a_scene_control_target():

@@ -206,12 +206,14 @@ BUILD_DIR = REPO_ROOT / "build"
 LIVE_VOD_DIR = BUILD_DIR / "m10-live-vod"
 FRAMES_DIR = BUILD_DIR / "m10-frames"
 
-# The reusable static transition scene (Pulsar #79 fast-track). A franc
-# full-screen WHITE Canvas/LSML scene with the centred Zablab logo, served by
-# Solar in a browser_source. It carries NO keyframes / NO wipe-cover element /
-# NO scene_control leaf — it is a STATIC render scene, so the franc-cut playout
-# (--transition-scene) drives the visible transition entirely with two bare
-# SetCurrentProgramScene cuts and an OBS scene that just renders white+logo.
+# The reusable ANIMATED transition scene (Pulsar #79 animated). A full-screen
+# WHITE Canvas/LSML scene with the centred Zablab logo, served by Solar in a
+# browser_source. The logo carries an `animate` directive (a single mount-play:
+# fade + scale-in) and the scene DECLARES the scene_control leaf in
+# operator_inputs (so the active white+logo scene fans the Blue delta out — no
+# silent-drop, no magenta workaround). The render root stays white+logo: NO
+# keyframes block / NO wipe-cover render element. The --transition-scene playout
+# RE-MOUNTS the browser_source before each cut so the mount animation replays.
 TRANSITION_FIXTURE = REPO_ROOT / "scripts" / "fixtures" / "zab-transition.lsml.json"
 
 # The blueprint slug → canonical leaf path. Pinned by #84 / the contract.
@@ -1199,9 +1201,19 @@ def fire_blue_trigger(
 ) -> dict:
     """POST /blue/api/v1/blueprints/{id}/trigger with the operator Bearer in the
     HEADER (never the query — Blue ADR 001 R6). Returns the parsed JSON body
-    (which carries outputs.scene_control). Raises on a non-2xx."""
+    (which carries outputs.scene_control). Raises on a non-2xx.
+
+    The rule-driven blueprint (Pulsar #32) reads a ``core.input`` named
+    ``target``; the trigger supplies it from ``M10_RULE_INPUT_TARGET`` (default
+    ``screen-2``) so the RULE selects ``scene-screen-2``/cut-250 by *computing*
+    on the input — a literal would be invariant to it. The value is an env knob,
+    never baked into the graph (that is the whole 'rule not literal' point)."""
     url = f"{gateway_url.rstrip('/')}/blue/api/v1/blueprints/{blueprint_id}/trigger"
-    body = json.dumps({"inputs": {}}).encode("utf-8")
+    target = os.environ.get("M10_RULE_INPUT_TARGET", "screen-2").strip() or "screen-2"
+    inputs = {"target": target} if target else {}
+    log(f"   [trigger] rule input target={target!r} (the Blue rule routes the "
+        "target_scene off THIS — not a literal)")
+    body = json.dumps({"inputs": inputs}).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
     req.add_header("Accept", "application/json")
@@ -1358,10 +1370,10 @@ def load_transition_bundle(log: TeeLog) -> dict:
             "(Orion lsmlNode form: node[k]=raw), never nested under a `props` "
             "object — a nested block leaves the runtime's flat resolved.* lookups "
             "empty and the scene renders at defaults.")
-    # The franc passage is STATIC — no keyframes, no wipe-cover, no leaf. Assert
-    # the dormant lower_wipe_cover path is genuinely unused by this scene by
-    # walking the layout tree (a substring scan would false-match the prose in
-    # the _fixture description, which mentions these words on purpose).
+    # The render ROOT stays white+logo: NO keyframes block, NO wipe-cover render
+    # element (the leaf is DECLARED for fan-out, NOT lowered to a magenta cover).
+    # Walk the layout tree (a substring scan would false-match the _fixture prose,
+    # which mentions these words on purpose).
     def _walk_nodes(n: dict):
         if not isinstance(n, dict):
             return
@@ -1370,16 +1382,43 @@ def load_transition_bundle(log: TeeLog) -> dict:
             yield from _walk_nodes(c)
     for n in _walk_nodes(layout):
         if "keyframes" in n:
-            raise SystemExit("transition fixture must carry NO keyframes (static scene)")
+            raise SystemExit("transition fixture must carry NO keyframes (the mount "
+                             "play is the `animate` directive, not a keyframe block)")
         if n.get("kind") == "wipe-cover":
-            raise SystemExit("transition fixture must carry NO wipe-cover element "
-                             "(lower_wipe_cover is unused — franc passage)")
-    if bundle.get("operator_inputs"):
-        raise SystemExit("transition fixture declares no operator_inputs (static)")
-    # Find the image node + prove its src is a complete embedded data-URI image.
+            raise SystemExit("transition fixture render root must stay white+logo — "
+                             "NO wipe-cover render element (the leaf is declared for "
+                             "fan-out, not rendered as a magenta cover)")
+    # LEAF DECLARATION (#79 animated): the white+logo scene MUST declare the
+    # scene_control leaf in operator_inputs so Orion fans the Blue delta out while
+    # THIS scene is active (no F2 silent-drop → no magenta-scene workaround).
+    oinputs = bundle.get("operator_inputs")
+    if not isinstance(oinputs, list) or not oinputs:
+        raise SystemExit("transition fixture must declare operator_inputs carrying "
+                         "the scene_control leaf (so the active white+logo scene "
+                         "fans the Blue delta out — no silent-drop, no magenta)")
+    declared = {oi.get("path") for oi in oinputs if isinstance(oi, dict)}
+    if M10_LEAF_PATH not in declared:
+        raise SystemExit(f"transition fixture must declare the leaf {M10_LEAF_PATH!r} "
+                         f"in operator_inputs (got {sorted(declared)}); a declared "
+                         "path is what Orion's sceneAcceptsPath needs to fan out.")
+    # ANIMATED MOUNT (#79 animated): the logo carries an `animate` directive (a
+    # single transition: transition{duration,easing} + opacity / transform.scale)
+    # — the authored mount-play that fades + scales the logo into view on (re)mount.
     img = _find_node(layout, "image")
     if img is None:
         raise SystemExit("transition fixture has no `image` node for the logo")
+    animate = img.get("animate")
+    if not isinstance(animate, dict):
+        raise SystemExit("transition fixture logo must carry an `animate` directive "
+                         "(the authored mount fade/scale) — without it the logo snaps")
+    a_tx = animate.get("transition") or {}
+    if not isinstance(a_tx, dict) or not a_tx.get("duration"):
+        raise SystemExit("logo `animate.transition` must set a non-zero `duration` "
+                         "(ms) — a 0 duration is an instant snap, not an animation")
+    if animate.get("opacity") is None and (animate.get("transform") or {}).get("scale") is None:
+        raise SystemExit("logo `animate` must animate at least opacity or "
+                         "transform.scale (the mount fade/scale)")
+    mp = animate_mount_params(img)
     src = img.get("src", "")
     if not src.startswith("data:image/"):
         raise SystemExit("logo image.src must be an embedded base64 data-URI "
@@ -1400,17 +1439,66 @@ def load_transition_bundle(log: TeeLog) -> dict:
     log(f"[transition] zab-transition scene OK: white frame "
         f"(background={layout.get('background')}), centred {fmt.upper()} logo "
         f"{len(raw)} bytes embedded as a data-URI ({img.get('width')}px, "
-        f"fit={img.get('fit')}); STATIC (no keyframes / no scene_control leaf / "
-        "lower_wipe_cover unused) — round-trips as plain LSML 1.1.")
+        f"fit={img.get('fit')}); ANIMATED MOUNT (opacity {mp['opacity_from']}→"
+        f"{mp['opacity_to']}, scale {mp['scale_from']}→{mp['scale_to']}, "
+        f"{mp['duration_ms']}ms {mp['easing']}); DECLARES the leaf "
+        f"{M10_LEAF_PATH!r} (fan-out, render root stays white+logo — no magenta) "
+        "— round-trips as plain LSML 1.1.")
     return bundle
+
+
+def animate_mount_params(img: dict) -> dict:
+    """Derive the logo's MOUNT animation params from its LSML `animate` directive
+    (LSMLAnimateDirective in @lumencast/compiler) — the SAME single transition the
+    fixture authors. Returns {duration_ms, easing(css), opacity_from, scale_from}.
+
+    The directive's `opacity`/`transform.scale` are the SETTLED (to) values (the
+    runtime's `animate` target); the mount-play interpolates FROM a hidden start
+    (opacity 0, a slightly smaller scale) TO them over `transition.duration` ms.
+    The `from` start sits here (the authoring intent: "appears, not snaps"); the
+    duration/easing come verbatim off the directive so the page's CSS mount
+    keyframes match what Solar would tween. A logo WITHOUT an animate directive
+    yields a no-op (duration 0) so the page degrades to the prior static render."""
+    a = (img or {}).get("animate") or {}
+    t = a.get("transition") or {}
+    duration_ms = t.get("duration", 0) or 0
+    # The fixture authors duration in MS (compiler: duration_ms = transition.duration;
+    # runtime toFramer divides by 1000). Mirror that unit here.
+    easing_map = {
+        "linear": "linear",
+        "ease-in": "ease-in",
+        "ease-out": "ease-out",
+        "ease-in-out": "ease-in-out",
+        "spring": "cubic-bezier(0.34,1.56,0.64,1)",  # a gentle overshoot stand-in
+    }
+    easing = easing_map.get(t.get("easing", "ease-out"), "ease-out")
+    # Settled targets (to). The mount starts hidden + slightly smaller and grows in.
+    opacity_to = a.get("opacity", 1)
+    scale_to = (a.get("transform") or {}).get("scale", 1)
+    if isinstance(scale_to, (list, tuple)):
+        scale_to = scale_to[0]
+    return {
+        "duration_ms": int(duration_ms),
+        "easing": easing,
+        "opacity_from": 0.0,
+        "opacity_to": float(opacity_to),
+        # A modest scale-up (0.85 → settled) reads as "grows in" without layout cost.
+        "scale_from": 0.85,
+        "scale_to": float(scale_to),
+    }
 
 
 def _write_transition_page(log: TeeLog) -> pathlib.Path:
     """Generate a self-contained local page that paints the zab-transition scene
     (white background + centred Zab logo) straight from the fixture's embedded
-    data-URI. This is the VPS-less render of the SAME static scene the real Solar
-    bundle would paint from Orion — enough to prove the franc-cut playout + the
-    white MID without the antenna. Returns the directory to serve."""
+    data-URI, ANIMATING the logo into view ON LOAD (fade + scale-up) to mirror the
+    fixture's LSML `animate` directive. This is the VPS-less render of the same
+    scene + mount-play the real Solar bundle would paint from Orion — enough to
+    prove the animated transition playout + the white MID WITHOUT the antenna.
+    Because the animation is keyed to PAGE LOAD (a CSS animation on a fresh DOM),
+    REMOUNTING the browser_source (re-SetCaptureSource → fresh CEF load) REPLAYS it
+    — exactly the replay the playout forces before each cut. Returns the dir to
+    serve."""
     bundle = json.loads(TRANSITION_FIXTURE.read_text(encoding="utf-8"))
     layout = bundle["layout"]
     img = _find_node(layout, "image")
@@ -1418,20 +1506,43 @@ def _write_transition_page(log: TeeLog) -> pathlib.Path:
     bg = layout.get("background", "#FFFFFF")
     src = img["src"]
     w = img.get("width", 346)
+    mp = animate_mount_params(img)
     out_dir = BUILD_DIR / "m10-transition-page"
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Static, no JS, no animation — a franc white field with the centred logo.
+    if mp["duration_ms"] > 0:
+        # A CSS mount animation: the logo FADES + SCALES UP from hidden to settled
+        # over duration_ms, once, on load. `transform-origin:center` keeps the grow
+        # centred. transform+opacity only (GPU-friendly, matching Solar's
+        # transform/opacity/filter-only animatable rule). The animation NEVER loops
+        # (`forwards`) so a settled grab after duration_ms reads full white+logo.
+        anim_css = (
+            f"@keyframes zabmount{{"
+            f"from{{opacity:{mp['opacity_from']};"
+            f"transform:scale({mp['scale_from']})}}"
+            f"to{{opacity:{mp['opacity_to']};"
+            f"transform:scale({mp['scale_to']})}}}}"
+            f"img{{width:{w}px;height:{w}px;object-fit:contain;"
+            f"transform-origin:center;will-change:opacity,transform;"
+            f"animation:zabmount {mp['duration_ms']}ms {mp['easing']} both}}"
+        )
+        anim_note = (f"animated mount: opacity {mp['opacity_from']}→{mp['opacity_to']}, "
+                     f"scale {mp['scale_from']}→{mp['scale_to']}, "
+                     f"{mp['duration_ms']}ms {mp['easing']}")
+    else:
+        anim_css = f"img{{width:{w}px;height:{w}px;object-fit:contain}}"
+        anim_note = "static (no animate directive on the logo)"
     html = (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<style>html,body{margin:0;height:100%;width:100%}"
         f"body{{background:{bg};display:flex;align-items:center;"
         "justify-content:center}"
-        f"img{{width:{w}px;height:{w}px;object-fit:contain}}</style></head>"
+        f"{anim_css}</style></head>"
         f"<body><img alt='Zab logo' src='{src}'></body></html>"
     )
     (out_dir / "zab-transition.html").write_text(html, encoding="utf-8")
     log(f"[transition] wrote local render page {out_dir / 'zab-transition.html'} "
-        f"(background {bg}, centred {w}px logo from the fixture data-URI).")
+        f"(background {bg}, centred {w}px logo from the fixture data-URI; "
+        f"{anim_note}).")
     return out_dir
 
 
@@ -1478,6 +1589,123 @@ async def setup_transition_scene(inbox: Inbox, ws, *, transition_url: str,
     log(f"   [transition] SetCaptureSource on {TRANSITION_SCENE!r} did not return "
         f"a browser_source ({data}) — light build / no CEF; the fades still fire.")
     return False
+
+
+def _bust_url(url: str, token: int) -> str:
+    """Append a cache-busting `_replay=<token>` query param so the URL DIFFERS from
+    the one currently loaded. obs-browser's Update() early-returns when every
+    setting (incl. the URL) is unchanged (plugins/pulsar-browser/obs-browser-
+    source.cpp ~L507) — so a same-URL re-set would NOT reload. A distinct URL (and
+    SetCaptureSource always obs_source_create()s a FRESH browser anyway) forces a
+    full CEF page (re)load, which re-runs the page's mount animation. The param is
+    inert to Solar (it reads `orion`/`mode`, ignores `_replay`)."""
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}_replay={token}"
+
+
+async def replay_transition_mount(inbox: Inbox, ws, *, transition_url: str,
+                                  token: int, log: TeeLog) -> bool:
+    """Force the transition browser_source to RE-MOUNT so its mount animation
+    (the logo fade/scale) plays again. We make the program scene `scene-transition`
+    (SetCaptureSource targets the CURRENT frontend scene), then re-SetCaptureSource
+    with a cache-busted URL → a brand-new CEF browser → fresh page load → the
+    `animate` mount-play re-runs from its hidden start. Returns True if the source
+    re-installed (False ⇒ light build / no CEF; the replay is then the antenna)."""
+    # SetCaptureSource mutates the CURRENT frontend scene; make it the transition.
+    await request(inbox, ws, "SetCurrentProgramScene", f"replay-cur-{token}",
+                  {"sceneName": TRANSITION_SCENE})
+    busted = _bust_url(transition_url, token)
+    r = await vendor_call(inbox, ws, f"replay-set-{token}", "pulsar-scene",
+                          "SetCaptureSource", {
+                              "kind": BROWSER_SOURCE_KIND,
+                              "url": busted,
+                              "width": CANVAS_W,
+                              "height": CANVAS_H,
+                              "fps": 30,
+                              "reroute_audio": False,
+                          })
+    data = vendor_response_data(r)
+    if data.get("kind") == BROWSER_SOURCE_KIND:
+        log(f"   [replay] re-mounted transition browser_source (fresh CEF load, "
+            f"replay token {token}) → the logo mount fade/scale re-plays from start.")
+        return True
+    log(f"   [replay] re-SetCaptureSource did not return a browser_source ({data}) "
+        "— light build / no CEF; the visible replay is the antenna run.")
+    return False
+
+
+async def capture_mount_sequence(
+    inbox: Inbox, ws, *, frames: int, interval_s: float, tag: str, log: TeeLog,
+) -> list[dict]:
+    """Grab a SEQUENCE of program frames across the mount-animation window,
+    returning a per-frame list of {t_ms, mean, distinct, nonbg_ratio, png}. The
+    caller proves a RAMP from these (the anti-faux-positif: intermediate frames
+    must be NEITHER blank NOR already-settled). Each PNG is also written under
+    FRAMES_DIR/seq-<tag>-NN.png so a human/Keeper can eyeball the ramp."""
+    FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+    seq: list[dict] = []
+    t0 = time.monotonic()
+    for i in range(frames):
+        try:
+            png, m = await capture_program_frame(inbox, ws, f"{tag}-seq-{i}")
+        except Exception as exc:  # noqa: BLE001 — a grab may race the first CEF frame
+            log(f"   [seq {tag}] frame {i}: grab not ready ({type(exc).__name__})")
+            await asyncio.sleep(interval_s)
+            continue
+        t_ms = (time.monotonic() - t0) * 1000.0
+        path = FRAMES_DIR / f"seq-{tag}-{i:02d}.png"
+        path.write_bytes(png)
+        seq.append({
+            "i": i, "t_ms": t_ms, "mean": m["mean"], "distinct": m["distinct"],
+            "nonbg_ratio": m["nonbg_ratio"], "path": str(path),
+        })
+        await asyncio.sleep(interval_s)
+    return seq
+
+
+def prove_mount_ramp(seq: list[dict], *, settled_white: bool) -> tuple[bool, str]:
+    """ANTI-FAUX-POSITIF: prove the captured sequence shows an ANIMATION IN FLIGHT,
+    not a static frame repeated. The mount fades the logo IN over a white field, so
+    the logo's footprint (nonbg pixels away from the white modal) GROWS from ~0 to
+    its settled value, and the mean RGB darkens slightly as the logo materialises.
+
+    We require an evolving signal: at least one EARLY frame meaningfully BELOW the
+    LAST (settled) frame's logo footprint, AND a monotone-ish rise — i.e. a real
+    RAMP, with the early frame neither already-settled (the animation would be
+    invisible) nor the late frame still blank (it never settled). Returns
+    (proved, why). `settled_white` records whether the final frame is the expected
+    white+logo (a sanity tie-back). On too-few frames → not proved (be honest)."""
+    if len(seq) < 3:
+        return False, (f"only {len(seq)} frame(s) captured — too few to prove a "
+                       "ramp (need >=3 across the window)")
+    foot = [f["nonbg_ratio"] for f in seq]          # logo footprint over time
+    last = foot[-1]
+    first = foot[0]
+    peak = max(foot)
+    # The settled footprint must be non-trivial (the logo actually rendered).
+    if peak <= 0.0:
+        return False, ("every frame is a FLAT field (nonbg_ratio==0 throughout) — "
+                       "the logo never rendered; animation NOT visible (likely a "
+                       "blank/headless CEF — defer the visible proof to the run)")
+    # A ramp: some early frame sits well below the settled peak, and the signal
+    # rises into it. "well below" = <= 60% of the peak footprint.
+    early_low = min(foot[: max(1, len(foot) // 2)])
+    rose = last >= early_low  # ended at/above where it started rising from
+    ramped = early_low <= 0.60 * peak and rose
+    if not ramped:
+        return False, (f"footprint did not RAMP: first={first:.3f} early_low="
+                       f"{early_low:.3f} peak={peak:.3f} last={last:.3f} — every "
+                       "frame is already-settled (the mount animation is NOT "
+                       "visible: all frames identical/settled)")
+    # Find the most-intermediate frame (closest to ~40% of peak) as the proof point.
+    target = 0.40 * peak
+    mid = min(seq, key=lambda f: abs(f["nonbg_ratio"] - target))
+    why = (f"RAMP proven: footprint first={first:.3f} → early_low={early_low:.3f} "
+           f"→ peak={peak:.3f} → settled_last={last:.3f}; intermediate frame "
+           f"#{mid['i']} @ {mid['t_ms']:.0f}ms at {mid['nonbg_ratio']:.3f} "
+           f"(~{mid['nonbg_ratio']/peak*100:.0f}% of settled) — neither blank nor "
+           f"settled (settled_white={settled_white})")
+    return True, why
 
 
 def resolve_fade_transition_name(transitions: list) -> Optional[str]:
@@ -1824,6 +2052,19 @@ async def run_transition_playout(
             await asyncio.sleep(SOLAR_READY_GRACE_S)
 
         switch_verb = "FADE" if fade_armed else "cut(no-fade-build)"
+
+        # RE-MOUNT the transition browser_source JUST BEFORE the cut so its mount
+        # animation (the logo fade/scale) plays AS the fade brings it on-screen.
+        # A fresh CEF page load restarts the animation from its hidden start; the
+        # capture-sequence below then proves the ramp (anti-faux-positif). We do
+        # this BEFORE the program switch so the remount blank stays off-air (still
+        # on screen-1) and the animation is in flight when the transition lands.
+        replayed = False
+        if transition_settled and transition_url:
+            replayed = await replay_transition_mount(
+                inbox, ws, transition_url=transition_url, token=int(time.monotonic()),
+                log=log)
+
         # FADE #1 — A → transition. The Fade transition (armed above) makes this
         # SetCurrentProgramScene a CROSSFADE: screen-1 DISSOLVES into the white+
         # logo passage over ~fade_ms (no hard snap).
@@ -1835,11 +2076,21 @@ async def run_transition_playout(
         log(f"[playout] FADE #1 ({switch_verb}, ~{fade_ms}ms): {SCENE_SCREEN_1!r} "
             f"~> {TRANSITION_SCENE!r}")
 
-        # MID-FADE frame — grab a frame WHILE the crossfade is still in flight
-        # (well inside fade_ms), so it shows the A↔white BLEND that proves a smooth
-        # dissolve, not a snap. Best-effort: on a fast box the fade may have
-        # finished; we log it as the mid-fade blend candidate either way.
-        if fade_armed:
+        # CAPTURE-SEQUENCE across the mount window — prove the logo ANIMATES IN
+        # (a ramp), not a static frame. Grab ~8 frames every ~80ms over ~640ms
+        # starting at the cut: the fade (~fade_ms) + the mount (~550ms) overlap, so
+        # early frames show the logo small/faint, late frames show it settled.
+        anim_seq: list[dict] = []
+        if replayed:
+            anim_seq = await capture_mount_sequence(
+                inbox, ws, frames=8, interval_s=0.08, tag="mount", log=log)
+            for f in anim_seq:
+                log(f"   [seq mount] #{f['i']} @ {f['t_ms']:.0f}ms "
+                    f"nonbg={f['nonbg_ratio']:.3f} distinct={f['distinct']} "
+                    f"mean={tuple(round(x) for x in f['mean'])}")
+        elif fade_armed:
+            # No re-mount (light build / no CEF) — keep the old single mid-fade grab
+            # so the crossfade itself is still sampled.
             await asyncio.sleep(max(0.05, fade_ms / 1000.0 * 0.4))
             png_blend, m_blend = await capture_program_frame(inbox, ws, "fc-blend")
             (FRAMES_DIR / "frame-MIDFADE-blend.png").write_bytes(png_blend)
@@ -1848,8 +2099,8 @@ async def run_transition_playout(
                 f"distinct={m_blend['distinct']} -> "
                 f"{FRAMES_DIR / 'frame-MIDFADE-blend.png'} (A↔white blend candidate)")
 
-        # HOLD — let the fade complete + Solar render the white+logo scene; capture
-        # the settled transition MID.
+        # HOLD — let the fade + mount complete + Solar render the settled white+logo
+        # scene; capture the settled transition MID.
         await asyncio.sleep(max(0.3, hold_ms / 1000.0 / 2.0))
         png_mid, m_mid = await capture_program_frame(inbox, ws, "fc-mid")
         (FRAMES_DIR / "frame-MID-transition.png").write_bytes(png_mid)
@@ -1937,9 +2188,43 @@ async def run_transition_playout(
                 "black MID = Solar did not paint, a busy MID = a visible capture cut.")
             return 1
 
-        log(f"[playout] SMOOTH-FADE A~>transition~>B proven: two program switches "
+        # ---- ANIMATION VERDICT (anti-faux-positif) ---------------------------
+        # Prove the mount sequence is a RAMP (logo fades/scales IN), not a static
+        # frame repeated. This is the brief's core anti-faux-positif: if every
+        # frame is identical/settled the animation is NOT visible and we SAY SO.
+        if replayed and anim_seq:
+            ramp_ok, ramp_why = prove_mount_ramp(anim_seq, settled_white=mid_white)
+            log("")
+            log("==== ANIMATION VERDICT (the logo must ANIMATE in, not snap) ====")
+            log(f"  captured {len(anim_seq)} frame(s) across the mount window "
+                f"(~{(anim_seq[-1]['t_ms'] if anim_seq else 0):.0f}ms span)")
+            if ramp_ok:
+                log(f"  ==> ANIMATED (VISIBLE): {ramp_why}")
+            elif args.allow_blank:
+                log(f"  ==> INCONCLUSIVE (--allow-blank): {ramp_why}. The CEF may not "
+                    "paint on this headless box — the VISIBLE animation is the "
+                    "antenna/desktop run (Keeper must see the ramp there).")
+            else:
+                log(f"  ==> NOT VISIBLE: {ramp_why}. The logo did NOT animate in — "
+                    "do NOT declare 'animated'. Either the mount-play did not replay "
+                    "or the capture caught only settled frames.")
+                log("==== END ANIMATION VERDICT ====")
+                return 1
+            log("==== END ANIMATION VERDICT ====")
+            log("")
+        elif transition_settled and not replayed:
+            log("[anim] the browser_source did not re-mount (no CEF / light build) — "
+                "the VISIBLE mount animation is the antenna/desktop run; the playout "
+                "issued the re-SetCaptureSource replay regardless.")
+        else:
+            log("[anim] no animation sequence captured (light build / no CEF) — the "
+                "authored `animate` + the reload-replay are in place; the VISIBLE "
+                "ramp is the antenna/desktop run.")
+
+        log(f"[playout] ANIMATED A~>transition~>B proven: two program switches "
             f"run through the native Fade (armed={fade_armed}, ~{fade_ms}ms each), the "
-            f"white+logo Canvas scene dissolved between them, target B={target_scene!r} "
+            f"white+logo Canvas scene ANIMATED IN (logo mount fade/scale, replayed via "
+            f"a fresh CEF load) and dissolved between them, target B={target_scene!r} "
             f"driven by {leaf_source}.")
         rc = 0
 

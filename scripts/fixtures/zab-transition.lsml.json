@@ -1,8 +1,25 @@
 {
-  "_fixture": "REUSABLE static Canvas/LSML scene  (Pulsar #79, M10 fast-track). A franc full-screen WHITE frame with the centred Zablab logo, used as the OBS transition scene between two capture scenes: cut A -> hold on this -> cut B (the franc passage, no fade, no OBS-native transition). It is a STATIC render scene: NO keyframes, NO wipe-cover authoring element, NO scene_control leaf, NO operator_inputs - so it needs NO Orion compiler lowering (lower_wipe_cover is NOT used) and round-trips as plain LSML 1.1. The render tree is the runtime render vocab the @lumencast/runtime primitives read flat off resolved props (Solar tests/unit/render.test.tsx: frame {background,width,height}; stack {direction,align,justify}; image {src,width,height,fit}). The logo is embedded as a base64 data-URI in image.src (no asset hosting, no Solar rebuild - the fast-track). The logo is B&W on white so it blends into the white frame. scene_version is a zeroed placeholder the harness stamps with the real content hash before push (m9/m10 parity).",
+  "_fixture": "REUSABLE Canvas/LSML transition scene (Pulsar #79 → #79 animated, M10). A franc full-screen WHITE frame with the centred Zablab logo, used as the OBS transition scene between two capture scenes: A -> hold on this -> B. TWO additions over the prior static form. (1) ANIMATED MOUNT: the logo carries an `animate` directive (LSMLAnimateDirective in @lumencast/compiler lsml-types — a SINGLE transition: transition{duration,easing} + opacity + transform.scale) so on (re)mount the logo FADES + SCALES UP into view (opacity→1, scale→1 over ~550ms, ease-out) instead of snapping. This is the authored mount-play vocab: NO keyframes-compiler, NO multi-step. NOTE on the runtime: today @lumencast/compiler lowers `animate` to per-prop `transitions` TIMING only, and the runtime primitives (Image/Frame) carry `animate` WITHOUT `initial`, so a static-prop `animate` is not itself a mount-play in vanilla Solar; the VISIBLE mount animation is produced by REMOUNTING the browser_source (a fresh CEF page load — playout re-SetCaptureSource before each cut) which replays the page's mount animation. The authored `animate` records the AUTHORING INTENT + drives the local render page's CSS mount keyframes (the headless dry render). (2) LEAF DECLARATION: operator_inputs declares __inputs.blue.m10-scene-control.scene_control (calque on m10-orion-scene.lsml.json) so Orion's sceneAcceptsPath (Orion/internal/adapters/inbox.go F2) FANS the Blue scene_control delta out to /show/stream subscribers while THIS white+logo scene is active — no silent-drop, so we no longer have to swap to the magenta wipe-cover scene to deliver the Blue rule. The render root STAYS white+logo (frame#FFFFFF + centred image): the leaf is declared, NOT rendered as a wipe-cover, so the passage is white, never magenta. The render tree is the runtime render vocab the @lumencast/runtime primitives read flat off resolved props (Solar render.test.tsx: frame {background,width,height}; stack {direction,align,justify}; image {src,width,height,fit}). The logo is embedded as a base64 data-URI in image.src (no asset hosting, no Solar rebuild). scene_version is a zeroed placeholder the harness stamps with the real content hash before push (m9/m10 parity).",
   "lsml": "1.1",
   "scene_id": "0c8a9e57-0000-4000-8000-0000000000b0",
   "scene_version": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "operator_inputs": [
+    {
+      "path": "__inputs.blue.m10-scene-control.scene_control",
+      "label": "M10 scene-control (Blue-driven) — declared so the white+logo passage fans the leaf out (no silent-drop); NOT rendered (no wipe-cover) so the passage stays white",
+      "type": "json",
+      "default": {
+        "target_scene": "scene-screen-1",
+        "overlay": {
+          "kind": "wipe-cover",
+          "reveal_ms": 400,
+          "hold_ms": 500,
+          "retract_ms": 400
+        },
+        "cut_at_ms": 650
+      }
+    }
+  ],
   "layout": {
     "kind": "frame",
     "id": "zab-transition-bg",
@@ -26,7 +43,12 @@
             "width": 346,
             "height": 346,
             "fit": "contain",
-            "alt": "Zablab logo"
+            "alt": "Zablab logo",
+            "animate": {
+              "transition": { "duration": 550, "easing": "ease-out" },
+              "opacity": 1,
+              "transform": { "scale": 1 }
+            }
           }
         ]
       }
