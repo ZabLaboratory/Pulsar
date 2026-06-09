@@ -2,8 +2,8 @@
 
 - **Status**: accepted
 - **Date**: 2026-06-08
-- **Decided**: 2026-06-08
-- **Deciders**: @ClodoCapeo (maintainer), Vigil (design re-validation of Amendment 4 — pivot finalised, approved at design level), Bastion (security clearance — R7 veto lifted at design level via Amendment 2; R6 re-raised by Amendment 4 → re-clearance #76 required before build). The build is gated on SPIKE-GPU + SPIKE-CUT (A4.6) and Bastion re-clearance #76.
+- **Decided**: 2026-06-09
+- **Deciders**: @ClodoCapeo (maintainer), Vigil (design re-validation of Amendment 4 — pivot finalised, approved at design level; **and of Amendment 5 — the keyframed `wipe-cover` authoring maillon, Option (B), approved at design level 2026-06-09**), Bastion (security clearance — R7 veto lifted at design level via Amendment 2; R6 re-raised by Amendment 4 → re-clearance #76 required before build, extended by A5.5/A5.7 to confirm the leaf carries no node shape). The build is gated on SPIKE-LSML-HASH (A5.5, before Orion#64 merges) + SPIKE-GPU + SPIKE-CUT (A4.6) and Bastion re-clearance #76.
 - **Author**: Atlas (architect agent)
 - **Supersedes**: —
 - **Superseded by**: —
@@ -1386,3 +1386,246 @@ not retired.
   decided. The mechanism, the disposition, the contract shape, and the risk acceptances are
   fully specified. What is left is **engineering proof** (the two spikes), not product
   choice.
+
+---
+
+## Amendment 5 — The authoring maillon for the keyframed `wipe-cover` node: corrects the inexact "exactly the M9 repaint mechanism" premise (§A4.2), pins the string-JSON leaf transport, and decides WHERE the `RenderNode.keyframes` is produced in the REAL pipeline
+
+- **Date**: 2026-06-09
+- **Author**: Atlas (architect agent)
+- **Status of the ADR**: returns to **proposed** (Vigil re-validates). This amendment
+  does **not** rewrite §1–§6 or Amendments 1–4 in place — they remain the audit trail.
+  It **corrects two load-bearing premises in §A4.2** (the "exactly the M9 repaint
+  mechanism" claim and the implicit object-shaped leaf) and **decides the missing
+  authoring maillon** that lets the REAL Blue→Orion→Solar pipeline produce the keyframed
+  `wipe-cover` overlay node — the node that issue **#73** assumes exists but that no
+  layer of the real pipeline can currently emit. It supersedes the §A4.7 **#73** scope
+  (re-scoped below) and adds issues.
+
+### A5.0 The trou (code-anchored, verified independently of Forge's report)
+
+The loopback M10 proof passes; the real wire cannot. The reason is a **vocabulary gap**:
+the runtime can *render* a leaf-replayed keyframe sequence, but **no authoring layer can
+emit one**. Verified end-to-end against the source:
+
+| Layer | Has a `keyframes` (leaf-keyed replay) concept? | Evidence |
+|---|---|---|
+| **Solar runtime** `@lumencast/runtime` | **YES.** `RenderNode.keyframes?: Keyframes`; `Keyframes.key` = "LeafPath whose value-change replays the sequence"; `KeyframePlayer` remounts on `key` change. | `dist/render/bundle.d.ts:18-21`; `dist/animate/keyframes.d.ts` (`Keyframes.key`); `dist/render/keyframe-player.d.ts` |
+| **`buildWipeCoverNode`** (Solar src) | **YES — emits exactly that node.** A `frame` with `keyframes:{key:leafPath, duration_ms, steps[reveal/hold/retract]}`. | `Solar/src/overlay/wipe-cover.ts:122-161` |
+| **LSML authoring vocab** `@lumencast/compiler` `lsml-types.d.ts` | **NO.** `LSMLBaseNode` has `bind`, `bindStyle`, `bindUniversal`, `animate` (a **single** transition: one `transform`/`opacity`/`filter` target). **No `keyframes`, no multi-step, no leaf-keyed replay.** | `lsml-types.d.ts` (`LSMLBaseNode`, `LSMLAnimateDirective`) |
+| **LSML→RenderBundle compiler** `@lumencast/compiler/compile.js` | **NO.** Emits `props`/`bindings`/`transitions` only; `node.animate → transitions`. **Zero occurrences of `keyframes`** in the whole package. | `compile.js:50-223`; `grep -rn keyframes @lumencast/compiler` = 0 hits |
+| **Orion compiler** (Go) | **NO.** `LayoutNode` struct fields = `Kind,ID,Props,Bindings,Transitions,Children,ComponentArgs` — **no `Keyframes`**. `lsmlNode` emits only `kind/id/<props>/bind/animate/children/animations`; `isReservedNodeKey` doesn't even know `keyframes`. **Zero `keyframe` occurrences in all of `internal/`.** | `Orion/internal/compiler/types.go:80-92`; `emit_lsml.go:91-156` |
+| **M10 fixture scene** | **NO node.** `layout` is a black `frame` + a `text` marker; it only **declares the leaf** (`operator_inputs`) so Orion fans the delta out. No wipe-cover node anywhere. | `Pulsar/scripts/fixtures/m10-orion-scene.lsml.json:23-36` |
+| **M10 standin** (loopback) | **YES — hand-built, bypasses the compiler.** `build_wipe_cover_bundle` writes the `keyframes` block directly into the served bundle's `root`. **This is the only thing that makes the loopback proof work.** | `Pulsar/scripts/m10_orion_standin.py:158-225` |
+
+**Two hard facts seal it.** (1) Go's default `json.Unmarshal` **silently drops unknown
+keys**, so even a hand-authored `keyframes` block in a pushed scene definition is
+**discarded at Orion ingest** before compilation. (2) The opaque `animations` pass-through
+in `emit_lsml.go:137-142` is **not** a usable carrier: it is passed `nil` at the only call
+site (`scenes_push.go:216`), it rides the **root node's `animations` key** (an LSML-1.0
+operator-animation tree), and the Solar `KeyframePlayer` reads **per-node `keyframes`**, not
+a root `animations` blob. So `buildWipeCoverNode` is called by **nobody** in the real fil —
+only by the loopback standin. **`--real-orion` mode (#79) loads the bundle Orion actually
+serves for the active scene, which has no keyframed node → no overlay → no MID=magenta.**
+
+### A5.1 CORRECTION 1 — §A4.2 "exactly the M9 repaint mechanism" is INEXACT
+
+§A4.2 (l.1164-1165) states the Solar overlay is "an **authored Canvas/Solar overlay
+element keyed off the leaf**, **exactly the M9 repaint mechanism** Quasar/Blue already
+drive." **This is factually wrong against the runtime**, in two ways:
+
+1. **M9 is a `bind` (value-snap), not a keyframe replay.** The M9 background-colour repaint
+   used `bind:{background:<leaf>}` — a **value-binding**: the runtime subscribes the leaf's
+   signal and **assigns** the new value to the prop on each delta. It produces an
+   **instantaneous snap** (optionally smoothed by a single `animate` transition). It does
+   **not** replay a reveal→hold→retract timeline. The wipe-cover needs the leaf delta to
+   **re-trigger a multi-step opacity sequence from t=0** — that is `RenderNode.keyframes`
+   with `key=<leafPath>`, a **different runtime primitive** (`KeyframePlayer` remount), and
+   a **different authoring vocabulary** than M9's `bind`.
+2. **That vocabulary does not exist in the authoring chain.** LSML has `bind`/`bindStyle`/
+   `bindUniversal`/`animate` (single transition) — **no keyframes** (A5.0). So "exactly the
+   M9 mechanism" cannot produce the wipe-cover node: M9's mechanism (`bind`) **is** emittable
+   and **is** wrong for this; the right mechanism (`keyframes`) **is** correct and **is not**
+   emittable. The premise conflated "leaf-driven" (true of both) with "same mechanism"
+   (false). This amendment supplies the missing maillon.
+
+**The corrected statement:** the wipe-cover overlay is leaf-driven **like** M9, but via the
+runtime's **`keyframes` replay** primitive (`Keyframes.key`), **not** M9's value-`bind`. The
+authoring layer must learn to emit `RenderNode.keyframes`; it cannot today.
+
+### A5.2 CORRECTION 2 — the `scene_control` leaf transports as a **string-JSON**, not an object (Vigil's §A4.2 finding, integrated)
+
+§A4.2's leaf block (l.1148-1158) and the A4.2 prose describe the leaf value as an **object**
+`{target_scene, overlay{…}, cut_at_ms}`. **On the wire it is a JSON string**, not a JSON
+object. Verified: a raw object is **not LSDP-legal** — `assertLeafValue` rejects it with
+`INVALID_VALUE`; the contract's `encode_scene_control_leaf` does
+`json.dumps(validated, sort_keys=True, separators=(",",":"))` → a deterministic **string**,
+and the standin mirrors it byte-for-byte (`m10_orion_standin.py:144-156`,
+`encode_scene_control_leaf`). The object shape in §A4.2 is the **decoded/logical** shape; the
+**transport** shape is `string`.
+
+**Why this is benign for the replay trigger and must not regress.** The `KeyframePlayer`
+replays purely on **whether the value at `keyframes.key` CHANGED** (string inequality
+`lastKeyValue.current !== v`), so a stable, sorted, separator-pinned string is exactly the
+right carrier: any contract-meaningful change yields a new string → a replay. **The two
+consumers decode the string** (Solar parses the `overlay` sub-object; Prism parses
+`target_scene`+`cut_at_ms`). **Constraint pinned:** the encoder is **canonical**
+(`sort_keys=True`, compact separators) so identical logical values produce **identical bytes**
+— a non-canonical re-encode would spuriously re-trigger the replay or break the consumers'
+round-trip. The Conduit contract (#70, re-confirmed in #91 below) owns this canonical-string
+invariant. **Solar's `keyframes.key` keys on the leaf path, and the value it compares is the
+string** — no object identity is involved, so the string transport is correct, not a
+workaround.
+
+### A5.3 DECISION — the authoring maillon: **(B) a Canvas/Orion `wipe-cover` user-component-ish authoring primitive that compiles to `RenderNode.keyframes`**, NOT a general LSML keyframes extension
+
+The maillon must turn "the active Orion scene carries a `wipe-cover` overlay keyed on the
+`scene_control` leaf" into a served bundle whose `root` (or a child) **is** the keyframed
+node `buildWipeCoverNode` produces. Three candidate seams were evaluated against the source.
+
+| Option | What it touches (churn by repo) | Genericity | Coherence w/ reactive model | Risk | Verdict |
+|---|---|---|---|---|---|
+| **(A) General LSML keyframes vocab** — add a `keyframes{key,steps[],duration_ms,easing}` directive to `lsml-types.d.ts`, teach `@lumencast/compiler/compile.js` to emit `RenderNode.keyframes`, **and** mirror it in Orion (`LayoutNode.Keyframes` field + `lsmlNode` emit + `isReservedNodeKey`). | **@lumencast/compiler (TS): types + compile**, **Orion (Go): struct + emit + lowering**, plus a Canvas authoring affordance. **3–4 repos, two compilers in lock-step.** | **Highest** — any future keyframed widget reuses it. | High — it's the runtime's own §6.6 vocab finally surfaced to authoring; clean. | **High churn, two-compiler contract.** The TS and Go compilers must agree byte-for-byte (LSML hash reconciliation, `scenes_push.go:206-216`); a keyframes directive that one emits and the other drops re-opens `LSML_HASH_MISMATCH`. Large, and most of it unused by M10. | **Rejected for M10** (revisit as a follow-up, A5.6). |
+| **(B) A `wipe-cover` authored overlay primitive that lowers to the keyframed node** — model the overlay as a **named element** (a Canvas user-component / an Orion-recognised authoring node `kind:"wipe-cover"`) whose **lowering** calls the equivalent of `buildWipeCoverNode(leafPath, overlay)` and emits the `RenderNode.keyframes` directly into the served bundle. The leaf path + timings come from the scene's declared `scene_control` operator-input. | **Orion (Go): one lowering case** that recognises the overlay element and emits the keyframed `LayoutNode` (requires adding a `Keyframes` field to `LayoutNode` + emitting it — but **scoped to this one element**, not a general directive). **Solar**: `buildWipeCoverNode` already exists (reused as the canonical shape / parity oracle). **Canvas/fixture**: author the element in the M10 scene. **2 repos (Orion + fixture), Solar unchanged.** | Medium — reusable for "opaque cover" overlays; not arbitrary keyframes. | **Highest** — the leaf-keyed `keyframes.key` is exactly the reactive trigger; the element is declared once and replays on every `scene_control` delta, matching the M9-style fan-out. | Medium — adds a `Keyframes` field to Orion's `LayoutNode` + one emit path; contained, no general two-compiler directive. **The keyframe *shape* is owned by one builder** (parity-tested against `buildWipeCoverNode`). | **CHOSEN.** |
+| **(C) Hand-authored bundle served by Orion (the standin path, productised)** — give Orion a route to serve a **pre-built** bundle whose `root` is the keyframed node, bypassing LSML compilation (what the standin does). | **Orion (Go): a new "serve a pre-compiled bundle" ingest/route**, plus a builder (Solar's `buildWipeCoverNode` exported to a build step). **Bypasses the compiler/LSML-hash/identity machinery** (`scenes_push.go` adopt-on-verify). | Low — one-off escape hatch. | Low — it sidesteps the reactive authoring model entirely; the bundle is opaque to Orion, so future leaf/scene changes don't reconcile. | **High architectural** — a second, un-compiled bundle path defeats content-hash identity, LSML-hash reconciliation, and `sceneAcceptsPath` fan-out guarantees. It's the standin's shortcut promoted to prod — exactly the thing that made the loopback proof unrepresentative. | **Rejected** — re-introduces the standin's architectural shortcut as a permanent surface. |
+
+**Why (B), precisely.** (B) is the **moindre-churn** path that stays **inside the reactive
+authoring model**: it adds **one** recognised overlay element whose lowering emits the
+keyframed node, rather than a general keyframes grammar that forces the TS and Go compilers
+into a new lock-step contract (A's cost) or a parallel un-compiled bundle path (C's cost).
+It reuses `buildWipeCoverNode` as the **canonical shape oracle** (Solar already owns it; a
+parity test pins Orion's emitted shape to it), so the keyframe geometry has **one** source of
+truth. It respects Solar's doctrine ("new widgets are authored compositions, not runtime
+releases", Solar CLAUDE.md) — `wipe-cover` is an **authored overlay element**, and the
+**runtime primitive it needs (`keyframes`) already ships** (`RenderNode.keyframes`, LSML 1.1
+§6.6), so **no `@lumencast/runtime` change is required**. The only new field is Orion's
+`LayoutNode.Keyframes` (so the served render bundle can carry it) + its emit; this is additive
+and `omitempty`, breaking nothing.
+
+**Net repo touch for the chosen maillon:**
+- **Orion (Go)** — add `Keyframes json.RawMessage \`json:"keyframes,omitempty"\`` to
+  `LayoutNode` (`types.go`); recognise the `wipe-cover` overlay element during
+  lowering/expansion and emit the keyframed node (reveal/hold/retract from the declared
+  `scene_control` overlay timings, `key` = the declared leaf path); carry `keyframes`
+  through `lowerRenderTree`/`copyProps` so it survives lowering; **and** add it to the
+  served render bundle (`render-bundle`). **It need NOT be added to the LSML 1.1 emit**
+  (`lsmlNode`/`isReservedNodeKey`) for M10 — the LSML bundle is the authoring-hash artifact,
+  and the wipe-cover keyframes can be confined to the **render bundle** Solar fetches (the
+  LSML keyframes vocab is the deferred general work, A5.6). *If* the LSML-hash reconciliation
+  (`scenes_push.go`) requires the authoring tree to round-trip the element, Orion treats the
+  `wipe-cover` element as an opaque authored node (like a user-component reference) so the
+  hash stays stable — Forge confirms during build (spike SPIKE-LSML-HASH, A5.5).
+- **Solar (TS)** — **no runtime change**; `buildWipeCoverNode` is kept and **exported as the
+  parity oracle** for the contract test (Orion's emitted keyframed node must match its
+  shape). The `--real-orion` Solar bundle is then the **real** one Orion serves, not the
+  standin's.
+- **`@lumencast/compiler`** — **untouched for M10.** (Touching it is Option A, deferred.)
+- **Fixture / Canvas** — the M10 Orion scene (`m10-orion-scene.lsml.json`) authors the
+  `wipe-cover` overlay element above the marker, keyed on
+  `__inputs.blue.m10-scene-control.scene_control`, so the served bundle carries the keyframed
+  node. (It already declares the leaf for fan-out; it now also authors the node.)
+
+**The porteur's standing permission to touch `@lumencast/*`** is acknowledged: the cheapest
+*correct* maillon (B) deliberately **does not need it** — the runtime already has
+`keyframes`, and the compiler change is the expensive general path (A) we defer. So M10 ships
+without a Lumencast lib release; only Orion (+ fixture, + a Solar export) move.
+
+### A5.4 Reconciliation with §A4.2 and the existing #73
+
+§A4.2's mechanism stands **once the maillon exists**: Solar still renders the leaf-driven
+opaque overlay; Prism still fires the `cut_at_ms` hard-cut; the leaf is still the synchro
+contract. What A5 fixes is the **silent assumption** that the served bundle already contains
+the keyframed node. **#73 is re-scoped** (A5.7): it is no longer "author the element and trust
+it replays" — it is "**the Orion lowering emits `RenderNode.keyframes` for the `wipe-cover`
+element, byte-shape-pinned to `buildWipeCoverNode`, and the served render bundle carries it;**
+a leaf delta on the real wire replays it on the CEF surface."
+
+### A5.5 Risks (extends §A4.5)
+
+- **R-AUTH (new, engineering) — the maillon is a compiler/lowering change on the broadcast
+  render path.** Adding a `Keyframes` field + an overlay-lowering case to Orion touches the
+  bundle Solar renders on air. A wrong emit (bad `times[]`, wrong `key`, dropped on lowering)
+  = no replay or a broken overlay mid-broadcast. Guarded by: the parity contract test against
+  `buildWipeCoverNode` (#90), the probe's real-wire MID=magenta proof (#75/#92), and the
+  lowering round-trip test. *Engineering, not security.*
+- **SPIKE-LSML-HASH (new, build gate, small).** Confirm that authoring a `wipe-cover` overlay
+  element does **not** break the LSML-hash reconciliation (`scenes_push.go:206-216`,
+  `LSML_HASH_MISMATCH` / adopt-on-verify): either the element round-trips through `lsmlNode`
+  as an opaque authored node, or the render-bundle-only keyframes path is confirmed not to
+  feed the LSML hash. **If it breaks the hash, the maillon must also touch the LSML emit
+  (drifting toward Option A) — measure first.** (Owner: Forge spike, Conduit confirms the
+  contract.)
+- **No new security surface.** The maillon changes **how the served bundle is built**, not
+  **what crosses the network** nor any auth/transport. The leaf, the fan-out, the
+  `target_scene` allowlist, the operator-gated trigger, the read-only viewer subscription —
+  **all unchanged from A4**. R6 (broadcast-control) and R4 (desktop capture) are **not
+  re-weighted** by A5. → Bastion: confirm the maillon introduces no path by which a **leaf
+  value** can inject arbitrary `keyframes`/`key`/node shape into the bundle (the keyframe
+  geometry is **authored in the scene**, the leaf supplies only the *replay trigger* and the
+  decoded timings the consumers read — the served node's `keyframes.steps` come from the
+  **scene's declared overlay**, never from the live leaf value). This is the A5 analogue of
+  the A2.1 "leaf carries no `path`" invariant: **the leaf carries no node shape.**
+
+### A5.6 Deferred — the general LSML keyframes vocab (Option A) as a follow-up
+
+Surfacing the runtime's §6.6 `keyframes` into the LSML authoring vocab + both compilers is a
+**real, generic capability** (any future leaf-replayed multi-step animation). It is **out of
+scope for M10** (Option A's churn) but **recorded as the principled successor**: when a second
+keyframed widget is needed, promote (B)'s one-element lowering to (A)'s general directive. A
+follow-up ADR (or an amendment here) owns it; M10 does not pay for it.
+
+### A5.7 Issue delta (supersedes the §A4.7 #73 scope; adds the parity / contract / real-wire issues)
+
+> **Filed issue numbers (the §A4.7 #73 re-scope + three new):** Orion emit =
+> **ZabLaboratory/Orion#64** (the re-scoped #73); Pulsar parity oracle =
+> **Pulsar#89**; Pulsar canonical-string contract = **Pulsar#90**; Pulsar real-wire
+> proof = **Pulsar#91**. (The §A5.7 mnemonic labels #73/#90/#91/#92 below map to those.)
+
+- **#73 → Orion#64 (Forge, Orion + fixture) — RE-SCOPED: emit the keyframed `wipe-cover`
+  node in the REAL pipeline.** Add `LayoutNode.Keyframes` (`json:"keyframes,omitempty"`,
+  `types.go`);
+  recognise the `wipe-cover` overlay authoring element and lower it to a `RenderNode` whose
+  `keyframes` = `{key:<declared scene_control leaf path>, duration_ms:reveal+hold+retract,
+  easing:"ease-in-out", steps:[0→0, revealAt→1, holdEndAt→1, 1→0]}` — **byte-shape identical
+  to `Solar/src/overlay/wipe-cover.ts::buildWipeCoverNode`**; carry `keyframes` through
+  lowering (`lowerRenderTree`/`copyProps`) and into the served `render-bundle`; author the
+  element in `fixtures/m10-orion-scene.lsml.json`. **RC:** (a) `POST /scenes/{id}/push` of
+  the M10 scene yields a `render-bundle` whose tree contains a node with
+  `keyframes.key == "__inputs.blue.m10-scene-control.scene_control"` and the 4-step
+  reveal/hold/retract `steps`; (b) the emitted node matches `buildWipeCoverNode`'s output for
+  the same overlay timings (parity test #90); (c) a leaf delta on `--real-orion` replays the
+  overlay on the CEF surface (no standin); (d) Go `json.Unmarshal` round-trips `keyframes`
+  (no silent drop); (e) `go test ./...` + `golangci`/`staticcheck` green.
+- **#90 → Pulsar#89 (Probe / Conduit — parity oracle test).** A cross-repo test asserting Orion's emitted
+  keyframed node is **shape-identical** to `buildWipeCoverNode(leafPath, overlay)` for a
+  battery of overlay timings (incl. the fixture's 400/500/400). Pins the single-source-of-truth
+  invariant (A5.3). **RC:** parity holds for ≥3 timing tuples incl. edge `reveal=hold=retract`;
+  the test fails loudly if Orion's `times[]`/`key`/`duration_ms` drift from the builder.
+- **#91 → Pulsar#90 (Conduit — re-confirm the canonical string-JSON leaf transport, A5.2).** The
+  `scene_control` contract (#70) explicitly pins: leaf value is a **canonical JSON string**
+  (`sort_keys`, compact separators); a raw object is `INVALID_VALUE`; identical logical values
+  ⇒ identical bytes. **RC:** contract test asserts encode→decode round-trip and byte-stability;
+  a non-canonical re-encode is rejected/normalised; Solar and Prism both decode the string.
+- **#92 → Pulsar#91 (Probe — real-wire keyframes proof, folds into #75).** Extends the #75 antenna run:
+  in `--real-orion`, the CEF loads the **Orion-served** bundle (the standin is used **only**
+  for the loopback regression, never as the `--real-orion` source); assert the served bundle
+  carries the keyframed node and that a Blue-pushed leaf delta (VPS-origin) replays it
+  (MID frame = magenta cover) — proving the **whole real fil**, not the hand-built bundle.
+  **RC:** with `--real-orion`, MID=magenta sourced from the Orion bundle; a `--standin` run
+  remains green as the isolated runtime regression. SPIKE-LSML-HASH (A5.5) lifted before #73
+  merges.
+- **SPIKE-LSML-HASH (Forge, before #73 merge)** — A5.5: confirm authoring the overlay element
+  doesn't break `LSML_HASH_MISMATCH`/adopt-on-verify; decide render-bundle-only vs
+  LSML-emit-too.
+- **#76 (Bastion) — extends:** confirm the A5 maillon adds no path for a **leaf value** to
+  inject node shape/`keyframes`/`key` (geometry is scene-authored, leaf is replay-trigger +
+  decoded timings only — the "leaf carries no node shape" invariant, A5.5). No re-weight of
+  R4/R6; A5 introduces no new network/auth surface.
+
+### A5.8 Residual unknowns
+
+- **SPIKE-LSML-HASH** (A5.5) — the one build-gate unknown: does the overlay-element authoring
+  perturb the LSML content-hash reconciliation? Small, must be lifted before #73 merges.
+- **No product questions.** A5 is a pure mechanism/authoring correction; nothing for the
+  porteur to decide. The maillon (B), the two §A4.2 corrections, and the deferral of the
+  general LSML vocab (A) are architectural calls recorded here for Vigil's re-validation.
