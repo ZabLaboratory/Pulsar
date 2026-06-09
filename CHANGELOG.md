@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-10
+
+Operability + M10 transition groundwork release. Builds on the V1 headless
+broadcast engine with: a governance/merge-gate CI surface, a frozen
+cross-service `scene_control` contract (Blue → Orion leaf → Solar/Prism),
+the M10 "blue-driven scene transition" harness and probes, and a dormant
+native-stinger compositing capability gated OFF by default. No change to the
+public spawn/handshake (PRISM-EMBEDDING) or the obs-websocket request surface
+— all additions are backward-compatible (minor bump per `docs/PROTOCOL.md`).
+
+### ✨ Added
+
+- **CI compliance workflow (`compliance.yml`).** Org merge-gate conformance,
+  kept separate from the build pipeline: `secret-scan` (trufflehog verified
+  history+filesystem scan **+** detect-secrets audit against
+  `.secrets.baseline`), `deps-audit` (npm `--omit=dev --audit-level=high`,
+  high/critical CVE blocks), `lockfile-check` (`npm ci --dry-run`, no drift,
+  stray-`yarn.lock` guard) and `codeowners-check` (structural CODEOWNERS
+  validation). No error-suppression toggles — every job can turn a PR red.
+- **`scene_control` cross-service contract** (`scripts/contracts/scene_control/`).
+  Single source of truth for the leaf that travels Blue → `Orion leaf` →
+  Solar/Prism/probe, with a schema validator, valid/malicious fixtures and a
+  contract test (`test_scene_control_contract.py`) bound to a mirror of Blue's
+  leaf_mapper. Wired into CI as the `contract tests (scene_control)` job.
+- **M10 transition harness** (`scripts/m10_setup.py`, `run-m10.ps1`,
+  `run-m10-live.ps1`, `m10_orion_standin.py`) creating the two
+  `monitor_capture` scenes and the Solar/CEF overlay used for the
+  blue-driven scene transition, plus the loopback Orion-WS stand-in.
+- **Native stinger compositing**, gated behind the `PULSAR_NATIVE_STINGER`
+  env flag (**default OFF / dormant**). Adds a fade + stinger transition pair
+  bound as the encoder output source, with `PULSAR_STINGER_ASSET` to pin a
+  **local-only** demo asset path. The flag is resolved once at boot from the
+  process environment and is **never** reachable from a leaf / obs-websocket /
+  network value (Bastion invariant, ADR 003 §A4.5).
+- **OBS version tagging** — `OBS_VERSION` is suffixed with a `pulsar` marker
+  so a built binary is identifiable as the fork (`patches/0001-…`).
+- **ATL-dependent plugin build gate** behind `PULSAR_HAVE_ATL`
+  (`patches/0002-…`), with a runbook for the missing-build failure mode.
+- **New probe suite** — 30 s Twitch scene-switch probe, M1/M2/M3/M6 milestone
+  probes (binary smoke, media-output→MP4, CEF browser-source capture, real
+  Solar scene on air), the M10 Canvas-live probe, the GPU-coexistence spike
+  (`monitor_capture` + CEF `browser_source` on GPU) and a flag-aware stinger
+  smoke probe.
+- **Pinned stinger demo asset** generator (`scripts/assets/`,
+  `generate-stinger-demo.ps1` + manifest) for the dormant native path.
+
+### ♻️ Changed
+
+- **Pivot to a Solar/CEF overlay transition (M10).** The transition is no
+  longer an OBS-native media transition: Solar/CEF animates a full-screen
+  opaque overlay over the two captures and the underlying screen change is an
+  instantaneous hard-cut hidden under the overlay plateau. The leaf
+  co-specifies the overlay animation (Solar) and the `cut_at_ms` (Prism); the
+  OBS-native form (media `asset_id` / `path` / action verbs) is superseded and
+  kept only behind the dormant flag.
+- **Harness capture method forced to WGC** (Windows Graphics Capture) to prove
+  `monitor_capture` coexists with the CEF browser source headless; Orion scene
+  default migrated to the overlay shape.
+- **Transition output binding moved out of `setup()`** — the encoder output
+  source is now driven by the transition (passthrough when idle, blend
+  mid-switch) rather than a raw scene bind.
+- **Docs refresh** — full `docs/` set re-synced (ARCHITECTURE, DEVELOPMENT,
+  PROTOCOL, PRISM-EMBEDDING) and `CLAUDE.md` untracked (now local-only).
+
+### 📝 Docs
+
+- **ADR 001** — ATL build gate + CI compliance, accepted.
+- **ADR 002** — M8 Canvas-authored live test, accepted.
+- **ADR 003** — blue-driven OBS scene transition (M10), accepted, through
+  Amendment 5 (Solar/CEF overlay pivot, Orion wipe-cover authoring link,
+  M9-premise/transport corrections).
+- **Runbook** — `docs/runbooks/atl-missing-build-failure.md`.
+- Package READMEs expanded (`pulsar-client`, `pulsar-bundle`,
+  `pulsar-bundle-full`, `pulsar-frontend-stub`).
+
+### 🔧 CI / Build
+
+- `pipeline.yml` gains the `contract tests (scene_control)` job (ubuntu,
+  parallel to lint) plus offline M10 harness/probe tests.
+- New `scripts/build-win.ps1` build entrypoint.
+- `.gitignore` now excludes the local `/CLAUDE.md` agent constitution.
+
+### ⚠️ Notes
+
+- `PULSAR_NATIVE_STINGER` is **dormant** in this release: unset (the default)
+  keeps OBS doing a raw hard cut, the stinger source is never registered and
+  no media is decoded. It exists in `main` as a future capability only.
+- The live M10 transition on-air leg (overlay actually compositing, leaf read
+  off `/show/stream`) is proven by the CTest integration suite + an operator
+  antenna run, not by the offline CI contract/probe tests.
+
 ## [1.0.0] - 2026-05-02
 
 V1 — first stable release. Pulsar is now a production-grade headless
