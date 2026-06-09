@@ -24,6 +24,7 @@ Run:
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
 
 import pytest
@@ -87,31 +88,68 @@ def test_f2_orion_fixture_declares_the_leaf_path():
 
 def test_f2_seeded_default_is_a_valid_scene_control_value():
     """Orion seeds the declared default on boot — it must itself be a legal
-    scene_control payload (round-trip through the consumer guard)."""
+    scene_control payload in the re-frozen Amendment 4 OVERLAY shape (#78):
+    target_scene + overlay{kind,reveal_ms,hold_ms,retract_ms} + cut_at_ms,
+    round-tripped through the consumer guard. The old stinger/transition
+    default is rejected by this same contract (the regression #78 fixes)."""
     bundle = m10.build_orion_declaration()
     default = next(
         oi["default"] for oi in bundle["operator_inputs"]
         if oi["path"] == m10.M10_LEAF_PATH
     )
     validated = validate_scene_control(default)
-    assert validated["action"] == "switch_program_scene"
     assert validated["target_scene"] in DEFAULT_SCENE_ALLOWLIST
-    assert validated["transition"]["kind"] in {"stinger", "fade"}
-    # The seed carries an asset_id KEY, never a path (C-PATH).
-    assert "path" not in validated["transition"]
+    assert validated["overlay"]["kind"] == "wipe-cover"
+    # The cut-window invariant holds (reveal_ms <= cut_at_ms <= reveal+hold) —
+    # the hard-cut lands inside the opaque plateau (§A4.2 visual-safety core).
+    ov = validated["overlay"]
+    assert ov["reveal_ms"] <= validated["cut_at_ms"] <= ov["reveal_ms"] + ov["hold_ms"]
+    # No superseded OBS-native construct survived the migration: the strict
+    # contract echoes ONLY the overlay-form keys (no action/transition/asset_id).
+    assert set(validated) == {"target_scene", "overlay", "cut_at_ms"}
+    assert "action" not in default
+    assert "transition" not in default
+
+
+def test_f2_default_is_the_overlay_form_not_the_superseded_stinger():
+    """Regression guard for #78: the fixture default must NOT carry the old
+    Amendment 1/2 stinger shape (action/transition/asset_id) — that form is
+    rejected by the re-frozen contract and was the known regression."""
+    bundle = json.loads(m10.ORION_SCENE_FIXTURE.read_text(encoding="utf-8"))
+    default = next(
+        oi["default"] for oi in bundle["operator_inputs"]
+        if oi["path"] == m10.M10_LEAF_PATH
+    )
+    assert "transition" not in default
+    assert "action" not in default
+    assert "overlay" in default and "cut_at_ms" in default
 
 
 def test_f2_rejects_a_seed_with_an_unknown_target_scene():
     """Defence: a declaration seeding an off-allowlist target_scene must be
     caught by the same guard the consumer runs (C-INJ)."""
     bad = {
-        "action": "switch_program_scene",
         "target_scene": "scene-evil",
+        "overlay": {"kind": "wipe-cover", "reveal_ms": 250,
+                    "hold_ms": 200, "retract_ms": 250},
+        "cut_at_ms": 250,
+    }
+    with pytest.raises(SceneControlContractError):
+        validate_scene_control(bad)
+
+
+def test_f2_rejects_a_seed_with_the_superseded_stinger_shape():
+    """The exact regression #78 fixes: the old stinger default
+    (action/target_scene/transition) is rejected by the re-frozen contract —
+    it is no longer a valid scene_control value."""
+    stinger = {
+        "action": "switch_program_scene",
+        "target_scene": "scene-screen-1",
         "transition": {"kind": "stinger", "asset_id": "stinger-demo",
                        "point_ms": 0, "duration_ms": 600},
     }
     with pytest.raises(SceneControlContractError):
-        validate_scene_control(bad)
+        validate_scene_control(stinger)
 
 
 def test_monitor_setting_keys_match_fork_sources():
@@ -121,6 +159,15 @@ def test_monitor_setting_keys_match_fork_sources():
     assert m10.SETTING_MONITOR_ID == "monitor_id"
     assert m10.SETTING_MONITOR_IDX == "monitor"
     assert m10.MONITOR_CAPTURE_KIND == "monitor_capture"
+
+
+def test_capture_method_is_forced_to_wgc():
+    """#78 pivot deblock: the harness pins the monitor_capture method to
+    WGC (the integer enum METHOD_WGC=2 under the 'method' key) so capture is
+    non-black in a headless / non-interactive agent context where the DXGI
+    duplicator returns 887A0004 (SPIKE-GPU, #72/#77)."""
+    assert m10.SETTING_METHOD == "method"
+    assert m10.METHOD_WGC == 2
 
 
 def test_blueprint_slug_matches_contract_fixture():
