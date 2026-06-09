@@ -130,20 +130,23 @@ if ($browserCode -eq 3) {
 }
 
 # --------------------------------------------------------------------
-# Phase 1d -- self-spawning stinger transition smoke (probe-stinger-
-# smoke.py, M10 #57).
+# Phase 1d -- self-spawning FLAG-AWARE stinger smoke (probe-stinger-
+# smoke.py, M10 #79 / pivot).
 #
-# Proves the Gap B' fix loads on the full build: the frontend-stub
-# registers a "Stinger" transition (obs_stinger_transition), the obs-ws
-# transition-config requests are accepted, and a program-scene change
-# with the stinger active does NOT error and does NOT blank the encoder
-# (record stays active, activeFps>0, drop ratio low across the switch).
-# Self-spawns its OWN pulsar.exe child (pins PULSAR_STINGER_ASSET to the
-# committed demo asset, fresh ephemeral port) for the config.json-reseed
-# reason as the other Phase-1 probes -- so it runs before the shared
-# instance. The full VISUAL mid-transition proof is the M10 live probe
-# (#61), not this smoke. A LIGHT build (no obs_stinger_transition kind)
-# makes the probe exit 3 (typed skip), tolerated here.
+# With PULSAR_NATIVE_STINGER unset (the DEFAULT, the Solar/CEF pivot
+# world, #73/#83) the probe asserts the native stinger is DORMANT: NO
+# "Stinger" transition instance is registered, and a program-scene
+# change is an instantaneous HARD-CUT that does NOT error and does NOT
+# blank the encoder (record stays active + outputTotalFrames grows
+# across the switch window -- activeFps is NOT a liveness signal on the
+# record-only encoder, handoff #73). The CTest runs this default world.
+# Set PULSAR_NATIVE_STINGER=1 locally to assert the dormant #57 native
+# path instead. Self-spawns its OWN pulsar.exe child (fresh ephemeral
+# port) for the config.json-reseed reason as the other Phase-1 probes.
+# The VISUAL overlay-blend + invisible-cut proof is the M10 live probe
+# (#79), not this smoke. A LIGHT build -> exit 3 (typed skip) only in
+# the NATIVE_STINGER=1 world; the default hard-cut world runs on any
+# full build.
 # --------------------------------------------------------------------
 $stingerProbe = Join-Path $repoRoot "scripts/probe-stinger-smoke.py"
 Write-Host "==> Running probe-stinger-smoke.py (self-spawn stinger seam, M10 #57)"
@@ -160,25 +163,29 @@ if ($stingerCode -eq 3) {
 }
 
 # --------------------------------------------------------------------
-# Phase 1e -- self-spawning M10 live end-to-end probe in PROOF-ONLY mode
-# (probe-m10-canvas-live.py, #61).
+# Phase 1e -- self-spawning M10 OVERLAY live end-to-end probe in
+# PROOF-ONLY mode (probe-m10-canvas-live.py, #79 / Solar-CEF pivot).
 #
-# Runs the FULL M10 chain WITHOUT going live to Twitch and WITHOUT the VPS:
+# Runs the FULL M10 overlay chain WITHOUT going live to Twitch and WITHOUT
+# the VPS:
 #   --no-broadcast    no Twitch key, no StartDestination (the on-air leg is
 #                     Keeper's antenna run).
 #   --loopback-leaf   injects the exact scene_control leaf Orion would fan out
-#                     into the SAME in-process consumer code path (validate →
-#                     executor → obs-ws → switch → capture), so the integration
-#                     is proven on a box with no VPS reach.
-#   --allow-blank     a CI runner has no real desktop content behind
-#                     monitor_capture and (usually) a single display, so the
-#                     A/B frames coincide; the wire + the switch + the anti-
-#                     injection (C-INJ) + C-FANOUT(F2) + C-SEC are all still
-#                     asserted. The VISUAL mid-transition blend proof
-#                     (criterion 5) needs a 2-monitor operator box with real
-#                     content -- that is Keeper's antenna run, by doctrine.
+#                     into BOTH the in-process stand-in cut consumer AND the
+#                     overlay page (validate -> hard-cut -> capture + overlay
+#                     blend + cut-skew), so the integration is proven on a box
+#                     with no VPS reach.
+#   --allow-blank     a CI runner may not render WGC monitor_capture / the
+#                     Solar CEF overlay, so the visual blend + real-opacity
+#                     skew can't be asserted; the wire + the hard-cut + C-MECH
+#                     (no native transition) + C-INJ + C-FANOUT(F2) + C-SEC are
+#                     ALL still asserted. The VISUAL overlay-blend + invisible-
+#                     cut skew proof needs a real desktop + the Solar bundle --
+#                     that is the antenna run (#81), by doctrine.
 # Self-spawns + reaps its own pulsar.exe (config.json-reseed reason) so it runs
-# in Phase 1. A LIGHT build (no stinger/monitor_capture) -> exit 3, tolerated.
+# in Phase 1. pulsar.exe is launched GPU-ON (no --disable-gpu) so WGC + CEF
+# coexist (SPIKE-GPU #70). A LIGHT build (no browser_source/monitor_capture)
+# -> exit 3, tolerated.
 # --------------------------------------------------------------------
 $m10Probe = Join-Path $repoRoot "scripts/probe-m10-canvas-live.py"
 Write-Host "==> Running probe-m10-canvas-live.py (self-spawn M10 e2e, proof-only, #61)"
