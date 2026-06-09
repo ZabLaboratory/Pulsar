@@ -1,29 +1,46 @@
 #!/usr/bin/env python3
-"""probe-stinger-smoke.py -- M10 #57 build/load smoke for the stinger transition.
+"""probe-stinger-smoke.py -- M10 stinger build/load smoke, FLAG-AWARE for the
+Solar/CEF pivot (ADR 003 Amendments 3 & 4 / #71, #79).
 
-Scope (this is NOT the full M10 live probe -- that is #61). This smoke proves
-the load-bearing #57 facts that are checkable on the operator box without a
-Twitch broadcast:
+THE PIVOT MAKES THE NATIVE STINGER DORMANT (#73 / #83).
+  The Amendment 1/2 OBS-native stinger transition is no longer the live M10
+  mechanism. The visible transition is now a Solar/CEF *opaque overlay* over
+  two monitor_capture scenes, and the screen-1->screen-2 change underneath is
+  an INSTANTANEOUS hard-cut hidden under the overlay's opaque plateau (no
+  OBS-native transition at all). The native stinger compositing therefore
+  ships DORMANT behind the build/runtime flag ``PULSAR_NATIVE_STINGER``,
+  default OFF (#73). This smoke is the load-bearing check on the operator box
+  that the dormancy is correct.
 
-  1. pulsar.exe (full build) launches and the obs-websocket v5 socket is up.
-  2. GetTransitionKindList includes the stinger kind (obs_stinger_transition).
-  3. GetSceneTransitionList includes a registered "Stinger" transition instance
-     (the frontend-stub now registers it alongside "Fade").
-  4. SetCurrentSceneTransition{Stinger} + SetCurrentSceneTransitionDuration +
-     SetCurrentSceneTransitionSettings{transition_point} are accepted.
-  5. A program-scene change with the stinger active does NOT error and does NOT
-     blank the encoder: with recording running, the record output stays active
-     and activeFps stays > 0 across the switch window (drop ratio stays low).
+THE FLAG GATES WHICH WORLD WE ASSERT (we never weaken -- we BRANCH).
+  PULSAR_NATIVE_STINGER unset / "0" / "off"  (the DEFAULT, live pivot world):
+    - NO "Stinger" transition instance is registered, and the
+      obs_stinger_transition kind is NOT advertised (or, if the kind is still
+      compiled in, no instance is wired). The default current transition is a
+      plain cut/Fade -- never a Stinger.
+    - A SetCurrentProgramScene is an INSTANTANEOUS HARD-CUT: it must not error,
+      must flip the program scene, and must NOT blank the encoder. We prove
+      "encoder not blanked" off ``outputTotalFrames`` GROWING across the
+      switch window (the record-only encoder reports activeFps==0 even when
+      healthy -- handoff #73 -- so activeFps is NOT a liveness signal here;
+      outputTotalFrames is).
+  PULSAR_NATIVE_STINGER == "1" / "on" / "true":
+    - The #57 world: obs_stinger_transition kind present, a registered
+      "Stinger" instance, transition-config requests accepted, and a program
+      switch with the stinger active composites the seam without erroring and
+      keeps the record output active across the (animated) switch window.
 
-The full VISUAL proof that the stinger media composites mid-transition on air
-is #61 (the M10 live probe capturing mid-transition frames) -- explicitly out
-of scope here per ADR 003 §6 criterion 5 and the #57 task.
+The full VISUAL proof of the OVERLAY blend mid-transition + the invisible
+hard-cut skew is the M10 live probe (probe-m10-canvas-live.py, #79), out of
+scope here -- this is a wiring/seam smoke runnable without Twitch or the VPS.
 
-Exit codes: 0 pass · 1 assertion failure · 2 config error · 3 typed skip
-(stinger kind absent -> not a full build).
+Exit codes: 0 pass * 1 assertion failure * 2 config error * 3 typed skip
+(the build can't exercise the asserted world -- e.g. NATIVE_STINGER=1 on a
+LIGHT build with no obs_stinger_transition kind).
 
   pip install websockets
-  python scripts/probe-stinger-smoke.py
+  python scripts/probe-stinger-smoke.py                    # default: pivot (OFF)
+  PULSAR_NATIVE_STINGER=1 python scripts/probe-stinger-smoke.py   # #57 world
 """
 
 from __future__ import annotations
@@ -57,10 +74,22 @@ READY_RE = re.compile(r"^PULSAR_READY ws=(\S+) password=(\S+)$")
 READY_TIMEOUT_S = 60.0
 EVENT_SUBSCRIPTION_ALL = 0x7FF
 
+# The flag that gates the native stinger (#73 / #83). Default OFF == the live
+# Solar/CEF pivot world; "1"/"on"/"true" == the dormant #57 world re-armed.
+NATIVE_STINGER_ENV = "PULSAR_NATIVE_STINGER"
+
+
+def native_stinger_enabled() -> bool:
+    """True iff the dormant native stinger is armed by the flag. Default OFF."""
+    return os.environ.get(NATIVE_STINGER_ENV, "").strip().lower() in (
+        "1", "on", "true", "yes",
+    )
+
 
 class Pulsar:
-    def __init__(self, exe: pathlib.Path) -> None:
+    def __init__(self, exe: pathlib.Path, *, native_stinger: bool) -> None:
         self.exe = exe
+        self.native_stinger = native_stinger
         self.proc: Optional[subprocess.Popen] = None
         self._lines: list[str] = []
         self._ready = threading.Event()
@@ -71,8 +100,12 @@ class Pulsar:
         env["PULSAR_PORT"] = "0"  # session-random, surfaced on PULSAR_READY
         env["PULSAR_FPS"] = "30"
         env["PULSAR_RESOLUTION"] = "1920x1080"
+        # Propagate the flag's resolved value so the spawned fork sees exactly
+        # the world this run asserts (a stray parent-shell value can't drift
+        # the child from the probe's branch decision).
+        env[NATIVE_STINGER_ENV] = "1" if self.native_stinger else "0"
         # Pin the stinger asset path LOCALLY (C-PATH): the fork reads this env,
-        # never a leaf value. Point it at the committed, hash-pinned demo asset.
+        # never a leaf value. Harmless when the native stinger is dormant.
         env["PULSAR_STINGER_ASSET"] = str(STINGER_ASSET)
         env.pop("PULSAR_CAPTURE_WINDOW", None)
         env.pop("PULSAR_MIC_DEVICE_ID", None)
@@ -169,6 +202,235 @@ def resolve_exe() -> pathlib.Path:
     return pathlib.Path(os.environ.get("PULSAR_EXE", str(DEFAULT_EXE)))
 
 
+# --------------------------------------------------------------------------
+# Shared: identify, create a 2nd scene, run the program switch, sample the
+# encoder. Returns the (pre, post) GetStats responseData dicts + the flipped
+# scene name so each world asserts its own invariants on the same evidence.
+# --------------------------------------------------------------------------
+async def connect_identify(ws, password: str) -> Inbox:
+    hello = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+    identify = {"rpcVersion": hello["d"]["rpcVersion"],
+                "eventSubscriptions": EVENT_SUBSCRIPTION_ALL}
+    if "authentication" in hello["d"]:
+        a = hello["d"]["authentication"]
+        identify["authentication"] = compute_auth(password, a["salt"], a["challenge"])
+    await ws.send(json.dumps({"op": 1, "d": identify}))
+    ident = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+    if ident.get("op") != 2:
+        raise RuntimeError(f"Identify rejected: {ident}")
+    print("[smoke] obs-ws v5 connected + identified")
+    return Inbox()
+
+
+async def list_transition_state(ix: Inbox, ws) -> tuple[list[str], dict[str, dict]]:
+    """Return (transition_kinds, {name: transition}) for the current fork."""
+    r = await request(ix, ws, "GetTransitionKindList", "kinds")
+    kinds = r.get("responseData", {}).get("transitionKinds", [])
+    r = await request(ix, ws, "GetSceneTransitionList", "list")
+    trs = r.get("responseData", {}).get("transitions", [])
+    names = {t["transitionName"]: t for t in trs}
+    return kinds, names
+
+
+async def run_program_switch(ix: Inbox, ws, *, target_scene: str) -> tuple[dict, dict, str]:
+    """Create target_scene, start recording, sample stats pre/post a program
+    switch. Returns (pre_stats, post_stats, current_scene_after)."""
+    r = await request(ix, ws, "CreateScene", "mk-b", {"sceneName": target_scene})
+    if not ok(r) and r["requestStatus"].get("code") != 601:  # 601 = already exists
+        raise RuntimeError(f"CreateScene: {r['requestStatus']}")
+
+    r = await request(ix, ws, "StartRecord", "rec-on")
+    rec_started = ok(r)
+    print(f"[smoke] StartRecord ok={rec_started} ({r['requestStatus'].get('comment','')})")
+
+    r = await request(ix, ws, "GetStats", "stats-pre")
+    pre = r.get("responseData", {})
+    print(f"[smoke] pre-switch activeFps={pre.get('activeFps', 0.0):.1f} "
+          f"outputTotal={pre.get('outputTotalFrames', 0)} "
+          f"outputSkipped={pre.get('outputSkippedFrames', 0)}")
+
+    r = await request(ix, ws, "SetCurrentProgramScene", "switch",
+                      {"sceneName": target_scene})
+    if not ok(r):
+        raise RuntimeError(f"SetCurrentProgramScene errored: {r['requestStatus']}")
+    print(f"[smoke] SetCurrentProgramScene({target_scene}) accepted -- no error on switch")
+
+    # Let frames flow across the switch window, then re-sample.
+    await asyncio.sleep(1.2)
+    r = await request(ix, ws, "GetStats", "stats-post")
+    post = r.get("responseData", {})
+    print(f"[smoke] post-switch activeFps={post.get('activeFps', 0.0):.1f} "
+          f"outputTotal={post.get('outputTotalFrames', 0)} "
+          f"outputSkipped={post.get('outputSkippedFrames', 0)}")
+
+    r = await request(ix, ws, "GetCurrentProgramScene", "get-prog")
+    prog = r.get("responseData", {})
+    cur_scene = prog.get("currentProgramSceneName") or prog.get("sceneName")
+    print(f"[smoke] current program scene after switch: {cur_scene}")
+
+    post["_rec_started"] = rec_started  # piggyback for the caller's record check
+    if rec_started:
+        r = await request(ix, ws, "GetRecordStatus", "rec-st")
+        post["_rec_active"] = bool(r.get("responseData", {}).get("outputActive"))
+        await request(ix, ws, "StopRecord", "rec-off")
+    return pre, post, cur_scene
+
+
+def assert_encoder_not_blanked(pre: dict, post: dict, *, label: str) -> Optional[str]:
+    """The pivot liveness assertion (handoff #73). The record-only encoder
+    reports activeFps==0 even when healthy, so liveness is proven off
+    outputTotalFrames GROWING across the switch window -- NOT activeFps.
+    Returns an error string on failure, None on success."""
+    total_pre = int(pre.get("outputTotalFrames", 0) or 0)
+    total_post = int(post.get("outputTotalFrames", 0) or 0)
+    rec_started = bool(post.get("_rec_started"))
+
+    if rec_started:
+        if not post.get("_rec_active"):
+            return f"{label}: record output went INACTIVE across the switch (encoder blanked)"
+        if total_post <= total_pre:
+            return (f"{label}: outputTotalFrames did not grow across the switch "
+                    f"({total_pre} -> {total_post}) -- encoder blanked (the cut "
+                    "stalled the output, NOT a hard-cut)")
+        skipped = max(0, int(post.get("outputSkippedFrames", 0) or 0)
+                      - int(pre.get("outputSkippedFrames", 0) or 0))
+        drop = skipped / max(1, total_post)
+        print(f"[smoke] {label}: outputTotalFrames grew {total_pre}->{total_post} "
+              f"(record active; switch-window drop~{drop:.4f}); activeFps NOT used "
+              "as a liveness signal (record-only encoder reports 0 -- handoff #73)")
+        if drop > 0.05:
+            return f"{label}: drop ratio {drop:.4f} > 0.05 across the switch"
+        return None
+
+    # Recording declined (encoders unconfigured on this build): we cannot read
+    # outputTotalFrames growth, so fall back to "the switch did not error and
+    # the render thread is alive". A bare activeFps>0 is acceptable evidence
+    # ONLY in this no-record fallback (not the primary signal).
+    if float(post.get("activeFps", 0.0) or 0.0) <= 0.0 and total_post <= total_pre:
+        return (f"{label}: recording unavailable AND no render/output progress "
+                "across the switch -- cannot prove the seam stayed live")
+    print(f"[smoke] {label}: recording unavailable; render/output progressed "
+          "across the switch (seam OK, degraded evidence)")
+    return None
+
+
+# --------------------------------------------------------------------------
+# World A -- PIVOT (PULSAR_NATIVE_STINGER OFF, the default).
+# --------------------------------------------------------------------------
+async def run_pivot_off(ix: Inbox, ws) -> int:
+    print(f"[smoke] world: PIVOT ({NATIVE_STINGER_ENV} OFF) -- native stinger "
+          "DORMANT; the live transition is the Solar/CEF overlay + an invisible "
+          "hard-cut (this probe asserts the hard-cut, NOT the overlay -- #79).")
+    kinds, names = await list_transition_state(ix, ws)
+    print(f"[smoke] transition kinds: {kinds}")
+    print(f"[smoke] registered transitions: {sorted(names)}")
+
+    # ASSERT: NO Stinger instance is registered when the flag is OFF. The
+    # obs_stinger_transition kind MAY still be compiled in (the code exists,
+    # only dormant), but NO "Stinger" instance may be wired into the live set.
+    if "Stinger" in names:
+        print("FAIL: a 'Stinger' transition instance IS registered while "
+              f"{NATIVE_STINGER_ENV} is OFF -- the native stinger is NOT dormant "
+              "(pivot regression). Expected zero Stinger instances by default.")
+        return 1
+    print("[smoke] OK: no 'Stinger' transition instance registered (native "
+          "stinger dormant by default -- the pivot invariant).")
+
+    # The default current transition must be a plain cut/Fade, never a Stinger.
+    r = await request(ix, ws, "GetCurrentSceneTransition", "get-tr")
+    cur = r.get("responseData", {})
+    print(f"[smoke] current transition: {cur.get('transitionName')} "
+          f"kind={cur.get('transitionKind')} dur={cur.get('transitionDuration')}")
+    if cur.get("transitionKind") == "obs_stinger_transition":
+        print("FAIL: the default current transition is a stinger while the flag "
+              "is OFF -- a hard-cut must not route through a stinger.")
+        return 1
+
+    # The hard-cut: a program switch must not error and must not blank the
+    # encoder (proven off outputTotalFrames growth -- handoff #73).
+    pre, post, cur_scene = await run_program_switch(ix, ws, target_scene="smoke-scene-b")
+    if cur_scene != "smoke-scene-b":
+        print(f"FAIL: program scene did not flip on the hard-cut (got {cur_scene})")
+        return 1
+    err = assert_encoder_not_blanked(pre, post, label="hard-cut")
+    if err:
+        print(f"FAIL: {err}")
+        return 1
+
+    print("\nPASS: native stinger dormant ({0} OFF); a program switch is an "
+          "instantaneous HARD-CUT that does not error and does not blank the "
+          "encoder (outputTotalFrames grew across the switch). The visible "
+          "overlay transition is Solar/CEF -- proven by probe-m10-canvas-live "
+          "(#79).".format(NATIVE_STINGER_ENV))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# World B -- #57 native stinger re-armed (PULSAR_NATIVE_STINGER=1).
+# --------------------------------------------------------------------------
+async def run_native_on(ix: Inbox, ws) -> int:
+    print(f"[smoke] world: NATIVE STINGER ({NATIVE_STINGER_ENV}=1) -- the #57 "
+          "OBS-native compositing path re-armed by the flag.")
+    kinds, names = await list_transition_state(ix, ws)
+    print(f"[smoke] transition kinds: {kinds}")
+    print(f"[smoke] registered transitions: {sorted(names)}")
+
+    if "obs_stinger_transition" not in kinds:
+        print("SKIP(3): obs_stinger_transition kind absent -> not a full build; "
+              f"cannot exercise the {NATIVE_STINGER_ENV}=1 world here.")
+        return 3
+    if "Stinger" not in names:
+        print(f"FAIL: {NATIVE_STINGER_ENV}=1 but no registered 'Stinger' transition "
+              "instance (#57 part 1) -- the flag did not arm the native stinger.")
+        return 1
+    if names["Stinger"]["transitionKind"] != "obs_stinger_transition":
+        print(f"FAIL: 'Stinger' kind = {names['Stinger']['transitionKind']}")
+        return 1
+    if "Fade" not in names:
+        print("FAIL: fade fallback transition missing")
+        return 1
+
+    # Configure the stinger over routed obs-ws requests (no media path on the
+    # wire -- pinned locally by the fork; obs-ws sends only transition_point).
+    r = await request(ix, ws, "SetCurrentSceneTransition", "set-tr",
+                      {"transitionName": "Stinger"})
+    if not ok(r):
+        print(f"FAIL: SetCurrentSceneTransition(Stinger): {r['requestStatus']}")
+        return 1
+    r = await request(ix, ws, "SetCurrentSceneTransitionDuration", "set-dur",
+                      {"transitionDuration": 600})
+    if not ok(r):
+        print(f"FAIL: SetCurrentSceneTransitionDuration: {r['requestStatus']}")
+        return 1
+    r = await request(ix, ws, "SetCurrentSceneTransitionSettings", "set-set",
+                      {"transitionSettings": {"transition_point": 300, "tp_type": 0}})
+    if not ok(r):
+        print(f"FAIL: SetCurrentSceneTransitionSettings: {r['requestStatus']}")
+        return 1
+    r = await request(ix, ws, "GetCurrentSceneTransition", "get-tr")
+    cur = r.get("responseData", {})
+    print(f"[smoke] current transition: {cur.get('transitionName')} "
+          f"kind={cur.get('transitionKind')} dur={cur.get('transitionDuration')}")
+    if cur.get("transitionName") != "Stinger":
+        print("FAIL: current transition is not Stinger after set")
+        return 1
+
+    # Program switch with the stinger active: must composite without erroring
+    # and keep the record output alive across the animated window.
+    pre, post, cur_scene = await run_program_switch(ix, ws, target_scene="smoke-scene-b")
+    if cur_scene != "smoke-scene-b":
+        print(f"FAIL: program scene did not flip (got {cur_scene})")
+        return 1
+    err = assert_encoder_not_blanked(pre, post, label="stinger-switch")
+    if err:
+        print(f"FAIL: {err}")
+        return 1
+
+    print("\nPASS: stinger registered + configured; program switch composites the "
+          "stinger seam without erroring or blanking the encoder.")
+    return 0
+
+
 async def run() -> int:
     exe = resolve_exe()
     if not exe.exists():
@@ -178,150 +440,21 @@ async def run() -> int:
         print(f"error: stinger asset missing at {STINGER_ASSET}")
         return 2
 
-    pulsar = Pulsar(exe)
+    native = native_stinger_enabled()
+    print(f"[smoke] {NATIVE_STINGER_ENV}={os.environ.get(NATIVE_STINGER_ENV, '<unset>')!r} "
+          f"-> asserting the {'NATIVE-STINGER (#57)' if native else 'PIVOT (hard-cut)'} world")
+
+    pulsar = Pulsar(exe, native_stinger=native)
     pulsar.spawn()
     ws_url, password = pulsar.wait_ready()
     print(f"[smoke] PULSAR_READY ws={ws_url} password=<redacted>")
 
     try:
         async with websockets.connect(ws_url, max_size=8 * 1024 * 1024) as ws:
-            hello = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
-            identify = {"rpcVersion": hello["d"]["rpcVersion"],
-                        "eventSubscriptions": EVENT_SUBSCRIPTION_ALL}
-            if "authentication" in hello["d"]:
-                a = hello["d"]["authentication"]
-                identify["authentication"] = compute_auth(password, a["salt"], a["challenge"])
-            await ws.send(json.dumps({"op": 1, "d": identify}))
-            ident = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
-            if ident.get("op") != 2:
-                print(f"FAIL: Identify rejected: {ident}")
-                return 1
-            print("[smoke] obs-ws v5 connected + identified")
-
-            ix = Inbox()
-
-            # (2) GetTransitionKindList includes the stinger kind.
-            r = await request(ix, ws, "GetTransitionKindList", "kinds")
-            kinds = r.get("responseData", {}).get("transitionKinds", [])
-            print(f"[smoke] transition kinds: {kinds}")
-            if "obs_stinger_transition" not in kinds:
-                print("SKIP(3): obs_stinger_transition kind absent -> not a full build")
-                return 3
-
-            # (3) GetSceneTransitionList includes a registered "Stinger" instance.
-            r = await request(ix, ws, "GetSceneTransitionList", "list")
-            trs = r.get("responseData", {}).get("transitions", [])
-            names = {t["transitionName"]: t for t in trs}
-            print(f"[smoke] registered transitions: {sorted(names)}")
-            if "Stinger" not in names:
-                print("FAIL: no registered 'Stinger' transition instance (#57 part 1)")
-                return 1
-            if names["Stinger"]["transitionKind"] != "obs_stinger_transition":
-                print(f"FAIL: 'Stinger' kind = {names['Stinger']['transitionKind']}")
-                return 1
-            if "Fade" not in names:
-                print("FAIL: fade fallback transition missing")
-                return 1
-
-            # (4) Configure the stinger over the routed obs-ws requests.
-            r = await request(ix, ws, "SetCurrentSceneTransition", "set-tr",
-                              {"transitionName": "Stinger"})
-            if not ok(r):
-                print(f"FAIL: SetCurrentSceneTransition(Stinger): {r['requestStatus']}")
-                return 1
-            r = await request(ix, ws, "SetCurrentSceneTransitionDuration", "set-dur",
-                              {"transitionDuration": 600})
-            if not ok(r):
-                print(f"FAIL: SetCurrentSceneTransitionDuration: {r['requestStatus']}")
-                return 1
-            # transition_point only -- NOT a path (the path was pinned locally
-            # by the fork at boot; obs-ws never supplies it here).
-            r = await request(ix, ws, "SetCurrentSceneTransitionSettings", "set-set",
-                              {"transitionSettings": {"transition_point": 300, "tp_type": 0}})
-            if not ok(r):
-                print(f"FAIL: SetCurrentSceneTransitionSettings: {r['requestStatus']}")
-                return 1
-            r = await request(ix, ws, "GetCurrentSceneTransition", "get-tr")
-            cur = r.get("responseData", {})
-            print(f"[smoke] current transition: {cur.get('transitionName')} "
-                  f"kind={cur.get('transitionKind')} dur={cur.get('transitionDuration')}")
-            if cur.get("transitionName") != "Stinger":
-                print("FAIL: current transition is not Stinger after set")
-                return 1
-
-            # (5) Start recording so the encoder runs, then flip the program
-            #     scene with the stinger active. Create a 2nd scene to flip to.
-            r = await request(ix, ws, "CreateScene", "mk-b", {"sceneName": "smoke-scene-b"})
-            if not ok(r) and r["requestStatus"].get("code") != 601:  # 601 = already exists
-                print(f"FAIL: CreateScene: {r['requestStatus']}")
-                return 1
-
-            r = await request(ix, ws, "StartRecord", "rec-on")
-            rec_started = ok(r)
-            print(f"[smoke] StartRecord ok={rec_started} ({r['requestStatus'].get('comment','')})")
-
-            r = await request(ix, ws, "GetStats", "stats-pre")
-            pre = r.get("responseData", {})
-            fps_pre = pre.get("activeFps", 0.0)
-            skipped_pre = pre.get("outputSkippedFrames", 0)
-            print(f"[smoke] pre-switch activeFps={fps_pre:.1f} outputSkipped={skipped_pre}")
-
-            # The program-scene change -- the Gap B' compositing seam.
-            r = await request(ix, ws, "SetCurrentProgramScene", "switch",
-                              {"sceneName": "smoke-scene-b"})
-            if not ok(r):
-                print(f"FAIL: SetCurrentProgramScene errored (Gap B' seam): {r['requestStatus']}")
-                return 1
-            print("[smoke] SetCurrentProgramScene(smoke-scene-b) accepted -- no error on stinger seam")
-
-            # Let the 600 ms stinger play, sampling the encoder.
-            await asyncio.sleep(1.2)
-            r = await request(ix, ws, "GetStats", "stats-post")
-            post = r.get("responseData", {})
-            fps_post = post.get("activeFps", 0.0)
-            skipped_post = post.get("outputSkippedFrames", 0)
-            total_post = post.get("outputTotalFrames", 0)
-            print(f"[smoke] post-switch activeFps={fps_post:.1f} outputSkipped={skipped_post} "
-                  f"outputTotal={total_post}")
-
-            r = await request(ix, ws, "GetCurrentProgramScene", "get-prog")
-            prog = r.get("responseData", {})
-            cur_scene = prog.get("currentProgramSceneName") or prog.get("sceneName")
-            print(f"[smoke] current program scene after switch: {cur_scene}")
-            if cur_scene != "smoke-scene-b":
-                print(f"FAIL: program scene did not flip (got {cur_scene})")
-                return 1
-
-            # Encoder-not-blanked assertion: with recording running the output
-            # must stay active and producing frames across the stinger window.
-            if rec_started:
-                r = await request(ix, ws, "GetRecordStatus", "rec-st")
-                rec = r.get("responseData", {})
-                if not rec.get("outputActive"):
-                    print("FAIL: record output went inactive across the stinger switch")
-                    return 1
-                if fps_post <= 0.0:
-                    print(f"FAIL: activeFps={fps_post} -- encoder blanked across stinger switch")
-                    return 1
-                drop = 0.0
-                if total_post:
-                    drop = max(0, skipped_post - skipped_pre) / max(1, total_post)
-                print(f"[smoke] record still active; activeFps>0; switch-window drop~{drop:.4f}")
-                if drop > 0.05:
-                    print(f"FAIL: drop ratio {drop:.4f} > 0.05 across the switch")
-                    return 1
-                await request(ix, ws, "StopRecord", "rec-off")
-            else:
-                # Recording may decline if encoders are unconfigured on this
-                # build; still assert the seam did not blank the render thread.
-                if fps_post <= 0.0:
-                    print(f"FAIL: activeFps={fps_post} after switch (render thread blanked)")
-                    return 1
-                print("[smoke] recording unavailable; render-thread activeFps>0 across switch (seam OK)")
-
-            print("\nPASS: stinger registered + configured; program switch composites the "
-                  "stinger seam without erroring or blanking the encoder.")
-            return 0
+            ix = await connect_identify(ws, password)
+            if native:
+                return await run_native_on(ix, ws)
+            return await run_pivot_off(ix, ws)
     finally:
         pulsar.stop()
 
@@ -331,6 +464,9 @@ def main() -> int:
         return asyncio.run(run())
     except asyncio.TimeoutError:
         print("FAIL: obs-ws request timed out")
+        return 1
+    except RuntimeError as exc:
+        print(f"FAIL: {exc}")
         return 1
 
 
