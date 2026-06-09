@@ -247,6 +247,37 @@ FRAME_DROP_RATIO_MAX = 0.05
 POLL_INTERVAL_SEC = 5.0
 DESTINATION_NAME = "pulsar-m10-live"
 
+# REAL-INGEST PROOF (#keeper-m10). StartDestination only means "obs_output_start
+# was accepted" — the RTMP connect to Twitch happens ASYNC on the output worker
+# thread, so `started=true` is NOT proof Twitch ingested a single byte (the false
+# positive prior runs declared on). The decisive proof is read straight off the
+# destination's rtmp_output via obs-ws GetOutputStatus{outputName}:
+#   - outputBytes (obs_output_get_total_bytes) MUST GROW = bytes really pushed to
+#     rtmp://live.twitch.tv; a flat 0 = nothing ingested (key refused/dropped).
+#   - outputActive MUST stay true; a flip to false post-connect = Twitch dropped us.
+# The multi-stream plugin names each destination output "PulsarDest_<id>"
+# (ensure_output: obs_output_create("rtmp_output", "PulsarDest_"+id)); twitch
+# kind targets rtmp://live.twitch.tv/app/ (TWITCH_INGEST_URL). We poll that exact
+# output every POLL_INTERVAL_SEC for the whole on-air hold.
+DEST_OUTPUT_NAME_PREFIX = "PulsarDest_"
+# The RTMP stdout lines obs-outputs/rtmp-stream.c emits (verbatim format strings):
+#   info("Connecting to RTMP URL %s...")      — the URL embeds the stream KEY:
+#       ALWAYS redacted before logging (the Redactor scrubs stream_key).
+#   info("Connection to %s (%s) successful")  — REAL ingest handshake succeeded.
+#   info("Disconnected from %s")               — dropped AFTER connect (key killed
+#       mid-stream / Twitch closed us) — a post-connect Disconnected = NOT ingested.
+#   info("Connection to %s failed: %d")        — connect refused (bad/dead key).
+RTMP_CONNECTING_RE = re.compile(r"Connecting to RTMP URL\b", re.IGNORECASE)
+RTMP_SUCCESS_RE = re.compile(r"Connection to .+ successful", re.IGNORECASE)
+RTMP_DISCONNECT_RE = re.compile(r"\bDisconnected from\b", re.IGNORECASE)
+RTMP_FAILED_RE = re.compile(r"Connection to .+ failed", re.IGNORECASE)
+# Any RTMP-relevant line worth surfacing verbatim (redacted).
+RTMP_ANY_RE = re.compile(
+    r"rtmp|live\.twitch|Connecting to RTMP|Connection to .+ (successful|failed)"
+    r"|Disconnected from|reconnect|stream",
+    re.IGNORECASE,
+)
+
 # WGC WARMUP-POLL (#79 timing fix). SPIKE-GPU proved WGC monitor_capture renders
 # non-black GPU-on headless — but the FIRST WGC frame is black: the duplicator /
 # WinRT capture needs a few hundred ms of warmup before it yields live content
@@ -1434,9 +1465,161 @@ def is_white_with_logo(mid: dict) -> tuple[bool, str]:
     return white, why
 
 
+async def get_output_status(inbox: Inbox, ws, output_name: str) -> Optional[dict]:
+    """Read the REAL ingest counters off a named output via obs-ws
+    GetOutputStatus (obs_output_get_total_bytes / obs_output_active /
+    GetOutputDuration). Returns the responseData dict, or None if the request
+    failed (e.g. the output name is not registered yet)."""
+    r = await request(inbox, ws, "GetOutputStatus", f"outstat-{_secrets.token_hex(3)}",
+                      {"outputName": output_name})
+    if not req_ok(r):
+        return None
+    return r.get("responseData", {}) or {}
+
+
+def scrape_rtmp_lines(lines: list[str], start_idx: int, redactor: Redactor
+                      ) -> tuple[int, list[str]]:
+    """Scan pulsar.exe stdout from start_idx for RTMP-relevant lines, returning
+    (new_idx, [redacted lines]). The 'Connecting to RTMP URL' line embeds the
+    stream key in the URL — the redactor scrubs it (C-SEC) before we ever keep
+    or print it."""
+    out: list[str] = []
+    n = len(lines)
+    for i in range(start_idx, n):
+        ln = lines[i]
+        if RTMP_ANY_RE.search(ln):
+            out.append(redactor(ln.strip()))
+    return n, out
+
+
+async def hold_on_air_with_ingest_proof(
+    *, inbox: Inbox, ws, obs: ObsCaller, args, redactor: Redactor, log: TeeLog,
+    dest_id: Optional[str], rtmp_lines: Optional[Callable[[], list[str]]],
+    on_air_secs: float, transition_settled: bool, transition_url: Optional[str],
+) -> dict:
+    """STAY ON AIR for ~on_air_secs, looping A→transition→B and polling the REAL
+    ingest counters every POLL_INTERVAL_SEC so Twitch has time to display the
+    stream AND we PROVE bytes are really pushed. Returns a proof dict the caller
+    turns into the verdict. This is the heart of the keeper real-ingest run: it
+    replaces 'StartDestination started=true ⇒ LIVE' with measured outputBytes
+    growth + RTMP-log evidence over a long hold."""
+    output_name = (DEST_OUTPUT_NAME_PREFIX + dest_id) if dest_id else None
+    samples: list[dict] = []
+    rtmp_seen: list[str] = []
+    rtmp_idx = 0
+    first_bytes: Optional[int] = None
+    last_bytes: Optional[int] = None
+    saw_active_true = False
+    saw_active_false_after_true = False
+    loops = 0
+    t0 = time.monotonic()
+    deadline = t0 + on_air_secs
+    log(f"[on-air] HOLDING the stream live for ~{on_air_secs:.0f}s, polling REAL "
+        f"ingest every {POLL_INTERVAL_SEC:.0f}s (output={output_name!r}). This is "
+        "the proof Twitch ingests — NOT StartDestination.started.")
+
+    next_loop_at = t0 + 6.0  # do the first re-loop a few seconds in, then space them
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            break
+        elapsed = now - t0
+
+        # --- REAL ingest sample (obs_output_get_total_bytes on the dest) -------
+        status = None
+        if output_name is not None:
+            try:
+                status = await get_output_status(inbox, ws, output_name)
+            except Exception as exc:  # noqa: BLE001 — a poll failure is not fatal
+                log(f"[on-air t={elapsed:4.0f}s] GetOutputStatus error "
+                    f"({type(exc).__name__}: {redactor(str(exc))}).")
+        if status is not None:
+            b = int(status.get("outputBytes", 0) or 0)
+            active = bool(status.get("outputActive", False))
+            dur = int(status.get("outputDuration", 0) or 0)
+            cong = status.get("outputCongestion")
+            skipped = status.get("outputSkippedFrames")
+            total_f = status.get("outputTotalFrames")
+            if first_bytes is None:
+                first_bytes = b
+            prev = last_bytes
+            last_bytes = b
+            if active:
+                saw_active_true = True
+            elif saw_active_true:
+                saw_active_false_after_true = True
+            dbytes = (b - prev) if prev is not None else b
+            rate = dbytes / POLL_INTERVAL_SEC if prev is not None else 0.0
+            samples.append({"t": round(elapsed, 1), "bytes": b, "active": active,
+                            "duration_ms": dur, "congestion": cong,
+                            "skipped": skipped, "total_frames": total_f,
+                            "dbytes": dbytes})
+            log(f"[on-air t={elapsed:4.0f}s] outputActive={active} "
+                f"outputBytes={b:,} (Δ={dbytes:+,} ≈{rate/1024:,.0f} KiB/s) "
+                f"outputDuration={dur/1000:.1f}s"
+                + (f" congestion={cong}" if cong is not None else "")
+                + (f" skipped={skipped}" if skipped is not None else ""))
+        else:
+            log(f"[on-air t={elapsed:4.0f}s] GetOutputStatus({output_name!r}) "
+                "returned no status (output not registered / not broadcasting).")
+
+        # --- RTMP stdout evidence (redacted) -----------------------------------
+        if rtmp_lines is not None:
+            rtmp_idx, fresh = scrape_rtmp_lines(rtmp_lines(), rtmp_idx, redactor)
+            for ln in fresh:
+                rtmp_seen.append(ln)
+                log(f"   [rtmp] {ln}")
+
+        # --- keep the show moving: re-loop A→transition→B periodically ---------
+        if transition_settled and now >= next_loop_at and (deadline - now) > 8.0:
+            loops += 1
+            log(f"[on-air t={elapsed:4.0f}s] re-loop #{loops}: "
+                f"{SCENE_SCREEN_2!r} → {TRANSITION_SCENE!r} → {SCENE_SCREEN_1!r} "
+                "(franc cuts, white+logo passage) — keeps motion on air.")
+            await obs.call("SetCurrentProgramScene", {"sceneName": TRANSITION_SCENE})
+            await asyncio.sleep(max(0.4, args.hold_ms / 1000.0))
+            # alternate the landing scene so both monitors get airtime
+            land = SCENE_SCREEN_1 if (loops % 2 == 1) else SCENE_SCREEN_2
+            await obs.call("SetCurrentProgramScene", {"sceneName": land})
+            next_loop_at = now + 18.0
+
+        await asyncio.sleep(POLL_INTERVAL_SEC)
+
+    # Final RTMP scrape (catch lines emitted after the last poll).
+    if rtmp_lines is not None:
+        rtmp_idx, fresh = scrape_rtmp_lines(rtmp_lines(), rtmp_idx, redactor)
+        for ln in fresh:
+            rtmp_seen.append(ln)
+            log(f"   [rtmp] {ln}")
+
+    held = time.monotonic() - t0
+    grew = (first_bytes is not None and last_bytes is not None
+            and last_bytes > first_bytes)
+    bytes_pushed = (last_bytes - first_bytes) if (first_bytes is not None
+                                                  and last_bytes is not None) else 0
+    rtmp_success = any(RTMP_SUCCESS_RE.search(ln) for ln in rtmp_seen)
+    rtmp_connecting = any(RTMP_CONNECTING_RE.search(ln) for ln in rtmp_seen)
+    # A Disconnected/failed that appears AFTER a successful connect is the killer.
+    rtmp_dropped = any(RTMP_DISCONNECT_RE.search(ln) or RTMP_FAILED_RE.search(ln)
+                       for ln in rtmp_seen)
+    return {
+        "held_s": held, "loops": loops, "samples": samples,
+        "first_bytes": first_bytes, "last_bytes": last_bytes,
+        "bytes_pushed": bytes_pushed, "bytes_grew": grew,
+        "active_stayed_true": saw_active_true and not saw_active_false_after_true,
+        "saw_active_true": saw_active_true,
+        "active_dropped": saw_active_false_after_true,
+        "rtmp_connecting": rtmp_connecting, "rtmp_success": rtmp_success,
+        "rtmp_dropped": rtmp_dropped, "rtmp_lines": rtmp_seen,
+        "output_name": output_name,
+    }
+
+
 async def run_transition_playout(
     *, inbox: Inbox, ws, obs: ObsCaller, args, redactor: Redactor, log: TeeLog,
     stream_key: str, transition_settled: bool,
+    rtmp_lines: Optional[Callable[[], list[str]]] = None,
+    transition_url: Optional[str] = None,
 ) -> int:
     """The franc-cut playout: go-live on screen-1 → CUT to scene-transition
     (white+logo covers) → hold ~hold_ms → CUT to screen-2. Two bare program
@@ -1470,7 +1653,12 @@ async def run_transition_playout(
             await vendor_call(inbox, ws, "fc-rm-dest", "pulsar",
                               "RemoveDestination", {"id": dest_id})
             return 1
-        log("-> StartDestination started=true — LIVE on Twitch")
+        # NB: started=true only means obs_output_start was ACCEPTED — the RTMP
+        # connect to Twitch is async. We do NOT declare 'LIVE' here. The real
+        # ingest proof (outputBytes growth + RTMP 'successful' log) is measured
+        # during hold_on_air_with_ingest_proof below.
+        log("-> StartDestination started=true (start ACCEPTED — async RTMP connect "
+            "pending; real ingest is proven by outputBytes growth, not this flag).")
     else:
         log("-> --no-broadcast: NOT going live to Twitch (proof-only). The franc "
             "A→transition→B playout is proven OFF AIR.")
@@ -1590,6 +1778,61 @@ async def run_transition_playout(
         log("[playout] FRANC A→transition→B proven: two bare program cuts, the "
             "white+logo Canvas scene covers between them, NO OBS-native transition.")
         rc = 0
+
+        # ---- LONG ON-AIR HOLD + REAL INGEST PROOF (keeper-m10) ----------------
+        # The franc playout above is fast (~hold_ms). If we stop now Twitch never
+        # gets a chance to display the stream and we have NO proof it ingested.
+        # Stay on air for --on-air-secs, loop the playout, and PROVE real ingest.
+        on_air_secs = float(getattr(args, "on_air_secs", 0) or 0)
+        if args.broadcast and on_air_secs > 0 and dest_id:
+            proof = await hold_on_air_with_ingest_proof(
+                inbox=inbox, ws=ws, obs=obs, args=args, redactor=redactor, log=log,
+                dest_id=dest_id, rtmp_lines=rtmp_lines, on_air_secs=on_air_secs,
+                transition_settled=transition_settled, transition_url=None)
+            # --- Verdict on REAL ingest (the brief's core) --------------------
+            log("")
+            log("==== REAL-INGEST VERDICT (outputBytes is the proof, not "
+                "StartDestination) ====")
+            log(f"  held on air      : {proof['held_s']:.0f}s "
+                f"({len(proof['samples'])} status samples, {proof['loops']} re-loops)")
+            fb, lb = proof["first_bytes"], proof["last_bytes"]
+            log(f"  outputBytes      : first={fb if fb is not None else 'n/a':,} "
+                f"last={lb if lb is not None else 'n/a':,} "
+                f"pushed={proof['bytes_pushed']:,} bytes over the hold")
+            log(f"  outputBytes grew : {proof['bytes_grew']}  "
+                f"(MUST be True = bytes really reached rtmp://live.twitch.tv)")
+            log(f"  outputActive     : saw_true={proof['saw_active_true']} "
+                f"stayed_true={proof['active_stayed_true']} "
+                f"dropped_after_connect={proof['active_dropped']}")
+            log(f"  RTMP log         : connecting={proof['rtmp_connecting']} "
+                f"successful={proof['rtmp_success']} "
+                f"disconnected/failed={proof['rtmp_dropped']}")
+            ingested = (
+                proof["bytes_grew"]
+                and proof["saw_active_true"]
+                and not proof["active_dropped"]
+                and not proof["rtmp_dropped"]
+            )
+            if ingested:
+                log("  ==> PROVEN: Twitch INGESTED the stream — outputBytes grew "
+                    "monotonically, the output stayed active, and no post-connect "
+                    "RTMP disconnect/failure. The key is GOOD and the stream is "
+                    "REALLY on the channel.")
+            else:
+                # Real ingest NOT proven — this is a FAILURE the porteur must see,
+                # NOT a 'LIVE' false positive. Most likely the key is refused.
+                log("  ==> NOT PROVEN: real Twitch ingest could not be confirmed. "
+                    "Likely the stream key is refused/dead (no outputBytes growth, "
+                    "or the output dropped after connect, or an RTMP failure). DO "
+                    "NOT declare 'on air' — request a FRESH Twitch key.")
+                if rtmp_lines is not None:
+                    rc = 1  # honest failure when we could read the RTMP truth
+            if proof["rtmp_lines"]:
+                log("  --- RTMP lines (verbatim, redacted) ---")
+                for ln in proof["rtmp_lines"]:
+                    log(f"      {ln}")
+            log("==== END REAL-INGEST VERDICT ====")
+            log("")
     finally:
         if recording:
             try:
@@ -2130,7 +2373,9 @@ async def deliver_leaf(*, args, redactor: Redactor, log: TeeLog,
 # --------------------------------------------------------------------------
 async def run_transition_mode(*, ws_url: str, password: str, args,
                               redactor: Redactor, log: TeeLog, stream_key: str,
-                              transition_url: str) -> int:
+                              transition_url: str,
+                              rtmp_lines: Optional[Callable[[], list[str]]] = None
+                              ) -> int:
     async with websockets.connect(
         ws_url, subprotocols=["obswebsocket.json"], max_size=2**24,
         ping_interval=None, close_timeout=15, open_timeout=10,
@@ -2176,7 +2421,8 @@ async def run_transition_mode(*, ws_url: str, password: str, args,
         obs = ObsCaller(inbox, ws)
         return await run_transition_playout(
             inbox=inbox, ws=ws, obs=obs, args=args, redactor=redactor, log=log,
-            stream_key=stream_key, transition_settled=transition_settled)
+            stream_key=stream_key, transition_settled=transition_settled,
+            rtmp_lines=rtmp_lines, transition_url=transition_url)
 
 
 # --------------------------------------------------------------------------
@@ -2185,14 +2431,16 @@ async def run_transition_mode(*, ws_url: str, password: str, args,
 async def run(*, ws_url: str, password: str, args, redactor: Redactor,
               log: TeeLog, stream_key: str, overlay_url: str,
               leaf_state: _LeafState, engine: str,
-              orion: Optional["OrionStandIn"] = None) -> int:
+              orion: Optional["OrionStandIn"] = None,
+              rtmp_lines: Optional[Callable[[], list[str]]] = None) -> int:
     redactor.add(password, "obs-ws-password")
     args._engine = engine
     log(f"connecting: {ws_url}")
     if getattr(args, "transition_scene", False):
         return await run_transition_mode(
             ws_url=ws_url, password=password, args=args, redactor=redactor,
-            log=log, stream_key=stream_key, transition_url=overlay_url)
+            log=log, stream_key=stream_key, transition_url=overlay_url,
+            rtmp_lines=rtmp_lines)
     async with websockets.connect(
         ws_url, subprotocols=["obswebsocket.json"], max_size=2**24,
         ping_interval=None, close_timeout=15, open_timeout=10,
@@ -2305,6 +2553,14 @@ def main() -> int:
                     default=int(os.environ.get("LIVE_TEST_HOLD_MS", "700")),
                     help="ms to hold on the transition scene between the two franc "
                          "cuts (default 700; --transition-scene only)")
+    ap.add_argument("--on-air-secs", type=float,
+                    default=float(os.environ.get("LIVE_TEST_ON_AIR_SECS", "0")),
+                    help="after the A→transition→B playout, STAY LIVE this many "
+                         "seconds, looping the playout and polling REAL ingest "
+                         "(outputBytes via obs-ws GetOutputStatus on the Twitch "
+                         "destination output) every 5s. 0 = off (the old fast "
+                         "playout). Keeper's antenna run uses ~80 so Twitch has "
+                         "time to display the stream and real ingest is proven.")
     ap.add_argument("--gateway-url", default=os.environ.get("M8_GATEWAY_URL", ""))
     ap.add_argument("--blueprint-id", default=os.environ.get("M10_BLUEPRINT_ID", ""))
     ap.add_argument("--allow-blank", action="store_true",
@@ -2472,7 +2728,8 @@ def main() -> int:
         rc = asyncio.run(run(ws_url=ws_url, password=sentinel_pw, args=args,
                              redactor=redactor, log=log, stream_key=stream_key,
                              overlay_url=overlay_url, leaf_state=leaf_state,
-                             engine=engine, orion=orion))
+                             engine=engine, orion=orion,
+                             rtmp_lines=lambda: pulsar.lines))
     except KeyboardInterrupt:
         log("interrupted")
         rc = 130
