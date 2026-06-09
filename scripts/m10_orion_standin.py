@@ -155,12 +155,21 @@ def encode_scene_control_leaf(payload: dict[str, Any]) -> str:
     return json.dumps(validated, sort_keys=True, separators=(",", ":"))
 
 
-def build_wipe_cover_bundle(leaf_path: str, *, fill: str = "#000000") -> dict[str, Any]:
+def build_wipe_cover_bundle(leaf_path: str, *, fill: str = "#C81E5A") -> dict[str, Any]:
     """The RenderBundle the host fetches — its ``root`` is the wipe-cover node.
 
     This is the JSON-of-record equivalent of Solar's ``buildWipeCoverNode``
     (``Solar/src/overlay/wipe-cover.ts``): a full-screen, absolute, opaque
-    ``frame`` whose ``opacity`` is driven by a 4-step keyframe sequence
+    ``frame`` whose ``opacity`` is driven by a 4-step keyframe sequence.
+
+    The default ``fill`` mirrors Solar's ``DEFAULT_COVER_FILL = #C81E5A`` (the
+    M9 demo magenta, Solar #77/#12): the real Solar bundle this stand-in feeds
+    will paint a franc magenta cover, so the probe's MID frame is provably OUR
+    engine's paint (MID == magenta) and not a cold/black capture. A black fill
+    here would feed Solar a black-cover node and reproduce the ambiguous black
+    MID this change exists to eliminate.
+
+    The original 4-step keyframe sequence is unchanged
     (0 -> reveal opaque -> hold opaque -> retract transparent), keyed off
     ``leaf_path`` so the runtime's ``KeyframePlayer`` REPLAYS reveal/hold/
     retract on every value change at that path (the M9 reactive trigger).

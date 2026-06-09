@@ -58,10 +58,15 @@ BROADCAST MODES
   proved WGC monitor_capture + CEF browser_source coexist GPU-on headless.
 
 PROOFS (Resolution criteria #79)
-  C5″ (overlay blend on CEF)  — capture frame A (pre), MID (during the opaque
-        plateau — the Solar overlay covers the screen), B (post). The MID frame
-        is the overlay cover (near-uniform opaque fill), NOT a hard cut between
-        two captures.
+  C5″ (overlay blend on CEF)  — capture frame A (pre) + MID (during the opaque
+        plateau — the Solar overlay covers the screen). The MID frame is the
+        overlay cover: near-uniform AND ≈ the MAGENTA fill #C81E5A our engine
+        paints (Solar #77/#12), NOT a hard cut between two captures and NOT a
+        cold/black capture. A magenta MID over varied screen-1 (A) proves OUR
+        engine painted; a black MID = the overlay did NOT paint → FAIL. Frame B
+        (screen-2, post-cut) is captured best-effort and logged but is NO LONGER
+        required varied — WGC keeps only one capture hot, so screen-2 is often
+        cold; the program-flip is proven independently by C-CUT.
   C-CUT + SPIKE-CUT (invisible cut) — measure the skew between the overlay's
         real CEF opacity (read from window.__m10) and the cut instant
         `cut_at_ms`; prove the cut fires while opacity≈1 (under the plateau).
@@ -224,31 +229,48 @@ SOLAR_READY_GRACE_S = 1.5
 MODAL_MANHATTAN_TOL = 24
 MIN_DISTINCT_COLOURS = 12
 MIN_NONBG_PIXEL_RATIO = 0.02
-# The opaque-plateau cover fill (Solar wipe-cover DEFAULT_COVER_FILL = #000000).
-# At the plateau the program output is near-uniform this colour.
-COVER_FILL_RGB = (0, 0, 0)
+# The opaque-plateau cover fill (Solar wipe-cover DEFAULT_COVER_FILL = #C81E5A,
+# the M9 demo magenta — Solar #77/#12). At the plateau the program output is
+# near-uniform THIS colour, NOT black. The magenta is the decisive proof: MID ==
+# magenta means OUR engine painted the cover; a black MID means the overlay did
+# NOT paint (or the capture is cold), which we now FAIL explicitly. A franc
+# colour also makes "overlay covered" distinguishable from "capture was simply
+# black", which a #000 cover could never do (the old C5″ false positive).
+COVER_FILL_RGB = (0xC8, 0x1E, 0x5A)  # 200, 30, 90
 # A MID frame is "covered" when it is near-uniform (very few distinct colours)
-# and its mean sits near the cover fill — the overlay, not a capture.
+# and its mean sits near the magenta cover fill — the overlay, not a capture.
+# COVER_MEAN_TOL is the L1 (Manhattan) distance in RGB the MID mean may sit from
+# the magenta fill; well below the distance from magenta to black (320) or to a
+# typical busy-desktop mean, so a black/non-rendered MID and a varied hard-cut
+# MID both fall outside it.
 COVER_MAX_DISTINCT = 8
-COVER_MEAN_TOL = 28
+COVER_MEAN_TOL = 90
 
-# C5″ HARDENING (#79). A near-uniform black MID frame is AMBIGUOUS: it is
-# equally the wipe-cover at its opaque plateau OR a blank/dead WGC capture
-# (a black desktop, a build that renders nothing). The cover-fill is #000, so
-# "MID is uniform black" alone is NOT proof of the overlay — that was the C5″
-# false positive. The proof is only sound when the cover is DISTINGUISHABLE
-# from a blank frame, and the only way a uniform-cover frame carries meaning is
-# if the frames it sits BETWEEN are REAL, VARIED screen content:
-#   * frame A (pre-cut)  MUST be content (varied desktop) — frame_is_content;
-#   * frame B (post-cut) MUST be content (varied desktop) — frame_is_content;
-#   * frame MID          MUST be the uniform cover (COVER_*), i.e. the overlay
-#     has visibly REPLACED that varied content with a flat fill.
-# A run where A or B is also blank cannot tell "overlay covered the screen"
-# from "the screen was black the whole time" — so it FAILs (unless --allow-blank
-# explicitly downgrades the visual leg to the antenna run). The MID-is-cover
-# check additionally requires the frame be near-uniform AT the fill colour, so
-# a busy desktop captured at MID (a VISIBLE hard cut, no overlay) also FAILs.
+# C5″ HARDENING (#79) + MAGENTA PROOF (Solar #77/#12). The cover fill is now a
+# franc MAGENTA (#C81E5A), not #000. That single change re-grounds the proof:
+#   * a near-uniform MAGENTA MID is UNAMBIGUOUS — only OUR engine paints that
+#     colour over the capture. A black MID is no longer "maybe the cover": it
+#     means the overlay did NOT paint (FAIL with a clear diagnostic), and a busy
+#     MID means a visible hard cut (FAIL). The old #000 cover could not tell a
+#     cover from a cold/black capture; magenta can.
+# So the cover frame now carries meaning on its OWN colour, and the proof needs
+# only that it sits over REAL pre-cut content:
+#   * frame A (pre-cut) MUST be varied content (screen-1) — frame_is_content;
+#   * frame MID         MUST be the uniform MAGENTA cover (COVER_*) — the overlay
+#     visibly REPLACED that varied content with our flat magenta fill.
+# frame B (screen-2, post-cut) is NO LONGER required varied for the overlay
+# proof: WGC keeps only ONE monitor capture hot, so screen-2 often stays cold
+# (black) when it becomes program — that is a capture-warmth artefact, NOT
+# evidence about whether our overlay painted. The program-flip itself is already
+# proven by C-CUT (GetCurrentProgramScene == screen-2). We still warm + capture
+# B best-effort and LOG it, but a cold screen-2 no longer FAILs the overlay
+# proof. --allow-blank still downgrades a non-rendering MID to the antenna run.
 C5_REQUIRE_VARIED_AB = True
+# Whether frame B (screen-2) must be varied for the overlay-cover proof. False
+# since Solar #77/#12: the magenta MID over varied A proves our engine painted,
+# independent of screen-2 capture warmth (WGC keeps one capture hot). The
+# program-flip is proven separately by C-CUT.
+C5_REQUIRE_VARIED_B = False
 
 # The leaf value the demo blueprint emits — the canonical valid fixture case
 # "wipe-cover-switch-to-screen-2" (re-frozen overlay form). cut_at_ms sits
@@ -953,18 +975,29 @@ async def wait_solar_ready(
 
 def is_overlay_cover(mid: dict) -> tuple[bool, str]:
     """C5″ — the MID frame is the OVERLAY COVER (the Solar wipe-cover at its
-    opaque plateau), NOT a hard cut between two captures. The cover is a
-    near-uniform opaque fill: very few distinct colours AND a mean near the
-    cover fill colour. (A capture-to-capture hard cut would land MID on a busy
-    desktop image — many distinct colours, mean far from the fill.)"""
+    opaque plateau), NOT a hard cut between two captures and NOT a cold/black
+    capture. The cover is a near-uniform opaque MAGENTA fill (#C81E5A): very few
+    distinct colours AND a mean near the magenta cover fill. Two distinct
+    failure modes are now separable:
+      * a busy-desktop MID (a VISIBLE hard cut, no overlay) — many distinct
+        colours, mean far from magenta → not covered;
+      * a BLACK MID (the overlay did NOT paint, or the capture is cold) — its
+        mean is ~(0,0,0), ~320 L1 away from magenta → not covered.
+    Only a near-uniform, near-magenta MID is the cover our engine painted."""
     distinct = mid["distinct"]
     mr, mg, mb = mid["mean"]
     fr, fg, fb = COVER_FILL_RGB
     mean_dist = abs(mr - fr) + abs(mg - fg) + abs(mb - fb)
-    covered = distinct <= COVER_MAX_DISTINCT and mean_dist <= COVER_MEAN_TOL
-    return covered, (f"distinct={distinct} (<= {COVER_MAX_DISTINCT}?) "
-                     f"mean={tuple(round(x) for x in mid['mean'])} "
-                     f"|mean-fill|={mean_dist:.0f} (<= {COVER_MEAN_TOL}?)")
+    near_black = (mr + mg + mb) <= 48  # ~uniform black ⇒ overlay did not paint
+    covered = (
+        distinct <= COVER_MAX_DISTINCT and mean_dist <= COVER_MEAN_TOL
+    )
+    why = (f"distinct={distinct} (<= {COVER_MAX_DISTINCT}?) "
+           f"mean={tuple(round(x) for x in mid['mean'])} "
+           f"|mean-magenta|={mean_dist:.0f} (<= {COVER_MEAN_TOL}?)")
+    if not covered and near_black:
+        why += " — MID is BLACK (overlay did NOT paint; expected magenta cover)"
+    return covered, why
 
 
 # --------------------------------------------------------------------------
@@ -1441,25 +1474,42 @@ async def _do_overlay_cut(
     mid_covered, mid_why = is_overlay_cover(m_mid)
     a_varied = m_a is not None and frame_is_content(m_a)
     b_varied = frame_is_content(m_b)
+    # The overlay-cover proof needs A to be varied (real screen-1 content the
+    # magenta cover visibly replaced). B is NOT required varied since the cover
+    # is now self-evident MAGENTA (Solar #77/#12): a magenta MID over varied A
+    # proves our engine painted regardless of screen-2 capture warmth (WGC keeps
+    # one capture hot → screen-2 frequently stays cold/black). The program-flip
+    # is proven independently by C-CUT. `cover_ctx_ok` is the A/B context the
+    # cover proof requires.
+    cover_ctx_ok = a_varied and (b_varied or not C5_REQUIRE_VARIED_B)
+    if a_varied and not b_varied:
+        log("[frame B] NOTE: screen-2 is cold/blank (WGC keeps only one capture "
+            "hot; screen-2 just became program). This does NOT weaken the overlay "
+            "proof — the magenta MID over varied A proves our engine painted, and "
+            "C-CUT already proved the program-flip. (B varied is no longer "
+            "required for the cover proof.)")
 
     # ---- SPIKE-CUT: the cut fired UNDER the opaque plateau ----
     # The REAL bundle exposes no window.__m10 (it is Solar's @lumencast/runtime,
     # not the fallback page), so opacity read-by-eval is usually None. The
     # STRONGER proof — and the one actually on the antenna — is by FRAME: the
-    # MID frame, captured mid-plateau, is a uniform cover (mid_covered) sitting
-    # between VARIED A and B; the cut fired inside that same plateau window
-    # (in_window, proven above) → it landed under the cover → invisible. We
-    # prefer this; opacity (when present) is corroborating, never required.
+    # MID frame, captured mid-plateau, is a uniform MAGENTA cover (mid_covered)
+    # over VARIED screen-1 (A); the cut fired inside that same plateau window
+    # (in_window, proven above) → it landed under the cover → invisible. B
+    # warmth is not part of this proof (the cover colour is self-evident; the
+    # flip is C-CUT). We prefer the frame proof; opacity (when present) is
+    # corroborating, never required.
     if cef_opacity_at_cut is not None and cef_opacity_at_cut >= 0.97:
         log(f"[SPIKE-CUT] OK (opacity): real CEF overlay opacity "
             f"{cef_opacity_at_cut:.3f} >= 0.97 at the cut instant — corroborates "
             "the frame proof.")
-    elif overlay_settled and mid_covered and a_varied and b_varied:
-        log(f"[SPIKE-CUT] OK (frame): MID is the uniform opaque cover ({mid_why}) "
-            "between VARIED A and B, and the cut fell inside the same plateau "
+    elif overlay_settled and mid_covered and cover_ctx_ok:
+        log(f"[SPIKE-CUT] OK (frame): MID is the uniform MAGENTA cover ({mid_why}) "
+            "over VARIED screen-1 (A), and the cut fell inside the same plateau "
             f"window [{opaque_start}, {opaque_end}] — the content swap happened "
             "UNDER the cover, never seen. This is the antenna-true proof (what is "
-            "actually broadcast), stronger than an eval'd opacity number.")
+            "actually broadcast), stronger than an eval'd opacity number. (B "
+            "warmth not required: our engine's magenta paint is self-evident.)")
     elif args.allow_blank:
         log("[SPIKE-CUT] neither opacity>=0.97 nor a frame-cover proof available "
             "but --allow-blank: WGC/Solar may not render on this CI box. The "
@@ -1468,40 +1518,41 @@ async def _do_overlay_cut(
     else:
         log("FAIL: SPIKE-CUT — could not prove the cut was hidden. Opacity "
             f"readback={cef_opacity_at_cut}; MID-cover={mid_covered} "
-            f"({mid_why}); A varied={a_varied}; B varied={b_varied}. A uniform "
-            "MID is only a 'cover' when A and B are real varied content; a "
-            "blank-everywhere run is NOT a hidden cut and fails here.")
+            f"({mid_why}); A varied={a_varied}. A magenta MID is the cover only "
+            "when A is real varied screen-1 content; a blank/black MID is the "
+            "overlay NOT painting, not a hidden cut, and fails here.")
         return 1
 
     # ---- C5″: the MID frame is the overlay COVER, not a hard cut ----
     if not overlay_settled:
         log("[C5″] overlay browser_source did not render (light build / no CEF) "
             "— overlay-blend visual assertion SKIPPED; wire + cut proven.")
-    elif mid_covered and a_varied and b_varied:
-        # The HARDENED proof (#79): a uniform MID is meaningful ONLY when it sits
-        # between REAL varied screen content. Black-everywhere can no longer pass.
-        log(f"[C5″] OVERLAY-BLEND OK: A is varied content (distinct={m_a['distinct']}"
-            f", nonbg={m_a['nonbg_ratio']*100:.1f}%), B is varied content "
-            f"(distinct={m_b['distinct']}, nonbg={m_b['nonbg_ratio']*100:.1f}%), "
-            f"and MID is the uniform opaque Solar cover ({mid_why}) — the overlay "
-            "visibly REPLACED varied content with a flat fill, NOT a hard cut "
-            "between two captures, NOT a screen that was blank throughout.")
+    elif mid_covered and cover_ctx_ok:
+        # The MAGENTA proof (Solar #77/#12): a uniform MID near #C81E5A over
+        # varied screen-1 (A) proves OUR engine painted the cover. B warmth is
+        # not required — the program-flip is proven by C-CUT.
+        log(f"[C5″] OVERLAY-BLEND OK: A is varied screen-1 content "
+            f"(distinct={m_a['distinct']}, nonbg={m_a['nonbg_ratio']*100:.1f}%), "
+            f"and MID is the uniform MAGENTA Solar cover ({mid_why}) — our engine "
+            "visibly REPLACED varied content with the #C81E5A magenta fill, NOT a "
+            "hard cut between two captures, NOT a screen that was blank "
+            f"throughout. (B={tuple(round(x) for x in m_b['mean'])} "
+            f"varied={b_varied}; not required — C-CUT proved the flip.)")
     elif args.allow_blank:
         log(f"[C5″] inconclusive (MID-cover={mid_covered}: {mid_why}; A varied="
-            f"{a_varied}; B varied={b_varied}) but --allow-blank: WGC/Solar may "
-            "not render on this CI box. The overlay-blend visual proof is the "
-            "antenna run.")
+            f"{a_varied}) but --allow-blank: WGC/Solar may not render on this CI "
+            "box. The overlay-blend visual proof is the antenna run.")
     else:
-        if mid_covered and not (a_varied and b_varied):
-            log(f"[C5″] FAIL: MID looks uniform ({mid_why}) but A varied="
-                f"{a_varied} / B varied={b_varied} — a uniform MID between blank "
-                "frames is INDISTINGUISHABLE from a screen that was black the "
-                "whole time. This is the blank false-positive C5″ now rejects: "
-                "the cover only proves anything against VARIED A/B content.")
+        if not a_varied:
+            log(f"[C5″] FAIL: MID looks like the cover ({mid_why}) but A varied="
+                f"{a_varied} — a cover frame is only meaningful over REAL varied "
+                "screen-1 content. A blank A cannot establish the overlay "
+                "replaced anything.")
         else:
-            log(f"[C5″] FAIL: MID frame is NOT the opaque overlay cover ({mid_why}) "
-                "— the screen change was a visible hard cut, not covered by the "
-                "Solar overlay.")
+            log(f"[C5″] FAIL: MID frame is NOT the magenta overlay cover ({mid_why}) "
+                "— either the overlay did NOT paint (black MID) or the screen "
+                "change was a visible hard cut, not covered by the Solar overlay. "
+                "Expected a near-uniform #C81E5A magenta cover.")
         return 1
 
     log(f"[proof] M10 overlay pivot proven (engine={getattr(args, '_engine', 'unknown')}): "
