@@ -1,22 +1,22 @@
 {
-  "_fixture": "M10 Orion fan-out scene (Pulsar #60, ADR 003 Amendment 2 §A2.3 / F2). This is NOT the OBS scene graph the monitor_capture sources live in (those are created over obs-websocket by m10_setup.py against pulsar.exe). This is the ORION show scene whose ONLY job is to DECLARE the scene_control leaf path so Orion's Inbox.Write fans the Blue delta out to Prism's /show/stream subscription. Orion's sceneAcceptsPath (Orion/internal/adapters/inbox.go:78-87,102-124) drops any leaf no loaded scene declares in defaults / operator_inputs / bindings.target_paths. So the active M10 scene MUST declare __inputs.blue.m10-scene-control.scene_control or the switch silently no-ops (C-FANOUT precondition). The slug 'm10-scene-control' and the 3-segment path are pinned by the scene_control contract (scripts/contracts/scene_control/, fixtures/valid.json) and Blue #58; Prism #72/#63 (SCENE_ALLOWLIST = {scene-screen-1, scene-screen-2}) consumes the resulting delta. The leaf type is 'json' because the scene_control value is a structured object (target_scene + overlay{kind,reveal_ms,hold_ms,retract_ms} + cut_at_ms, the ADR 003 Amendment 4 §A4.2 overlay form — Solar #73 reads `overlay`, Prism reads `cut_at_ms`+`target_scene` and fires the hidden hard-cut), not a scalar. The seeded default satisfies the cut-window invariant reveal_ms <= cut_at_ms <= reveal_ms+hold_ms and is validated in-process against scripts/contracts/scene_control (m10_setup.build_orion_declaration). Orion seeds this declared default on boot and accepts the later Blue write in-scope. This scene renders nothing OBS-visible itself (it is the wire-declaration scene); the on-air composition is the two OBS monitor_capture scenes. scene_version is a zeroed placeholder the harness stamps with the real content hash (m9 parity).",
+  "_fixture": "M10 Orion fan-out scene (Pulsar #79 / pivot, ADR 003 Amendment 4 §A4.2 + Amendment 2 §A2.3 / F2). This is NOT the OBS scene graph the monitor_capture sources live in (those are created over obs-websocket by m10_setup.py against pulsar.exe). This is the ORION show scene whose ONLY job is to DECLARE the scene_control leaf path so Orion's Inbox.Write fans the Blue delta out to the /show/stream subscribers (Solar overlay + Prism cut consumer). Orion's sceneAcceptsPath (Orion/internal/adapters/inbox.go) drops any leaf no loaded scene declares in defaults / operator_inputs / bindings.target_paths. So the active M10 scene MUST declare __inputs.blue.m10-scene-control.scene_control or the switch silently no-ops (C-FANOUT precondition). The slug 'm10-scene-control' and the 3-segment path are pinned by the scene_control contract (scripts/contracts/scene_control/, fixtures/valid.json) and Blue #71; Prism #72 (SCENE_ALLOWLIST = {scene-screen-1, scene-screen-2}) reads cut_at_ms+target_scene, Solar #73 reads the overlay sub-object. The leaf type is 'json' because the scene_control value is a structured object (target_scene/overlay/cut_at_ms), not a scalar; Orion seeds the declared default on boot and it MUST round-trip the re-frozen overlay-form contract (the prior OBS-native action/transition shape is rejected — Amendment 4). This scene renders nothing OBS-visible itself (it is the wire-declaration scene); the on-air composition is the two OBS monitor_capture scenes + the Solar/CEF overlay above them. scene_version is a zeroed placeholder the harness stamps with the real content hash (m9 parity).",
   "lsml": "1.1",
   "scene_id": "0c8a9e57-0000-4000-8000-0000000000a0",
   "scene_version": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "operator_inputs": [
     {
       "path": "__inputs.blue.m10-scene-control.scene_control",
-      "label": "M10 scene-control (Blue-driven overlay + hidden hard-cut)",
+      "label": "M10 scene-control (Blue-driven Solar overlay + invisible hard-cut)",
       "type": "json",
       "default": {
-        "target_scene": "scene-screen-2",
+        "target_scene": "scene-screen-1",
         "overlay": {
           "kind": "wipe-cover",
-          "reveal_ms": 250,
-          "hold_ms": 200,
-          "retract_ms": 250
+          "reveal_ms": 400,
+          "hold_ms": 500,
+          "retract_ms": 400
         },
-        "cut_at_ms": 250
+        "cut_at_ms": 650
       }
     }
   ],

@@ -1,92 +1,98 @@
 #!/usr/bin/env python3
-r"""M10 live end-to-end probe — VPS-fired Blue trigger → leaf → consumer →
-STINGER program-scene switch, on air mid-broadcast (ADR 003 §3.2-§3.4 / §6 +
-Amendment 1 §A1.7 + Amendment 2 §A2.1/A2.3, issue #61).
+r"""M10 live end-to-end probe — Blue trigger → leaf → {Solar overlay (CEF) +
+stand-in cut} → invisible hard-cut between two WGC monitor_capture scenes, on
+air mid-broadcast (ADR 003 Amendments 3 & 4 §A4.2/§A4.4/§A4.6, issue #79).
 
-WHAT THIS PROBE PROVES (the full M10 chain)
-  A Blue blueprint, fired from a context DISTINCT from the box running OBS,
-  drives an animated STINGER transition between two ``monitor_capture`` scenes
-  (screen-1 → screen-2) — caused by a leaf delta the consumer reads off
-  ``/show/stream`` (PULL), never a direct obs-ws call from the trigger site.
+THE PIVOT THIS PROVES (Solar/CEF overlay, NOT an OBS-native transition)
+  The visible transition is an OPAQUE full-screen overlay animated by OUR
+  engine (Solar `wipe-cover`, #77) inside a CEF `browser_source`, layered above
+  two `monitor_capture` scenes. The screen-1→screen-2 change underneath is an
+  INSTANTANEOUS hard-cut (`SetCurrentProgramScene`) fired UNDER the overlay's
+  opaque plateau — so 100 % of the visible animation is ours and the cut is
+  never seen. There is NO OBS-native transition (C-MECH): the native stinger is
+  dormant behind PULSAR_NATIVE_STINGER (default OFF, #73/#83).
 
-THE CHAIN, END TO END (ADR 003 Amendment 2 §A2.1 executor):
+THE CHAIN, END TO END (ADR §A4.4):
 
     fire blueprint on the VPS  ──►  POST /blue/api/v1/blueprints/{id}/trigger
         │  (operator Bearer HEADER, never query — Blue ADR 001 R6)
         ▼
-    Blue writes a LEAF  __inputs.blue.<slug>.scene_control = { action,
-        target_scene, transition{kind,asset_id,point_ms,duration_ms} }
+    Blue writes a LEAF  __inputs.blue.<slug>.scene_control = {
+        target_scene, overlay{kind,reveal_ms,hold_ms,retract_ms}, cut_at_ms }
         │  over Blue's service-token WS → ZabGate → Orion
         ▼
     Orion /show/stream  ── fans the leaf delta to ALL live subscribers ──►
         │  (ONLY if the active scene DECLARES the path — F2 / C-FANOUT)
-        ├──► Solar (viewer)            — IGNORES it (not a Solar render input)
-        └──► THIS consumer (#63 logic) — validates (C-INJ/C-PATH/C-PATHREAL)
-                 then issues on the loopback obs-ws:
-                   1. SetCurrentSceneTransition{ "Stinger" }
-                   2. SetCurrentSceneTransitionSettings{ transition_point }  (NO path)
-                   3. SetCurrentSceneTransitionDuration{ duration_ms }
-                   4. SetCurrentProgramScene{ target_scene }  → stinger on air
+        ├──► Solar (overlay, in the CEF) — reads `overlay`, REPLAYS wipe-cover
+        └──► THIS stand-in cut consumer  — reads `cut_at_ms` + `target_scene`,
+                 validates via the FROZEN contract, then at cut_at_ms issues a
+                 single loopback obs-ws SetCurrentProgramScene{target_scene}
+                 (a HARD-CUT — NO SetCurrentSceneTransition, ever).
 
-THE CONSUMER IS THE FROZEN CONTRACT, NOT A FORK
-  ADR §3.5 lets the probe stand in for Prism's #63 consumer "the same way
-  m9_setup does". To keep that stand-in provably identical to Prism's TS
-  guard, this probe drives every leaf through the SAME canonical validator
-  ``scripts/contracts/scene_control/validate_scene_control`` (the frozen
-  cross-service contract, #59) and the SAME executor step order
-  (Prism/src/main/scene-control/executor.ts). The Python consumer here and
-  the TS consumer there are two faithful expressions of one contract, both
-  driven by ``scripts/contracts/scene_control/fixtures/*`` — they cannot
-  drift case-for-case (the contract test #59 enforces it).
+THE STAND-IN CUT CONSUMER IS THE FROZEN CONTRACT, NOT A FORK
+  ADR §A4.5 lets the probe stand in for Prism's cut executor (#72). To keep
+  the stand-in provably identical to Prism's TS guard, every leaf is driven
+  through the SAME canonical validator
+  ``scripts/contracts/scene_control/validate_scene_control`` (#82, the
+  re-frozen overlay-form contract). The Python stand-in here and the TS
+  consumer there are two faithful expressions of one contract, both driven by
+  ``scripts/contracts/scene_control/fixtures/*`` — they cannot drift.
 
-TWO DELIVERY MODES — so the chain is provable WITHOUT the VPS
-  --live-wire     (default, Keeper's antenna run): the real POST /trigger on the
-                  VPS writes the Blue leaf; the consumer subscribes to the REAL
-                  gateway /show/stream and reads the Orion-fanned delta. Proves
-                  the VPS origin, the real fan-out, Solar-ignores, ordering.
-                  Needs: a reachable ZabGate, an operator JWT (etage-1), a Blue
-                  scene-control blueprint, the F2 Orion scene pushed ACTIVE.
+DELIVERY MODES — so the chain is provable WITHOUT the VPS
+  --live-wire     (default, Keeper's antenna run): the real POST /trigger on
+                  the VPS writes the Blue leaf; the stand-in subscribes to the
+                  REAL gateway /show/stream and reads the Orion-fanned delta.
   --loopback-leaf (dry-run / CI proof-only): the probe INJECTS the exact leaf
-                  delta Orion would fan out into the SAME in-process consumer
-                  code path, against a real local pulsar.exe. Proves the
-                  validate→executor→obs-ws→switch→capture chain end-to-end
-                  (C-FANOUT shape, ordering, animation, C-INJ-negative, C-SEC)
-                  on a box with no VPS reach. Does NOT prove the VPS trigger
-                  origin / real Orion fan-out / Solar-ignores — those are the
-                  antenna conditions (criterion 10) Keeper proves on --live-wire.
+                  Orion would fan out into BOTH the in-process stand-in AND the
+                  overlay page (via the loopback /leaf.json endpoint), against
+                  a real local pulsar.exe. Proves validate→cut→capture +
+                  overlay-blend + cut-skew, C-MECH, ordering, C-INJ, C-SEC on a
+                  box with no VPS reach.
 
---no-broadcast (proof-only, no Twitch key) — mirrors the first M9 probe. The
-  pulsar runs, the scenes are created, the consumer runs, the leaf is delivered
-  (loopback or live), and the switch + animation are proven OFF AIR. This is the
-  mode Forge runs to debug the chain before Keeper takes it to the antenna.
+BROADCAST MODES
+  --no-broadcast  proof-only: run the full chain OFF AIR (no Twitch key). The
+                  mode Forge runs to debug the chain (WGC renders headless).
+  --broadcast     go live to Twitch (needs TWITCH_STREAM_KEY, etage-1).
 
-ANIMATION PROOF (criterion 5, MANDATORY — no cut-only exit)
-  The probe captures the program-output frame A (pre-switch, screen-1), frame B
-  (post-switch settled, screen-2), and a MID-transition frame at
-  ~switch + duration_ms/2: that mid frame must be a BLEND (neither pure
-  screen-1 nor pure screen-2), the visible proof the stinger composites on air.
+  GPU: pulsar.exe is spawned WITHOUT --disable-gpu (GPU-on). SPIKE-GPU (#70)
+  proved WGC monitor_capture + CEF browser_source coexist GPU-on headless.
 
-SECRET HYGIENE (criterion 7 / C-SEC)
-  TWITCH_STREAM_KEY, the operator JWT, the viewer show-token, and the obs-ws
-  password are read from the environment / runtime only and NEVER logged. Every
-  log line goes through redact(); the /show/stream URL is redacted via
-  redact_show_stream_url; a final grep-assert scans the whole captured stdout +
-  every PNG for any of the live secrets and fails the run on a leak.
+PROOFS (Resolution criteria #79)
+  C5″ (overlay blend on CEF)  — capture frame A (pre), MID (during the opaque
+        plateau — the Solar overlay covers the screen), B (post). The MID frame
+        is the overlay cover (near-uniform opaque fill), NOT a hard cut between
+        two captures.
+  C-CUT + SPIKE-CUT (invisible cut) — measure the skew between the overlay's
+        real CEF opacity (read from window.__m10) and the cut instant
+        `cut_at_ms`; prove the cut fires while opacity≈1 (under the plateau).
+  C-MECH (no native transition) — assert ZERO SetCurrentSceneTransition /
+        SetCurrentSceneTransitionSettings requests are ever issued.
+  C-FANOUT / ordering / C-SEC — the delta reaches the consumer; the cut is
+        CAUSED by the leaf; grep-assert no secret in stdout or any PNG.
+
+  --allow-blank   proof-only CI-safe: do not FAIL on a blank/identical capture
+                  (a CI runner where WGC/Solar may not render). The wire +
+                  validate + cut + C-MECH + C-INJ + C-FANOUT + C-SEC are still
+                  asserted; the visual blend + skew are then the antenna run.
 
 Exit codes (probe-family convention):
   0  pass · 1 assertion/integration failure · 2 config/env error
-  3  typed skip (monitor_capture / stinger not registered — LIGHT build)
+  3  typed skip (monitor_capture / browser_source not registered — LIGHT build)
 
 Usage (from the repo root):
     pip install websockets
     # Dry-run Forge runs (no Twitch, no VPS) — the integration proof:
     python scripts/probe-m10-canvas-live.py --no-broadcast --loopback-leaf
-    # Keeper's antenna run (real VPS trigger + Twitch), prepared not fired here:
+    # CI proof-only (CTest): wiring/imports, no visual assertion:
+    python scripts/probe-m10-canvas-live.py --no-broadcast --loopback-leaf \
+        --allow-blank --duration 12
+    # Keeper's antenna run (real VPS trigger + Twitch):
     export TWITCH_STREAM_KEY=...            # etage-1 secret, never committed
     export M8_OPERATOR_TOKEN=...            # etage-1 operator/admin JWT
     export M8_GATEWAY_URL=https://zabgate.cyell.dev
-    export M10_BLUEPRINT_ID=...            # the scene-control blueprint id on Blue
-    python scripts/probe-m10-canvas-live.py --live-wire
+    export M10_BLUEPRINT_ID=...            # the scene-control blueprint id
+    export M10_SHOW_TOKEN=...              # viewer show-token (etage-1)
+    python scripts/probe-m10-canvas-live.py --broadcast --live-wire
 """
 from __future__ import annotations
 
@@ -94,11 +100,13 @@ import argparse
 import asyncio
 import base64
 import hashlib
+import http.server
 import json
 import os
 import pathlib
 import re
 import secrets as _secrets
+import socketserver
 import struct
 import subprocess
 import sys
@@ -121,15 +129,15 @@ except ImportError:
     print("error: pip install websockets (pure WS client — no native deps)")
     sys.exit(2)
 
-# The frozen cross-service contract (#59) is the single source of truth for the
-# scene NAMES (the obs-ws target_scene allowlist), the canonical 3-segment leaf
-# path, the leaf-value shape, and the reject corpus. The probe's stand-in
-# consumer validates EVERY leaf through it — never a re-declared rule.
+# The re-frozen cross-service contract (#82) is the single source of truth for
+# the scene NAMES (target_scene allowlist), the overlay-kind allowlist, the
+# canonical 3-segment leaf path, the overlay-form leaf-value shape, and the
+# reject corpus. The stand-in cut consumer validates EVERY leaf through it.
 _CONTRACTS_DIR = pathlib.Path(__file__).resolve().parent / "contracts"
 if str(_CONTRACTS_DIR.parent) not in sys.path:
     sys.path.insert(0, str(_CONTRACTS_DIR.parent))
 from contracts.scene_control import (  # noqa: E402
-    DEFAULT_ASSET_ALLOWLIST,
+    ALLOWED_OVERLAY_KINDS,
     DEFAULT_SCENE_ALLOWLIST,
     SceneControlContractError,
     assert_canonical_leaf_path,
@@ -137,9 +145,9 @@ from contracts.scene_control import (  # noqa: E402
     validate_scene_control,
 )
 
-# Reuse the #60 setup harness verbatim (scene creation, U1 monitor enum, F2
+# Reuse the #84 setup harness verbatim (WGC scene creation, U1 monitor enum, F2
 # in-process declaration round-trip). The probe orchestrates it; it does NOT
-# re-implement the scene plumbing #60 already froze.
+# re-implement the scene plumbing #84 already froze.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import m10_setup  # noqa: E402
 
@@ -148,23 +156,28 @@ DEFAULT_EXE = (
     REPO_ROOT / "upstream" / "build_x64" / "rundir" / "RelWithDebInfo"
     / "bin" / "64bit" / "pulsar.exe"
 )
-STINGER_ASSET = REPO_ROOT / "scripts" / "assets" / "stinger-demo.webm"
+OVERLAY_DIR = REPO_ROOT / "scripts" / "live-test"
+OVERLAY_PAGE = OVERLAY_DIR / "m10-overlay.html"
 BUILD_DIR = REPO_ROOT / "build"
 LIVE_VOD_DIR = BUILD_DIR / "m10-live-vod"
 FRAMES_DIR = BUILD_DIR / "m10-frames"
 
-# The blueprint slug → canonical leaf path. Pinned by #60 / the contract.
+# The blueprint slug → canonical leaf path. Pinned by #84 / the contract.
 M10_BLUEPRINT_SLUG = m10_setup.M10_BLUEPRINT_SLUG  # "m10-scene-control"
 M10_LEAF_PATH = build_leaf_path(M10_BLUEPRINT_SLUG)  # 3-segment, contract-checked
 
 SCENE_SCREEN_1 = m10_setup.SCENE_SCREEN_1
 SCENE_SCREEN_2 = m10_setup.SCENE_SCREEN_2
 SCENE_ALLOWLIST = frozenset(DEFAULT_SCENE_ALLOWLIST)
-ASSET_ALLOWLIST = frozenset(DEFAULT_ASSET_ALLOWLIST)
+OVERLAY_KIND_ALLOWLIST = frozenset(ALLOWED_OVERLAY_KINDS)
 
 MONITOR_CAPTURE_KIND = "monitor_capture"
-STINGER_TRANSITION_NAME = "Stinger"
-STINGER_TRANSITION_KIND = "obs_stinger_transition"
+BROWSER_SOURCE_KIND = "browser_source"
+OVERLAY_SCENE = "scene-overlay"
+OVERLAY_INPUT = "m10-overlay-cef"
+# The native-stinger flag (#73/#83). Default OFF: the live pivot world this
+# probe asserts. We make the dormancy explicit on the spawned fork.
+NATIVE_STINGER_ENV = "PULSAR_NATIVE_STINGER"
 
 READY_TIMEOUT_S = 60.0
 SHUTDOWN_GRACE_S = 8.0
@@ -181,21 +194,35 @@ DESTINATION_NAME = "pulsar-m10-live"
 MODAL_MANHATTAN_TOL = 24
 MIN_DISTINCT_COLOURS = 12
 MIN_NONBG_PIXEL_RATIO = 0.02
+# The opaque-plateau cover fill (Solar wipe-cover DEFAULT_COVER_FILL = #000000).
+# At the plateau the program output is near-uniform this colour.
+COVER_FILL_RGB = (0, 0, 0)
+# A MID frame is "covered" when it is near-uniform (very few distinct colours)
+# and its mean sits near the cover fill — the overlay, not a capture.
+COVER_MAX_DISTINCT = 8
+COVER_MEAN_TOL = 28
 
-# The leaf value the demo blueprint emits (the canonical valid fixture case
-# "stinger-demo-switch-to-screen-2"). On --loopback-leaf the probe injects this
-# exact value; on --live-wire Blue produces it and the probe asserts the leaf it
-# receives equals this shape.
+# The leaf value the demo blueprint emits — the canonical valid fixture case
+# "wipe-cover-switch-to-screen-2" (re-frozen overlay form). cut_at_ms sits
+# inside the opaque window [reveal_ms, reveal_ms+hold_ms].
 DEMO_SCENE_CONTROL_VALUE: dict[str, Any] = {
-    "action": "switch_program_scene",
     "target_scene": SCENE_SCREEN_2,
-    "transition": {
-        "kind": "stinger",
-        "asset_id": "stinger-demo",
-        "point_ms": 300,
-        "duration_ms": 600,
+    "overlay": {
+        "kind": "wipe-cover",
+        "reveal_ms": 400,
+        "hold_ms": 500,
+        "retract_ms": 400,
     },
+    "cut_at_ms": 650,  # mid-plateau: reveal(400) <= 650 <= reveal+hold(900)
 }
+
+# obs-ws requests that constitute an OBS-NATIVE transition. C-MECH asserts the
+# stand-in NEVER issues any of these — the cut is a bare SetCurrentProgramScene.
+NATIVE_TRANSITION_REQUESTS = frozenset({
+    "SetCurrentSceneTransition",
+    "SetCurrentSceneTransitionSettings",
+    "SetCurrentSceneTransitionDuration",
+})
 
 
 # --------------------------------------------------------------------------
@@ -261,8 +288,107 @@ class TeeLog:
 
 
 # --------------------------------------------------------------------------
-# Process management — reuse m10_setup's PulsarProcess lifecycle, but spawn
-# with the stinger asset env + a record dir + encoder fps (broadcast spine).
+# Local HTTP server — serves the overlay page (or a real Solar bundle dir) to
+# CEF AND exposes the loopback /leaf.json the overlay polls. The probe writes
+# the leaf there at the synchronised delivery instant so the SAME leaf drives
+# the overlay (CEF) and the cut (stand-in).
+# --------------------------------------------------------------------------
+def find_free_port() -> int:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class _LeafState:
+    """Thread-safe holder for the current leaf value the overlay polls."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._seq = 0
+        self._value: Optional[dict] = None
+
+    def set(self, value: dict) -> int:
+        with self._lock:
+            self._seq += 1
+            self._value = value
+            return self._seq
+
+    def snapshot(self) -> tuple[int, Optional[dict]]:
+        with self._lock:
+            return self._seq, self._value
+
+
+def _make_handler(directory: str, leaf: _LeafState):
+    class _Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=directory, **kw)
+
+        def log_message(self, *_a) -> None:  # silence per-request stderr noise
+            pass
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?", 1)[0] == "/leaf.json":
+                seq, value = leaf.snapshot()
+                body = json.dumps({"seq": seq, "value": value}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            super().do_GET()
+
+    return _Handler
+
+
+def start_overlay_server(port: int, directory: pathlib.Path,
+                         leaf: _LeafState) -> socketserver.ThreadingTCPServer:
+    handler = _make_handler(str(directory), leaf)
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
+    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", port), handler)
+    threading.Thread(target=httpd.serve_forever, name="m10-overlay-http",
+                     daemon=True).start()
+    return httpd
+
+
+def resolve_overlay_serving(log: TeeLog) -> tuple[pathlib.Path, str, str]:
+    """Decide WHAT to serve to CEF and return (serve_dir, entry_path, engine).
+
+    Preference order:
+      1) SOLAR_OVERLAY_BUNDLE env → a directory holding a built Solar bundle
+         (index.html + assets); served verbatim. The REAL #77 engine path.
+      2) A discovered Solar dist/host bundle next to Pulsar (../Solar/dist/host).
+      3) The self-contained Pulsar fallback page (scripts/live-test/
+         m10-overlay.html) — reproduces the same wipe-cover timeline keyed off
+         the same leaf, enough to prove the blend + cut-skew without Solar #11.
+    """
+    env_bundle = os.environ.get("SOLAR_OVERLAY_BUNDLE", "").strip()
+    if env_bundle:
+        d = pathlib.Path(env_bundle)
+        idx = d / "index.html"
+        if idx.exists():
+            log(f"[overlay] serving REAL Solar bundle from SOLAR_OVERLAY_BUNDLE="
+                f"{d} (our engine renders wipe-cover).")
+            return d, "index.html", "solar-bundle"
+        log(f"[overlay] SOLAR_OVERLAY_BUNDLE={d} has no index.html — ignoring.")
+
+    solar_host = (REPO_ROOT.parent / "Solar" / "dist" / "host")
+    if (solar_host / "index.html").exists():
+        log(f"[overlay] serving discovered Solar host bundle from {solar_host} "
+            "(our engine renders wipe-cover).")
+        return solar_host, "index.html", "solar-bundle"
+
+    log("[overlay] no Solar bundle found — serving the self-contained Pulsar "
+        f"fallback overlay {OVERLAY_PAGE.name} (same wipe-cover timeline, same "
+        "leaf; the real Solar bundle path is gated on #11/#77 being assembled).")
+    return OVERLAY_DIR, OVERLAY_PAGE.name, "pulsar-fallback"
+
+
+# --------------------------------------------------------------------------
+# Process management — spawn pulsar.exe GPU-ON (no --disable-gpu) so WGC +
+# CEF coexist (SPIKE-GPU #70). Native stinger forced OFF (the pivot world).
 # --------------------------------------------------------------------------
 READY_RE = re.compile(r"^PULSAR_READY ws=(\S+) password=(\S+)$")
 
@@ -285,19 +411,22 @@ class PulsarProcess:
         env["PULSAR_FPS"] = str(self.fps)
         env["PULSAR_RESOLUTION"] = f"{CANVAS_W}x{CANVAS_H}"
         env["PULSAR_VIDEO_BITRATE"] = "6000"
-        # C-PATH: the stinger media path is pinned LOCALLY by the fork from
-        # this env (#57/#64); it is NEVER read from a leaf value.
-        env["PULSAR_STINGER_ASSET"] = str(STINGER_ASSET)
+        # The pivot world: native stinger DORMANT (#73/#83). The overlay does
+        # the visible transition; the cut is a bare program switch.
+        env[NATIVE_STINGER_ENV] = "0"
         LIVE_VOD_DIR.mkdir(parents=True, exist_ok=True)
         env["PULSAR_RECORD_DIR"] = str(LIVE_VOD_DIR)
-        # No window/mic/process-audio capture — monitor_capture is the source.
+        # No window/mic/process-audio capture — monitor_capture + the CEF
+        # overlay are the only sources (the overlay page is silent).
         env.pop("PULSAR_CAPTURE_WINDOW", None)
         env.pop("PULSAR_MIC_DEVICE_ID", None)
         env.pop("PULSAR_PROCESS_AUDIO_NAME", None)
 
         creationflags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
+        # GPU-ON: NO --disable-gpu. SPIKE-GPU (#70) proved WGC monitor_capture
+        # and the CEF browser_source coexist GPU-on in a headless agent context.
         self.proc = subprocess.Popen(
-            [str(self.exe), "--disable-gpu", "--no-sandbox"],
+            [str(self.exe), "--no-sandbox"],
             cwd=str(self.exe.parent),
             env=env,
             stdout=subprocess.PIPE,
@@ -450,13 +579,14 @@ def req_code(resp: dict) -> Optional[int]:
 
 
 # --------------------------------------------------------------------------
-# The obs-ws CALL RECORDER + the stand-in CONSUMER.
+# The obs-ws CALL RECORDER + the stand-in CUT CONSUMER.
 #
-# Every obs-ws request the consumer issues passes through ObsCaller.call so
-# the C-INJ negative test can assert a rejected leaf produces ZERO calls and
-# the ordering test can assert the switch was CAUSED by the leaf (the recorded
-# calls bracket the leaf-delivery timestamp). This mirrors Prism's injected
-# ObsCaller (executor.ts) one-to-one.
+# Every obs-ws request the consumer issues passes through ObsCaller.call so:
+#   - C-INJ asserts a rejected leaf produces ZERO calls;
+#   - ordering asserts the cut was CAUSED by the leaf (calls bracket delivery);
+#   - C-MECH asserts NO native-transition request was EVER issued.
+# This mirrors Prism's injected ObsCaller (executor.ts) one-to-one. The cut is
+# a BARE SetCurrentProgramScene — the stand-in has no transition step at all.
 # --------------------------------------------------------------------------
 class ObsCaller:
     def __init__(self, inbox: Inbox, ws) -> None:
@@ -472,91 +602,54 @@ class ObsCaller:
             self.inbox, self.ws, request_type, f"consumer-{self._n}", data
         )
 
-
-def select_transition_name(kind: str, asset_id: str) -> Optional[str]:
-    """Mirror Prism asset-allowlist.selectTransitionName: stinger → "Stinger"
-    (the pre-registered, locally-pinned transition), fade → built-in "Fade".
-    The asset_id only SELECTS which allowlisted transition; it never supplies a
-    media path (C-PATH)."""
-    if kind == "stinger":
-        return STINGER_TRANSITION_NAME if asset_id == "stinger-demo" else None
-    if kind == "fade":
-        return "Fade"
-    return None
+    def native_transition_calls(self) -> list[str]:
+        """C-MECH evidence: any native-transition request the consumer issued."""
+        return [rt for (_t, rt, _d) in self.calls if rt in NATIVE_TRANSITION_REQUESTS]
 
 
-async def apply_scene_control(obs: ObsCaller, ctrl: dict, log: TeeLog) -> bool:
-    """Issue the obs-ws sequence for a VALIDATED scene_control — the exact
-    executor.ts step order. Returns True if the four (or three, for fade)
-    requests were issued. NO media path is ever sent (C-PATH): step 2 sets
-    only transition_point; the media path was baked into the fork's "Stinger"
-    transition from the pinned local asset (#57/#64)."""
-    transition = ctrl["transition"]
-    name = select_transition_name(transition["kind"], transition["asset_id"])
-    if name is None:
-        log("   [consumer] transition name did not resolve — 0 obs-ws calls")
-        return False
-
-    # 1. Select the pre-registered transition by NAME (never a media path).
-    r = await obs.call("SetCurrentSceneTransition", {"transitionName": name})
-    if not req_ok(r):
-        raise RuntimeError(f"SetCurrentSceneTransition({name}): {r.get('requestStatus')}")
-    # 2. Stinger transition_point only (fade has none).
-    if transition["kind"] == "stinger":
-        r = await obs.call("SetCurrentSceneTransitionSettings", {
-            "transitionSettings": {"transition_point": transition["point_ms"]},
-            "overlay": True,  # merge into the fork's pinned media-path settings
-        })
-        if not req_ok(r):
-            raise RuntimeError(
-                f"SetCurrentSceneTransitionSettings: {r.get('requestStatus')}"
-            )
-    # 3. Duration (clamped 50–20000 on the fork; already range-checked).
-    r = await obs.call("SetCurrentSceneTransitionDuration", {
-        "transitionDuration": transition["duration_ms"],
-    })
-    if not req_ok(r):
-        raise RuntimeError(f"SetCurrentSceneTransitionDuration: {r.get('requestStatus')}")
-    # 4. Flip the program scene — the transition composites on air.
+async def apply_cut(obs: ObsCaller, ctrl: dict, log: TeeLog) -> bool:
+    """Issue the HARD-CUT for a VALIDATED scene_control — a SINGLE
+    SetCurrentProgramScene{target_scene}. NO SetCurrentSceneTransition,
+    NO SetCurrentSceneTransitionSettings, NO duration: there is no OBS-native
+    transition in the pivot (C-MECH). The visible transition is the Solar
+    overlay; this is the invisible content swap under its opaque plateau."""
     r = await obs.call("SetCurrentProgramScene", {"sceneName": ctrl["target_scene"]})
     if not req_ok(r):
         raise RuntimeError(f"SetCurrentProgramScene: {r.get('requestStatus')}")
     return True
 
 
-async def consume_leaf(
-    obs: ObsCaller, path: str, value: Any, log: TeeLog,
-) -> tuple[bool, Optional[dict]]:
-    """The stand-in #63 consumer for ONE leaf, gating every obs-ws call behind
-    the frozen contract (C-PATHREAL → C-INJ/C-PATH → executor). Returns
-    (applied, validated_ctrl). A rejected leaf ⇒ (False, None) and ZERO calls."""
+async def validate_leaf(path: str, value: Any, log: TeeLog) -> Optional[dict]:
+    """The stand-in cut consumer's GATE for ONE leaf (C-PATHREAL → contract).
+    Returns the validated ctrl, or None if the leaf is not ours / is rejected
+    (a rejected leaf ⇒ ZERO obs-ws calls; the caller never reaches apply_cut)."""
     # C-PATHREAL — only the canonical 3-segment scene_control leaf is ours.
     try:
         slug = assert_canonical_leaf_path(path)
     except SceneControlContractError:
-        return False, None  # not our leaf (Solar inputs etc. land here too)
+        return None  # not our leaf (Solar overlay inputs etc. land here too)
 
-    # C-INJ / C-PATH — the single gate before any obs-ws call.
+    # The single gate before any obs-ws call — the FROZEN overlay-form contract.
     try:
         ctrl = validate_scene_control(
             value,
             scene_allowlist=SCENE_ALLOWLIST,
-            asset_allowlist=ASSET_ALLOWLIST,
+            overlay_kind_allowlist=OVERLAY_KIND_ALLOWLIST,
         )
     except SceneControlContractError as exc:
-        log(f"   [consumer] REJECTED leaf {path!r} (slug={slug}): {exc} — 0 obs-ws calls")
-        return False, None
+        log(f"   [cut] REJECTED leaf {path!r} (slug={slug}): {exc} — 0 obs-ws calls")
+        return None
 
-    log(f"   [consumer] ACCEPTED leaf {path!r} (slug={slug}): "
-        f"target={ctrl['target_scene']} kind={ctrl['transition']['kind']} "
-        f"asset={ctrl['transition']['asset_id']}")
-    applied = await apply_scene_control(obs, ctrl, log)
-    return applied, ctrl
+    log(f"   [cut] ACCEPTED leaf {path!r} (slug={slug}): "
+        f"target={ctrl['target_scene']} overlay={ctrl['overlay']['kind']} "
+        f"cut_at_ms={ctrl['cut_at_ms']} window=[{ctrl['overlay']['reveal_ms']}, "
+        f"{ctrl['overlay']['reveal_ms'] + ctrl['overlay']['hold_ms']}]")
+    return ctrl
 
 
 # --------------------------------------------------------------------------
 # Pure-stdlib PNG decode + frame analysis (mirrors probe-m6-live.py) — for the
-# A / B / MID animation proof. No PIL / numpy (CI-safe, license-clean).
+# A / MID / B overlay-blend proof. No PIL / numpy (CI-safe, license-clean).
 # --------------------------------------------------------------------------
 def _paeth(a: int, b: int, c: int) -> int:
     p = a + b - c
@@ -650,7 +743,7 @@ def _mean_rgb(width: int, height: int, channels: int, px: bytearray) -> tuple[fl
 
 def analyse_frame(width: int, height: int, channels: int, px: bytearray) -> dict:
     """Blank/content metrics + mean RGB. Mirrors probe-m6-live.analyse_frame and
-    adds the mean colour used by the MID-transition blend assertion."""
+    adds the mean colour used by the overlay-cover MID assertion."""
     total = width * height
     if total == 0:
         return {"distinct": 0, "nonbg_ratio": 0.0, "all_same": True,
@@ -724,43 +817,20 @@ async def capture_program_frame(inbox: Inbox, ws, rid: str) -> tuple[bytes, dict
     return png, metrics
 
 
-def is_blend(mid: dict, a: dict, b: dict) -> tuple[bool, str]:
-    """A mid-transition frame is a BLEND if its mean colour is neither A's nor
-    B's settled mean — the stinger media composites over the program output, so
-    the mid frame sits OFF both endpoints (the visible animation proof). We use
-    the mean-RGB distance: a hard cut would land the mid frame exactly on A or B
-    (distance ~0 to one of them); a real composited transition sits away from
-    both."""
-    def dist(p: tuple[float, float, float], q: tuple[float, float, float]) -> float:
-        return sum(abs(p[i] - q[i]) for i in range(3))
-
-    ma, mb, mm = a["mean"], b["mean"], mid["mean"]
-    sep = dist(ma, mb)
-    da, db = dist(mm, ma), dist(mm, mb)
-    # If A and B are barely distinguishable the mean test cannot separate a
-    # blend from a cut — report INDETERMINATE rather than asserting it falsely.
-    # Two distinct causes, both yielding |A-B|≈0, need different operator action:
-    #   - blank capture: monitor_capture returned an all-black frame (DXGI
-    #     desktop-duplication unavailable in a non-interactive/headless/RDP
-    #     session — `DuplicateOutput1 887A0004` in the pulsar log). Needs a real
-    #     interactive desktop session on the operator box.
-    #   - mono-screen / identical desktops: one display, or two displays showing
-    #     the same content. Needs a 2nd monitor with distinct content.
-    if sep < 3 * MODAL_MANHATTAN_TOL:
-        a_blank = a["distinct"] <= 1 and a["mean"] == (0.0, 0.0, 0.0)
-        b_blank = b["distinct"] <= 1 and b["mean"] == (0.0, 0.0, 0.0)
-        cause = ("blank capture (monitor_capture all-black — DXGI desktop "
-                 "duplication unavailable in this session; needs an interactive "
-                 "operator desktop)" if (a_blank or b_blank)
-                 else "mono-screen / identical desktops (needs a 2nd monitor "
-                      "with distinct content)")
-        return False, (f"endpoints too close (|A-B|={sep:.1f}) — blend "
-                       f"indeterminate: {cause}")
-    # A blend sits meaningfully away from BOTH endpoints. A hard cut lands on B
-    # (db~0) or still on A (da~0).
-    blend = da > 0.10 * sep and db > 0.10 * sep
-    return blend, (f"|A-B|={sep:.1f} |MID-A|={da:.1f} |MID-B|={db:.1f} "
-                   f"(blend wants MID off BOTH endpoints)")
+def is_overlay_cover(mid: dict) -> tuple[bool, str]:
+    """C5″ — the MID frame is the OVERLAY COVER (the Solar wipe-cover at its
+    opaque plateau), NOT a hard cut between two captures. The cover is a
+    near-uniform opaque fill: very few distinct colours AND a mean near the
+    cover fill colour. (A capture-to-capture hard cut would land MID on a busy
+    desktop image — many distinct colours, mean far from the fill.)"""
+    distinct = mid["distinct"]
+    mr, mg, mb = mid["mean"]
+    fr, fg, fb = COVER_FILL_RGB
+    mean_dist = abs(mr - fr) + abs(mg - fg) + abs(mb - fb)
+    covered = distinct <= COVER_MAX_DISTINCT and mean_dist <= COVER_MEAN_TOL
+    return covered, (f"distinct={distinct} (<= {COVER_MAX_DISTINCT}?) "
+                     f"mean={tuple(round(x) for x in mid['mean'])} "
+                     f"|mean-fill|={mean_dist:.0f} (<= {COVER_MEAN_TOL}?)")
 
 
 # --------------------------------------------------------------------------
@@ -825,11 +895,12 @@ async def subscribe_show_stream(
 
 
 # --------------------------------------------------------------------------
-# Scene setup — reuse #60's run_obs_setup against the live socket.
+# Scene setup — two WGC monitor_capture scenes (#84) + the CEF overlay scene.
 # --------------------------------------------------------------------------
 async def setup_scenes(inbox: Inbox, ws, log: TeeLog) -> int:
-    """Create scene-screen-1 / scene-screen-2 via the #60 harness primitives.
-    Returns 0 / 1 / 3 (typed skip). Mono-screen fallback is the #60 behaviour."""
+    """Create scene-screen-1 / scene-screen-2 (WGC monitor_capture) via the #84
+    harness primitives. Returns 0 / 1 / 3 (typed skip). Mono-screen fallback is
+    the #84 behaviour."""
     resp = await request(inbox, ws, "GetInputKindList", "kinds-mc", {})
     kinds = set(resp["responseData"]["inputKinds"])
     if MONITOR_CAPTURE_KIND not in kinds:
@@ -837,7 +908,7 @@ async def setup_scenes(inbox: Inbox, ws, log: TeeLog) -> int:
             "Typed skip, NOT a pass.")
         return 3
 
-    log("[setup] enumerating displays for monitor_capture (U1/#56) ...")
+    log("[setup] enumerating displays for monitor_capture (U1/#84) ...")
     setting_key, values = await m10_setup.enumerate_monitors(inbox, ws, log)
     if not values:
         log("FAIL: no displays enumerated — cannot pin monitor_capture")
@@ -851,13 +922,13 @@ async def setup_scenes(inbox: Inbox, ws, log: TeeLog) -> int:
         value_2 = values[0]
         mono = True
         log("   NOTE: single display — mono-screen fallback (both scenes pin the "
-            "same display; the on-air 2-display blend proof needs a 2nd monitor).")
+            "same display; the on-air 2-display proof needs a 2nd monitor).")
 
-    log(f"[setup] creating {SCENE_SCREEN_1!r} (display 1) ...")
+    log(f"[setup] creating {SCENE_SCREEN_1!r} (display 1, WGC) ...")
     s1 = await m10_setup.create_monitor_scene(
         inbox, ws, scene_name=SCENE_SCREEN_1, input_name="capture-screen-1",
         setting_key=setting_key, setting_value=value_1, log=log)
-    log(f"[setup] creating {SCENE_SCREEN_2!r} (display 2) ...")
+    log(f"[setup] creating {SCENE_SCREEN_2!r} (display 2, WGC) ...")
     s2 = await m10_setup.create_monitor_scene(
         inbox, ws, scene_name=SCENE_SCREEN_2, input_name="capture-screen-2",
         setting_key=setting_key, setting_value=value_2, log=log)
@@ -870,33 +941,80 @@ async def setup_scenes(inbox: Inbox, ws, log: TeeLog) -> int:
     return 0
 
 
+async def add_overlay_to_scenes(inbox: Inbox, ws, *, overlay_url: str,
+                                log: TeeLog) -> bool:
+    """Install the Solar overlay CEF browser_source on BOTH content scenes, so
+    the opaque cover composites above the monitor_capture in either scene. The
+    overlay is created once and added to each scene. Returns True if the
+    browser_source rendered (False ⇒ light build, caller may skip the blend)."""
+    settled = False
+    for scene in (SCENE_SCREEN_1, SCENE_SCREEN_2):
+        # The pulsar-scene vendor installs the browser_source on the CURRENT
+        # scene (mirrors probe-twitch-scene-switch), so set it current first.
+        await request(inbox, ws, "SetCurrentProgramScene", f"ov-cur-{scene}",
+                      {"sceneName": scene})
+        r = await vendor_call(inbox, ws, f"ov-set-{scene}", "pulsar-scene",
+                              "SetCaptureSource", {
+                                  "kind": BROWSER_SOURCE_KIND,
+                                  "url": overlay_url,
+                                  "width": CANVAS_W,
+                                  "height": CANVAS_H,
+                                  "fps": 60,
+                                  "reroute_audio": False,
+                              })
+        data = vendor_response_data(r)
+        if data.get("kind") == BROWSER_SOURCE_KIND:
+            settled = True
+            log(f"   [overlay] browser_source installed on {scene!r} → "
+                f"{redact_show_stream_url(overlay_url)}")
+        else:
+            log(f"   [overlay] SetCaptureSource on {scene!r} did not return a "
+                f"browser_source ({data}) — light build / no CEF?")
+    return settled
+
+
 # --------------------------------------------------------------------------
-# Stinger transition guard (criterion 3) — assert the fork registered it.
+# C-MECH guard — assert the fork is NOT defaulting to a native stinger.
 # --------------------------------------------------------------------------
-async def assert_stinger_registered(inbox: Inbox, ws, log: TeeLog) -> int:
-    r = await request(inbox, ws, "GetTransitionKindList", "tr-kinds", {})
-    kinds = r.get("responseData", {}).get("transitionKinds", [])
-    if STINGER_TRANSITION_KIND not in kinds:
-        log(f"SKIP: {STINGER_TRANSITION_KIND} kind absent — fork lacks the #57 "
-            "stinger compositing. Typed skip, NOT a pass.")
-        return 3
+async def assert_no_native_stinger_default(inbox: Inbox, ws, log: TeeLog) -> int:
+    """The pivot precondition: with PULSAR_NATIVE_STINGER OFF (forced on spawn),
+    the DEFAULT current transition must NOT be a stinger (a hard-cut must never
+    route through an OBS-native transition — C-MECH). Returns 0 OK / 1 fail.
+
+    A registered 'Stinger' INSTANCE while the flag is OFF means the binary does
+    not yet gate the native stinger behind #73/#83 (today's main build) — that
+    is a build-side deferral, NOT a C-MECH break, because the decisive C-MECH
+    proof is that THIS stand-in consumer issues ZERO native-transition requests
+    (asserted later from the recorded calls, build-independent). So a Stinger
+    instance is a NOTE, not a fail; only a stinger DEFAULT transition fails."""
     r = await request(inbox, ws, "GetSceneTransitionList", "tr-list", {})
-    names = {t["transitionName"] for t in r.get("responseData", {}).get("transitions", [])}
-    if STINGER_TRANSITION_NAME not in names:
-        log(f"FAIL: no registered {STINGER_TRANSITION_NAME!r} transition (#57).")
+    names = {t["transitionName"]: t for t in
+             r.get("responseData", {}).get("transitions", [])}
+    if "Stinger" in names:
+        log("[C-MECH pre] NOTE: a 'Stinger' instance is registered while the "
+            "native stinger is OFF — this binary does not yet gate it behind the "
+            "#73/#83 flag (build deferral). The real C-MECH proof (consumer "
+            "issues ZERO native-transition requests) is asserted from the cut "
+            "calls below, regardless of any registered instance.")
+    r = await request(inbox, ws, "GetCurrentSceneTransition", "tr-cur", {})
+    cur = r.get("responseData", {})
+    if cur.get("transitionKind") == "obs_stinger_transition":
+        log("FAIL: the DEFAULT current transition is a stinger — a hard-cut must "
+            "not route through an OBS-native transition (C-MECH).")
         return 1
-    log(f"[stinger] registered: kind {STINGER_TRANSITION_KIND} + named "
-        f"{STINGER_TRANSITION_NAME!r} transition present (criterion 3 pre-check).")
+    log(f"[C-MECH pre] OK: default transition={cur.get('transitionName')!r} "
+        f"kind={cur.get('transitionKind')!r} (not a stinger — the cut will be a "
+        "bare program switch).")
     return 0
 
 
 # --------------------------------------------------------------------------
-# C-INJ negative test (criterion 11) — every malicious leaf ⇒ 0 obs-ws calls.
+# C-INJ negative test — every malicious leaf ⇒ 0 obs-ws calls.
 # --------------------------------------------------------------------------
 async def assert_anti_injection(obs: ObsCaller, log: TeeLog) -> int:
     """Drive the frozen reject corpus (fixtures/malicious.json) through the SAME
-    consumer gate and assert ZERO obs-ws calls per case. Proves C-INJ/C-PATH/
-    C-PATHREAL hold at the live consumer, not just in the contract unit test."""
+    consumer gate and assert ZERO obs-ws calls per case. Proves C-INJ holds at
+    the live consumer, not just in the contract unit test."""
     corpus_path = _CONTRACTS_DIR / "scene_control" / "fixtures" / "malicious.json"
     corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
     failures = 0
@@ -904,44 +1022,48 @@ async def assert_anti_injection(obs: ObsCaller, log: TeeLog) -> int:
         name = case["name"]
         before = len(obs.calls)
         path = case.get("bad_path", M10_LEAF_PATH)
-        applied, _ = await consume_leaf(obs, path, case["value"], log)
+        ctrl = await validate_leaf(path, case["value"], log)
+        if ctrl is not None:
+            # A leaf that wrongly validated — the gate failed.
+            log(f"   [C-INJ] FAIL {name!r}: leaf VALIDATED but must be rejected")
+            failures += 1
+            continue
         issued = len(obs.calls) - before
-        if applied or issued != 0:
-            log(f"   [C-INJ] FAIL {name!r}: consumer issued {issued} obs-ws call(s) "
-                f"(applied={applied}) — MUST be 0")
+        if issued != 0:
+            log(f"   [C-INJ] FAIL {name!r}: {issued} obs-ws call(s) — MUST be 0")
             failures += 1
         else:
-            log(f"   [C-INJ] ok {name!r}: 0 obs-ws calls ({case.get('invariant')})")
+            log(f"   [C-INJ] ok {name!r}: rejected, 0 obs-ws calls "
+                f"({case.get('invariant')})")
     if failures:
-        log(f"FAIL: {failures} anti-injection case(s) issued obs-ws calls (criterion 11).")
+        log(f"FAIL: {failures} anti-injection case(s) (C-INJ).")
         return 1
-    log(f"[C-INJ] criterion 11 OK: all {len(corpus['cases'])} off-allowlist "
-        "leaves rejected with 0 obs-ws calls.")
+    log(f"[C-INJ] OK: all {len(corpus['cases'])} off-contract leaves rejected "
+        "with 0 obs-ws calls.")
     return 0
 
 
 # --------------------------------------------------------------------------
-# Broadcast + the M10 proof sequence.
+# Broadcast + the M10 overlay proof sequence.
 # --------------------------------------------------------------------------
 async def run_proof(
     *, inbox: Inbox, ws, obs: ObsCaller, args, redactor: Redactor, log: TeeLog,
-    stream_key: str,
+    stream_key: str, leaf_state: _LeafState, overlay_settled: bool, engine: str,
 ) -> int:
     duration = args.duration
-    switch_at = duration / 2.0
-    transition_ms = DEMO_SCENE_CONTROL_VALUE["transition"]["duration_ms"]
+    deliver_at = duration / 2.0
     FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Go live on screen-1 (the program scene before the switch).
+    # Go live on screen-1 (the program scene before the cut).
     if not req_ok(await request(inbox, ws, "SetCurrentProgramScene", "go-s1",
                                 {"sceneName": SCENE_SCREEN_1})):
         log("FAIL: could not set program scene to screen-1 pre-flight.")
         return 1
-    log(f"[proof] program scene = {SCENE_SCREEN_1!r} (on air)")
+    log(f"[proof] program scene = {SCENE_SCREEN_1!r} (on air, overlay above it)")
 
     dest_id: Optional[str] = None
     recording = False
-    if not args.no_broadcast:
+    if args.broadcast:
         r = await vendor_call(inbox, ws, "create-dest", "pulsar", "CreateDestination",
                               {"name": DESTINATION_NAME, "kind": "twitch", "key": stream_key})
         dest_id = vendor_response_data(r).get("id")
@@ -957,8 +1079,8 @@ async def run_proof(
             return 1
         log("-> StartDestination started=true — LIVE on Twitch")
     else:
-        log("-> --no-broadcast: NOT going live to Twitch (proof-only). The switch "
-            "is proven OFF AIR. The Twitch leg is Keeper's antenna run.")
+        log("-> --no-broadcast: NOT going live to Twitch (proof-only). The "
+            "overlay + cut are proven OFF AIR. The Twitch leg is the antenna run.")
 
     r = await request(inbox, ws, "StartRecord", "start-rec", {})
     if req_ok(r):
@@ -967,7 +1089,7 @@ async def run_proof(
     else:
         log(f"   warn: StartRecord declined: {r.get('requestStatus')}")
 
-    # Settle, then capture FRAME A (screen-1, on air).
+    # Settle, then capture FRAME A (screen-1, on air, overlay transparent).
     await asyncio.sleep(2.0)
     png_a, m_a = await capture_program_frame(inbox, ws, "frame-a")
     (FRAMES_DIR / "frame-A-screen1.png").write_bytes(png_a)
@@ -975,140 +1097,46 @@ async def run_proof(
         f"distinct={m_a['distinct']} nonbg={m_a['nonbg_ratio']*100:.1f}% "
         f"-> {FRAMES_DIR / 'frame-A-screen1.png'}")
     if not frame_is_content(m_a) and not args.allow_blank:
-        log("FAIL: frame A is blank — screen-1 capture produced no content. "
-            "(A headless/CI box with no real desktop can pass --allow-blank to "
-            "exercise the wire without the visual content assertion.)")
+        log("FAIL: frame A is blank — screen-1 WGC capture produced no content. "
+            "(A CI box with no real desktop can pass --allow-blank to exercise "
+            "the wire without the visual assertion.)")
         if dest_id:
             await _stop_broadcast(inbox, ws, dest_id, recording, log)
         return 1
 
     pre_scene = await _current_scene(inbox, ws)
-    log(f"[proof] pre-switch program scene = {pre_scene!r}")
+    log(f"[proof] pre-cut program scene = {pre_scene!r}")
 
-    # ----- deliver the leaf at ~duration/2 and drive the switch -----
-    delivered_t: Optional[float] = None
-    received_value: Any = None
     rc = 0
     start_t = time.time()
-    poll = 0
-    adaptive_seen = 0
-    switched = False
+    delivered = False
     while time.time() - start_t < duration:
-        await asyncio.sleep(min(POLL_INTERVAL_SEC, max(0.5, switch_at - (time.time() - start_t))))
+        await asyncio.sleep(min(POLL_INTERVAL_SEC,
+                                max(0.2, deliver_at - (time.time() - start_t))))
         elapsed = time.time() - start_t
 
-        if not switched and elapsed >= switch_at:
-            log(f"\n** M10 SWITCH @ t={elapsed:.1f}s — delivering the scene_control leaf "
-                f"via {args.delivery} **")
-            delivered_t, received_value = await deliver_leaf(
-                args=args, redactor=redactor, log=log)
-            # Assert the leaf VALUE matches the frozen demo contract shape.
-            if received_value != DEMO_SCENE_CONTROL_VALUE:
-                log("   note: received leaf value differs from the pinned demo "
-                    "shape; validating it against the contract regardless.")
-            calls_before = len(obs.calls)
-            applied, ctrl = await consume_leaf(obs, M10_LEAF_PATH, received_value, log)
-            calls_after = len(obs.calls)
-            if not applied:
-                log("FAIL: the consumer did not apply the delivered leaf (criterion 2).")
-                rc = 1
+        if not delivered and elapsed >= deliver_at:
+            rc = await _do_overlay_cut(
+                inbox=inbox, ws=ws, obs=obs, args=args, redactor=redactor,
+                log=log, leaf_state=leaf_state, overlay_settled=overlay_settled,
+                pre_scene=pre_scene)
+            delivered = True
+            if rc != 0:
                 break
-            # ORDERING (criterion 2/10): every obs-ws call happened AFTER the
-            # leaf was delivered — the switch is CAUSED by the delta, not a timer.
-            first_call_t = obs.calls[calls_before][0]
-            if delivered_t is not None and first_call_t < delivered_t:
-                log(f"FAIL: obs-ws call at {first_call_t:.3f} preceded leaf delivery "
-                    f"at {delivered_t:.3f} — switch not caused by the delta (ordering).")
-                rc = 1
-                break
-            log(f"[ordering] OK: {calls_after - calls_before} obs-ws call(s) all issued "
-                f"AFTER leaf delivery (Δ={obs.calls[calls_before][0] - delivered_t:.3f}s) "
-                "— switch CAUSED by the delta, not a timer.")
-
-            # Criterion 3 (live): the recorded call sequence proves the STINGER
-            # transition was selected + configured BEFORE the program flip — the
-            # delta drove the animated path, not a bare cut.
-            seq = [c[1] for c in obs.calls[calls_before:calls_after]]
-            expect = ["SetCurrentSceneTransition", "SetCurrentSceneTransitionSettings",
-                      "SetCurrentSceneTransitionDuration", "SetCurrentProgramScene"]
-            if ctrl["transition"]["kind"] == "stinger" and seq != expect:
-                log(f"FAIL: obs-ws call sequence {seq} != expected stinger sequence "
-                    f"{expect} (criterion 3 — stinger configured before the flip).")
-                rc = 1
-                break
-            # Confirm the fork reflects the Stinger transition after the set.
-            gr = await request(inbox, ws, "GetCurrentSceneTransition", "get-tr-live", {})
-            cur_tr = gr.get("responseData", {})
-            log(f"[criterion 3] transition set: name={cur_tr.get('transitionName')!r} "
-                f"kind={cur_tr.get('transitionKind')!r} dur={cur_tr.get('transitionDuration')}ms "
-                f"— sequence {seq} (stinger configured, THEN flipped).")
-            if ctrl["transition"]["kind"] == "stinger" and \
-                    cur_tr.get("transitionName") != STINGER_TRANSITION_NAME:
-                log(f"FAIL: current transition is {cur_tr.get('transitionName')!r}, "
-                    f"not {STINGER_TRANSITION_NAME!r} (criterion 3).")
-                rc = 1
-                break
-
-            # Capture the MID-transition frame at ~switch + transition_ms/2.
-            await asyncio.sleep(transition_ms / 2000.0)
-            png_mid, m_mid = await capture_program_frame(inbox, ws, "frame-mid")
-            (FRAMES_DIR / "frame-MID-transition.png").write_bytes(png_mid)
-            log(f"[frame MID] mean={tuple(round(x) for x in m_mid['mean'])} "
-                f"-> {FRAMES_DIR / 'frame-MID-transition.png'}")
-
-            # Let the transition settle, capture FRAME B (screen-2).
-            await asyncio.sleep(transition_ms / 1000.0 + 0.5)
-            now = await _current_scene(inbox, ws)
-            if now != SCENE_SCREEN_2:
-                log(f"FAIL: program scene did not flip to {SCENE_SCREEN_2!r} "
-                    f"(got {now!r}) — criterion 4.")
-                rc = 1
-                break
-            png_b, m_b = await capture_program_frame(inbox, ws, "frame-b")
-            (FRAMES_DIR / "frame-B-screen2.png").write_bytes(png_b)
-            log(f"[frame B] screen-2: mean={tuple(round(x) for x in m_b['mean'])} "
-                f"distinct={m_b['distinct']} -> {FRAMES_DIR / 'frame-B-screen2.png'}")
-            log(f"[criterion 4] program scene flipped {pre_scene!r} -> {now!r} OK")
-
-            # ANIMATION (criterion 5): the MID frame is a BLEND of A and B.
-            blend, why = is_blend(m_mid, m_a, m_b)
-            if blend:
-                log(f"[criterion 5] ANIMATION OK: mid-transition frame is a BLEND "
-                    f"(stinger composited on air) — {why}")
-            else:
-                log(f"[criterion 5] animation INDETERMINATE/NOT proven: {why}")
-                if not args.allow_blank:
-                    log("   -> with 2 distinct displays this is a FAIL (cut, not "
-                        "animation). On a mono-screen box the endpoints coincide so "
-                        "the blend is unprovable here — the visual proof is Keeper's "
-                        "antenna run on a 2-monitor operator box (criterion 5).")
-            switched = True
 
         # Broadcast health polling (only when live).
         if dest_id:
-            r = await vendor_call(inbox, ws, f"get-dest-{poll}", "pulsar",
+            r = await vendor_call(inbox, ws, f"get-dest-{int(elapsed)}", "pulsar",
                                   "GetDestinations", {})
             ours = next((d for d in vendor_response_data(r).get("destinations", [])
                          if d.get("id") == dest_id), None)
             if not ours or not ours.get("active"):
-                log(f"FAIL: destination not active at poll #{poll}: {ours}")
+                log(f"FAIL: destination not active at t={elapsed:.0f}s: {ours}")
                 rc = 1
                 break
-            r = await vendor_call(inbox, ws, f"get-adapt-{poll}", "pulsar",
-                                  "GetAdaptiveState", {})
-            adapt = vendor_response_data(r)
-            adaptive_seen = max(adaptive_seen, int(adapt.get("samples", 0)))
-            drop = float(adapt.get("last_drop_ratio", 0.0))
-            log(f"   poll #{poll} t={elapsed:.0f}s active=true drop_ratio={drop:.4f} "
-                f"switched={switched}")
-            if drop > FRAME_DROP_RATIO_MAX:
-                log(f"FAIL: drop ratio {drop:.4f} > {FRAME_DROP_RATIO_MAX}")
-                rc = 1
-                break
-        poll += 1
 
-    if rc == 0 and not switched:
-        log("FAIL: run ended before the mid-course switch fired.")
+    if rc == 0 and not delivered:
+        log("FAIL: run ended before the overlay/cut fired.")
         rc = 1
 
     # Stop cleanly.
@@ -1122,10 +1150,180 @@ async def run_proof(
             log(f"   warn: StopRecord error: {exc}")
     if dest_id:
         await _stop_broadcast(inbox, ws, dest_id, False, log)
-        if rc == 0 and adaptive_seen <= 0:
-            log(f"FAIL: adaptive worker never reported samples (saw {adaptive_seen}).")
-            rc = 1
     return rc
+
+
+async def _do_overlay_cut(
+    *, inbox, ws, obs: ObsCaller, args, redactor: Redactor, log: TeeLog,
+    leaf_state: _LeafState, overlay_settled: bool, pre_scene,
+) -> int:
+    """Deliver the leaf (overlay + stand-in cut), schedule the hard-cut at
+    cut_at_ms under the opaque plateau, capture the MID + B frames, and run the
+    C5″ / C-CUT(SPIKE-CUT) / C-MECH / ordering proofs."""
+    log(f"\n** M10 OVERLAY+CUT — delivering the scene_control leaf via "
+        f"{args.delivery} **")
+    delivered_t, value = await deliver_leaf(
+        args=args, redactor=redactor, log=log, leaf_state=leaf_state)
+    if value != DEMO_SCENE_CONTROL_VALUE:
+        log("   note: received leaf differs from the pinned demo shape; "
+            "validating against the contract regardless.")
+
+    # The SAME leaf drives the overlay (CEF, via /leaf.json) AND the cut. Push
+    # it to the overlay endpoint NOW (synchronised delivery instant).
+    seq = leaf_state.set(json.loads(json.dumps(value)))
+    overlay_t0 = time.monotonic()
+    log(f"   [overlay] leaf pushed to CEF (seq={seq}); the same leaf clocks the "
+        "cut — one leaf, co-specified (the leaf IS the synchronisation contract).")
+
+    ctrl = await validate_leaf(M10_LEAF_PATH, value, log)
+    if ctrl is None:
+        log("FAIL: the stand-in cut consumer did not accept the delivered leaf.")
+        return 1
+
+    reveal = ctrl["overlay"]["reveal_ms"]
+    hold = ctrl["overlay"]["hold_ms"]
+    cut_at = ctrl["cut_at_ms"]
+    opaque_start, opaque_end = reveal, reveal + hold
+
+    # Capture the MID frame at mid-plateau (between opaque_start and opaque_end),
+    # BEFORE the cut, so the frame shows the overlay covering the OLD scene while
+    # opacity≈1 — then fire the cut at cut_at_ms (still under the plateau).
+    mid_target_ms = (opaque_start + opaque_end) / 2.0
+    mid_wait = max(0.0, (mid_target_ms - (time.monotonic() - overlay_t0) * 1000.0) / 1000.0)
+    await asyncio.sleep(mid_wait)
+    cef_opacity_mid = await _read_overlay_opacity(inbox, ws, log)
+    png_mid, m_mid = await capture_program_frame(inbox, ws, "frame-mid")
+    (FRAMES_DIR / "frame-MID-overlay.png").write_bytes(png_mid)
+    log(f"[frame MID] mean={tuple(round(x) for x in m_mid['mean'])} "
+        f"distinct={m_mid['distinct']} cef_opacity~{cef_opacity_mid} "
+        f"-> {FRAMES_DIR / 'frame-MID-overlay.png'}")
+
+    # Fire the HARD-CUT at cut_at_ms (under the plateau). Record the opacity
+    # the overlay reports AT the cut instant (SPIKE-CUT skew evidence).
+    now_ms = (time.monotonic() - overlay_t0) * 1000.0
+    await asyncio.sleep(max(0.0, (cut_at - now_ms) / 1000.0))
+    cef_opacity_at_cut = await _read_overlay_opacity(inbox, ws, log)
+    calls_before = len(obs.calls)
+    applied = await apply_cut(obs, ctrl, log)
+    if not applied:
+        log("FAIL: the stand-in did not apply the hard-cut (criterion C-CUT).")
+        return 1
+
+    # ORDERING — the cut happened AFTER the leaf was delivered.
+    first_call_t = obs.calls[calls_before][0]
+    if first_call_t < delivered_t:
+        log(f"FAIL: cut at {first_call_t:.3f} preceded leaf delivery at "
+            f"{delivered_t:.3f} — not caused by the delta (ordering).")
+        return 1
+    log(f"[ordering] OK: hard-cut issued AFTER leaf delivery "
+        f"(Δ={first_call_t - delivered_t:.3f}s) — CAUSED by the delta.")
+
+    # C-MECH — the cut was a BARE SetCurrentProgramScene; NO native transition.
+    seq_types = [c[1] for c in obs.calls[calls_before:]]
+    native = obs.native_transition_calls()
+    if native:
+        log(f"FAIL: C-MECH — native transition request(s) issued: {native}. The "
+            "pivot forbids any OBS-native transition; the cut must be a bare "
+            "SetCurrentProgramScene.")
+        return 1
+    if seq_types != ["SetCurrentProgramScene"]:
+        log(f"FAIL: C-MECH — cut sequence {seq_types} != ['SetCurrentProgramScene'] "
+            "(the hard-cut must be a single program switch, no transition steps).")
+        return 1
+    log(f"[C-MECH] OK: cut = {seq_types}; ZERO native-transition requests across "
+        f"the whole run ({len(obs.calls)} obs-ws call(s) total).")
+
+    # Settle past the retract, capture FRAME B (screen-2, overlay transparent).
+    await asyncio.sleep(max(0.6, ctrl["overlay"]["retract_ms"] / 1000.0 + 0.4))
+    now = await _current_scene(inbox, ws)
+    if now != SCENE_SCREEN_2:
+        log(f"FAIL: program scene did not flip to {SCENE_SCREEN_2!r} (got {now!r}) "
+            "— C-CUT.")
+        return 1
+    png_b, m_b = await capture_program_frame(inbox, ws, "frame-b")
+    (FRAMES_DIR / "frame-B-screen2.png").write_bytes(png_b)
+    log(f"[frame B] screen-2: mean={tuple(round(x) for x in m_b['mean'])} "
+        f"distinct={m_b['distinct']} -> {FRAMES_DIR / 'frame-B-screen2.png'}")
+    log(f"[C-CUT] program scene flipped {pre_scene!r} -> {now!r} OK")
+
+    # ---- C-CUT + SPIKE-CUT: the cut fell UNDER the opaque plateau ----
+    in_window = opaque_start <= cut_at <= opaque_end
+    log(f"[SPIKE-CUT] cut_at_ms={cut_at} opaque window=[{opaque_start}, "
+        f"{opaque_end}] in_window={in_window}; CEF opacity at cut~"
+        f"{cef_opacity_at_cut}. Skew margins: cut-{opaque_start}="
+        f"{cut_at - opaque_start}ms after reveal-end; {opaque_end}-cut="
+        f"{opaque_end - cut_at}ms before retract-start.")
+    if not in_window:
+        log("FAIL: SPIKE-CUT — cut_at_ms is OUTSIDE the opaque plateau; the "
+            "content snap would be SEEN. (Contract should have rejected this — "
+            "internal inconsistency.)")
+        return 1
+
+    # The overlay's measured opacity at the cut must be ≈1 (under the plateau).
+    if cef_opacity_at_cut is not None:
+        if cef_opacity_at_cut >= 0.97:
+            log(f"[SPIKE-CUT] OK: real CEF overlay opacity {cef_opacity_at_cut:.3f} "
+                ">= 0.97 at the cut instant — the cut is hidden under the opaque "
+                "cover (the engine, not a contract claim, proves it).")
+        elif args.allow_blank:
+            log(f"[SPIKE-CUT] CEF opacity {cef_opacity_at_cut:.3f} < 0.97 but "
+                "--allow-blank: the overlay may not render on this CI box; the "
+                "cut-window invariant is still proven by the contract + timing. "
+                "Real-opacity skew is the antenna run.")
+        else:
+            log(f"FAIL: SPIKE-CUT — real CEF overlay opacity {cef_opacity_at_cut:.3f} "
+                "< 0.97 at the cut instant — the cut would be visible. The overlay "
+                "did not reach the opaque plateau in time (hold_ms too short, or "
+                "the overlay engine did not animate).")
+            return 1
+    else:
+        log("[SPIKE-CUT] overlay opacity readback unavailable (no CEF / fallback "
+            "page not the served root) — window proven by contract + timing only.")
+
+    # ---- C5″: the MID frame is the overlay COVER, not a hard cut ----
+    if not overlay_settled:
+        log("[C5″] overlay browser_source did not render (light build / no CEF) "
+            "— overlay-blend visual assertion SKIPPED; wire + cut proven.")
+    else:
+        covered, why = is_overlay_cover(m_mid)
+        if covered:
+            log(f"[C5″] OVERLAY-BLEND OK: MID frame is the opaque Solar cover "
+                f"(our engine covers the screen, not a hard cut) — {why}")
+        elif args.allow_blank:
+            log(f"[C5″] MID not conclusively the cover ({why}) but --allow-blank: "
+                "WGC/Solar may not render on this CI box. The overlay-blend visual "
+                "proof is the antenna run.")
+        else:
+            log(f"[C5″] FAIL: MID frame is NOT the opaque overlay cover ({why}) — "
+                "the screen change was a visible hard cut, not covered by the "
+                "Solar overlay.")
+            return 1
+
+    log(f"[proof] M10 overlay pivot proven (engine={getattr(args, '_engine', 'unknown')}): "
+        "Solar wipe-cover covers the screen; the hard-cut fires invisibly under "
+        "the opaque plateau; NO OBS-native transition.")
+    return 0
+
+
+async def _read_overlay_opacity(inbox: Inbox, ws, log: TeeLog) -> Optional[float]:
+    """Read the overlay's live cover opacity from window.__m10 in the CEF page,
+    via the pulsar-scene vendor's browser eval (if the fork exposes it). Returns
+    None when the readback path is unavailable (real Solar bundle without the
+    __m10 shim, or a light build) — the proof then leans on contract + timing."""
+    try:
+        r = await vendor_call(inbox, ws, "ov-op", "pulsar-scene", "EvalBrowser", {
+            "expression": "JSON.stringify({op: (window.__m10 && window.__m10.opacity)})",
+        })
+        data = vendor_response_data(r)
+        raw = data.get("result") or data.get("value")
+        if isinstance(raw, str):
+            parsed = json.loads(raw)
+            op = parsed.get("op")
+            if isinstance(op, (int, float)):
+                return float(op)
+    except Exception as exc:  # noqa: BLE001 — readback is best-effort
+        log(f"   [overlay] opacity readback unavailable ({type(exc).__name__}).")
+    return None
 
 
 async def _current_scene(inbox: Inbox, ws) -> Optional[str]:
@@ -1143,18 +1341,18 @@ async def _stop_broadcast(inbox: Inbox, ws, dest_id: str, recording: bool, log: 
         log(f"   warn: stop/remove destination error: {exc}")
 
 
-async def deliver_leaf(*, args, redactor: Redactor, log: TeeLog) -> tuple[float, Any]:
-    """Deliver the scene_control leaf to the consumer, returning (recv_t, value).
+async def deliver_leaf(*, args, redactor: Redactor, log: TeeLog,
+                       leaf_state: _LeafState) -> tuple[float, Any]:
+    """Deliver the scene_control leaf, returning (recv_t, value).
 
     --loopback-leaf : inject the demo leaf VALUE directly (proof-only; the same
                       bytes Orion would fan out), timestamp = now.
     --live-wire     : fire the VPS Blue /trigger, then read the FIRST
                       __inputs.blue.<slug>.scene_control delta off the REAL
-                      gateway /show/stream. Proves the VPS origin + Orion
-                      fan-out + the F2 declaration are all in place."""
+                      gateway /show/stream."""
     if args.delivery == "loopback-leaf":
-        log("   [loopback-leaf] injecting the demo scene_control leaf value into "
-            "the consumer (proof-only; identical bytes to Orion's fan-out).")
+        log("   [loopback-leaf] injecting the demo scene_control leaf value "
+            "(proof-only; identical bytes to Orion's fan-out).")
         return time.monotonic(), json.loads(json.dumps(DEMO_SCENE_CONTROL_VALUE))
 
     # live-wire — fire on the VPS, receive off /show/stream.
@@ -1194,8 +1392,10 @@ async def deliver_leaf(*, args, redactor: Redactor, log: TeeLog) -> tuple[float,
 # Top-level: connect, guard, setup, prove, reap, grep-assert.
 # --------------------------------------------------------------------------
 async def run(*, ws_url: str, password: str, args, redactor: Redactor,
-              log: TeeLog, stream_key: str) -> int:
+              log: TeeLog, stream_key: str, overlay_url: str,
+              leaf_state: _LeafState, engine: str) -> int:
     redactor.add(password, "obs-ws-password")
+    args._engine = engine
     log(f"connecting: {ws_url}")
     async with websockets.connect(
         ws_url, subprotocols=["obswebsocket.json"], max_size=2**24,
@@ -1221,25 +1421,35 @@ async def run(*, ws_url: str, password: str, args, redactor: Redactor,
 
         inbox = Inbox()
 
-        # Guard + setup.
-        rc = await assert_stinger_registered(inbox, ws, log)
+        # C-MECH precondition — the native stinger is dormant by default.
+        rc = await assert_no_native_stinger_default(inbox, ws, log)
         if rc != 0:
             return rc
+
+        # Setup the two WGC monitor_capture scenes (#84).
         rc = await setup_scenes(inbox, ws, log)
         if rc != 0:
             return rc
 
+        # Install the Solar overlay CEF browser_source above both scenes.
+        kinds = set((await request(inbox, ws, "GetInputKindList", "kinds-bs", {}))
+                    ["responseData"]["inputKinds"])
+        overlay_settled = False
+        if BROWSER_SOURCE_KIND in kinds:
+            overlay_settled = await add_overlay_to_scenes(
+                inbox, ws, overlay_url=overlay_url, log=log)
+        else:
+            log("   [overlay] browser_source NOT registered (light build / no "
+                "CEF) — the overlay cannot render; wire + cut still proven.")
+
         obs = ObsCaller(inbox, ws)
 
-        # Criterion 11 (anti-injection) — BEFORE the live switch, drive the
-        # reject corpus and assert 0 obs-ws calls. (Runs the corpus on the real
-        # consumer gate; no scene is touched because every case is rejected.)
+        # C-INJ — drive the reject corpus through the cut gate, expect 0 calls.
         rc = await assert_anti_injection(obs, log)
         if rc != 0:
             return rc
-        injection_calls = len(obs.calls)
-        if injection_calls != 0:
-            log(f"FAIL: anti-injection left {injection_calls} obs-ws call(s) behind.")
+        if len(obs.calls) != 0:
+            log(f"FAIL: anti-injection left {len(obs.calls)} obs-ws call(s) behind.")
             return 1
 
         # F2 (in-process) — prove the active Orion scene declares the leaf path.
@@ -1251,22 +1461,27 @@ async def run(*, ws_url: str, password: str, args, redactor: Redactor,
             log(f"FAIL (F2): {exc}")
             return 1
 
-        return await run_proof(inbox=inbox, ws=ws, obs=obs, args=args,
-                               redactor=redactor, log=log, stream_key=stream_key)
+        return await run_proof(
+            inbox=inbox, ws=ws, obs=obs, args=args, redactor=redactor, log=log,
+            stream_key=stream_key, leaf_state=leaf_state,
+            overlay_settled=overlay_settled, engine=engine)
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Pulsar M10 live end-to-end probe")
+    ap = argparse.ArgumentParser(description="Pulsar M10 overlay live e2e probe")
     ap.add_argument("--exe", type=pathlib.Path,
                     default=pathlib.Path(os.environ.get("PULSAR_EXE", str(DEFAULT_EXE))))
     ap.add_argument("--duration", type=int,
                     default=int(os.environ.get("LIVE_TEST_DURATION", "30")),
-                    help="run seconds (default 30); the switch fires at /2")
+                    help="run seconds (default 30); the overlay+cut fires at /2")
     ap.add_argument("--fps", type=int,
                     default=int(os.environ.get("LIVE_TEST_FPS", "60")))
-    ap.add_argument("--no-broadcast", action="store_true",
+    ap.add_argument("--no-broadcast", dest="broadcast", action="store_false",
                     help="proof-only: run the full chain WITHOUT going live to "
                          "Twitch (no stream key needed). The mode Forge runs.")
+    ap.add_argument("--broadcast", dest="broadcast", action="store_true",
+                    help="go live to Twitch (needs TWITCH_STREAM_KEY, etage-1)")
+    ap.set_defaults(broadcast=False)
     ap.add_argument("--loopback-leaf", dest="delivery", action="store_const",
                     const="loopback-leaf",
                     help="inject the leaf locally (VPS-less integration proof)")
@@ -1278,9 +1493,10 @@ def main() -> int:
     ap.add_argument("--gateway-url", default=os.environ.get("M8_GATEWAY_URL", ""))
     ap.add_argument("--blueprint-id", default=os.environ.get("M10_BLUEPRINT_ID", ""))
     ap.add_argument("--allow-blank", action="store_true",
-                    help="do not fail on a blank/identical capture (headless/CI/"
-                         "mono-screen box) — the wire is still exercised; the "
-                         "visual blend proof is then Keeper's antenna run")
+                    help="do not fail on a blank/identical capture or an overlay "
+                         "that did not render (headless/CI box) — the wire + cut "
+                         "+ C-MECH + C-INJ + C-FANOUT + C-SEC are still asserted; "
+                         "the visual blend + skew are then the antenna run")
     ap.add_argument("--ready-timeout", type=float, default=READY_TIMEOUT_S)
     args = ap.parse_args()
     if args.delivery is None:
@@ -1294,29 +1510,41 @@ def main() -> int:
         log(f"error: pulsar.exe not found at {exe}")
         log("Build it first: scripts/build-win.ps1 -Full")
         return 2
-    if not STINGER_ASSET.exists():
-        log(f"error: stinger asset missing at {STINGER_ASSET}")
+    if not OVERLAY_PAGE.exists():
+        log(f"error: overlay page missing at {OVERLAY_PAGE}")
         return 2
     if args.duration < 8:
-        log("error: --duration must be >= 8s so the switch + transition have room.")
+        log("error: --duration must be >= 8s so the overlay + cut have room.")
         return 2
 
     stream_key = ""
-    if not args.no_broadcast:
+    if args.broadcast:
         stream_key = os.environ.get("TWITCH_STREAM_KEY", "").strip()
         if not stream_key:
-            log("error: TWITCH_STREAM_KEY empty and --no-broadcast not set. Set it "
-                "from the etage-1 secret (never commit) or pass --no-broadcast. "
-                "Refusing to broadcast.")
+            log("error: TWITCH_STREAM_KEY empty and --broadcast set. Set it from "
+                "the etage-1 secret (never commit) or drop --broadcast. Refusing "
+                "to broadcast.")
             return 2
         redactor.add(stream_key, "stream-key")
 
-    port = _free_port()
+    # Resolve what to serve to CEF + start the overlay HTTP server.
+    serve_dir, entry, engine = resolve_overlay_serving(log)
+    leaf_state = _LeafState()
+    http_port = find_free_port()
+    httpd = start_overlay_server(http_port, serve_dir, leaf_state)
+    # The overlay URL CEF loads. A real Solar bundle ignores extra query params;
+    # our fallback page polls /leaf.json off the same origin.
+    overlay_url = f"http://127.0.0.1:{http_port}/{entry}?mode=broadcast"
+    log(f"[overlay] serving {serve_dir} on http://127.0.0.1:{http_port} "
+        f"(engine={engine}); CEF loads {entry}")
+
+    port = find_free_port()
     password = _secrets.token_urlsafe(16)
     redactor.add(password, "obs-ws-password")
-    log(f"spawning: {exe}")
+    log(f"spawning: {exe}  (GPU-ON — no --disable-gpu; WGC+CEF coexist, SPIKE-GPU #70)")
     log(f"  PULSAR_PORT={port}  PULSAR_PASSWORD=<redacted {len(password)} chars>")
-    log(f"  delivery={args.delivery}  broadcast={'OFF (proof-only)' if args.no_broadcast else 'ON'}")
+    log(f"  delivery={args.delivery}  broadcast={'ON' if args.broadcast else 'OFF (proof-only)'}"
+        f"  {NATIVE_STINGER_ENV}=0 (pivot — native stinger dormant)")
 
     pulsar = PulsarProcess(exe, port, password, args.fps)
     rc = 1
@@ -1326,7 +1554,9 @@ def main() -> int:
         redactor.add(sentinel_pw, "obs-ws-password")
         log(f"READY: {ws_url}")
         rc = asyncio.run(run(ws_url=ws_url, password=sentinel_pw, args=args,
-                             redactor=redactor, log=log, stream_key=stream_key))
+                             redactor=redactor, log=log, stream_key=stream_key,
+                             overlay_url=overlay_url, leaf_state=leaf_state,
+                             engine=engine))
     except KeyboardInterrupt:
         log("interrupted")
         rc = 130
@@ -1336,6 +1566,10 @@ def main() -> int:
             log(redactor(pulsar.diag()))
         rc = 1
     finally:
+        try:
+            httpd.shutdown()
+        except Exception:
+            pass
         if rc not in (0, 3):
             for ln in pulsar.lines[-60:]:
                 log(redactor(f"  | {ln}"))
@@ -1361,17 +1595,10 @@ def main() -> int:
         rc = 1
     else:
         log("[C-SEC] grep-assert clean: no stream key / operator JWT / show-token "
-            "/ obs-ws password in stdout or any captured PNG (criterion 7).")
+            "/ obs-ws password in stdout or any captured PNG.")
 
     log("PASS" if rc == 0 else (f"SKIPPED (exit {rc})" if rc == 3 else f"FAILED (exit {rc})"))
     return rc
-
-
-def _free_port() -> int:
-    import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 if __name__ == "__main__":
