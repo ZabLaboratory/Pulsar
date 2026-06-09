@@ -47,8 +47,18 @@ available displays over obs-websocket and pins by position:
   2. If that property is absent (legacy GDI build) → fall back to the
      integer ``"monitor"`` key with index 0 / 1.
 
+Both capture sources are pinned to ``method=2`` (``METHOD_WGC``, Windows
+Graphics Capture) — the #78 pivot deblock. SPIKE-GPU
+(``probe-spike-gpu-coexist.py``, #72/#77) proved WGC renders a **non-black**
+plane in a non-interactive / headless agent context, where the DXGI duplicator
+returns ``887A0004`` and the frame goes all-black. The display is STILL pinned
+by the same ``monitor_id`` device-id string in WGC mode (the method only swaps
+the capture backend, not the display selection — see ``SETTING_METHOD`` below).
+
 ``GetInputSettings`` after creation confirms the two scenes carry
-**distinct** monitor targets (Resolution criterion 1).
+**distinct** monitor targets (Resolution criterion 1) and reports the stored
+capture method (a forced WGC silently downgrades to DXGI without
+``wgc_supported``).
 
 Mono-screen fallback (CI / dev box with one display): if fewer than 2
 displays are enumerated, both scenes are pinned to the SAME (only) display.
@@ -127,6 +137,16 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
+# Force UTF-8 on stdout/stderr so the harness's '→' / box-drawing diagnostics
+# don't crash on the Windows console default cp1252 ('charmap' codec can't
+# encode '→'). Same guard the sibling probe uses
+# (probe-spike-gpu-coexist.py:111-115).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    except Exception:
+        pass
+
 try:
     import websockets
 except ImportError:
@@ -184,6 +204,36 @@ MONITOR_CAPTURE_KIND = "monitor_capture"
 #  - GDI fallback (legacy):                 integer index under "monitor"
 SETTING_MONITOR_ID = "monitor_id"   # duplicator-monitor-capture.c:298,810
 SETTING_MONITOR_IDX = "monitor"     # monitor-capture.c:67,210
+
+# --------------------------------------------------------------------------
+# WGC capture method (the #78 pivot deblock) — force Windows Graphics Capture.
+# --------------------------------------------------------------------------
+# The duplicator source exposes an INTEGER "method" selector
+# (duplicator-monitor-capture.c:65-69 enum METHOD_AUTO=0 / METHOD_DXGI=1 /
+# METHOD_WGC=2). SPIKE-GPU (scripts/probe-spike-gpu-coexist.py, #72/#77)
+# PROVED that pinning method=2 (WGC) makes monitor_capture render a NON-BLACK
+# plane in a NON-INTERACTIVE / headless agent context — exactly where the DXGI
+# duplicator's DuplicateOutput1 returns 887A0004 (DXGI_ERROR_UNSUPPORTED) and
+# the frame goes all-black. WGC (the WinRT Windows.Graphics.Capture path) does
+# not need the interactive desktop session DXGI duplication requires, so it is
+# THE deblock that lets this harness (and the end-to-end #75 antenna run) drive
+# pulsar.exe from an agent without a logged-in desktop.
+#
+# The screen is STILL targeted by the same "monitor_id" device-id string that
+# U1's enumerate_monitors resolves: in WGC mode the source resolves the target
+# HMONITOR from that same "monitor_id" find_monitor uses for DXGI
+# (update_settings:298-306 → video_tick → winrt_capture_init_monitor) — there
+# is no separate WGC monitor key. So forcing method=2 changes ONLY the capture
+# backend, never the display selection. (See the METHOD_* note in
+# probe-spike-gpu-coexist.py:147-156.)
+#
+# Forced (not AUTO): METHOD_AUTO would let the fork pick the DXGI duplicator on
+# a D3D11 box (choose_method), reintroducing the headless black-frame. WGC is
+# only honoured if the fork reports wgc_supported (a forced WGC silently
+# downgrades to DXGI otherwise — choose_method:250-254); the on-air #75 run
+# reads the log's "method:" line to confirm which libobs actually applied.
+SETTING_METHOD = "method"           # duplicator-monitor-capture.c:65-69,378
+METHOD_WGC = 2                       # enum METHOD_WGC (Windows Graphics Capture)
 
 READY_TIMEOUT_S = 60.0
 SHUTDOWN_GRACE_S = 8.0
@@ -475,7 +525,15 @@ async def create_monitor_scene(
     log(f"   scene {scene_name!r} ready"
         f"{' (already existed)' if req_code(r) == RESOURCE_ALREADY_EXISTS else ''}")
 
-    settings = {setting_key: setting_value, "capture_cursor": True}
+    # Force WGC (method=2): non-black in headless/non-interactive context where
+    # the DXGI duplicator returns 887A0004 (SPIKE-GPU, #72/#77). `setting_key`
+    # (monitor_id / monitor) still pins the display in WGC mode — the method only
+    # swaps the capture backend (see SETTING_METHOD note above).
+    settings = {
+        setting_key: setting_value,
+        SETTING_METHOD: METHOD_WGC,
+        "capture_cursor": True,
+    }
     r = await request(inbox, ws, "CreateInput", f"ci-{scene_name}", {
         "sceneName": scene_name,
         "inputName": input_name,
@@ -502,7 +560,8 @@ async def create_monitor_scene(
                 f"CreateInput({input_name}, monitor_capture) failed: "
                 f"{r.get('requestStatus')}"
             )
-    log(f"   input {input_name!r} → {setting_key}={setting_value!r}")
+    log(f"   input {input_name!r} → {setting_key}={setting_value!r} "
+        f"{SETTING_METHOD}={METHOD_WGC} (WGC — headless non-black, SPIKE-GPU)")
 
     r = await request(inbox, ws, "GetInputSettings", f"gis-{scene_name}",
                       {"inputName": input_name})
@@ -582,6 +641,19 @@ async def run_obs_setup(url: str, password: str) -> int:
         target_1 = settings_1.get(setting_key)
         target_2 = settings_2.get(setting_key)
         print(f"[ASSERT] {setting_key}: screen-1={target_1!r}  screen-2={target_2!r}")
+        # Report the capture method actually stored on each source. A forced WGC
+        # silently downgrades to DXGI if the fork lacks wgc_supported; surfacing
+        # the read-back value lets the #75 antenna run spot a downgrade (which
+        # would reintroduce the headless black-frame).
+        method_1 = settings_1.get(SETTING_METHOD)
+        method_2 = settings_2.get(SETTING_METHOD)
+        print(f"[ASSERT] {SETTING_METHOD}: screen-1={method_1!r}  screen-2={method_2!r} "
+              f"(requested WGC={METHOD_WGC}; the log 'method:' line states which "
+              "libobs applied)")
+        if METHOD_WGC not in (method_1, method_2):
+            print("   NOTE: neither source read back method=2 — the fork may have "
+                  "downgraded WGC to DXGI (no wgc_supported) or omitted the key; "
+                  "headless capture may be black. Check the log 'method:' line.")
         if not mono:
             if target_1 == target_2:
                 print("FAIL: the two scenes pin the SAME monitor on a multi-display "
