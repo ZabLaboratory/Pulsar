@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Pulsar M10 — Solar wipe-cover overlay (CEF)</title>
+<!-- ─────────────────────────────────────────────────────────────────────────
+     M10 OVERLAY PAGE  (probe-m10-canvas-live.py, #79)
+
+     This page is the CEF browser_source the M10 live probe layers ABOVE the
+     two monitor_capture scenes. It hosts the Solar "wipe-cover" overlay
+     (Pulsar ADR 003 §A4.2 / Solar #77): a full-screen OPAQUE cover whose
+     opacity animates 0 → 1 (reveal) → opaque plateau (hold) → 1 → 0 (retract),
+     replayed every time the scene_control leaf changes.
+
+     SERVING STRATEGY (two-tier, both honest).
+       (1) REAL SOLAR BUNDLE. If the probe finds a built Solar host/overlay
+           bundle, it serves that bundle to CEF instead of this page — our real
+           engine (`@lumencast/runtime` KeyframePlayer + Solar `buildWipeCoverNode`)
+           animates the cover. That is the faithful #77 path.
+       (2) SELF-CONTAINED FALLBACK (this page). When the Solar bundle wiring
+           (#11) is not assembled, this page reproduces the SAME authored
+           wipe-cover opacity timeline in-DOM, keyed off the SAME scene_control
+           leaf, so the overlay-blend + cut-skew mechanism is provable end to
+           end on a box that has only Pulsar. It animates ONLY `opacity` (the
+           Solar GPU-only-animation constraint) and the cover is fully opaque
+           (#000) at the plateau so the hidden hard-cut is invisible.
+
+     LEAF DELIVERY. The probe injects the leaf VALUE (the `overlay` sub-object
+     of __inputs.blue.<slug>.scene_control) by polling `/leaf.json` off the
+     probe's local HTTP server — the SAME leaf the stand-in cut consumer reads,
+     co-specified at the same delivery instant (the leaf IS the synchronisation
+     contract). A value change replays the reveal/hold/retract sequence.
+
+     OPACITY READBACK (SPIKE-CUT). `window.__m10` exposes the live cover opacity
+     and the leaf-apply timestamp so the probe can measure the skew between the
+     real CEF opacity and the cut instant `cut_at_ms` — proving the cut lands
+     under the opaque plateau. No secrets, no network beyond the probe's
+     loopback poll, no audio.
+─────────────────────────────────────────────────────────────────────────── -->
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: transparent;
+  }
+  /* The full-screen opaque cover. Only opacity is animated (GPU-only). The
+     cover sits above the captured content; at opacity 1 it fully hides it. */
+  #cover {
+    position: fixed; inset: 0;
+    background: #000000;           /* opaque broadcast wipe fill */
+    opacity: 0;                    /* transparent at rest — content visible */
+    will-change: opacity;
+  }
+</style>
+</head>
+<body>
+<div id="cover" data-testid="wipe-cover"></div>
+<script>
+(function () {
+  "use strict";
+
+  // Mirror of Solar's buildWipeCoverNode keyframe timeline (src/overlay/
+  // wipe-cover.ts): a value change at the scene_control leaf replays
+  //   at 0                 opacity 0   (transparent — content visible)
+  //   at reveal/total      opacity 1   (fully opaque — cover up)
+  //   at (reveal+hold)/tot  opacity 1   (still opaque — the cut window)
+  //   at 1                 opacity 0   (transparent — content visible)
+  // with ease-in-out, duration_ms = reveal_ms + hold_ms + retract_ms.
+  var cover = document.getElementById("cover");
+
+  // window.__m10 — the probe reads this to measure the real CEF opacity at the
+  // cut instant (SPIKE-CUT) and to confirm the overlay engine drove the cover.
+  var state = {
+    engine: "pulsar-fallback-wipe-cover",   // overwritten if a real Solar
+                                             // bundle is ever inlined here
+    leafSeq: 0,            // increments on every applied leaf (replay counter)
+    appliedAtMs: null,     // performance.now() of the last leaf-apply
+    overlay: null,         // the last applied overlay timings
+    opacity: 0,            // live measured cover opacity
+    opacityAt: function (tMs) { return sampleOpacity(tMs); },
+  };
+  window.__m10 = state;
+
+  var current = null;  // { reveal_ms, hold_ms, retract_ms, total, t0 }
+
+  function easeInOut(x) {
+    // cubic ease-in-out, matching framer-motion's "ease-in-out" closely enough
+    // for an opacity plateau proof (the plateau itself is exact: opacity==1).
+    return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+  }
+
+  function plannedOpacity(o, elapsedMs) {
+    var total = o.reveal_ms + o.hold_ms + o.retract_ms;
+    if (elapsedMs <= 0) return 0;
+    if (elapsedMs >= total) return 0;
+    if (elapsedMs < o.reveal_ms) {
+      return easeInOut(elapsedMs / o.reveal_ms);            // 0 -> 1
+    }
+    if (elapsedMs < o.reveal_ms + o.hold_ms) {
+      return 1;                                             // opaque plateau
+    }
+    var r = (elapsedMs - o.reveal_ms - o.hold_ms) / o.retract_ms;
+    return easeInOut(1 - r);                                // 1 -> 0
+  }
+
+  function sampleOpacity(tMs) {
+    if (!current) return 0;
+    return plannedOpacity(current, tMs - current.t0);
+  }
+
+  function tick() {
+    if (current) {
+      var op = plannedOpacity(current, performance.now() - current.t0);
+      cover.style.opacity = String(op);
+      state.opacity = op;
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  // Apply a scene_control leaf VALUE's `overlay` sub-object — replays the
+  // animation (the M9 reactive path: a leaf value-change re-keys the player).
+  function applyLeaf(value) {
+    if (!value || typeof value !== "object") return;
+    var o = value.overlay;
+    if (!o || o.kind !== "wipe-cover") return;
+    if (![o.reveal_ms, o.hold_ms, o.retract_ms].every(function (n) {
+      return typeof n === "number" && n > 0 && Number.isInteger(n);
+    })) return;
+    current = {
+      reveal_ms: o.reveal_ms, hold_ms: o.hold_ms, retract_ms: o.retract_ms,
+      total: o.reveal_ms + o.hold_ms + o.retract_ms,
+      t0: performance.now(),
+    };
+    state.leafSeq += 1;
+    state.appliedAtMs = current.t0;
+    state.overlay = { kind: "wipe-cover", reveal_ms: o.reveal_ms,
+                      hold_ms: o.hold_ms, retract_ms: o.retract_ms };
+  }
+  // Let the probe push a leaf directly (used by the loopback/dry-run path).
+  window.__m10ApplyLeaf = applyLeaf;
+
+  // Poll the probe's loopback leaf endpoint. The probe writes the leaf value
+  // there at the synchronised delivery instant; we replay on any new sequence.
+  var lastSeen = -1;
+  function poll() {
+    fetch("/leaf.json?ts=" + Date.now(), { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && typeof j.seq === "number" && j.seq !== lastSeen && j.value) {
+          lastSeen = j.seq;
+          applyLeaf(j.value);
+        }
+      })
+      .catch(function () { /* endpoint not up yet — keep polling */ });
+  }
+  setInterval(poll, 50);
+  poll();
+})();
+</script>
+</body>
+</html>
