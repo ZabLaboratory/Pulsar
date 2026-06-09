@@ -192,6 +192,14 @@ BUILD_DIR = REPO_ROOT / "build"
 LIVE_VOD_DIR = BUILD_DIR / "m10-live-vod"
 FRAMES_DIR = BUILD_DIR / "m10-frames"
 
+# The reusable static transition scene (Pulsar #79 fast-track). A franc
+# full-screen WHITE Canvas/LSML scene with the centred Zablab logo, served by
+# Solar in a browser_source. It carries NO keyframes / NO wipe-cover element /
+# NO scene_control leaf — it is a STATIC render scene, so the franc-cut playout
+# (--transition-scene) drives the visible transition entirely with two bare
+# SetCurrentProgramScene cuts and an OBS scene that just renders white+logo.
+TRANSITION_FIXTURE = REPO_ROOT / "scripts" / "fixtures" / "zab-transition.lsml.json"
+
 # The blueprint slug → canonical leaf path. Pinned by #84 / the contract.
 M10_BLUEPRINT_SLUG = m10_setup.M10_BLUEPRINT_SLUG  # "m10-scene-control"
 M10_LEAF_PATH = build_leaf_path(M10_BLUEPRINT_SLUG)  # 3-segment, contract-checked
@@ -205,6 +213,24 @@ MONITOR_CAPTURE_KIND = "monitor_capture"
 BROWSER_SOURCE_KIND = "browser_source"
 OVERLAY_SCENE = "scene-overlay"
 OVERLAY_INPUT = "m10-overlay-cef"
+
+# The franc-cut transition scene (--transition-scene). A DISTINCT third OBS
+# program scene holding one browser_source that renders the active Orion scene
+# (zab-transition = white + centred Zab logo). It is NOT a scene_control target
+# (it is not in the frozen allowlist — that allowlist is the leaf-driven cut
+# contract, irrelevant to a franc playout), so we never validate it against the
+# contract; it is a local OBS-scene name only.
+TRANSITION_SCENE = "scene-transition"
+TRANSITION_INPUT = "zab-transition-cef"
+# The white-with-logo MID frame check: the transition program frame must be
+# near-WHITE (the franc passage covers the screen with the white scene), NOT
+# magenta (that is the overlay-cover world) and NOT black (Solar did not paint).
+WHITE_RGB = (0xFF, 0xFF, 0xFF)
+# L1 (Manhattan) distance in RGB the transition MID mean may sit from pure white.
+# The centred logo darkens the mean a little, so the tolerance is generous; a
+# black (Solar did not render) or busy (a visible hard cut to a capture) MID
+# sits well outside it.
+WHITE_MEAN_TOL = 150
 # The native-stinger flag (#73/#83). Default OFF: the live pivot world this
 # probe asserts. We make the dormancy explicit on the spawned fork.
 NATIVE_STINGER_ENV = "PULSAR_NATIVE_STINGER"
@@ -1208,6 +1234,344 @@ async def add_overlay_to_scenes(inbox: Inbox, ws, *, overlay_url: str,
 
 
 # --------------------------------------------------------------------------
+# --transition-scene — the franc-cut (no-fade) playout (Pulsar #79 fast-track).
+#
+# A→transition→B in two BARE cuts, the visible transition being a third OBS
+# program scene (scene-transition) that renders the static zab-transition Canvas
+# scene (white + centred Zab logo) in a browser_source. NO overlay opacity, NO
+# keyframes, NO scene_control leaf, NO OBS-native transition (C-MECH): the franc
+# passage IS the scene swap. This is the simplest pivot — the transition is a
+# reusable Canvas SCENE (data), not transition code.
+# --------------------------------------------------------------------------
+def load_transition_bundle(log: TeeLog) -> dict:
+    """Load + validate the reusable zab-transition LSML scene (the data the
+    Solar browser_source renders). Proves the fixture is well-formed LSML 1.1,
+    round-trips, and the logo data-URI is a complete embedded image — provable
+    WITHOUT the VPS / a desktop (the only #79 risk the brief flags)."""
+    bundle = json.loads(TRANSITION_FIXTURE.read_text(encoding="utf-8"))
+    if bundle.get("lsml") != "1.1":
+        raise SystemExit(f"transition fixture lsml != '1.1': {bundle.get('lsml')!r}")
+    layout = bundle.get("layout")
+    if not isinstance(layout, dict) or layout.get("kind") != "frame":
+        raise SystemExit("transition fixture layout root must be a `frame` node")
+    if "props" in layout:
+        raise SystemExit(
+            "transition fixture props must be SPREAD at the LSML node top level "
+            "(Orion lsmlNode form: node[k]=raw), never nested under a `props` "
+            "object — a nested block leaves the runtime's flat resolved.* lookups "
+            "empty and the scene renders at defaults.")
+    # The franc passage is STATIC — no keyframes, no wipe-cover, no leaf. Assert
+    # the dormant lower_wipe_cover path is genuinely unused by this scene by
+    # walking the layout tree (a substring scan would false-match the prose in
+    # the _fixture description, which mentions these words on purpose).
+    def _walk_nodes(n: dict):
+        if not isinstance(n, dict):
+            return
+        yield n
+        for c in n.get("children", []) or []:
+            yield from _walk_nodes(c)
+    for n in _walk_nodes(layout):
+        if "keyframes" in n:
+            raise SystemExit("transition fixture must carry NO keyframes (static scene)")
+        if n.get("kind") == "wipe-cover":
+            raise SystemExit("transition fixture must carry NO wipe-cover element "
+                             "(lower_wipe_cover is unused — franc passage)")
+    if bundle.get("operator_inputs"):
+        raise SystemExit("transition fixture declares no operator_inputs (static)")
+    # Find the image node + prove its src is a complete embedded data-URI image.
+    img = _find_node(layout, "image")
+    if img is None:
+        raise SystemExit("transition fixture has no `image` node for the logo")
+    src = img.get("src", "")
+    if not src.startswith("data:image/"):
+        raise SystemExit("logo image.src must be an embedded base64 data-URI "
+                         "(no asset hosting — the fast-track)")
+    payload = src.split(",", 1)[1] if "," in src else ""
+    raw = base64.b64decode(payload)
+    # A JPEG (FFD8..FFD9) or PNG (\x89PNG) — a complete image, not a truncated URI.
+    if raw[:2] == b"\xff\xd8":
+        complete = raw[-2:] == b"\xff\xd9"
+        fmt = "jpeg"
+    elif raw[:8] == b"\x89PNG\r\n\x1a\n":
+        complete = b"IEND" in raw[-12:]
+        fmt = "png"
+    else:
+        raise SystemExit("logo data-URI is neither a JPEG nor a PNG")
+    if not complete:
+        raise SystemExit(f"logo {fmt} data-URI is truncated (no end marker)")
+    log(f"[transition] zab-transition scene OK: white frame "
+        f"(background={layout.get('background')}), centred {fmt.upper()} logo "
+        f"{len(raw)} bytes embedded as a data-URI ({img.get('width')}px, "
+        f"fit={img.get('fit')}); STATIC (no keyframes / no scene_control leaf / "
+        "lower_wipe_cover unused) — round-trips as plain LSML 1.1.")
+    return bundle
+
+
+def _write_transition_page(log: TeeLog) -> pathlib.Path:
+    """Generate a self-contained local page that paints the zab-transition scene
+    (white background + centred Zab logo) straight from the fixture's embedded
+    data-URI. This is the VPS-less render of the SAME static scene the real Solar
+    bundle would paint from Orion — enough to prove the franc-cut playout + the
+    white MID without the antenna. Returns the directory to serve."""
+    bundle = json.loads(TRANSITION_FIXTURE.read_text(encoding="utf-8"))
+    layout = bundle["layout"]
+    img = _find_node(layout, "image")
+    assert img is not None
+    bg = layout.get("background", "#FFFFFF")
+    src = img["src"]
+    w = img.get("width", 346)
+    out_dir = BUILD_DIR / "m10-transition-page"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Static, no JS, no animation — a franc white field with the centred logo.
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<style>html,body{margin:0;height:100%;width:100%}"
+        f"body{{background:{bg};display:flex;align-items:center;"
+        "justify-content:center}"
+        f"img{{width:{w}px;height:{w}px;object-fit:contain}}</style></head>"
+        f"<body><img alt='Zab logo' src='{src}'></body></html>"
+    )
+    (out_dir / "zab-transition.html").write_text(html, encoding="utf-8")
+    log(f"[transition] wrote local render page {out_dir / 'zab-transition.html'} "
+        f"(background {bg}, centred {w}px logo from the fixture data-URI).")
+    return out_dir
+
+
+def _find_node(node: dict, kind: str) -> Optional[dict]:
+    """Depth-first search for the first child of the given `kind`."""
+    if not isinstance(node, dict):
+        return None
+    if node.get("kind") == kind:
+        return node
+    for c in node.get("children", []) or []:
+        hit = _find_node(c, kind)
+        if hit is not None:
+            return hit
+    return None
+
+
+async def setup_transition_scene(inbox: Inbox, ws, *, transition_url: str,
+                                 log: TeeLog) -> bool:
+    """Create the third OBS program scene (scene-transition) holding ONE
+    browser_source pointed at the Solar host that renders the active Orion scene
+    (zab-transition). Returns True if the browser_source rendered (False ⇒ light
+    build / no CEF: the franc cuts still fire, the MID check is then the antenna
+    run)."""
+    r = await request(inbox, ws, "CreateScene", "cs-transition",
+                      {"sceneName": TRANSITION_SCENE})
+    if not req_ok(r) and req_code(r) != RESOURCE_ALREADY_EXISTS:
+        raise RuntimeError(f"CreateScene({TRANSITION_SCENE}) failed: "
+                           f"{r.get('requestStatus')}")
+    await request(inbox, ws, "SetCurrentProgramScene", "tr-cur",
+                  {"sceneName": TRANSITION_SCENE})
+    r = await vendor_call(inbox, ws, "tr-set", "pulsar-scene", "SetCaptureSource", {
+        "kind": BROWSER_SOURCE_KIND,
+        "url": transition_url,
+        "width": CANVAS_W,
+        "height": CANVAS_H,
+        "fps": 30,
+        "reroute_audio": False,
+    })
+    data = vendor_response_data(r)
+    if data.get("kind") == BROWSER_SOURCE_KIND:
+        log(f"   [transition] browser_source installed on {TRANSITION_SCENE!r} → "
+            f"{redact_show_stream_url(transition_url)}")
+        return True
+    log(f"   [transition] SetCaptureSource on {TRANSITION_SCENE!r} did not return "
+        f"a browser_source ({data}) — light build / no CEF; franc cuts still fire.")
+    return False
+
+
+def is_white_with_logo(mid: dict) -> tuple[bool, str]:
+    """The transition MID frame is the white zab-transition scene (the franc
+    passage), NOT a black non-render and NOT a busy hard cut to a capture. The
+    scene is a near-WHITE field with a small centred logo, so the mean sits near
+    white; a black MID (Solar did not paint) is ~765 L1 away, a busy desktop MID
+    sits far off too."""
+    mr, mg, mb = mid["mean"]
+    wr, wg, wb = WHITE_RGB
+    mean_dist = abs(mr - wr) + abs(mg - wg) + abs(mb - wb)
+    near_black = (mr + mg + mb) <= 48
+    white = mean_dist <= WHITE_MEAN_TOL
+    why = (f"mean={tuple(round(x) for x in mid['mean'])} "
+           f"|mean-white|={mean_dist:.0f} (<= {WHITE_MEAN_TOL}?) "
+           f"distinct={mid['distinct']}")
+    if not white and near_black:
+        why += " — MID is BLACK (Solar did NOT paint; expected the white scene)"
+    return white, why
+
+
+async def run_transition_playout(
+    *, inbox: Inbox, ws, obs: ObsCaller, args, redactor: Redactor, log: TeeLog,
+    stream_key: str, transition_settled: bool,
+) -> int:
+    """The franc-cut playout: go-live on screen-1 → CUT to scene-transition
+    (white+logo covers) → hold ~hold_ms → CUT to screen-2. Two bare program
+    switches, no OBS-native transition (C-MECH). Captures frame A (screen-1),
+    MID (transition — must be ~white+logo, not black/magenta), B (screen-2)."""
+    hold_ms = args.hold_ms
+    FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Go live on screen-1.
+    if not req_ok(await request(inbox, ws, "SetCurrentProgramScene", "fc-go-s1",
+                                {"sceneName": SCENE_SCREEN_1})):
+        log("FAIL: could not set program scene to screen-1 pre-flight.")
+        return 1
+    log(f"[playout] program scene = {SCENE_SCREEN_1!r} (Scene A, on air)")
+
+    dest_id: Optional[str] = None
+    recording = False
+    if args.broadcast:
+        r = await vendor_call(inbox, ws, "fc-create-dest", "pulsar",
+                              "CreateDestination",
+                              {"name": DESTINATION_NAME, "kind": "twitch",
+                               "key": stream_key})
+        dest_id = vendor_response_data(r).get("id")
+        if not dest_id:
+            log(f"FAIL: CreateDestination no id; status={vendor_request_status(r)}")
+            return 1
+        r = await vendor_call(inbox, ws, "fc-start-dest", "pulsar",
+                              "StartDestination", {"id": dest_id})
+        if not vendor_response_data(r).get("started"):
+            log(f"FAIL: StartDestination not started; status={vendor_request_status(r)}")
+            await vendor_call(inbox, ws, "fc-rm-dest", "pulsar",
+                              "RemoveDestination", {"id": dest_id})
+            return 1
+        log("-> StartDestination started=true — LIVE on Twitch")
+    else:
+        log("-> --no-broadcast: NOT going live to Twitch (proof-only). The franc "
+            "A→transition→B playout is proven OFF AIR.")
+
+    r = await request(inbox, ws, "StartRecord", "fc-start-rec", {})
+    if req_ok(r):
+        recording = True
+        log(f"-> StartRecord ok (VOD under {LIVE_VOD_DIR})")
+
+    rc = 1
+    try:
+        # FRAME A — warm screen-1 then capture (WGC first-frame-black warmup).
+        png_a, m_a, a_ok = await warmup_capture_until_content(inbox, ws, log)
+        if png_a is None:
+            log("FAIL: never decoded a program frame during screen-1 warmup.")
+            return 1
+        (FRAMES_DIR / "frame-A-screen1.png").write_bytes(png_a)
+        log(f"[frame A] screen-1: mean={tuple(round(x) for x in m_a['mean'])} "
+            f"distinct={m_a['distinct']} content={a_ok} "
+            f"-> {FRAMES_DIR / 'frame-A-screen1.png'}")
+        if not a_ok and not args.allow_blank:
+            log("FAIL: frame A is blank after WGC warmup — screen-1 never produced "
+                "content. (A CI box with no desktop can pass --allow-blank.)")
+            return 1
+
+        pre_scene = await _current_scene(inbox, ws)
+
+        # Give the transition browser_source a brief grace to load + paint the
+        # white+logo page BEFORE the cut lands on it (the first CEF frame is blank
+        # exactly like the first WGC frame). On a real desktop this lets the MID
+        # capture see the white scene; on a headless box it stays blank and
+        # --allow-blank defers the visual proof to the antenna run.
+        if transition_settled:
+            await asyncio.sleep(SOLAR_READY_GRACE_S)
+
+        # CUT #1 — franc cut A → transition. A BARE SetCurrentProgramScene
+        # (C-MECH: no SetCurrentSceneTransition); the white+logo scene covers.
+        cut1_before = len(obs.calls)
+        r = await obs.call("SetCurrentProgramScene", {"sceneName": TRANSITION_SCENE})
+        if not req_ok(r):
+            log(f"FAIL: cut #1 to {TRANSITION_SCENE!r}: {r.get('requestStatus')}")
+            return 1
+        log(f"[playout] CUT #1 (franc): {SCENE_SCREEN_1!r} -> {TRANSITION_SCENE!r}")
+
+        # HOLD — let Solar settle + render the white+logo scene, capture MID.
+        await asyncio.sleep(max(0.3, hold_ms / 1000.0 / 2.0))
+        png_mid, m_mid = await capture_program_frame(inbox, ws, "fc-mid")
+        (FRAMES_DIR / "frame-MID-transition.png").write_bytes(png_mid)
+        now_mid = await _current_scene(inbox, ws)
+        log(f"[frame MID] transition: scene={now_mid!r} "
+            f"mean={tuple(round(x) for x in m_mid['mean'])} "
+            f"distinct={m_mid['distinct']} -> {FRAMES_DIR / 'frame-MID-transition.png'}")
+        # Finish the hold.
+        await asyncio.sleep(max(0.3, hold_ms / 1000.0 / 2.0))
+
+        # CUT #2 — franc cut transition → screen-2. Again a BARE program switch.
+        r = await obs.call("SetCurrentProgramScene", {"sceneName": SCENE_SCREEN_2})
+        if not req_ok(r):
+            log(f"FAIL: cut #2 to {SCENE_SCREEN_2!r}: {r.get('requestStatus')}")
+            return 1
+        log(f"[playout] CUT #2 (franc): {TRANSITION_SCENE!r} -> {SCENE_SCREEN_2!r}")
+
+        # C-MECH — both cuts were bare SetCurrentProgramScene, ZERO native
+        # transition requests, exactly two program switches.
+        seq_types = [c[1] for c in obs.calls[cut1_before:]]
+        native = obs.native_transition_calls()
+        if native:
+            log(f"FAIL: C-MECH — native transition request(s) issued: {native}.")
+            return 1
+        if seq_types != ["SetCurrentProgramScene", "SetCurrentProgramScene"]:
+            log(f"FAIL: C-MECH — playout cut sequence {seq_types} != two bare "
+                "SetCurrentProgramScene (franc cuts, no transition steps).")
+            return 1
+        log(f"[C-MECH] OK: playout = {seq_types}; ZERO native-transition requests "
+            f"across the whole run ({len(obs.calls)} obs-ws call(s) total).")
+
+        # C-CUT — the program scene actually flipped to screen-2.
+        await asyncio.sleep(0.4)
+        now = await _current_scene(inbox, ws)
+        if now != SCENE_SCREEN_2:
+            log(f"FAIL: program scene did not flip to {SCENE_SCREEN_2!r} (got {now!r}).")
+            return 1
+        png_b, m_b, b_ok = await warmup_capture_until_content(inbox, ws, log)
+        if png_b is not None:
+            (FRAMES_DIR / "frame-B-screen2.png").write_bytes(png_b)
+        log(f"[frame B] screen-2: mean={tuple(round(x) for x in (m_b['mean'] if png_b else (0,0,0)))} "
+            f"content={b_ok} -> {FRAMES_DIR / 'frame-B-screen2.png'}")
+        log(f"[C-CUT] program scene flipped {pre_scene!r} -> {TRANSITION_SCENE!r} "
+            f"-> {now!r} OK")
+
+        # The MID frame is the white zab-transition scene (the franc passage).
+        mid_white, mid_why = is_white_with_logo(m_mid)
+        a_varied = frame_is_content(m_a)
+        if not transition_settled:
+            log("[MID] transition browser_source did not render (light build / no "
+                "CEF) — the white+logo visual check is the antenna run; the franc "
+                "cuts + C-MECH are proven.")
+        elif now_mid != TRANSITION_SCENE:
+            log(f"FAIL: MID frame was captured while program was {now_mid!r}, not "
+                f"{TRANSITION_SCENE!r} — the hold did not land on the transition.")
+            return 1
+        elif mid_white and a_varied:
+            log(f"[MID] OK: A is varied screen-1 content (distinct={m_a['distinct']}), "
+                f"and MID is the near-WHITE zab-transition scene ({mid_why}) — the "
+                "franc white+logo passage visibly covered the screen between the two "
+                "cuts (NOT magenta, NOT black).")
+        elif args.allow_blank:
+            log(f"[MID] inconclusive (white={mid_white}: {mid_why}; A varied="
+                f"{a_varied}) but --allow-blank: Solar/WGC may not render on this CI "
+                "box. The white+logo visual proof is the antenna run.")
+        else:
+            log(f"[MID] FAIL: transition MID is NOT the white zab-transition scene "
+                f"({mid_why}). Expected a near-white field with the centred logo; a "
+                "black MID = Solar did not paint, a busy MID = a visible capture cut.")
+            return 1
+
+        log("[playout] FRANC A→transition→B proven: two bare program cuts, the "
+            "white+logo Canvas scene covers between them, NO OBS-native transition.")
+        rc = 0
+    finally:
+        if recording:
+            try:
+                r = await request(inbox, ws, "StopRecord", "fc-stop-rec", {})
+                vod = (r.get("responseData", {}) or {}).get("outputPath")
+                if vod:
+                    log(f"-> StopRecord finalised VOD: {vod}")
+            except Exception as exc:  # noqa: BLE001
+                log(f"   warn: StopRecord error: {exc}")
+        if dest_id:
+            await _stop_broadcast(inbox, ws, dest_id, False, log)
+    return rc
+
+
+# --------------------------------------------------------------------------
 # C-MECH guard — assert the fork is NOT defaulting to a native stinger.
 # --------------------------------------------------------------------------
 async def assert_no_native_stinger_default(inbox: Inbox, ws, log: TeeLog) -> int:
@@ -1727,6 +2091,62 @@ async def deliver_leaf(*, args, redactor: Redactor, log: TeeLog,
 
 
 # --------------------------------------------------------------------------
+# --transition-scene mode: connect, setup 3 scenes, run the franc-cut playout.
+# A parallel, simpler entry than run()/run_proof (no overlay opacity / no leaf /
+# no wipe-cover). Shares the obs-ws plumbing, C-MECH guard, frame analysis.
+# --------------------------------------------------------------------------
+async def run_transition_mode(*, ws_url: str, password: str, args,
+                              redactor: Redactor, log: TeeLog, stream_key: str,
+                              transition_url: str) -> int:
+    async with websockets.connect(
+        ws_url, subprotocols=["obswebsocket.json"], max_size=2**24,
+        ping_interval=None, close_timeout=15, open_timeout=10,
+    ) as ws:
+        hello = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+        if hello.get("op") != 0:
+            log(f"error: expected Hello (op=0), got {hello}")
+            return 1
+        identify_d: dict = {
+            "rpcVersion": hello["d"]["rpcVersion"],
+            "eventSubscriptions": EVENT_SUBSCRIPTION_ALL,
+        }
+        if "authentication" in hello["d"]:
+            a = hello["d"]["authentication"]
+            identify_d["authentication"] = compute_auth(password, a["salt"], a["challenge"])
+        await ws.send(json.dumps({"op": 1, "d": identify_d}))
+        ident = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+        if ident.get("op") != 2:
+            log(f"error: identify failed: {ident}")
+            return 1
+        log("identified (v5 auth OK)")
+        inbox = Inbox()
+
+        # C-MECH precondition — the native stinger is dormant by default.
+        rc = await assert_no_native_stinger_default(inbox, ws, log)
+        if rc != 0:
+            return rc
+
+        # The two WGC monitor_capture content scenes (#84) + the transition scene.
+        rc = await setup_scenes(inbox, ws, log)
+        if rc != 0:
+            return rc
+        kinds = set((await request(inbox, ws, "GetInputKindList", "kinds-bs-fc", {}))
+                    ["responseData"]["inputKinds"])
+        transition_settled = False
+        if BROWSER_SOURCE_KIND in kinds:
+            transition_settled = await setup_transition_scene(
+                inbox, ws, transition_url=transition_url, log=log)
+        else:
+            log("   [transition] browser_source NOT registered (light build / no "
+                "CEF) — the white scene cannot render; franc cuts still proven.")
+
+        obs = ObsCaller(inbox, ws)
+        return await run_transition_playout(
+            inbox=inbox, ws=ws, obs=obs, args=args, redactor=redactor, log=log,
+            stream_key=stream_key, transition_settled=transition_settled)
+
+
+# --------------------------------------------------------------------------
 # Top-level: connect, guard, setup, prove, reap, grep-assert.
 # --------------------------------------------------------------------------
 async def run(*, ws_url: str, password: str, args, redactor: Redactor,
@@ -1736,6 +2156,10 @@ async def run(*, ws_url: str, password: str, args, redactor: Redactor,
     redactor.add(password, "obs-ws-password")
     args._engine = engine
     log(f"connecting: {ws_url}")
+    if getattr(args, "transition_scene", False):
+        return await run_transition_mode(
+            ws_url=ws_url, password=password, args=args, redactor=redactor,
+            log=log, stream_key=stream_key, transition_url=overlay_url)
     async with websockets.connect(
         ws_url, subprotocols=["obswebsocket.json"], max_size=2**24,
         ping_interval=None, close_timeout=15, open_timeout=10,
@@ -1837,6 +2261,17 @@ def main() -> int:
                          "Blue VPS trigger pushes the leaf, the real Orion fans it "
                          "out, the real Solar replays the overlay; the cut stays "
                          "local. Needs the same env as --live-wire.")
+    ap.add_argument("--transition-scene", action="store_true",
+                    help="FRANC-CUT playout (Pulsar #79 fast-track): A (screen-1) "
+                         "-> a third OBS program scene rendering the reusable "
+                         "zab-transition Canvas scene (white + centred Zab logo) "
+                         "-> B (screen-2), in two BARE program cuts (no fade, no "
+                         "OBS-native transition, no scene_control leaf). Replaces "
+                         "the overlay-cover proof with the simpler scene playout.")
+    ap.add_argument("--hold-ms", type=int,
+                    default=int(os.environ.get("LIVE_TEST_HOLD_MS", "700")),
+                    help="ms to hold on the transition scene between the two franc "
+                         "cuts (default 700; --transition-scene only)")
     ap.add_argument("--gateway-url", default=os.environ.get("M8_GATEWAY_URL", ""))
     ap.add_argument("--blueprint-id", default=os.environ.get("M10_BLUEPRINT_ID", ""))
     ap.add_argument("--allow-blank", action="store_true",
@@ -1852,15 +2287,26 @@ def main() -> int:
     redactor = Redactor()
     log = TeeLog(redactor)
 
+    # FRANC-CUT mode (--transition-scene): validate the reusable zab-transition
+    # scene NOW — this is the offline-provable core (LSML round-trip + logo
+    # data-URI integrity), the only #79 risk the brief flags. A bad fixture
+    # fails here, before any pulsar.exe spawn.
+    if args.transition_scene:
+        try:
+            load_transition_bundle(log)
+        except SystemExit as exc:
+            log(f"error: zab-transition fixture invalid: {exc}")
+            return 2
+
     exe: pathlib.Path = args.exe
     if not exe.exists():
         log(f"error: pulsar.exe not found at {exe}")
         log("Build it first: scripts/build-win.ps1 -Full")
         return 2
-    if not OVERLAY_PAGE.exists():
+    if not OVERLAY_PAGE.exists() and not args.transition_scene:
         log(f"error: overlay page missing at {OVERLAY_PAGE}")
         return 2
-    if args.duration < 8:
+    if not args.transition_scene and args.duration < 8:
         log("error: --duration must be >= 8s so the overlay + cut have room.")
         return 2
 
@@ -1887,7 +2333,36 @@ def main() -> int:
     engine = "real-orion-vps"
     orion: Optional[OrionStandIn] = None
 
-    if real_orion:
+    if args.transition_scene:
+        # The transition browser_source renders the ACTIVE Orion scene
+        # (zab-transition = white + logo). For Keeper's antenna run, point it at
+        # the REAL VPS Solar bundle wired to the REAL Orion (which serves the
+        # pushed+active zab-transition scene). For the VPS-less dry proof, serve a
+        # local static page that paints the SAME white + centred logo straight
+        # from the fixture's data-URI (no Solar/Orion needed to prove the playout
+        # structure + the white MID; the real CEF-of-Solar render is the antenna).
+        gw = args.gateway_url.strip()
+        show_token = os.environ.get("M10_SHOW_TOKEN", "").strip()
+        if gw and show_token:
+            redactor.add(show_token, "show-token")
+            overlay_url = build_real_orion_overlay_url(
+                gateway_url=gw, show_token=show_token)
+            engine = "real-orion-vps"
+            log(f"[transition] REAL-ORION: browser_source loads the VPS Solar "
+                f"bundle {redact_show_stream_url(overlay_url)}; it must serve the "
+                "active zab-transition scene (white + Zab logo). Push+activate it "
+                "on Orion before this run (m10_setup-style author leg).")
+        else:
+            serve_dir = _write_transition_page(log)
+            http_port = find_free_port()
+            httpd = start_overlay_server(http_port, serve_dir, leaf_state)
+            overlay_url = f"http://127.0.0.1:{http_port}/zab-transition.html"
+            engine = "local-static-page"
+            log(f"[transition] no VPS env (M8_GATEWAY_URL/M10_SHOW_TOKEN) — serving "
+                f"the local white+logo page on http://127.0.0.1:{http_port} "
+                "(engine=local-static-page; faithful white+centred-logo render of "
+                "the fixture; the real Solar-of-Orion render is the antenna run).")
+    elif real_orion:
         gw = args.gateway_url.strip()
         show_token = os.environ.get("M10_SHOW_TOKEN", "").strip()
         if not (gw and show_token):

@@ -200,11 +200,12 @@ jobs:
 
       - name: Run offline M10 harness + probe tests
         # Provable without pulsar.exe and without the VPS: the F2 Orion
-        # declaration fixture (scene_control leaf path + valid default) and
-        # the --real-orion true-wire URL the CEF browser_source loads. The
-        # on-air legs are the CTest integration suite (needs the build) +
-        # Keeper's antenna run (needs the VPS).
-        run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py -v
+        # declaration fixture (scene_control leaf path + valid default), the
+        # --real-orion true-wire URL the CEF browser_source loads, and the
+        # reusable zab-transition Canvas scene (LSML round-trip + embedded logo
+        # data-URI + franc-cut playout helpers, #79). The on-air legs are the
+        # CTest integration suite (needs the build) + Keeper's antenna run.
+        run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py scripts/test_zab_transition.py -v
 
   # ── Stage 2 : build pulsar.exe (THE ONE BUILD) ────────────────────
   # Every downstream Windows job consumes the `pulsar-rundir` artefact
