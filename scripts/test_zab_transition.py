@@ -136,6 +136,21 @@ def test_logo_carries_an_animate_mount_directive():
         animate.get("transform") or {}).get("scale") is not None
 
 
+def test_logo_animate_authors_a_from_initial_state():
+    """The directive carries an authored ``from`` initial state (LSML 1.1 /
+    @lumencast 0.3.0) strictly below the settled targets — the SAME `from` the
+    Solar runtime hands framer-motion as `initial`, so the scene mount-plays
+    NATIVELY in the real bundle (no remount-CSS trick needed for visibility)."""
+    img = probe._find_node(_bundle()["layout"], "image")
+    frm = img["animate"].get("from")
+    assert isinstance(frm, dict), "animate must author a `from` initial state"
+    assert frm.get("opacity", 1) < img["animate"].get("opacity", 1), \
+        "from.opacity strictly below the settled opacity (the fade-in)"
+    scale_from = (frm.get("transform") or {}).get("scale", 1)
+    scale_to = (img["animate"].get("transform") or {}).get("scale", 1)
+    assert scale_from < scale_to, "from scale strictly below settled (the scale-up)"
+
+
 def test_animate_mount_params_derives_a_visible_ramp():
     """``animate_mount_params`` turns the directive into the page's CSS mount
     keyframes: opacity 0→settled, scale <1→settled, the directive's duration+easing.
@@ -147,6 +162,19 @@ def test_animate_mount_params_derives_a_visible_ramp():
     assert mp["scale_from"] < mp["scale_to"], "the logo SCALES up"
     assert mp["easing"] in {"linear", "ease-in", "ease-out", "ease-in-out",
                             "cubic-bezier(0.34,1.56,0.64,1)"}
+
+
+def test_animate_mount_params_falls_back_without_from():
+    """A directive WITHOUT ``from`` keeps the prior hidden-start defaults
+    (opacity 0 → settled, scale 0.85 → settled) so older fixtures keep their
+    visible ramp (no regression on the pre-`from` authoring)."""
+    mp = probe.animate_mount_params({
+        "kind": "image", "src": "data:image/png,x",
+        "animate": {"transition": {"duration": 400, "easing": "ease-out"},
+                    "opacity": 1, "transform": {"scale": 1}},
+    })
+    assert mp["opacity_from"] == 0.0 and mp["opacity_to"] == 1.0
+    assert mp["scale_from"] == 0.85 and mp["scale_to"] == 1.0
 
 
 def test_animate_mount_params_noop_without_directive():

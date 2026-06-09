@@ -1453,9 +1453,11 @@ def animate_mount_params(img: dict) -> dict:
     fixture authors. Returns {duration_ms, easing(css), opacity_from, scale_from}.
 
     The directive's `opacity`/`transform.scale` are the SETTLED (to) values (the
-    runtime's `animate` target); the mount-play interpolates FROM a hidden start
-    (opacity 0, a slightly smaller scale) TO them over `transition.duration` ms.
-    The `from` start sits here (the authoring intent: "appears, not snaps"); the
+    runtime's `animate` target); the mount-play interpolates FROM the directive's
+    authored `animate.from` initial state (LSML 1.1 / @lumencast 0.3.0 — the SAME
+    `from` the Solar runtime hands framer-motion as `initial`) TO them over
+    `transition.duration` ms. A directive WITHOUT `from` falls back to the prior
+    hidden start (opacity 0, scale 0.85) so older fixtures keep their ramp; the
     duration/easing come verbatim off the directive so the page's CSS mount
     keyframes match what Solar would tween. A logo WITHOUT an animate directive
     yields a no-op (duration 0) so the page degrades to the prior static render."""
@@ -1472,18 +1474,26 @@ def animate_mount_params(img: dict) -> dict:
         "spring": "cubic-bezier(0.34,1.56,0.64,1)",  # a gentle overshoot stand-in
     }
     easing = easing_map.get(t.get("easing", "ease-out"), "ease-out")
-    # Settled targets (to). The mount starts hidden + slightly smaller and grows in.
+    # Settled targets (to). The mount starts at the authored `from` (or the
+    # prior hidden default) and grows in.
     opacity_to = a.get("opacity", 1)
     scale_to = (a.get("transform") or {}).get("scale", 1)
     if isinstance(scale_to, (list, tuple)):
         scale_to = scale_to[0]
+    # Authored initial state (LSML 1.1 `animate.from`). Defaults mirror the
+    # pre-`from` behaviour: hidden + a modest scale-up (0.85 → settled) that
+    # reads as "grows in" without layout cost.
+    frm = a.get("from") or {}
+    opacity_from = frm.get("opacity", 0.0)
+    scale_from = (frm.get("transform") or {}).get("scale", 0.85)
+    if isinstance(scale_from, (list, tuple)):
+        scale_from = scale_from[0]
     return {
         "duration_ms": int(duration_ms),
         "easing": easing,
-        "opacity_from": 0.0,
+        "opacity_from": float(opacity_from),
         "opacity_to": float(opacity_to),
-        # A modest scale-up (0.85 → settled) reads as "grows in" without layout cost.
-        "scale_from": 0.85,
+        "scale_from": float(scale_from),
         "scale_to": float(scale_to),
     }
 
