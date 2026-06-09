@@ -206,9 +206,13 @@ if ($m10Code -eq 3) {
 # --transition-scene, #79 animated). Exercises the OBS Fade transition arming
 # (GetSceneTransitionList -> SetCurrentSceneTransition=Fade +
 # SetCurrentSceneTransitionDuration -> GetCurrentSceneTransition verify), the
-# RE-MOUNT of the transition browser_source (re-SetCaptureSource with a
-# cache-busted URL -> fresh CEF load -> the logo mount fade/scale REPLAYS), the
-# capture-SEQUENCE across the mount window (prove a RAMP, anti-faux-positif),
+# OFF-AIR RE-MOUNT of the transition browser_source (SetInputSettings with a
+# cache-busted URL -> fresh page load -> the logo mount fade/scale REPLAYS),
+# the PAINT-GATED cut (poll the SOURCE screenshot until the ramp is in flight,
+# THEN fade) + the DENSE capture-SEQUENCE across the mount window (prove a RAMP
+# with TRUE intermediate frames -- a blank->settled jump now FAILS; note the
+# probe CLAMPS --hold-ms up to the 1200ms ramp + margin when the CEF renders,
+# so the 400 below is only a floor),
 # and the two CROSSFADE program switches A~>zab-transition~>B against the REAL
 # CI pulsar.exe, VPS-less:
 #   --loopback-leaf   target B = the demo leaf target (no VPS trigger fired).

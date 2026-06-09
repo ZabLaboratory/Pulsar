@@ -260,6 +260,62 @@ WHITE_RGB = (0xFF, 0xFF, 0xFF)
 # black (Solar did not render) or busy (a visible hard cut to a capture) MID
 # sits well outside it.
 WHITE_MEAN_TOL = 150
+# ---------------------------------------------------------------------------
+# PAINT-GATED CUT + DENSE RAMP CAPTURE (#79 ramp-visibility fix). Keeper's real
+# run exposed the trap: the old replay re-created the CEF browser WHILE the
+# transition scene was program, and a fresh CEF takes ~2-3s before its FIRST
+# paint. The 550ms mount animation plays around that first paint, so the antenna
+# saw white/blank → logo already settled, and the sparse capture (8 grabs at a
+# ~250ms effective cadence) sampled at 188/438/703ms (pre-paint) then 2781ms
+# (settled) — the whole ramp fell in the 703→2781ms hole. WORSE, prove_mount_ramp
+# took the pre-paint blank (early_low=0.000) for the bottom of a ramp: a faux
+# positif. The fix is three-pronged:
+#   1. OFF-AIR reload + PAINT-GATED cut: the replay now navigates the EXISTING
+#      browser_source via SetInputSettings (no program flip — the plugin creates
+#      the source with shutdown=false so it keeps rendering off-air), then we
+#      poll GetSourceScreenshot ON THE SOURCE (not the program) at ~60ms until
+#      the reload blank passes AND the first logo pixels appear (= the mount
+#      animation's first visible frames), and cut THEN. The residual detection→
+#      cut latency eats only the first ~100-300ms of ramp.
+#   2. A LONGER authored ramp: the fixture's animate.transition.duration is now
+#      1200ms (MOUNT_ANIM_MS mirrors it) so a generous on-air ramp survives
+#      that residual latency.
+#   3. DENSE program sampling + a HARDENED prove_mount_ramp (intermediate frames
+#      REQUIRED; a blank→settled jump with zero intermediate now FAILS).
+TRANSITION_SOURCE_NAME = "PulsarSceneSource"  # the managed browser_source name
+# (plugin kCaptureSourceName — pulsar-scene-source/src/plugin-main.cpp)
+# Mirrors the fixture's animate.transition.duration (zab-transition.lsml.json);
+# test_zab_transition pins the two together. Used to clamp --hold-ms so the hold
+# always covers the full reveal (ramp + margin).
+MOUNT_ANIM_MS = 1200
+# First-paint gate: poll the SOURCE screenshot tightly; the budget is generous
+# because a COLD CEF first paint is ~2-3s (a warm navigate is much faster).
+FIRST_PAINT_BUDGET_S = 12.0
+FIRST_PAINT_POLL_S = 0.06
+# Footprint thresholds for the gate. Blank (reload gap / pre-mount white page /
+# unpainted black CEF) ⇒ nonbg ~0; the logo registers from ~3% opacity (a dark
+# pixel over white crosses MODAL_MANHATTAN_TOL=24 once 3*255*a > 24 ⇒ a > 0.031),
+# so MOUNT_PAINT_EPS fires within the first frames of the ease-out ramp.
+MOUNT_BLANK_EPS = 0.002
+MOUNT_PAINT_EPS = 0.004
+# Dense ramp sampling: ~28 grabs at a 70ms nominal interval (~2s nominal window),
+# downscaled to 480x270 so the pure-python PNG decode does not throttle the
+# cadence (the old 1920x1080 grabs cost ~170ms each — that overhead WAS a large
+# part of the capture hole).
+MOUNT_SEQ_FRAMES = 28
+MOUNT_SEQ_INTERVAL_S = 0.07
+MOUNT_SEQ_W = 480
+MOUNT_SEQ_H = 270
+# Ramp-proof classification: a frame only counts for the ramp when its MODAL
+# colour is near-white (the scene's own white field) — crossfade-blend frames of
+# screen-1 content carry a foreign modal and are excluded, so the fade #1 blend
+# cannot pollute the footprint signal. Intermediate band: a frame is a TRUE
+# in-flight sample when its footprint sits strictly between these fractions of
+# the settled footprint (below = still blank, above = already settled).
+RAMP_WHITE_MODAL_TOL = 120
+RAMP_INTERMEDIATE_LO = 0.15
+RAMP_INTERMEDIATE_HI = 0.85
+# ---------------------------------------------------------------------------
 # The native-stinger flag (#73/#83). Default OFF: the live pivot world this
 # probe asserts. We make the dormancy explicit on the spawned fork.
 NATIVE_STINGER_ENV = "PULSAR_NATIVE_STINGER"
@@ -1058,26 +1114,37 @@ def _strip_data_uri(image_data: str) -> bytes:
     return base64.b64decode(payload)
 
 
+async def capture_named_source_frame(
+    inbox: Inbox, ws, rid: str, *, source_name: str,
+    width: int = CANVAS_W, height: int = CANVAS_H,
+) -> tuple[bytes, dict]:
+    """GetSourceScreenshot of a NAMED source/scene → (png_bytes, metrics). Lets
+    callers (a) read a SOURCE directly (the paint gate polls the transition
+    browser_source itself, off-air) and (b) downscale (the dense ramp sampler
+    grabs 480x270 so the pure-python decode keeps the cadence tight)."""
+    r = await request(inbox, ws, "GetSourceScreenshot", rid, {
+        "sourceName": source_name,
+        "imageFormat": "png",
+        "imageWidth": width,
+        "imageHeight": height,
+    })
+    if not req_ok(r):
+        raise RuntimeError(
+            f"GetSourceScreenshot({source_name}) failed: {r.get('requestStatus')}"
+        )
+    png = _strip_data_uri(r["responseData"]["imageData"])
+    w, h, ch, pxs = decode_png(png)
+    metrics = analyse_frame(w, h, ch, pxs)
+    return png, metrics
+
+
 async def capture_program_frame(inbox: Inbox, ws, rid: str) -> tuple[bytes, dict]:
     """GetSourceScreenshot of the CURRENT program scene → (png_bytes, metrics).
     Targets the current program scene by name (the composed program output)."""
     r = await request(inbox, ws, "GetCurrentProgramScene", f"{rid}-name", {})
     rd = r.get("responseData", {})
     scene = rd.get("currentProgramSceneName") or rd.get("sceneName")
-    r = await request(inbox, ws, "GetSourceScreenshot", rid, {
-        "sourceName": scene,
-        "imageFormat": "png",
-        "imageWidth": CANVAS_W,
-        "imageHeight": CANVAS_H,
-    })
-    if not req_ok(r):
-        raise RuntimeError(
-            f"GetSourceScreenshot({scene}) failed: {r.get('requestStatus')}"
-        )
-    png = _strip_data_uri(r["responseData"]["imageData"])
-    w, h, ch, pxs = decode_png(png)
-    metrics = analyse_frame(w, h, ch, pxs)
-    return png, metrics
+    return await capture_named_source_frame(inbox, ws, rid, source_name=scene)
 
 
 async def warmup_capture_until_content(
@@ -1506,7 +1573,8 @@ def _write_transition_page(log: TeeLog) -> pathlib.Path:
     scene + mount-play the real Solar bundle would paint from Orion — enough to
     prove the animated transition playout + the white MID WITHOUT the antenna.
     Because the animation is keyed to PAGE LOAD (a CSS animation on a fresh DOM),
-    REMOUNTING the browser_source (re-SetCaptureSource → fresh CEF load) REPLAYS it
+    REMOUNTING the browser_source (off-air cache-busted URL reload → fresh page
+    load) REPLAYS it
     — exactly the replay the playout forces before each cut. Returns the dir to
     serve."""
     bundle = json.loads(TRANSITION_FIXTURE.read_text(encoding="utf-8"))
@@ -1616,48 +1684,122 @@ def _bust_url(url: str, token: int) -> str:
 async def replay_transition_mount(inbox: Inbox, ws, *, transition_url: str,
                                   token: int, log: TeeLog) -> bool:
     """Force the transition browser_source to RE-MOUNT so its mount animation
-    (the logo fade/scale) plays again. We make the program scene `scene-transition`
-    (SetCaptureSource targets the CURRENT frontend scene), then re-SetCaptureSource
-    with a cache-busted URL → a brand-new CEF browser → fresh page load → the
-    `animate` mount-play re-runs from its hidden start. Returns True if the source
-    re-installed (False ⇒ light build / no CEF; the replay is then the antenna)."""
-    # SetCaptureSource mutates the CURRENT frontend scene; make it the transition.
-    await request(inbox, ws, "SetCurrentProgramScene", f"replay-cur-{token}",
-                  {"sceneName": TRANSITION_SCENE})
+    (the logo fade/scale) plays again — **OFF AIR**. We navigate the EXISTING
+    managed browser_source (TRANSITION_SOURCE_NAME) to a cache-busted URL via the
+    standard obs-ws SetInputSettings: obs-browser's Update() sees the changed URL
+    and reloads the page → the `animate` mount-play re-runs from its hidden start.
+    Crucially this does NOT flip the program scene (the old path remounted via
+    SetCurrentProgramScene + SetCaptureSource, which put the blank CEF ON AIR for
+    its whole first-paint warmup — the antenna then saw white→settled and the ramp
+    fell in a capture hole). The plugin creates the source with shutdown=false, so
+    the off-air CEF keeps rendering and the caller can PAINT-GATE the cut by
+    polling GetSourceScreenshot on the source (wait_mount_first_paint). Returns
+    True if the reload was accepted (False ⇒ light build / no CEF / source absent;
+    the visible replay is then the antenna run)."""
     busted = _bust_url(transition_url, token)
-    r = await vendor_call(inbox, ws, f"replay-set-{token}", "pulsar-scene",
-                          "SetCaptureSource", {
-                              "kind": BROWSER_SOURCE_KIND,
-                              "url": busted,
-                              "width": CANVAS_W,
-                              "height": CANVAS_H,
-                              "fps": 30,
-                              "reroute_audio": False,
-                          })
-    data = vendor_response_data(r)
-    if data.get("kind") == BROWSER_SOURCE_KIND:
-        log(f"   [replay] re-mounted transition browser_source (fresh CEF load, "
-            f"replay token {token}) → the logo mount fade/scale re-plays from start.")
+    r = await request(inbox, ws, "SetInputSettings", f"replay-set-{token}", {
+        "inputName": TRANSITION_SOURCE_NAME,
+        "inputSettings": {"url": busted},
+        "overlay": True,
+    })
+    if req_ok(r):
+        log(f"   [replay] OFF-AIR reload of {TRANSITION_SOURCE_NAME!r} (cache-"
+            f"busted URL, replay token {token}) → fresh page load, the logo mount "
+            "fade/scale re-plays from its hidden start; program stays on screen-1 "
+            "until the paint gate fires.")
         return True
-    log(f"   [replay] re-SetCaptureSource did not return a browser_source ({data}) "
-        "— light build / no CEF; the visible replay is the antenna run.")
+    log(f"   [replay] SetInputSettings({TRANSITION_SOURCE_NAME!r}) failed "
+        f"({r.get('requestStatus')}) — light build / no CEF / source absent; the "
+        "visible replay is the antenna run.")
     return False
+
+
+async def wait_mount_first_paint(
+    inbox: Inbox, ws, *, source_name: str = TRANSITION_SOURCE_NAME,
+    budget_s: float = FIRST_PAINT_BUDGET_S, poll_s: float = FIRST_PAINT_POLL_S,
+    log: TeeLog,
+) -> tuple[bool, str, float]:
+    """PAINT GATE (#79 ramp-visibility fix): after the off-air reload, poll the
+    transition browser_source's OWN screenshot (GetSourceScreenshot on the SOURCE,
+    not the program) at ~60ms until the mount animation is actually IN FLIGHT,
+    so the caller cuts exactly then. Two phases:
+
+      1. RELOAD BLANK — the old settled white+logo footprint collapses to ~0
+         (page unload / pre-mount white / unpainted black CEF all read as
+         nonbg≈0). This guards against triggering on the STALE settled frame the
+         source still shows right after SetInputSettings.
+      2. FIRST LOGO PIXELS — the footprint rises past MOUNT_PAINT_EPS: the
+         ease-out ramp crosses detectability within its first frames (~3%
+         opacity), so this IS the start of the visible ramp.
+
+    Returns (painted, why, waited_ms). painted=False on budget expiry (a CEF
+    that never painted — headless box — or a navigation we never saw blank);
+    the caller cuts anyway and the hardened prove_mount_ramp arbitrates."""
+    t0 = time.monotonic()
+    deadline = t0 + budget_s
+    saw_blank = False
+    polls = 0
+    last_f = None
+    while time.monotonic() < deadline:
+        polls += 1
+        try:
+            _, m = await capture_named_source_frame(
+                inbox, ws, f"paintgate-{polls}", source_name=source_name,
+                width=MOUNT_SEQ_W, height=MOUNT_SEQ_H)
+        except Exception as exc:  # noqa: BLE001 — screenshot may not be ready yet
+            if polls == 1:
+                log(f"   [paint-gate] poll 1: source screenshot not ready "
+                    f"({type(exc).__name__}) — polling at ~{poll_s*1000:.0f}ms")
+            await asyncio.sleep(poll_s)
+            continue
+        f = m["nonbg_ratio"]
+        last_f = f
+        elapsed_ms = (time.monotonic() - t0) * 1000.0
+        if not saw_blank:
+            if f <= MOUNT_BLANK_EPS:
+                saw_blank = True
+                log(f"   [paint-gate] reload blank seen @ {elapsed_ms:.0f}ms "
+                    f"(footprint {f:.4f} <= {MOUNT_BLANK_EPS}) — waiting for the "
+                    "first logo pixels (the mount ramp's start).")
+        elif f >= MOUNT_PAINT_EPS:
+            return True, (f"first paint @ {elapsed_ms:.0f}ms (footprint {f:.4f} "
+                          f">= {MOUNT_PAINT_EPS} after the reload blank, {polls} "
+                          "polls) — the mount ramp is IN FLIGHT"), elapsed_ms
+        await asyncio.sleep(poll_s)
+    waited_ms = (time.monotonic() - t0) * 1000.0
+    if saw_blank:
+        why = (f"budget {budget_s:.0f}s expired AFTER the reload blank with no "
+               f"logo paint (last footprint={last_f}) — the CEF never painted the "
+               "logo (headless/blank box?)")
+    else:
+        why = (f"budget {budget_s:.0f}s expired WITHOUT observing the reload "
+               f"blank (last footprint={last_f}) — navigation not seen; the CEF "
+               "may have repainted between polls or never reloaded")
+    return False, why, waited_ms
 
 
 async def capture_mount_sequence(
     inbox: Inbox, ws, *, frames: int, interval_s: float, tag: str, log: TeeLog,
 ) -> list[dict]:
-    """Grab a SEQUENCE of program frames across the mount-animation window,
-    returning a per-frame list of {t_ms, mean, distinct, nonbg_ratio, png}. The
-    caller proves a RAMP from these (the anti-faux-positif: intermediate frames
-    must be NEITHER blank NOR already-settled). Each PNG is also written under
-    FRAMES_DIR/seq-<tag>-NN.png so a human/Keeper can eyeball the ramp."""
+    """Grab a DENSE SEQUENCE of program frames across the mount-animation window,
+    returning a per-frame list of {t_ms, mean, modal, distinct, nonbg_ratio, png}.
+    The caller proves a RAMP from these (the anti-faux-positif: intermediate
+    frames must be NEITHER blank NOR already-settled). The program scene name is
+    resolved ONCE and the grabs are downscaled (MOUNT_SEQ_W×MOUNT_SEQ_H) so the
+    effective cadence stays near interval_s — the old full-res grabs cost ~170ms
+    of decode each and a 550ms ramp fell BETWEEN samples. Each PNG is written
+    under FRAMES_DIR/seq-<tag>-NN.png so a human/Keeper can eyeball the ramp."""
     FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+    r = await request(inbox, ws, "GetCurrentProgramScene", f"{tag}-seq-name", {})
+    rd = r.get("responseData", {})
+    scene = rd.get("currentProgramSceneName") or rd.get("sceneName")
     seq: list[dict] = []
     t0 = time.monotonic()
     for i in range(frames):
         try:
-            png, m = await capture_program_frame(inbox, ws, f"{tag}-seq-{i}")
+            png, m = await capture_named_source_frame(
+                inbox, ws, f"{tag}-seq-{i}", source_name=scene,
+                width=MOUNT_SEQ_W, height=MOUNT_SEQ_H)
         except Exception as exc:  # noqa: BLE001 — a grab may race the first CEF frame
             log(f"   [seq {tag}] frame {i}: grab not ready ({type(exc).__name__})")
             await asyncio.sleep(interval_s)
@@ -1666,10 +1808,15 @@ async def capture_mount_sequence(
         path = FRAMES_DIR / f"seq-{tag}-{i:02d}.png"
         path.write_bytes(png)
         seq.append({
-            "i": i, "t_ms": t_ms, "mean": m["mean"], "distinct": m["distinct"],
-            "nonbg_ratio": m["nonbg_ratio"], "path": str(path),
+            "i": i, "t_ms": t_ms, "mean": m["mean"], "modal": m["modal"],
+            "distinct": m["distinct"], "nonbg_ratio": m["nonbg_ratio"],
+            "path": str(path),
         })
         await asyncio.sleep(interval_s)
+    if len(seq) >= 2:
+        cadence = (seq[-1]["t_ms"] - seq[0]["t_ms"]) / (len(seq) - 1)
+        log(f"   [seq {tag}] {len(seq)} frames over {seq[-1]['t_ms']:.0f}ms "
+            f"(effective cadence ~{cadence:.0f}ms)")
     return seq
 
 
@@ -1679,16 +1826,37 @@ def prove_mount_ramp(seq: list[dict], *, settled_white: bool) -> tuple[bool, str
     the logo's footprint (nonbg pixels away from the white modal) GROWS from ~0 to
     its settled value, and the mean RGB darkens slightly as the logo materialises.
 
-    We require an evolving signal: at least one EARLY frame meaningfully BELOW the
-    LAST (settled) frame's logo footprint, AND a monotone-ish rise — i.e. a real
-    RAMP, with the early frame neither already-settled (the animation would be
-    invisible) nor the late frame still blank (it never settled). Returns
+    HARDENED (#79 v2): the proof now REQUIRES in-flight evidence — at least one
+    frame strictly INTERMEDIATE (footprint within [15%,85%] of the settled peak:
+    not blank, not settled), a monotone-ish rise across intermediates when >=2
+    exist, and an EXPLICIT REJECTION of the blank→settled pattern (frames jump
+    from empty straight to settled with zero intermediate ⇒ the ramp fell in a
+    capture hole — that exact pattern was the prior faux positif, where the
+    pre-paint blank read as the bottom of a ramp). Crossfade-blend frames (modal
+    far from the scene's white field) are excluded before analysis. Returns
     (proved, why). `settled_white` records whether the final frame is the expected
     white+logo (a sanity tie-back). On too-few frames → not proved (be honest)."""
     if len(seq) < 3:
         return False, (f"only {len(seq)} frame(s) captured — too few to prove a "
                        "ramp (need >=3 across the window)")
-    foot = [f["nonbg_ratio"] for f in seq]          # logo footprint over time
+    # Exclude crossfade-blend frames: a fade #1 frame still blending screen-1
+    # content has a FOREIGN modal colour; only frames whose modal is the scene's
+    # own near-white field can speak for the logo footprint. Frames without a
+    # modal (older mocks) are kept — the filter only ever REMOVES evidence.
+    def _scene_frame(f: dict) -> bool:
+        modal = f.get("modal")
+        if modal is None:
+            return True
+        mr, mg, mb = modal
+        return (abs(mr - 255) + abs(mg - 255) + abs(mb - 255)
+                <= RAMP_WHITE_MODAL_TOL)
+    scene_seq = [f for f in seq if _scene_frame(f)]
+    excluded = len(seq) - len(scene_seq)
+    if len(scene_seq) < 3:
+        return False, (f"only {len(scene_seq)} frame(s) show the white scene "
+                       f"({excluded} crossfade-blend frame(s) excluded) — too few "
+                       "scene frames to prove a ramp")
+    foot = [f["nonbg_ratio"] for f in scene_seq]    # logo footprint over time
     last = foot[-1]
     first = foot[0]
     peak = max(foot)
@@ -1697,24 +1865,57 @@ def prove_mount_ramp(seq: list[dict], *, settled_white: bool) -> tuple[bool, str
         return False, ("every frame is a FLAT field (nonbg_ratio==0 throughout) — "
                        "the logo never rendered; animation NOT visible (likely a "
                        "blank/headless CEF — defer the visible proof to the run)")
-    # A ramp: some early frame sits well below the settled peak, and the signal
-    # rises into it. "well below" = <= 60% of the peak footprint.
-    early_low = min(foot[: max(1, len(foot) // 2)])
-    rose = last >= early_low  # ended at/above where it started rising from
-    ramped = early_low <= 0.60 * peak and rose
-    if not ramped:
-        return False, (f"footprint did not RAMP: first={first:.3f} early_low="
-                       f"{early_low:.3f} peak={peak:.3f} last={last:.3f} — every "
-                       "frame is already-settled (the mount animation is NOT "
-                       "visible: all frames identical/settled)")
-    # Find the most-intermediate frame (closest to ~40% of peak) as the proof point.
-    target = 0.40 * peak
-    mid = min(seq, key=lambda f: abs(f["nonbg_ratio"] - target))
-    why = (f"RAMP proven: footprint first={first:.3f} → early_low={early_low:.3f} "
-           f"→ peak={peak:.3f} → settled_last={last:.3f}; intermediate frame "
-           f"#{mid['i']} @ {mid['t_ms']:.0f}ms at {mid['nonbg_ratio']:.3f} "
-           f"(~{mid['nonbg_ratio']/peak*100:.0f}% of settled) — neither blank nor "
-           f"settled (settled_white={settled_white})")
+    # HARDENED RAMP PROOF (#79 anti-faux-positif v2). The old test ("some early
+    # frame <= 60% of peak, last >= early_low") PASSED a blank→settled jump: the
+    # pre-paint blank (0.000) read as the bottom of a ramp even though NOT ONE
+    # frame caught the animation in flight. Now the in-flight evidence is
+    # MANDATORY: at least one frame strictly INTERMEDIATE (footprint within
+    # [15%, 85%] of the settled peak — neither blank nor settled), and when >=2
+    # intermediates exist their footprints must rise overall (monotone-ish).
+    lo = RAMP_INTERMEDIATE_LO * peak
+    hi = RAMP_INTERMEDIATE_HI * peak
+    inter = [f for f in scene_seq if lo <= f["nonbg_ratio"] <= hi]
+    blanks = [f for f in scene_seq if f["nonbg_ratio"] < lo]
+    settled = [f for f in scene_seq if f["nonbg_ratio"] > hi]
+    if not inter:
+        if blanks and settled:
+            t_gap_a = blanks[-1]["t_ms"]
+            t_gap_b = settled[0]["t_ms"]
+            return False, (
+                f"BLANK→SETTLED jump with ZERO intermediate frame: "
+                f"{len(blanks)} blank frame(s) (<{lo:.3f}) then {len(settled)} "
+                f"settled frame(s) (>{hi:.3f}, peak={peak:.3f}), nothing in "
+                f"between (last blank @ {t_gap_a:.0f}ms, first settled @ "
+                f"{t_gap_b:.0f}ms) — the whole ramp fell in a capture hole; the "
+                "animation was NOT proven visible (this exact pattern was the "
+                "prior faux positif: white→settled is NOT a ramp)")
+        return False, (f"footprint did not RAMP: first={first:.3f} peak={peak:.3f} "
+                       f"last={last:.3f}, no intermediate frame in "
+                       f"[{lo:.3f},{hi:.3f}] — every frame is already-settled "
+                       "(the mount animation is NOT visible: all frames "
+                       "identical/settled)")
+    if len(inter) >= 2 and inter[-1]["nonbg_ratio"] < inter[0]["nonbg_ratio"]:
+        return False, (f"intermediate footprints FALL over time "
+                       f"({inter[0]['nonbg_ratio']:.3f} @ {inter[0]['t_ms']:.0f}ms "
+                       f"→ {inter[-1]['nonbg_ratio']:.3f} @ "
+                       f"{inter[-1]['t_ms']:.0f}ms) — not a mount ramp (the logo "
+                       "must GROW in, not shrink; a falling signal is a blend/"
+                       "teardown artefact)")
+    # The signal must end at/above the intermediates (it settled, not collapsed).
+    if last < inter[-1]["nonbg_ratio"]:
+        return False, (f"footprint collapsed after the intermediates "
+                       f"(last={last:.3f} < intermediate "
+                       f"{inter[-1]['nonbg_ratio']:.3f}) — the logo never settled")
+    inter_desc = ", ".join(
+        f"#{f['i']}@{f['t_ms']:.0f}ms={f['nonbg_ratio']:.3f}"
+        f"(~{f['nonbg_ratio']/peak*100:.0f}%)" for f in inter[:6])
+    why = (f"RAMP proven: {len(inter)} TRUE intermediate frame(s) in "
+           f"[{RAMP_INTERMEDIATE_LO*100:.0f}%,{RAMP_INTERMEDIATE_HI*100:.0f}%] of "
+           f"the settled peak ({inter_desc}), rising into peak={peak:.3f} → "
+           f"settled_last={last:.3f} (first={first:.3f}, {len(blanks)} blank, "
+           f"{len(settled)} settled, {excluded} blend frame(s) excluded; "
+           f"settled_white={settled_white}) — the animation was caught IN FLIGHT, "
+           "neither blank nor settled")
     return True, why
 
 
@@ -1991,6 +2192,17 @@ async def run_transition_playout(
     Captures frame A (screen-1), MID (the white+logo passage — and, when fading,
     a mid-fade blend of A↔white), B (target_scene)."""
     hold_ms = args.hold_ms
+    # The hold must cover the FULL mount reveal: with the paint-gated cut the
+    # ~1200ms ramp plays ON AIR right after fade #1, so a hold shorter than
+    # ramp+margin would fade to B mid-animation (and the settled-MID grab would
+    # race the ramp). Clamp up, never down (an explicit longer --hold-ms wins).
+    if transition_settled and transition_url:
+        min_hold = MOUNT_ANIM_MS + 400
+        if hold_ms < min_hold:
+            log(f"[playout] --hold-ms {hold_ms} < mount ramp {MOUNT_ANIM_MS}ms + "
+                f"400ms margin — clamping to {min_hold}ms so the reveal completes "
+                "on air before fade #2.")
+            hold_ms = min_hold
     FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 
     # Go live on screen-1.
@@ -2063,17 +2275,31 @@ async def run_transition_playout(
 
         switch_verb = "FADE" if fade_armed else "cut(no-fade-build)"
 
-        # RE-MOUNT the transition browser_source JUST BEFORE the cut so its mount
-        # animation (the logo fade/scale) plays AS the fade brings it on-screen.
-        # A fresh CEF page load restarts the animation from its hidden start; the
-        # capture-sequence below then proves the ramp (anti-faux-positif). We do
-        # this BEFORE the program switch so the remount blank stays off-air (still
-        # on screen-1) and the animation is in flight when the transition lands.
+        # RE-MOUNT the transition browser_source OFF AIR (SetInputSettings reload,
+        # no program flip — program stays on screen-1), then PAINT-GATE the cut:
+        # poll the SOURCE's own screenshot until the reload blank passes and the
+        # first logo pixels appear (the mount ramp's start), and fade THEN. This
+        # is the #79 ramp-visibility fix: the old path remounted via a program
+        # flip + SetCaptureSource, so the antenna sat on a blank CEF for its whole
+        # ~2-3s first-paint warmup and the 550ms ramp played into a capture hole
+        # (white → settled, no intermediate frame). With the gate + the 1200ms
+        # authored ramp, the residual detection→cut latency eats only the first
+        # ~100-300ms and a generous ramp lands ON AIR.
         replayed = False
+        paint_gated = False
         if transition_settled and transition_url:
             replayed = await replay_transition_mount(
                 inbox, ws, transition_url=transition_url, token=int(time.monotonic()),
                 log=log)
+            if replayed:
+                paint_gated, paint_why, paint_wait_ms = await wait_mount_first_paint(
+                    inbox, ws, log=log)
+                if paint_gated:
+                    log(f"   [paint-gate] CUT NOW: {paint_why}")
+                else:
+                    log(f"   [paint-gate] NOT gated ({paint_why}) — cutting anyway "
+                        f"after {paint_wait_ms:.0f}ms; the hardened ramp verdict "
+                        "below arbitrates (a blank→settled capture now FAILS).")
 
         # FADE #1 — A → transition. The Fade transition (armed above) makes this
         # SetCurrentProgramScene a CROSSFADE: screen-1 DISSOLVES into the white+
@@ -2086,14 +2312,18 @@ async def run_transition_playout(
         log(f"[playout] FADE #1 ({switch_verb}, ~{fade_ms}ms): {SCENE_SCREEN_1!r} "
             f"~> {TRANSITION_SCENE!r}")
 
-        # CAPTURE-SEQUENCE across the mount window — prove the logo ANIMATES IN
-        # (a ramp), not a static frame. Grab ~8 frames every ~80ms over ~640ms
-        # starting at the cut: the fade (~fade_ms) + the mount (~550ms) overlap, so
-        # early frames show the logo small/faint, late frames show it settled.
+        # DENSE CAPTURE-SEQUENCE across the mount window — prove the logo
+        # ANIMATES IN (a ramp), not a static frame. ~28 downscaled grabs at a
+        # ~70ms nominal interval (~2s window) starting at the paint-gated cut:
+        # the fade (~fade_ms) + the 1200ms mount overlap, so several frames land
+        # INSIDE the ramp (small/faint logo) before the settled tail — the old 8
+        # full-res grabs ran at a ~250ms effective cadence and the whole 550ms
+        # ramp fell between samples.
         anim_seq: list[dict] = []
         if replayed:
             anim_seq = await capture_mount_sequence(
-                inbox, ws, frames=8, interval_s=0.08, tag="mount", log=log)
+                inbox, ws, frames=MOUNT_SEQ_FRAMES,
+                interval_s=MOUNT_SEQ_INTERVAL_S, tag="mount", log=log)
             for f in anim_seq:
                 log(f"   [seq mount] #{f['i']} @ {f['t_ms']:.0f}ms "
                     f"nonbg={f['nonbg_ratio']:.3f} distinct={f['distinct']} "
@@ -2225,7 +2455,7 @@ async def run_transition_playout(
         elif transition_settled and not replayed:
             log("[anim] the browser_source did not re-mount (no CEF / light build) — "
                 "the VISIBLE mount animation is the antenna/desktop run; the playout "
-                "issued the re-SetCaptureSource replay regardless.")
+                "issued the off-air SetInputSettings reload regardless.")
         else:
             log("[anim] no animation sequence captured (light build / no CEF) — the "
                 "authored `animate` + the reload-replay are in place; the VISIBLE "
@@ -3067,9 +3297,12 @@ def main() -> int:
                          f"(default {FADE_DURATION_MS_DEFAULT}; --transition-scene "
                          "only)")
     ap.add_argument("--hold-ms", type=int,
-                    default=int(os.environ.get("LIVE_TEST_HOLD_MS", "700")),
+                    default=int(os.environ.get("LIVE_TEST_HOLD_MS", "1800")),
                     help="ms to hold on the transition scene between the two "
-                         "crossfades (default 700; --transition-scene only)")
+                         "crossfades (default 1800 — the 1200ms mount ramp + "
+                         "margin; when the CEF renders, values below ramp+400ms "
+                         "are clamped UP so fade #2 never lands mid-animation; "
+                         "--transition-scene only)")
     ap.add_argument("--on-air-secs", type=float,
                     default=float(os.environ.get("LIVE_TEST_ON_AIR_SECS", "0")),
                     help="after the A~>transition~>B playout, STAY LIVE this many "

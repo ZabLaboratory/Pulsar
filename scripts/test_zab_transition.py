@@ -285,6 +285,88 @@ def test_prove_mount_ramp_rejects_too_few_frames():
     assert "too few" in why
 
 
+def test_prove_mount_ramp_rejects_blank_to_settled_without_intermediate():
+    """THE prior faux positif (Keeper's real run): pre-paint blanks (the CEF had
+    not painted yet) then frames already settled — ZERO frame caught the ramp in
+    flight. The old checker read the blank as the bottom of a ramp and PASSED;
+    the hardened checker must FAIL with the capture-hole diagnostic."""
+    ok, why = probe.prove_mount_ramp(
+        _seq([0.0, 0.0, 0.0, 0.25, 0.25]), settled_white=True)
+    assert not ok, "blank→settled with no intermediate frame must NOT pass"
+    assert "ZERO intermediate" in why or "capture hole" in why
+
+
+def test_prove_mount_ramp_requires_a_true_intermediate_frame():
+    """A near-jump where the only non-settled frames sit below 15% of the peak
+    (still effectively blank) is NOT in-flight evidence either."""
+    ok, why = probe.prove_mount_ramp(
+        _seq([0.0, 0.01, 0.02, 0.25, 0.25, 0.25]), settled_white=True)
+    assert not ok
+    assert "ZERO intermediate" in why or "capture hole" in why
+
+
+def test_prove_mount_ramp_accepts_dense_in_flight_intermediates():
+    """The fixed harness (paint-gated cut + ~70ms dense sampling over a 1200ms
+    ramp) yields SEVERAL true intermediate frames between blank and settled —
+    that is what ANIMATED (VISIBLE) must look like now."""
+    ok, why = probe.prove_mount_ramp(
+        _seq([0.0, 0.01, 0.05, 0.09, 0.13, 0.17, 0.21, 0.24, 0.25, 0.25]),
+        settled_white=True)
+    assert ok, why
+    assert "RAMP proven" in why and "IN FLIGHT" in why
+
+
+def test_prove_mount_ramp_rejects_falling_intermediates():
+    """Intermediate footprints that FALL over time (a blend/teardown artefact,
+    not a logo growing in) are not a mount ramp — monotone-ish rise required."""
+    ok, why = probe.prove_mount_ramp(
+        _seq([0.0, 0.20, 0.05, 0.25, 0.25]), settled_white=True)
+    assert not ok
+    assert "FALL" in why
+
+
+def test_prove_mount_ramp_excludes_crossfade_blend_frames():
+    """Fade #1 blend frames (screen-1 content still dissolving — a FOREIGN modal,
+    far from the scene's white field) must be excluded from the footprint signal,
+    not mistaken for ramp evidence. A real ramp behind them still proves."""
+    blend = {"i": 0, "t_ms": 0.0, "nonbg_ratio": 0.40, "distinct": 900,
+             "mean": (90.0, 110.0, 130.0), "modal": (30, 60, 90),
+             "path": "seq-0.png"}
+    ramp = _seq([0.0, 0.05, 0.12, 0.19, 0.25, 0.25])
+    for f in ramp:
+        f["modal"] = (255, 255, 255)  # the scene's own white field
+        f["i"] += 1
+        f["t_ms"] += 80.0
+    ok, why = probe.prove_mount_ramp([blend] + ramp, settled_white=True)
+    assert ok, why
+    assert "1 blend frame(s) excluded" in why
+
+
+def test_mount_anim_ms_pins_the_fixture_duration():
+    """probe.MOUNT_ANIM_MS (the --hold-ms clamp + capture-window sizing) must
+    mirror the fixture's authored animate.transition.duration — if one moves
+    without the other, the hold/capture window and the real ramp drift apart."""
+    img = probe._find_node(_bundle()["layout"], "image")
+    assert probe.MOUNT_ANIM_MS == img["animate"]["transition"]["duration"]
+
+
+def test_mount_duration_survives_the_paint_gate_latency():
+    """#79 ramp-visibility: the paint-gated cut still loses ~100-400ms of ramp to
+    detection→cut latency, so the authored duration must be generous (>= 1000ms)
+    for the ramp to stay clearly visible ON AIR."""
+    img = probe._find_node(_bundle()["layout"], "image")
+    assert img["animate"]["transition"]["duration"] >= 1000
+
+
+def test_dense_capture_window_covers_the_full_ramp():
+    """The dense sampler must (a) poll at the brief's ~60-80ms cadence and (b)
+    span at least the full ramp + margin, so several frames land INSIDE the
+    animation window instead of straddling it."""
+    assert probe.MOUNT_SEQ_INTERVAL_S <= 0.08
+    nominal_window_ms = probe.MOUNT_SEQ_FRAMES * probe.MOUNT_SEQ_INTERVAL_S * 1000
+    assert nominal_window_ms >= probe.MOUNT_ANIM_MS + 600
+
+
 def test_bust_url_forces_a_distinct_url():
     """The reload primitive appends a distinct `_replay` param so obs-browser's
     same-URL early-return does NOT fire (a fresh CEF load → the mount replays)."""
