@@ -23,7 +23,9 @@
            leaf, so the overlay-blend + cut-skew mechanism is provable end to
            end on a box that has only Pulsar. It animates ONLY `opacity` (the
            Solar GPU-only-animation constraint) and the cover is fully opaque
-           (#000) at the plateau so the hidden hard-cut is invisible.
+           MAGENTA (#C81E5A, matching Solar's DEFAULT_COVER_FILL) at the plateau
+           so the hidden hard-cut is invisible AND the MID frame is provably
+           our engine's paint, not a cold black capture.
 
      LEAF DELIVERY. The probe injects the leaf VALUE (the `overlay` sub-object
      of __inputs.blue.<slug>.scene_control) by polling `/leaf.json` off the
@@ -46,7 +48,12 @@
      cover sits above the captured content; at opacity 1 it fully hides it. */
   #cover {
     position: fixed; inset: 0;
-    background: #000000;           /* opaque broadcast wipe fill */
+    background: #C81E5A;           /* opaque MAGENTA wipe fill — matches Solar
+                                      wipe-cover DEFAULT_COVER_FILL (#77/#12) so
+                                      the fallback paints the SAME colour the
+                                      probe's MID check expects; a visible fill
+                                      proves our engine painted (not a cold
+                                      black capture) */
     opacity: 0;                    /* transparent at rest — content visible */
     will-change: opacity;
   }
