@@ -113,6 +113,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zlib
 from typing import Any, Callable, Optional
@@ -150,6 +151,13 @@ from contracts.scene_control import (  # noqa: E402
 # re-implement the scene plumbing #84 already froze.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import m10_setup  # noqa: E402
+
+# The loopback Orion-WS stand-in (#79 fix). The REAL Solar host bundle gets its
+# scene EXCLUSIVELY from the Orion snapshot/delta stream in mode=broadcast — the
+# wipe-cover node is NOT baked in the JS. Without a WS peer the bundle connects
+# to nothing and #scene stays a black div (the C5″ false positive on a blank
+# frame). This serves the LSDP/1.1 scene + the bundle GET on one loopback port.
+from m10_orion_standin import OrionStandIn  # noqa: E402
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_EXE = (
@@ -201,6 +209,24 @@ COVER_FILL_RGB = (0, 0, 0)
 # and its mean sits near the cover fill — the overlay, not a capture.
 COVER_MAX_DISTINCT = 8
 COVER_MEAN_TOL = 28
+
+# C5″ HARDENING (#79). A near-uniform black MID frame is AMBIGUOUS: it is
+# equally the wipe-cover at its opaque plateau OR a blank/dead WGC capture
+# (a black desktop, a build that renders nothing). The cover-fill is #000, so
+# "MID is uniform black" alone is NOT proof of the overlay — that was the C5″
+# false positive. The proof is only sound when the cover is DISTINGUISHABLE
+# from a blank frame, and the only way a uniform-cover frame carries meaning is
+# if the frames it sits BETWEEN are REAL, VARIED screen content:
+#   * frame A (pre-cut)  MUST be content (varied desktop) — frame_is_content;
+#   * frame B (post-cut) MUST be content (varied desktop) — frame_is_content;
+#   * frame MID          MUST be the uniform cover (COVER_*), i.e. the overlay
+#     has visibly REPLACED that varied content with a flat fill.
+# A run where A or B is also blank cannot tell "overlay covered the screen"
+# from "the screen was black the whole time" — so it FAILs (unless --allow-blank
+# explicitly downgrades the visual leg to the antenna run). The MID-is-cover
+# check additionally requires the frame be near-uniform AT the fill colour, so
+# a busy desktop captured at MID (a VISIBLE hard cut, no overlay) also FAILs.
+C5_REQUIRE_VARIED_AB = True
 
 # The leaf value the demo blueprint emits — the canonical valid fixture case
 # "wipe-cover-switch-to-screen-2" (re-frozen overlay form). cut_at_ms sits
@@ -1049,6 +1075,7 @@ async def assert_anti_injection(obs: ObsCaller, log: TeeLog) -> int:
 async def run_proof(
     *, inbox: Inbox, ws, obs: ObsCaller, args, redactor: Redactor, log: TeeLog,
     stream_key: str, leaf_state: _LeafState, overlay_settled: bool, engine: str,
+    orion: Optional["OrionStandIn"] = None,
 ) -> int:
     duration = args.duration
     deliver_at = duration / 2.0
@@ -1119,7 +1146,7 @@ async def run_proof(
             rc = await _do_overlay_cut(
                 inbox=inbox, ws=ws, obs=obs, args=args, redactor=redactor,
                 log=log, leaf_state=leaf_state, overlay_settled=overlay_settled,
-                pre_scene=pre_scene)
+                pre_scene=pre_scene, orion=orion, m_a=m_a)
             delivered = True
             if rc != 0:
                 break
@@ -1156,6 +1183,7 @@ async def run_proof(
 async def _do_overlay_cut(
     *, inbox, ws, obs: ObsCaller, args, redactor: Redactor, log: TeeLog,
     leaf_state: _LeafState, overlay_settled: bool, pre_scene,
+    orion: Optional["OrionStandIn"] = None, m_a: Optional[dict] = None,
 ) -> int:
     """Deliver the leaf (overlay + stand-in cut), schedule the hard-cut at
     cut_at_ms under the opaque plateau, capture the MID + B frames, and run the
@@ -1163,7 +1191,8 @@ async def _do_overlay_cut(
     log(f"\n** M10 OVERLAY+CUT — delivering the scene_control leaf via "
         f"{args.delivery} **")
     delivered_t, value = await deliver_leaf(
-        args=args, redactor=redactor, log=log, leaf_state=leaf_state)
+        args=args, redactor=redactor, log=log, leaf_state=leaf_state,
+        orion=orion)
     if value != DEMO_SCENE_CONTROL_VALUE:
         log("   note: received leaf differs from the pinned demo shape; "
             "validating against the contract regardless.")
@@ -1259,45 +1288,73 @@ async def _do_overlay_cut(
             "internal inconsistency.)")
         return 1
 
-    # The overlay's measured opacity at the cut must be ≈1 (under the plateau).
-    if cef_opacity_at_cut is not None:
-        if cef_opacity_at_cut >= 0.97:
-            log(f"[SPIKE-CUT] OK: real CEF overlay opacity {cef_opacity_at_cut:.3f} "
-                ">= 0.97 at the cut instant — the cut is hidden under the opaque "
-                "cover (the engine, not a contract claim, proves it).")
-        elif args.allow_blank:
-            log(f"[SPIKE-CUT] CEF opacity {cef_opacity_at_cut:.3f} < 0.97 but "
-                "--allow-blank: the overlay may not render on this CI box; the "
-                "cut-window invariant is still proven by the contract + timing. "
-                "Real-opacity skew is the antenna run.")
-        else:
-            log(f"FAIL: SPIKE-CUT — real CEF overlay opacity {cef_opacity_at_cut:.3f} "
-                "< 0.97 at the cut instant — the cut would be visible. The overlay "
-                "did not reach the opaque plateau in time (hold_ms too short, or "
-                "the overlay engine did not animate).")
-            return 1
+    # The MID frame is the OVERLAY COVER (Solar wipe-cover at its opaque
+    # plateau). Computed once here; both SPIKE-CUT (frame path) and C5″ read it.
+    mid_covered, mid_why = is_overlay_cover(m_mid)
+    a_varied = m_a is not None and frame_is_content(m_a)
+    b_varied = frame_is_content(m_b)
+
+    # ---- SPIKE-CUT: the cut fired UNDER the opaque plateau ----
+    # The REAL bundle exposes no window.__m10 (it is Solar's @lumencast/runtime,
+    # not the fallback page), so opacity read-by-eval is usually None. The
+    # STRONGER proof — and the one actually on the antenna — is by FRAME: the
+    # MID frame, captured mid-plateau, is a uniform cover (mid_covered) sitting
+    # between VARIED A and B; the cut fired inside that same plateau window
+    # (in_window, proven above) → it landed under the cover → invisible. We
+    # prefer this; opacity (when present) is corroborating, never required.
+    if cef_opacity_at_cut is not None and cef_opacity_at_cut >= 0.97:
+        log(f"[SPIKE-CUT] OK (opacity): real CEF overlay opacity "
+            f"{cef_opacity_at_cut:.3f} >= 0.97 at the cut instant — corroborates "
+            "the frame proof.")
+    elif overlay_settled and mid_covered and a_varied and b_varied:
+        log(f"[SPIKE-CUT] OK (frame): MID is the uniform opaque cover ({mid_why}) "
+            "between VARIED A and B, and the cut fell inside the same plateau "
+            f"window [{opaque_start}, {opaque_end}] — the content swap happened "
+            "UNDER the cover, never seen. This is the antenna-true proof (what is "
+            "actually broadcast), stronger than an eval'd opacity number.")
+    elif args.allow_blank:
+        log("[SPIKE-CUT] neither opacity>=0.97 nor a frame-cover proof available "
+            "but --allow-blank: WGC/Solar may not render on this CI box. The "
+            "cut-WINDOW invariant is still proven by contract + timing; the "
+            "invisible-cut visual proof is the antenna run.")
     else:
-        log("[SPIKE-CUT] overlay opacity readback unavailable (no CEF / fallback "
-            "page not the served root) — window proven by contract + timing only.")
+        log("FAIL: SPIKE-CUT — could not prove the cut was hidden. Opacity "
+            f"readback={cef_opacity_at_cut}; MID-cover={mid_covered} "
+            f"({mid_why}); A varied={a_varied}; B varied={b_varied}. A uniform "
+            "MID is only a 'cover' when A and B are real varied content; a "
+            "blank-everywhere run is NOT a hidden cut and fails here.")
+        return 1
 
     # ---- C5″: the MID frame is the overlay COVER, not a hard cut ----
     if not overlay_settled:
         log("[C5″] overlay browser_source did not render (light build / no CEF) "
             "— overlay-blend visual assertion SKIPPED; wire + cut proven.")
+    elif mid_covered and a_varied and b_varied:
+        # The HARDENED proof (#79): a uniform MID is meaningful ONLY when it sits
+        # between REAL varied screen content. Black-everywhere can no longer pass.
+        log(f"[C5″] OVERLAY-BLEND OK: A is varied content (distinct={m_a['distinct']}"
+            f", nonbg={m_a['nonbg_ratio']*100:.1f}%), B is varied content "
+            f"(distinct={m_b['distinct']}, nonbg={m_b['nonbg_ratio']*100:.1f}%), "
+            f"and MID is the uniform opaque Solar cover ({mid_why}) — the overlay "
+            "visibly REPLACED varied content with a flat fill, NOT a hard cut "
+            "between two captures, NOT a screen that was blank throughout.")
+    elif args.allow_blank:
+        log(f"[C5″] inconclusive (MID-cover={mid_covered}: {mid_why}; A varied="
+            f"{a_varied}; B varied={b_varied}) but --allow-blank: WGC/Solar may "
+            "not render on this CI box. The overlay-blend visual proof is the "
+            "antenna run.")
     else:
-        covered, why = is_overlay_cover(m_mid)
-        if covered:
-            log(f"[C5″] OVERLAY-BLEND OK: MID frame is the opaque Solar cover "
-                f"(our engine covers the screen, not a hard cut) — {why}")
-        elif args.allow_blank:
-            log(f"[C5″] MID not conclusively the cover ({why}) but --allow-blank: "
-                "WGC/Solar may not render on this CI box. The overlay-blend visual "
-                "proof is the antenna run.")
+        if mid_covered and not (a_varied and b_varied):
+            log(f"[C5″] FAIL: MID looks uniform ({mid_why}) but A varied="
+                f"{a_varied} / B varied={b_varied} — a uniform MID between blank "
+                "frames is INDISTINGUISHABLE from a screen that was black the "
+                "whole time. This is the blank false-positive C5″ now rejects: "
+                "the cover only proves anything against VARIED A/B content.")
         else:
-            log(f"[C5″] FAIL: MID frame is NOT the opaque overlay cover ({why}) — "
-                "the screen change was a visible hard cut, not covered by the "
+            log(f"[C5″] FAIL: MID frame is NOT the opaque overlay cover ({mid_why}) "
+                "— the screen change was a visible hard cut, not covered by the "
                 "Solar overlay.")
-            return 1
+        return 1
 
     log(f"[proof] M10 overlay pivot proven (engine={getattr(args, '_engine', 'unknown')}): "
         "Solar wipe-cover covers the screen; the hard-cut fires invisibly under "
@@ -1342,17 +1399,32 @@ async def _stop_broadcast(inbox: Inbox, ws, dest_id: str, recording: bool, log: 
 
 
 async def deliver_leaf(*, args, redactor: Redactor, log: TeeLog,
-                       leaf_state: _LeafState) -> tuple[float, Any]:
+                       leaf_state: _LeafState,
+                       orion: Optional["OrionStandIn"] = None) -> tuple[float, Any]:
     """Deliver the scene_control leaf, returning (recv_t, value).
 
     --loopback-leaf : inject the demo leaf VALUE directly (proof-only; the same
-                      bytes Orion would fan out), timestamp = now.
+                      bytes Orion would fan out), timestamp = now. ALSO fans a
+                      leaf delta through the Orion-WS stand-in so the REAL Solar
+                      bundle's KeyframePlayer replays the wipe-cover (the delta
+                      value is a leaf-grain primitive — LSDP forbids the object
+                      on the wire; see m10_orion_standin docstring).
     --live-wire     : fire the VPS Blue /trigger, then read the FIRST
                       __inputs.blue.<slug>.scene_control delta off the REAL
                       gateway /show/stream."""
     if args.delivery == "loopback-leaf":
         log("   [loopback-leaf] injecting the demo scene_control leaf value "
             "(proof-only; identical bytes to Orion's fan-out).")
+        if orion is not None:
+            try:
+                n = await asyncio.to_thread(orion.deliver_leaf)
+                log(f"   [loopback-leaf] Orion-WS stand-in fanned the leaf delta "
+                    f"to {n} Solar subscriber(s) — the real bundle replays "
+                    "wipe-cover off the wire (not the /leaf.json fallback).")
+            except Exception as exc:  # noqa: BLE001 — fallback page still drives
+                log(f"   [loopback-leaf] Orion delta fan-out failed "
+                    f"({type(exc).__name__}: {redactor(str(exc))}); the "
+                    "/leaf.json fallback page still drives the overlay.")
         return time.monotonic(), json.loads(json.dumps(DEMO_SCENE_CONTROL_VALUE))
 
     # live-wire — fire on the VPS, receive off /show/stream.
@@ -1393,7 +1465,8 @@ async def deliver_leaf(*, args, redactor: Redactor, log: TeeLog,
 # --------------------------------------------------------------------------
 async def run(*, ws_url: str, password: str, args, redactor: Redactor,
               log: TeeLog, stream_key: str, overlay_url: str,
-              leaf_state: _LeafState, engine: str) -> int:
+              leaf_state: _LeafState, engine: str,
+              orion: Optional["OrionStandIn"] = None) -> int:
     redactor.add(password, "obs-ws-password")
     args._engine = engine
     log(f"connecting: {ws_url}")
@@ -1464,7 +1537,7 @@ async def run(*, ws_url: str, password: str, args, redactor: Redactor,
         return await run_proof(
             inbox=inbox, ws=ws, obs=obs, args=args, redactor=redactor, log=log,
             stream_key=stream_key, leaf_state=leaf_state,
-            overlay_settled=overlay_settled, engine=engine)
+            overlay_settled=overlay_settled, engine=engine, orion=orion)
 
 
 def main() -> int:
@@ -1532,11 +1605,38 @@ def main() -> int:
     leaf_state = _LeafState()
     http_port = find_free_port()
     httpd = start_overlay_server(http_port, serve_dir, leaf_state)
-    # The overlay URL CEF loads. A real Solar bundle ignores extra query params;
-    # our fallback page polls /leaf.json off the same origin.
-    overlay_url = f"http://127.0.0.1:{http_port}/{entry}?mode=broadcast"
+
+    # Start the loopback Orion-WS stand-in (#79). The REAL Solar bundle gets its
+    # scene + leaf deltas ONLY from this stream in mode=broadcast; the bundle
+    # GET is served on the SAME port so the runtime's baseUrl (derived from the
+    # orion= host) resolves the wipe-cover RenderBundle. The fallback page does
+    # not need it (it polls /leaf.json) but the extra orion= param is harmless.
+    orion: Optional[OrionStandIn] = None
+    ws_standin_port = find_free_port()
+    try:
+        orion = OrionStandIn(port=ws_standin_port, leaf_path=M10_LEAF_PATH, log=log)
+        orion.start()
+        log(f"[orion] loopback Orion-WS stand-in on {orion.orion_ws_url} "
+            "(LSDP/1.1 snapshot+delta + bundle GET; the real Solar bundle "
+            "renders wipe-cover from THIS stream).")
+    except Exception as exc:  # noqa: BLE001 — fall back to the leaf-poll path
+        log(f"[orion] could not start the Orion-WS stand-in ({type(exc).__name__}: "
+            f"{redactor(str(exc))}); the real Solar bundle will have no scene "
+            "source — only the /leaf.json fallback page can render.")
+        orion = None
+
+    # The overlay URL CEF loads. The REAL Solar host reads `orion=` (its mount()
+    # bootstrap: orionUrl = params.get('orion') ?? wss://${host}/orion/...) and
+    # `mode=broadcast`; a dummy viewer token satisfies the subscribe frame. The
+    # fallback page ignores both and polls /leaf.json off the same origin.
+    orion_q = ""
+    if orion is not None:
+        orion_q = "&orion=" + urllib.parse.quote(orion.orion_ws_url, safe="") \
+            + "&token=m10-viewer-standin"
+    overlay_url = f"http://127.0.0.1:{http_port}/{entry}?mode=broadcast{orion_q}"
     log(f"[overlay] serving {serve_dir} on http://127.0.0.1:{http_port} "
-        f"(engine={engine}); CEF loads {entry}")
+        f"(engine={engine}); CEF loads {entry} "
+        f"{'(scene via orion= stand-in)' if orion else '(no orion stand-in)'}")
 
     port = find_free_port()
     password = _secrets.token_urlsafe(16)
@@ -1556,7 +1656,7 @@ def main() -> int:
         rc = asyncio.run(run(ws_url=ws_url, password=sentinel_pw, args=args,
                              redactor=redactor, log=log, stream_key=stream_key,
                              overlay_url=overlay_url, leaf_state=leaf_state,
-                             engine=engine))
+                             engine=engine, orion=orion))
     except KeyboardInterrupt:
         log("interrupted")
         rc = 130
@@ -1570,6 +1670,11 @@ def main() -> int:
             httpd.shutdown()
         except Exception:
             pass
+        if orion is not None:
+            try:
+                orion.stop()
+            except Exception:
+                pass
         if rc not in (0, 3):
             for ln in pulsar.lines[-60:]:
                 log(redactor(f"  | {ln}"))
