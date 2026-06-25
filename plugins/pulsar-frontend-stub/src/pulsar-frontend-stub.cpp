@@ -1223,9 +1223,30 @@ void PulsarFrontendAPI::obs_frontend_start_virtualcam(void)
 {
     if (!virtualcamOutput || obs_output_active(virtualcamOutput))
         return;
-    if (!obs_output_start(virtualcamOutput))
+    // Load-order guard: outputs are created at startup, but the
+    // "virtualcam_output" type is registered LATER by win-dshow's
+    // obs_module_load. An output created before that registration carries no
+    // info (obs_output_get_flags()==0) and can never start. Re-create it now
+    // that all modules are loaded so it binds the real win-dshow output info.
+    if (obs_output_get_flags(virtualcamOutput) == 0) {
+        obs_output_release(virtualcamOutput);
+        virtualcamOutput = obs_output_create("virtualcam_output", "PulsarVCam", nullptr, nullptr);
+        if (!virtualcamOutput) {
+            blog(LOG_WARNING,
+                 "[pulsar-frontend-stub] virtualcam_output type unavailable (win-dshow not loaded?)");
+            return;
+        }
+        hookOutputSignals(virtualcamOutput, OnVCamStart, OnVCamStop);
+    }
+    // A raw output (virtualcam_output) needs the program video+audio mix bound
+    // before it can start (upstream BasicOutputHandler::StartVirtualCam,
+    // ProgramView => obs_get_video()).
+    obs_output_set_media(virtualcamOutput, obs_get_video(), obs_get_audio());
+    if (!obs_output_start(virtualcamOutput)) {
+        const char *vcamErr = obs_output_get_last_error(virtualcamOutput);
         blog(LOG_INFO, "[pulsar-frontend-stub] obs_output_start (vcam) declined: %s",
-             obs_output_get_last_error(virtualcamOutput));
+             vcamErr ? vcamErr : "(null)");
+    }
 }
 
 void PulsarFrontendAPI::obs_frontend_stop_virtualcam(void)
