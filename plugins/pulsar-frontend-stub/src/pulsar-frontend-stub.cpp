@@ -546,6 +546,12 @@ private:
     obs_output_t *recordOutput = nullptr;
     obs_output_t *replayOutput = nullptr;
     obs_output_t *virtualcamOutput = nullptr;
+    // Source-mode virtual cam (Zab): when a "ZabVirtualCamSource" scene exists,
+    // the vcam carries THAT scene (the source the operator chose in settings)
+    // through a dedicated view instead of the program. Created lazily on the
+    // first source-mode start, torn down with the output.
+    obs_view_t *vcamView = nullptr;
+    video_t *vcamVideo = nullptr;
     obs_service_t *streamService = nullptr;
 
     obs_encoder_t *videoEncoder = nullptr;
@@ -936,6 +942,13 @@ void PulsarFrontendAPI::teardown()
         obs_output_release(virtualcamOutput);
         virtualcamOutput = nullptr;
     }
+    if (vcamView) {
+        obs_view_remove(vcamView);
+        obs_view_set_source(vcamView, 0, nullptr);
+        obs_view_destroy(vcamView);
+        vcamView = nullptr;
+        vcamVideo = nullptr;
+    }
     if (streamService) {
         obs_service_release(streamService);
         streamService = nullptr;
@@ -1238,10 +1251,28 @@ void PulsarFrontendAPI::obs_frontend_start_virtualcam(void)
         }
         hookOutputSignals(virtualcamOutput, OnVCamStart, OnVCamStop);
     }
-    // A raw output (virtualcam_output) needs the program video+audio mix bound
-    // before it can start (upstream BasicOutputHandler::StartVirtualCam,
-    // ProgramView => obs_get_video()).
-    obs_output_set_media(virtualcamOutput, obs_get_video(), obs_get_audio());
+    // A raw output (virtualcam_output) needs a video+audio mix bound before it
+    // can start (upstream BasicOutputHandler::StartVirtualCam). Default is the
+    // program (ProgramView => obs_get_video()). Source mode (Zab): if a
+    // dedicated "ZabVirtualCamSource" scene exists — Prism builds it with the
+    // source the OPERATOR chose in settings — expose THAT through a private view
+    // so the virtual cam carries just their camera, reusable everywhere. The
+    // engine never picks a source itself; without that scene it's the program.
+    video_t *vcamMix = obs_get_video();
+    obs_source_t *vcamScene = obs_get_source_by_name("ZabVirtualCamSource");
+    if (vcamScene) {
+        if (!vcamView)
+            vcamView = obs_view_create();
+        obs_view_set_source(vcamView, 0, vcamScene);
+        if (!vcamVideo)
+            vcamVideo = obs_view_add(vcamView);
+        if (vcamVideo)
+            vcamMix = vcamVideo;
+        obs_source_release(vcamScene);
+        blog(LOG_INFO,
+             "[pulsar-frontend-stub] virtual cam SOURCE mode -> 'ZabVirtualCamSource'");
+    }
+    obs_output_set_media(virtualcamOutput, vcamMix, obs_get_audio());
     if (!obs_output_start(virtualcamOutput)) {
         const char *vcamErr = obs_output_get_last_error(virtualcamOutput);
         blog(LOG_INFO, "[pulsar-frontend-stub] obs_output_start (vcam) declined: %s",
