@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Added
+
+- `@clodocapeo/pulsar-client`: `pulsar.audio` namespace — stream-level mic
+  control (mute/unmute/toggle, device enumeration + selection via
+  `SetInputSettings.device_id`) wrapping the native obs-websocket v5 `Input*`
+  requests, no vendor plugin involved. Mute state lives on the mic input
+  itself, not on any scene, so cockpit mic controls survive scene switches.
+  Adds the typed `inputMuteStateChanged` event.
+
 ## [1.1.0] - 2026-06-10
 
 Operability + M10 transition groundwork release. Builds on the V1 headless

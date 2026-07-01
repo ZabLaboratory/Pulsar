@@ -46,11 +46,21 @@ interface AdaptiveState {
   last_drop_ratio: number;
 }
 
+interface MockInput {
+  name: string;
+  kind: string;
+  muted: boolean;
+  settings: Json;
+}
+
 export class MockObsWebSocket {
   readonly httpServer: Server;
   readonly wss: WebSocketServer;
   readonly destinations = new Map<string, VendorDest>();
   readonly clients = new Set<WebSocket>();
+  readonly inputs = new Map<string, MockInput>([
+    ["Mic/Aux", { name: "Mic/Aux", kind: "wasapi_input_capture", muted: false, settings: { device_id: "default" } }],
+  ]);
 
   video: VideoState = {
     fps: 60,
@@ -144,6 +154,14 @@ export class MockObsWebSocket {
     }
   }
 
+  /** Emit a baseline (non-vendor) obs-websocket v5 event, e.g. InputMuteStateChanged. */
+  emitEvent(eventType: string, eventData: Json): void {
+    const frame = { op: 5, d: { eventType, eventIntent: 1, eventData } };
+    for (const c of this.clients) {
+      if (c.readyState === c.OPEN) sendFrame(c, frame);
+    }
+  }
+
   private handleConnection(ws: WebSocket): void {
     this.clients.add(ws);
 
@@ -179,6 +197,9 @@ export class MockObsWebSocket {
   }
 
   private handleRequest(requestType: string, requestData: Json): Json {
+    const inputResponse = this.handleInputRequest(requestType, requestData);
+    if (inputResponse !== undefined) return inputResponse;
+
     if (requestType !== "CallVendorRequest") {
       // We don't simulate the v5 baseline here; tests that need
       // baseline calls (StartRecord, etc.) install their own routing.
@@ -194,6 +215,53 @@ export class MockObsWebSocket {
     }
 
     return { responseData: this.handleVendor(vendorReq, vendorData) };
+  }
+
+  /** Native (non-vendor) obs-websocket v5 Input* requests used by AudioNamespace. Returns undefined for anything else. */
+  private handleInputRequest(requestType: string, data: Json): Json | undefined {
+    switch (requestType) {
+      case "GetSpecialInputs":
+        return { mic1: "Mic/Aux" };
+
+      case "GetInputList":
+        return { inputs: Array.from(this.inputs.values()).map((i) => ({ inputName: i.name, inputKind: i.kind })) };
+
+      case "GetInputMute": {
+        const input = this.inputs.get(data["inputName"] as string);
+        return { inputMuted: input?.muted ?? false };
+      }
+
+      case "SetInputMute": {
+        const input = this.inputs.get(data["inputName"] as string);
+        if (input) input.muted = data["inputMuted"] as boolean;
+        return {};
+      }
+
+      case "ToggleInputMute": {
+        const input = this.inputs.get(data["inputName"] as string);
+        if (input) input.muted = !input.muted;
+        return { inputMuted: input?.muted ?? false };
+      }
+
+      case "GetInputPropertiesListPropertyItems": {
+        if (data["propertyName"] !== "device_id") return { propertyItems: [] };
+        return {
+          propertyItems: [
+            { itemName: "Default", itemValue: "default", itemEnabled: true },
+            { itemName: "USB Mic", itemValue: "usb-mic-1", itemEnabled: true },
+          ],
+        };
+      }
+
+      case "SetInputSettings": {
+        const input = this.inputs.get(data["inputName"] as string);
+        if (input) Object.assign(input.settings, data["inputSettings"] as Json);
+        return {};
+      }
+
+      default:
+        return undefined;
+    }
   }
 
   private handleVendor(requestType: string, data: Json): Json {

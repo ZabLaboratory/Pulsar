@@ -1,0 +1,71 @@
+import type { PulsarClient } from "./client.js";
+import type { AudioDevice, AudioInput, SpecialInputs } from "./types.js";
+
+/**
+ * Mic / audio-input control. Wraps the native obs-websocket v5 Input*
+ * requests (no vendor plugin involved) -- GetSpecialInputs to resolve the
+ * mic slot name, GetInputList/GetInputMute/SetInputMute/ToggleInputMute
+ * for mute state, GetInputPropertiesListPropertyItems("device_id") to
+ * enumerate capture devices on a wasapi_input_capture input, and
+ * SetInputSettings to switch device.
+ *
+ * Stream-level by design: mic state lives on the OBS input, not on any
+ * scene, so it survives scene switches for free.
+ */
+export class AudioNamespace {
+  constructor(private readonly client: PulsarClient) {}
+
+  /** Names of the Mic/Auxiliary input slots (mic1..mic4) configured in Pulsar. */
+  async specialInputs(): Promise<SpecialInputs> {
+    const resp = await this.client.obs.call("GetSpecialInputs");
+    return resp as unknown as SpecialInputs;
+  }
+
+  /** All audio-capable inputs (kind starts with wasapi_input/output_capture, etc). */
+  async listInputs(): Promise<AudioInput[]> {
+    const resp = await this.client.obs.call("GetInputList");
+    const inputs = (resp as unknown as { inputs: Array<Record<string, unknown>> }).inputs ?? [];
+    return inputs.map((i) => ({
+      name: String(i.inputName ?? ""),
+      kind: String(i.inputKind ?? ""),
+    }));
+  }
+
+  async isMuted(inputName: string): Promise<boolean> {
+    const resp = await this.client.obs.call("GetInputMute", { inputName } as never);
+    return Boolean((resp as unknown as { inputMuted: boolean }).inputMuted);
+  }
+
+  async setMuted(inputName: string, muted: boolean): Promise<void> {
+    await this.client.obs.call("SetInputMute", { inputName, inputMuted: muted } as never);
+  }
+
+  /** Returns the new mute state after toggling. */
+  async toggleMuted(inputName: string): Promise<boolean> {
+    const resp = await this.client.obs.call("ToggleInputMute", { inputName } as never);
+    return Boolean((resp as unknown as { inputMuted: boolean }).inputMuted);
+  }
+
+  /** Enumerate the physical devices selectable on a wasapi_input_capture input. */
+  async listDevices(inputName: string): Promise<AudioDevice[]> {
+    const resp = await this.client.obs.call("GetInputPropertiesListPropertyItems", {
+      inputName,
+      propertyName: "device_id",
+    } as never);
+    const items = (resp as unknown as { propertyItems: Array<Record<string, unknown>> }).propertyItems ?? [];
+    return items.map((i) => ({
+      id: String(i.itemValue ?? ""),
+      name: String(i.itemName ?? ""),
+      enabled: i.itemEnabled !== false,
+    }));
+  }
+
+  /** Switch the capture device of a mic input. Applies on top of existing settings. */
+  async setDevice(inputName: string, deviceId: string): Promise<void> {
+    await this.client.obs.call("SetInputSettings", {
+      inputName,
+      inputSettings: { device_id: deviceId },
+      overlay: true,
+    } as never);
+  }
+}

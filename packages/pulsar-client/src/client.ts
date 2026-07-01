@@ -7,9 +7,11 @@ import { VideoNamespace } from "./video.js";
 import { AdaptiveNamespace } from "./adaptive.js";
 import { RecordNamespace } from "./record.js";
 import { StreamNamespace } from "./stream.js";
+import { AudioNamespace } from "./audio.js";
 import { bitrateAdjustedFromWire, type WireBitrateAdjustedEvent } from "./wire.js";
 import type {
   ConnectOptions,
+  InputMuteStateChangedEvent,
   RecordStateChangedEvent,
   StreamStateChangedEvent,
   StudioModeStateChangedEvent,
@@ -55,6 +57,7 @@ export class PulsarClient extends TypedEventEmitter {
   public readonly adaptive: AdaptiveNamespace;
   public readonly record: RecordNamespace;
   public readonly stream: StreamNamespace;
+  public readonly audio: AudioNamespace;
 
   private connected = false;
 
@@ -66,6 +69,7 @@ export class PulsarClient extends TypedEventEmitter {
     this.adaptive = new AdaptiveNamespace(this);
     this.record = new RecordNamespace(this);
     this.stream = new StreamNamespace(this);
+    this.audio = new AudioNamespace(this);
 
     this.obs.on("ConnectionClosed", (info) => {
       this.connected = false;
@@ -90,6 +94,13 @@ export class PulsarClient extends TypedEventEmitter {
     this.obs.on("StudioModeStateChanged", (data) => {
       const evt: StudioModeStateChangedEvent = { enabled: data.studioModeEnabled };
       this.emit("studioModeStateChanged", evt);
+    });
+    this.obs.on("InputMuteStateChanged", (data) => {
+      const evt: InputMuteStateChangedEvent = {
+        inputName: data.inputName,
+        inputMuted: data.inputMuted,
+      };
+      this.emit("inputMuteStateChanged", evt);
     });
 
     // Pulsar vendor events -- VendorEvent payload includes vendorName +

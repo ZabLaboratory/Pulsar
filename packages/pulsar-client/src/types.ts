@@ -115,6 +115,35 @@ export interface BitrateAdjustedEvent {
   dropRatio: number;
 }
 
+/** GetSpecialInputs response -- names of the mic/desktop audio slots. */
+export interface SpecialInputs {
+  desktop1?: string;
+  desktop2?: string;
+  mic1?: string;
+  mic2?: string;
+  mic3?: string;
+  mic4?: string;
+}
+
+/** A single entry from GetInputList. */
+export interface AudioInput {
+  name: string;
+  kind: string;
+}
+
+/** A single capture device from GetInputPropertiesListPropertyItems("device_id"). */
+export interface AudioDevice {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
+/** InputMuteStateChanged event payload. */
+export interface InputMuteStateChangedEvent {
+  inputName: string;
+  inputMuted: boolean;
+}
+
 /** Connection options for PulsarClient.connect. */
 export interface ConnectOptions {
   /** Defaults to "ws://127.0.0.1:4455". */
@@ -133,6 +162,7 @@ export interface PulsarEventMap {
   recordStateChanged: RecordStateChangedEvent;
   streamStateChanged: StreamStateChangedEvent;
   studioModeStateChanged: StudioModeStateChangedEvent;
+  inputMuteStateChanged: InputMuteStateChangedEvent;
   connectionClosed: { code: number; reason: string };
 }
 
