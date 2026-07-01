@@ -114,6 +114,51 @@ describe("PulsarClient", () => {
     });
   });
 
+  describe("audio", () => {
+    it("specialInputs resolves the mic slot name", async () => {
+      const s = await client.audio.specialInputs();
+      expect(s.mic1).toBe("Mic/Aux");
+    });
+
+    it("listInputs surfaces name + kind", async () => {
+      const inputs = await client.audio.listInputs();
+      expect(inputs).toEqual([{ name: "Mic/Aux", kind: "wasapi_input_capture" }]);
+    });
+
+    it("mute / unmute / toggle round trip", async () => {
+      expect(await client.audio.isMuted("Mic/Aux")).toBe(false);
+
+      await client.audio.setMuted("Mic/Aux", true);
+      expect(await client.audio.isMuted("Mic/Aux")).toBe(true);
+
+      expect(await client.audio.toggleMuted("Mic/Aux")).toBe(false);
+      expect(await client.audio.isMuted("Mic/Aux")).toBe(false);
+    });
+
+    it("listDevices returns the wasapi device_id list property", async () => {
+      const devices = await client.audio.listDevices("Mic/Aux");
+      expect(devices).toEqual([
+        { id: "default", name: "Default", enabled: true },
+        { id: "usb-mic-1", name: "USB Mic", enabled: true },
+      ]);
+    });
+
+    it("setDevice applies device_id on top of existing settings", async () => {
+      await client.audio.setDevice("Mic/Aux", "usb-mic-1");
+      expect(server.inputs.get("Mic/Aux")?.settings["device_id"]).toBe("usb-mic-1");
+    });
+
+    it("InputMuteStateChanged event maps to typed inputMuteStateChanged", async () => {
+      const received = new Promise<{ inputName: string; inputMuted: boolean }>((resolve) => {
+        client.on("inputMuteStateChanged", (e) => resolve(e));
+      });
+
+      server.emitEvent("InputMuteStateChanged", { inputName: "Mic/Aux", inputMuted: true });
+
+      expect(await received).toEqual({ inputName: "Mic/Aux", inputMuted: true });
+    });
+  });
+
   describe("events", () => {
     it("BitrateAdjusted vendor event maps to typed bitrateAdjusted", async () => {
       const received = new Promise<{

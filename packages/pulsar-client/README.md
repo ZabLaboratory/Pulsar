@@ -28,6 +28,7 @@ client surface and adds a `spawn()` API.
   - [`adaptive` namespace](#adaptive-namespace)
   - [`record` namespace](#record-namespace)
   - [`stream` namespace](#stream-namespace)
+  - [`audio` namespace](#audio-namespace)
   - [v5 baseline passthrough](#v5-baseline-passthrough)
 - [Events](#events)
 - [Errors](#errors)
@@ -130,6 +131,7 @@ class PulsarClient extends TypedEventEmitter {
   readonly adaptive:      AdaptiveNamespace;
   readonly record:        RecordNamespace;
   readonly stream:        StreamNamespace;
+  readonly audio:         AudioNamespace;
 
   // Lifecycle
   connect(opts?: ConnectOptions): Promise<void>;
@@ -399,6 +401,40 @@ class StreamNamespace {
 > `pulsar.destinations.start(id)` instead. The multi-destination API
 > is the recommended path.
 
+### `audio` namespace
+
+Mic / audio-input control. **Stream-level, not scene-level**: mute
+state and device selection live on the OBS input itself, so they
+survive scene switches for free — no vendor plugin involved, this
+wraps the native obs-websocket v5 `Input*` requests directly.
+
+```ts
+class AudioNamespace {
+  specialInputs(): Promise<SpecialInputs>;              // mic1..mic4 slot names
+  listInputs(): Promise<AudioInput[]>;
+  isMuted(inputName: string): Promise<boolean>;
+  setMuted(inputName: string, muted: boolean): Promise<void>;
+  toggleMuted(inputName: string): Promise<boolean>;      // returns new state
+  listDevices(inputName: string): Promise<AudioDevice[]>; // wasapi device_id list
+  setDevice(inputName: string, deviceId: string): Promise<void>;
+}
+```
+
+```ts
+// Resolve the mic slot, then flip mute + pick a device from the cockpit
+const { mic1 } = await pulsar.audio.specialInputs();
+if (mic1) {
+  await pulsar.audio.setMuted(mic1, true);
+
+  const devices = await pulsar.audio.listDevices(mic1);
+  const usb = devices.find((d) => d.name.includes("USB"));
+  if (usb) await pulsar.audio.setDevice(mic1, usb.id);
+}
+```
+
+Mute changes (from any client, including the OBS UI) broadcast as the
+typed `inputMuteStateChanged` event — see "Events" below.
+
 ### v5 baseline passthrough
 
 Anything obs-websocket v5 supports is reachable via `pulsar.obs.call(...)`:
@@ -461,6 +497,11 @@ pulsar.on("studioModeStateChanged", (e) => {
   console.log(e.enabled);
 });
 
+pulsar.on("inputMuteStateChanged", (e) => {
+  // v5 baseline event -- fires for any input, not just the mic; filter by e.inputName.
+  console.log(e.inputName, e.inputMuted);
+});
+
 pulsar.on("connectionClosed", (e) => {
   console.log(`connection closed: code=${e.code} reason=${e.reason}`);
 });
@@ -477,6 +518,7 @@ obs-websocket-js client directly: `pulsar.obs.on("InputCreated", …)`.
 | `recordStateChanged` | `{ state: OutputState, outputPath?: string }` |
 | `streamStateChanged` | `{ state: OutputState }` |
 | `studioModeStateChanged` | `{ enabled: boolean }` |
+| `inputMuteStateChanged` | `{ inputName: string, inputMuted: boolean }` |
 | `connectionClosed` | `{ code: number, reason: string }` |
 
 `OutputState = "STARTING" | "STARTED" | "STOPPING" | "STOPPED" | "PAUSED" | "RESUMED" | "RECONNECTING" | "RECONNECTED"`
@@ -521,15 +563,19 @@ Every public type is exported from the package root:
 ```ts
 import type {
   AdaptiveState,
+  AudioDevice,
+  AudioInput,
   BitrateAdjustedEvent,
   ConnectOptions,
   CreateDestinationInput,
   Destination,
   DestinationKind,
+  InputMuteStateChangedEvent,
   OutputState,
   PulsarEventMap,
   PulsarEventName,
   RecordStateChangedEvent,
+  SpecialInputs,
   StreamStateChangedEvent,
   StudioModeStateChangedEvent,
   VideoSettings,
