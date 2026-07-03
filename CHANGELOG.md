@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   knob degrade silently (logged) to today's byte-identical x264 path; the spawn
   never fails on encoder choice. Encoder identity is boot-fixed (no live swap),
   same tier as `PULSAR_FPS`/`PULSAR_RESOLUTION`.
+- `pulsar-multi-stream`: new `pulsar:GetCapabilities` vendor request (ADR 004
+  §3.3) — enumerates the encoder families this build exposes (mapped from
+  `obs_enum_encoder_types()` to the whitelisted short names `x264`/`nvenc`/
+  `qsv`/`amf`, never a raw obs id) plus `active_encoder`, the `video_bitrate`
+  `{min,max}` window and the `audio_bitrate` ladder. `GetVideoSettings` gains
+  `video_encoder`/`video_preset`/`video_profile` for a complete off-air
+  snapshot; `SetVideoSettings` now rejects those three fields with the same
+  typed boot-fixed error as `fps` (no live encoder swap — ADR 004 §3.4).
+- `@clodocapeo/pulsar-client`: `pulsar.capabilities` namespace
+  (`client.capabilities.get()` → typed `PulsarCapabilities`) wrapping
+  `pulsar:GetCapabilities`; `VideoSettings` gains `videoEncoder`/`videoPreset`/
+  `videoProfile`.
 - `@clodocapeo/pulsar-client`: `pulsar.audio` namespace — stream-level mic
   control (mute/unmute/toggle, device enumeration + selection via
   `SetInputSettings.device_id`) wrapping the native obs-websocket v5 `Input*`

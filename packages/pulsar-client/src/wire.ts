@@ -11,6 +11,7 @@ import type {
   CreateDestinationInput,
   Destination,
   DestinationKind,
+  PulsarCapabilities,
   VideoSettings,
   VideoSettingsPatch,
   VideoSettingsPatchResult,
@@ -72,6 +73,25 @@ export interface WireGetVideoSettingsResponse {
   video_rate_control?: string;
   video_keyint_sec?: number;
   audio_bitrate?: number;
+  video_encoder?: string;
+  video_preset?: string;
+  video_profile?: string;
+  error?: string;
+}
+
+// libobs vendor handlers can only serialise arrays as arrays of objects
+// (Utils::Json::ObsDataToJson walks obs_data_array items as obs_data), never
+// bare JSON scalar arrays. So Pulsar wraps each list element in a one-field
+// { value } object; the client unwraps it back to a flat array here.
+export interface WireValueItem<T> {
+  value: T;
+}
+
+export interface WireGetCapabilitiesResponse {
+  encoders?: WireValueItem<string>[];
+  active_encoder?: string;
+  video_bitrate?: { min?: number; max?: number };
+  audio_bitrate?: WireValueItem<number>[];
   error?: string;
 }
 
@@ -147,6 +167,21 @@ export function videoSettingsFromWire(w: WireGetVideoSettingsResponse): VideoSet
     videoRateControl: w.video_rate_control ?? "",
     videoKeyintSec: w.video_keyint_sec ?? 0,
     audioBitrate: w.audio_bitrate ?? 0,
+    videoEncoder: w.video_encoder ?? "",
+    videoPreset: w.video_preset ?? "",
+    videoProfile: w.video_profile ?? "",
+  };
+}
+
+export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapabilities {
+  return {
+    encoders: (w.encoders ?? []).map((e) => e.value),
+    activeEncoder: w.active_encoder ?? "",
+    videoBitrateKbps: {
+      min: w.video_bitrate?.min ?? 0,
+      max: w.video_bitrate?.max ?? 0,
+    },
+    audioBitrateKbps: (w.audio_bitrate ?? []).map((e) => e.value),
   };
 }
 

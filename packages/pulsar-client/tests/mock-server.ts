@@ -32,6 +32,9 @@ interface VideoState {
   video_rate_control: string;
   video_keyint_sec: number;
   audio_bitrate: number;
+  video_encoder: string;
+  video_preset: string;
+  video_profile: string;
 }
 
 interface AdaptiveState {
@@ -70,7 +73,13 @@ export class MockObsWebSocket {
     video_rate_control: "CBR",
     video_keyint_sec: 2,
     audio_bitrate: 160,
+    video_encoder: "x264",
+    video_preset: "veryfast",
+    video_profile: "high",
   };
+
+  /** Encoder families the mock advertises via GetCapabilities. */
+  capabilityEncoders: string[] = ["x264", "nvenc"];
 
   adaptive: AdaptiveState = {
     enabled: true,
@@ -331,9 +340,20 @@ export class MockObsWebSocket {
       case "GetVideoSettings":
         return { ...this.video };
 
+      case "GetCapabilities":
+        return {
+          encoders: this.capabilityEncoders.map((value) => ({ value })),
+          active_encoder: this.video.video_encoder,
+          video_bitrate: { min: 200, max: 50000 },
+          audio_bitrate: [64, 96, 128, 160, 192, 224, 256, 320].map((value) => ({ value })),
+        };
+
       case "SetVideoSettings": {
         if ("fps" in data || "width" in data || "height" in data) {
           return { error: "fps / width / height pinned at boot" };
+        }
+        if ("video_encoder" in data || "video_preset" in data || "video_profile" in data) {
+          return { error: "video_encoder / video_preset / video_profile pinned at boot" };
         }
         let changed = false;
         const out: Json = {};

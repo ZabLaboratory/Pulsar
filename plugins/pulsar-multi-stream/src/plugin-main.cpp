@@ -783,6 +783,35 @@ void on_stop_all(obs_data_t * /*req*/, obs_data_t *res, void *)
 
 // ---- Phase 12a: video / encoder settings vendor requests --------------
 
+// ADR 004 §3.3 mapping: concrete obs encoder id -> reported family short name.
+// The ONLY strings ever returned to the wire are the four whitelisted families;
+// a non-H.264-streaming id maps to nullptr and is dropped, so an over-wide or
+// unknown obs id can never leak a raw obs string into the capabilities payload.
+static const char *encoder_family_for_id(const char *id)
+{
+    if (!id) return nullptr;
+    if (std::strcmp(id, "obs_x264") == 0)
+        return "x264";
+    if (std::strcmp(id, "jim_nvenc") == 0 || std::strcmp(id, "obs_nvenc_h264_tex") == 0 ||
+        std::strcmp(id, "ffmpeg_nvenc") == 0)
+        return "nvenc";
+    if (std::strcmp(id, "obs_qsv11_v2") == 0 || std::strcmp(id, "obs_qsv11") == 0)
+        return "qsv";
+    if (std::strcmp(id, "h264_texture_amf") == 0)
+        return "amf";
+    return nullptr;
+}
+
+// Family of the encoder currently bound to the streaming output, or "x264" as
+// the safe whitelisted default when nothing is bound / the id is unrecognised
+// (frontend-stub only ever creates whitelisted ids, so this is defensive).
+static const char *active_encoder_family(obs_encoder_t *vEnc)
+{
+    if (!vEnc) return "x264";
+    const char *fam = encoder_family_for_id(obs_encoder_get_id(vEnc));
+    return fam ? fam : "x264";
+}
+
 // Returns the encoders the streaming output is wired to. Lazy: callers
 // dispose of the OBSOutputAutoRelease, but the encoder pointers belong to
 // frontend-stub and must NOT be released.
@@ -813,6 +842,10 @@ void on_get_video_settings(obs_data_t * /*req*/, obs_data_t *res, void *)
         obs_data_set_int(res, "video_bitrate", obs_data_get_int(s, "bitrate"));
         obs_data_set_string(res, "video_rate_control", obs_data_get_string(s, "rate_control"));
         obs_data_set_int(res, "video_keyint_sec", obs_data_get_int(s, "keyint_sec"));
+        // ADR 004 §3.4: complete off-air snapshot of the boot-fixed encoder.
+        obs_data_set_string(res, "video_encoder", active_encoder_family(vEnc));
+        obs_data_set_string(res, "video_preset", obs_data_get_string(s, "preset"));
+        obs_data_set_string(res, "video_profile", obs_data_get_string(s, "profile"));
     }
     if (aEnc) {
         OBSDataAutoRelease s = obs_encoder_get_settings(aEnc);
@@ -871,6 +904,19 @@ void on_set_video_settings(obs_data_t *req, obs_data_t *res, void *)
         return;
     }
 
+    // ADR 004 §3.4: encoder identity/preset/profile join the boot-fixed tier.
+    // A live encoder swap would tear down and recreate the whole output binding
+    // -- exactly the fragility the boot-fixed tier exists to avoid. Reject with
+    // the same typed "respawn to change" contract as fps.
+    if (obs_data_has_user_value(req, "video_encoder") ||
+        obs_data_has_user_value(req, "video_preset") ||
+        obs_data_has_user_value(req, "video_profile")) {
+        obs_data_set_string(res, "error",
+            "video_encoder / video_preset / video_profile are fixed at boot via "
+            "PULSAR_VIDEO_ENCODER; restart pulsar.exe with new env vars to change them");
+        return;
+    }
+
     obs_encoder_t *vEnc = nullptr, *aEnc = nullptr;
     get_current_encoders(vEnc, aEnc);
 
@@ -913,6 +959,55 @@ void on_set_video_settings(obs_data_t *req, obs_data_t *res, void *)
     obs_data_set_bool(res, "changed", changed);
 }
 
+// ADR 004 §3.3: enumerate the encoders this build actually exposes and report
+// them as the whitelisted family short names Prism's registry consumes. The
+// bitrate window mirrors the bounds SetVideoSettings enforces ([200,50000]);
+// audio_bitrate is the standard ffmpeg_aac ladder. active_encoder is the family
+// currently bound to the streaming output (feeds GetVideoSettings §3.4).
+void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
+{
+    OBSDataArrayAutoRelease encoders = obs_data_array_create();
+    bool seen[5] = {false, false, false, false, false}; // x264,nvenc,qsv,amf sentinel
+    auto family_index = [](const char *f) -> int {
+        if (std::strcmp(f, "x264") == 0) return 0;
+        if (std::strcmp(f, "nvenc") == 0) return 1;
+        if (std::strcmp(f, "qsv") == 0) return 2;
+        if (std::strcmp(f, "amf") == 0) return 3;
+        return 4;
+    };
+
+    const char *encId = nullptr;
+    for (size_t i = 0; obs_enum_encoder_types(i, &encId); ++i) {
+        const char *fam = encoder_family_for_id(encId);
+        if (!fam) continue; // non-whitelisted / non-H.264-streaming id: dropped
+        int idx = family_index(fam);
+        if (seen[idx]) continue;
+        seen[idx] = true;
+        OBSDataAutoRelease item = obs_data_create();
+        obs_data_set_string(item, "value", fam);
+        obs_data_array_push_back(encoders, item);
+    }
+    obs_data_set_array(res, "encoders", encoders);
+
+    obs_encoder_t *vEnc = nullptr, *aEnc = nullptr;
+    get_current_encoders(vEnc, aEnc);
+    obs_data_set_string(res, "active_encoder", active_encoder_family(vEnc));
+
+    OBSDataAutoRelease vb = obs_data_create();
+    obs_data_set_int(vb, "min", 200);
+    obs_data_set_int(vb, "max", 50000);
+    obs_data_set_obj(res, "video_bitrate", vb);
+
+    OBSDataArrayAutoRelease ab = obs_data_array_create();
+    static const int kAudioLadder[] = {64, 96, 128, 160, 192, 224, 256, 320};
+    for (int kbps : kAudioLadder) {
+        OBSDataAutoRelease item = obs_data_create();
+        obs_data_set_int(item, "value", kbps);
+        obs_data_array_push_back(ab, item);
+    }
+    obs_data_set_array(res, "audio_bitrate", ab);
+}
+
 
 } // namespace
 
@@ -946,10 +1041,11 @@ void obs_module_post_load(void)
     obs_websocket_vendor_register_request(g_vendor, "StopAllDestinations",  on_stop_all,            nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetVideoSettings",     on_get_video_settings,  nullptr);
     obs_websocket_vendor_register_request(g_vendor, "SetVideoSettings",     on_set_video_settings,  nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "GetCapabilities",      on_get_capabilities,    nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetAdaptiveState",     on_get_adaptive_state,  nullptr);
     obs_websocket_vendor_register_request(g_vendor, "SetAdaptiveEnabled",   on_set_adaptive_enabled, nullptr);
 
-    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 11 requests");
+    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 12 requests");
 
     // Phase 12b: spin up the adaptive bitrate worker AFTER vendor registration
     // so its emit_event path has a valid handle.

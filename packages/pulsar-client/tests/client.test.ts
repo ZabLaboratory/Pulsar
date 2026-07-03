@@ -77,6 +77,9 @@ describe("PulsarClient", () => {
         videoRateControl: "CBR",
         videoKeyintSec: 2,
         audioBitrate: 160,
+        videoEncoder: "x264",
+        videoPreset: "veryfast",
+        videoProfile: "high",
       });
     });
 
@@ -95,6 +98,44 @@ describe("PulsarClient", () => {
       await expect(
         client.callVendor("SetVideoSettings", { fps: 120 }),
       ).rejects.toBeInstanceOf(PulsarVendorError);
+    });
+
+    it("rejects live encoder / preset / profile mutation (boot-fixed, ADR 004 §3.4)", async () => {
+      await expect(
+        client.callVendor("SetVideoSettings", { video_encoder: "nvenc" }),
+      ).rejects.toBeInstanceOf(PulsarVendorError);
+      await expect(
+        client.callVendor("SetVideoSettings", { video_preset: "p1" }),
+      ).rejects.toBeInstanceOf(PulsarVendorError);
+      await expect(
+        client.callVendor("SetVideoSettings", { video_profile: "main" }),
+      ).rejects.toBeInstanceOf(PulsarVendorError);
+      // bitrate mutation still works alongside the new rejections.
+      const r = await client.video.setBitrate(3000);
+      expect(r.changed).toBe(true);
+    });
+  });
+
+  describe("capabilities", () => {
+    it("get unwraps the wire {value} lists into flat typed arrays", async () => {
+      const caps = await client.capabilities.get();
+      expect(caps).toEqual({
+        encoders: ["x264", "nvenc"],
+        activeEncoder: "x264",
+        videoBitrateKbps: { min: 200, max: 50000 },
+        audioBitrateKbps: [64, 96, 128, 160, 192, 224, 256, 320],
+      });
+    });
+
+    it("always advertises at least x264", async () => {
+      const caps = await client.capabilities.get();
+      expect(caps.encoders).toContain("x264");
+    });
+
+    it("surfaces a server error field as PulsarVendorError", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities" ? { error: "detection failed" } : undefined;
+      await expect(client.capabilities.get()).rejects.toBeInstanceOf(PulsarVendorError);
     });
   });
 

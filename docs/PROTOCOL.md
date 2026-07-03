@@ -114,10 +114,19 @@ clients see snake_case on the wire.
 | `StopDestination` | `obs_output_stop` + async muxer trailer write. | `id` | `stopped: bool`, `error?` |
 | `StartAllDestinations` | Start every registered destination concurrently. Failed starts are logged server-side; the call resolves once the registry has tried them all. | — | `ok: bool`, `error?` |
 | `StopAllDestinations` | Mirror of the above. | — | `ok: bool`, `error?` |
-| `GetVideoSettings` | Snapshot the encoder + reset_video state. | — | `fps`, `width`, `height`, `video_bitrate`, `video_rate_control`, `video_keyint_sec`, `audio_bitrate`, `error?` |
-| `SetVideoSettings` | Mutate encoder bitrates **live**. Setting `fps` / `width` / `height` is rejected — those require boot-time env vars (`PULSAR_FPS`, `PULSAR_RESOLUTION`). Audio bitrate is only applied while the audio encoder is idle. | `video_bitrate?`, `audio_bitrate?` | `changed: bool`, `video_bitrate?`, `audio_bitrate?`, `error?` |
+| `GetVideoSettings` | Snapshot the encoder + reset_video state. Includes the boot-fixed encoder identity (`video_encoder` / `video_preset` / `video_profile`). | — | `fps`, `width`, `height`, `video_bitrate`, `video_rate_control`, `video_keyint_sec`, `audio_bitrate`, `video_encoder`, `video_preset`, `video_profile`, `error?` |
+| `SetVideoSettings` | Mutate encoder bitrates **live**. Setting `fps` / `width` / `height` is rejected — those require boot-time env vars (`PULSAR_FPS`, `PULSAR_RESOLUTION`). `video_encoder` / `video_preset` / `video_profile` are likewise rejected: encoder identity is boot-fixed via `PULSAR_VIDEO_ENCODER` (no live swap — see ADR 004 §3.4). Audio bitrate is only applied while the audio encoder is idle. | `video_bitrate?`, `audio_bitrate?` | `changed: bool`, `video_bitrate?`, `audio_bitrate?`, `error?` |
+| `GetCapabilities` | Enumerate the encoder families this build exposes (via `obs_enum_encoder_types()`, mapped to Pulsar short names) plus the bitrate windows. Off-air detection; `active_encoder` is the family bound to the streaming output. See list-encoding note below. | — | `encoders: {value: string}[]`, `active_encoder: string`, `video_bitrate: {min, max}`, `audio_bitrate: {value: number}[]`, `error?` |
 | `GetAdaptiveState` | Snapshot the bitrate adaptation worker. | — | `enabled`, `target_kbps`, `current_kbps`, `floor_kbps`, `stable_ticks`, `adjustments_total`, `last_delta_total`, `last_delta_dropped`, `last_drop_ratio`, `error?` |
 | `SetAdaptiveEnabled` | Toggle the worker. Disabling pauses sampling; the encoder bitrate is left at whatever value the worker last applied. Re-enabling resets `stable_ticks` to 0 so the loop re-warms before any climb attempt. | `enabled` | `enabled: bool`, `error?` |
+
+> **List encoding on the wire.** libobs vendor handlers can only serialise
+> arrays as arrays of *objects* (`Utils::Json::ObsDataToJson` walks each
+> `obs_data_array` item as an `obs_data`), never bare JSON scalar arrays. So
+> `GetCapabilities` wraps each `encoders` / `audio_bitrate` element in a
+> one-field `{ "value": … }` object. `@clodocapeo/pulsar-client`'s
+> `CapabilitiesNamespace.get()` unwraps these back into flat `string[]` /
+> `number[]` before handing the typed `PulsarCapabilities` to callers.
 
 ### Destination kinds
 
