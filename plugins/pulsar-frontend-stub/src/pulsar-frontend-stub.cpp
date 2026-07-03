@@ -58,6 +58,7 @@
 #include <util/darray.h>
 #include <util/util.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -589,6 +590,122 @@ private:
     std::vector<StubCallback<obs_frontend_save_cb>> preloadCallbacks;
 };
 
+namespace {
+
+// ADR 004 §3.1-3.2 -- boot-time video encoder selection with typed x264
+// fallback. The family names below are the ONLY strings accepted from env;
+// each resolves against the LIVE obs_enum_encoder_types() set through a pinned
+// preference list (never a blind env string to libobs) to absorb OBS-version
+// id drift (ADR R4). v0 scope is H.264 only.
+
+bool encoderIdAvailable(const char *id)
+{
+    const char *enumerated = nullptr;
+    for (size_t i = 0; obs_enum_encoder_types(i, &enumerated); ++i) {
+        if (enumerated && std::strcmp(enumerated, id) == 0)
+            return true;
+    }
+    return false;
+}
+
+// Concrete obs encoder id for a family, or nullptr if no id from that family's
+// preference list is present on this machine.
+const char *resolveEncoderId(const std::string &family)
+{
+    static const char *const kNvenc[] = {"jim_nvenc", "obs_nvenc_h264_tex", "ffmpeg_nvenc", nullptr};
+    static const char *const kQsv[]   = {"obs_qsv11_v2", "obs_qsv11", nullptr};
+    static const char *const kAmf[]   = {"h264_texture_amf", nullptr};
+
+    auto firstAvailable = [](const char *const *ids) -> const char * {
+        for (size_t i = 0; ids[i]; ++i)
+            if (encoderIdAvailable(ids[i]))
+                return ids[i];
+        return nullptr;
+    };
+
+    if (family == "x264")  return encoderIdAvailable("obs_x264") ? "obs_x264" : nullptr;
+    if (family == "nvenc") return firstAvailable(kNvenc);
+    if (family == "qsv")   return firstAvailable(kQsv);
+    if (family == "amf")   return firstAvailable(kAmf);
+    if (family == "auto") {
+        if (const char *id = firstAvailable(kNvenc)) return id;
+        if (const char *id = firstAvailable(kQsv))   return id;
+        if (const char *id = firstAvailable(kAmf))   return id;
+        return encoderIdAvailable("obs_x264") ? "obs_x264" : nullptr;
+    }
+    return nullptr; // unknown family (already whitelisted upstream, defensive)
+}
+
+// Concrete obs id -> reported family short name (ADR §3.3 mapping).
+const char *encoderFamilyForId(const char *id)
+{
+    if (std::strcmp(id, "jim_nvenc") == 0 || std::strcmp(id, "obs_nvenc_h264_tex") == 0 ||
+        std::strcmp(id, "ffmpeg_nvenc") == 0)
+        return "nvenc";
+    if (std::strcmp(id, "obs_qsv11_v2") == 0 || std::strcmp(id, "obs_qsv11") == 0)
+        return "qsv";
+    if (std::strcmp(id, "h264_texture_amf") == 0)
+        return "amf";
+    return "x264";
+}
+
+// Per-family whitelisted preset set + default. An env preset outside the set is
+// normalised to the default (logged), never passed raw to create (ADR R5).
+struct PresetSet {
+    const char *const *values;
+    const char *dflt;
+};
+
+PresetSet presetsForFamily(const std::string &family)
+{
+    static const char *const kX264[]  = {"ultrafast", "superfast", "veryfast", "faster", "fast",
+                                         "medium", "slow", "slower", "veryslow", nullptr};
+    static const char *const kNvenc[] = {"p1", "p2", "p3", "p4", "p5", "p6", "p7", nullptr};
+    static const char *const kQsv[]   = {"speed", "balanced", "quality", nullptr};
+    static const char *const kAmf[]   = {"speed", "balanced", "quality", nullptr};
+    if (family == "nvenc") return {kNvenc, "p5"};
+    if (family == "qsv")   return {kQsv, "balanced"};
+    if (family == "amf")   return {kAmf, "balanced"};
+    return {kX264, "veryfast"};
+}
+
+bool valueInSet(const char *const *set, const std::string &v)
+{
+    for (size_t i = 0; set[i]; ++i)
+        if (v == set[i])
+            return true;
+    return false;
+}
+
+std::string toLower(const char *s)
+{
+    std::string out = s ? s : "";
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    return out;
+}
+
+std::string toUpper(const char *s)
+{
+    std::string out = s ? s : "";
+    std::transform(out.begin(), out.end(), out.begin(),
+                   [](unsigned char c) { return (char)std::toupper(c); });
+    return out;
+}
+
+// Today's exact x264 parameter set (ADR RC2 / §3.2(3) byte-for-byte fallback).
+void applyX264Defaults(obs_data_t *s, int bitrate)
+{
+    obs_data_set_int(s, "bitrate", bitrate);
+    obs_data_set_string(s, "rate_control", "CBR");
+    obs_data_set_int(s, "keyint_sec", 2);
+    obs_data_set_string(s, "preset", "veryfast");
+    obs_data_set_string(s, "profile", "high");
+    obs_data_set_string(s, "tune", "zerolatency");
+}
+
+} // namespace
+
 bool PulsarFrontendAPI::setup()
 {
     // Default scene.
@@ -722,23 +839,106 @@ bool PulsarFrontendAPI::setup()
         if (v >= 200 && v <= 50000) videoBitrate = v;
         else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_VIDEO_BITRATE=%s rejected", e);
     }
+    // ---- ADR 004 §3.1-3.2: boot-time video encoder selection (x264 fallback) --
+    // PULSAR_VIDEO_ENCODER picks a family (whitelisted set); it resolves to a
+    // concrete obs id against the live obs_enum_encoder_types() set. Family
+    // absent, unknown env value, or a null create() all degrade to obs_x264
+    // with today's byte-identical settings -- the spawn never fails on encoder
+    // choice. Encoder identity joins fps/resolution in the boot-fixed tier.
+    std::string encoderFamily = "x264";
+    if (const char *e = std::getenv("PULSAR_VIDEO_ENCODER"); e && *e) {
+        std::string req = toLower(e);
+        if (req == "x264" || req == "nvenc" || req == "qsv" || req == "amf" || req == "auto")
+            encoderFamily = req;
+        else
+            blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_VIDEO_ENCODER=%s not in "
+                 "{x264,nvenc,qsv,amf,auto}; using x264", e);
+    }
+
+    const char *encoderId = resolveEncoderId(encoderFamily);
+    bool encoderFallback = false;
+    if (!encoderId) {
+        blog(LOG_WARNING, "[pulsar-frontend-stub] encoder '%s' unavailable on this "
+             "machine, falling back to x264", encoderFamily.c_str());
+        encoderFallback = true;
+    }
+
     OBSDataAutoRelease vEncSettings = obs_data_create();
-    obs_data_set_int(vEncSettings, "bitrate", videoBitrate);
-    obs_data_set_string(vEncSettings, "rate_control", "CBR");
-    obs_data_set_int(vEncSettings, "keyint_sec", 2);    // GOP = 2s -- Twitch / RTMP target
-    obs_data_set_string(vEncSettings, "preset", "veryfast");
-    obs_data_set_string(vEncSettings, "profile", "high");
-    obs_data_set_string(vEncSettings, "tune", "zerolatency");
-    videoEncoder = obs_video_encoder_create("obs_x264", "PulsarVideoEnc", vEncSettings, nullptr);
+    if (!encoderFallback) {
+        // Validate/normalise every knob before create (ADR §3.2) so a bad env
+        // value never reaches obs_video_encoder_create as a hard error.
+        const char *reportFamily = encoderFamilyForId(encoderId);
+
+        std::string rateControl = "CBR";
+        if (const char *e = std::getenv("PULSAR_VIDEO_RATE_CONTROL"); e && *e) {
+            std::string rc = toUpper(e);
+            if (rc == "CBR" || rc == "VBR" || rc == "CQP") rateControl = rc;
+            else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_VIDEO_RATE_CONTROL=%s "
+                      "not in {CBR,VBR,CQP}; using CBR", e);
+        }
+
+        std::string profile = "high";
+        if (const char *e = std::getenv("PULSAR_VIDEO_PROFILE"); e && *e) {
+            std::string p = toLower(e);
+            if (p == "baseline" || p == "main" || p == "high") profile = p;
+            else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_VIDEO_PROFILE=%s "
+                      "not in {baseline,main,high}; using high", e);
+        }
+
+        int keyintSec = 2;
+        if (const char *e = std::getenv("PULSAR_VIDEO_KEYINT_SEC"); e && *e) {
+            int v = std::atoi(e);
+            if (v >= 0 && v <= 20) keyintSec = v;
+            else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_VIDEO_KEYINT_SEC=%s "
+                      "rejected (0..20); using 2", e);
+        }
+
+        PresetSet presets = presetsForFamily(reportFamily);
+        std::string preset = presets.dflt;
+        if (const char *e = std::getenv("PULSAR_VIDEO_PRESET"); e && *e) {
+            std::string p = toLower(e);
+            if (valueInSet(presets.values, p)) preset = p;
+            else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_VIDEO_PRESET=%s unknown "
+                      "for encoder '%s'; using default '%s'", e, reportFamily, presets.dflt);
+        }
+
+        obs_data_set_int(vEncSettings, "bitrate", videoBitrate);
+        obs_data_set_string(vEncSettings, "rate_control", rateControl.c_str());
+        obs_data_set_int(vEncSettings, "keyint_sec", keyintSec);
+        obs_data_set_string(vEncSettings, "preset", preset.c_str());
+        obs_data_set_string(vEncSettings, "profile", profile.c_str());
+        if (std::strcmp(encoderId, "obs_x264") == 0)
+            obs_data_set_string(vEncSettings, "tune", "zerolatency"); // x264-only knob
+
+        videoEncoder = obs_video_encoder_create(encoderId, "PulsarVideoEnc", vEncSettings, nullptr);
+        if (!videoEncoder && std::strcmp(encoderId, "obs_x264") != 0) {
+            // §3.2(2): create() returned null for the GPU encoder -> typed fallback.
+            blog(LOG_WARNING, "[pulsar-frontend-stub] encoder '%s' (%s) failed to create, "
+                 "falling back to x264", reportFamily, encoderId);
+            encoderFallback = true;
+        }
+    }
+
+    if (encoderFallback) {
+        // §3.2(3): the x264 fallback path is byte-for-byte today's behaviour,
+        // regardless of any GPU-oriented env knobs.
+        obs_data_clear(vEncSettings);
+        applyX264Defaults(vEncSettings, videoBitrate);
+        encoderId = "obs_x264";
+        videoEncoder = obs_video_encoder_create("obs_x264", "PulsarVideoEnc", vEncSettings, nullptr);
+    }
+
+    encoderFamily = encoderFamilyForId(encoderId); // reflect what actually bound
     if (!videoEncoder) {
-        blog(LOG_WARNING, "[pulsar-frontend-stub] obs_x264 encoder unavailable");
+        blog(LOG_WARNING, "[pulsar-frontend-stub] video encoder '%s' unavailable", encoderId);
     } else {
         obs_encoder_set_video(videoEncoder, obs_get_video());
         if (recordOutput)
             obs_output_set_video_encoder(recordOutput, videoEncoder);
         if (streamOutput)
             obs_output_set_video_encoder(streamOutput, videoEncoder);
-        blog(LOG_INFO, "[pulsar-frontend-stub] x264 configured: %d kbps CBR, keyint=2s, preset=veryfast", videoBitrate);
+        blog(LOG_INFO, "[pulsar-frontend-stub] video encoder configured: family=%s id=%s, "
+             "%d kbps", encoderFamily.c_str(), encoderId, videoBitrate);
     }
 
     int audioBitrate = 160; // kbps

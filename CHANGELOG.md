@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Added
 
+- `pulsar-frontend-stub`: boot-time GPU video-encoder selection (ADR 004
+  §3.1-3.2). New env vars `PULSAR_VIDEO_ENCODER` (`x264`/`nvenc`/`qsv`/`amf`/
+  `auto`), `PULSAR_VIDEO_PRESET`, `PULSAR_VIDEO_PROFILE`,
+  `PULSAR_VIDEO_RATE_CONTROL`, `PULSAR_VIDEO_KEYINT_SEC`, all resolved against
+  the live `obs_enum_encoder_types()` set (H.264 only) with a mandatory typed
+  fallback to `obs_x264` — an absent family, a null `create()`, or an invalid
+  knob degrade silently (logged) to today's byte-identical x264 path; the spawn
+  never fails on encoder choice. Encoder identity is boot-fixed (no live swap),
+  same tier as `PULSAR_FPS`/`PULSAR_RESOLUTION`.
 - `@clodocapeo/pulsar-client`: `pulsar.audio` namespace — stream-level mic
   control (mute/unmute/toggle, device enumeration + selection via
   `SetInputSettings.device_id`) wrapping the native obs-websocket v5 `Input*`
