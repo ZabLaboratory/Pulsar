@@ -32,6 +32,9 @@ export interface CreateDestinationInput {
   key?: string;
 }
 
+/** Encoder family short names Pulsar reports (ADR 004 §3.3). */
+export type EncoderFamily = "x264" | "nvenc" | "qsv" | "amf";
+
 /** Snapshot returned by GetVideoSettings. */
 export interface VideoSettings {
   fps: number;
@@ -41,6 +44,24 @@ export interface VideoSettings {
   videoRateControl: string;
   videoKeyintSec: number;
   audioBitrate: number;
+  /** Active encoder family, boot-fixed via PULSAR_VIDEO_ENCODER (ADR 004 §3.4). */
+  videoEncoder: string;
+  /** Active encoder preset. */
+  videoPreset: string;
+  /** Active encoder H.264 profile. */
+  videoProfile: string;
+}
+
+/** Capabilities snapshot returned by GetCapabilities (ADR 004 §3.3). */
+export interface PulsarCapabilities {
+  /** Encoder families this build exposes (always contains "x264"). */
+  encoders: string[];
+  /** Encoder family currently bound to the streaming output. */
+  activeEncoder: string;
+  /** Inclusive video bitrate window SetVideoSettings enforces, in kbps. */
+  videoBitrateKbps: { min: number; max: number };
+  /** Discrete audio bitrate ladder, in kbps. */
+  audioBitrateKbps: number[];
 }
 
 /** Mutations accepted by SetVideoSettings. fps/width/height changes are

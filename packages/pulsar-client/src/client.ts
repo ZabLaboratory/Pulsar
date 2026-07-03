@@ -4,6 +4,7 @@ import { TypedEventEmitter } from "./events.js";
 import { PulsarNotConnectedError, PulsarVendorError } from "./errors.js";
 import { DestinationsNamespace } from "./destinations.js";
 import { VideoNamespace } from "./video.js";
+import { CapabilitiesNamespace } from "./capabilities.js";
 import { AdaptiveNamespace } from "./adaptive.js";
 import { RecordNamespace } from "./record.js";
 import { StreamNamespace } from "./stream.js";
@@ -54,6 +55,7 @@ export class PulsarClient extends TypedEventEmitter {
   public readonly obs: OBSWebSocket;
   public readonly destinations: DestinationsNamespace;
   public readonly video: VideoNamespace;
+  public readonly capabilities: CapabilitiesNamespace;
   public readonly adaptive: AdaptiveNamespace;
   public readonly record: RecordNamespace;
   public readonly stream: StreamNamespace;
@@ -66,6 +68,7 @@ export class PulsarClient extends TypedEventEmitter {
     this.obs = new OBSWebSocket();
     this.destinations = new DestinationsNamespace(this);
     this.video = new VideoNamespace(this);
+    this.capabilities = new CapabilitiesNamespace(this);
     this.adaptive = new AdaptiveNamespace(this);
     this.record = new RecordNamespace(this);
     this.stream = new StreamNamespace(this);
