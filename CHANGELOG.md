@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Fixed
+
+- `pulsar-scene-source`: repeated `pulsar-scene:SetCaptureSource` calls no
+  longer strand stale `browser_source` items on the program scene (#110). The
+  new source was created (canonical name `PulsarSceneSource`) before the old
+  one was removed, so libobs de-duped the fresh instance to
+  `PulsarSceneSource 2`; the exact-`strcmp` cleanup then missed every numbered
+  variant, leaving them accreting on the scene indefinitely and letting a
+  name-based consumer (Prism's `findBrowserSourceName`) lock onto a stale
+  instance from the 3rd re-point on. The cleanup now runs before the fresh
+  source is added, the fresh source reclaims the canonical name, and the
+  managed-item matcher recognises libobs de-dup variants (`base <n>`) so any
+  pre-existing drift is swept too. Regression-guarded by
+  `scripts/probe-scene-name-drift.py` in the offline probe suite.
+
 ## [1.2.0] - 2026-07-03
 
 ### ✨ Added

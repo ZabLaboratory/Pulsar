@@ -81,8 +81,37 @@ long long now_unix()
     return std::chrono::duration_cast<std::chrono::seconds>(t).count();
 }
 
+// True if `name` is `base`, or one of libobs's automatic de-dup
+// variants of it (`base 2`, `base 3`, ...). When a source is created
+// with a name libobs already knows, it appends " <n>" to keep names
+// unique ; an exact strcmp then misses that instance and leaves it
+// stranded on the scene forever (#110). Matching the numbered suffix
+// precisely — a space followed by digits only — cleans those variants
+// without over-matching an unrelated source that merely shares the
+// prefix (e.g. "PulsarSceneSourceCustom").
+bool is_managed_variant(const char *name, const char *base)
+{
+    size_t base_len = std::strlen(base);
+    if (std::strncmp(name, base, base_len) != 0)
+        return false;
+    const char *rest = name + base_len;
+    if (*rest == '\0')
+        return true; // exact match
+    if (*rest != ' ')
+        return false; // e.g. "PulsarSceneSourceCustom" — not ours
+    ++rest;
+    if (*rest == '\0')
+        return false; // trailing space with no number — not a de-dup name
+    for (const char *p = rest; *p; ++p) {
+        if (*p < '0' || *p > '9')
+            return false; // suffix isn't purely digits
+    }
+    return true;
+}
+
 // Walk every item of the given scene, remove ones whose source name
-// matches the Pulsar-managed capture set. Returns the number removed.
+// matches the Pulsar-managed capture set (canonical name or a libobs
+// de-dup variant of it). Returns the number removed.
 int remove_managed_items(obs_scene_t *scene)
 {
     struct Ctx { int removed; } ctx { 0 };
@@ -91,8 +120,8 @@ int remove_managed_items(obs_scene_t *scene)
         obs_source_t *src = obs_sceneitem_get_source(item);
         if (src) {
             const char *n = obs_source_get_name(src);
-            if (n && (std::strcmp(n, kCaptureSourceName) == 0
-                   || std::strcmp(n, kFrontendStubName)  == 0)) {
+            if (n && (is_managed_variant(n, kCaptureSourceName)
+                   || is_managed_variant(n, kFrontendStubName))) {
                 obs_sceneitem_remove(item);
                 c->removed += 1;
             }
@@ -167,8 +196,20 @@ void on_set_capture_source(obs_data_t *req, obs_data_t *res, void *)
         return;
     }
 
-    // Drop any prior managed items + add the new source.
+    // Drop any prior managed items FIRST — while the old source still
+    // owns the canonical name, obs_source_create above may have been
+    // de-duped to "PulsarSceneSource 2" (#110). Removing the old item
+    // frees its libobs refcount (the scene held the only ref), which
+    // releases the source and frees the canonical name synchronously.
     int removed = remove_managed_items(scene);
+
+    // Reclaim the canonical name now that it is free, so the fresh
+    // source is always "PulsarSceneSource" — never a numbered variant
+    // that a name-based consumer (Prism's findBrowserSourceName) could
+    // lock onto. No-op on the first call, where no de-dup occurred.
+    if (std::strcmp(obs_source_get_name(new_source), kCaptureSourceName) != 0)
+        obs_source_set_name(new_source, kCaptureSourceName);
+
     obs_sceneitem_t *item = obs_scene_add(scene, new_source);
     if (!item) {
         obs_data_set_string(res, "error", "scene_add_failed");
