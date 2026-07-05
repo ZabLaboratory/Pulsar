@@ -38,6 +38,7 @@
 #include <obs-websocket-api.h>
 
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -112,9 +113,22 @@ bool is_managed_variant(const char *name, const char *base)
 // Walk every item of the given scene, remove ones whose source name
 // matches the Pulsar-managed capture set (canonical name or a libobs
 // de-dup variant of it). Returns the number removed.
+//
+// Each matched source is RENAMED to a unique throwaway name *before* its
+// scene item is dropped. This is the crux of the #110 fix : obs_source_
+// set_name updates libobs's global name table synchronously (under the
+// sources mutex), so the canonical name "PulsarSceneSource" is freed the
+// instant this returns. obs_sceneitem_remove alone only *schedules* the
+// source's destruction, which libobs may defer to a later tick — relying
+// on that deferred release is a real race (proven intermittently in CI :
+// the replacement source, created while the old one still owned the
+// canonical name, stayed stuck as "PulsarSceneSource 2"). Renaming the
+// outgoing source out of the way removes the dependency on destroy timing
+// entirely. The throwaway name (source pointer + counter) is guaranteed
+// unique and does not match is_managed_variant, so it is never re-swept.
 int remove_managed_items(obs_scene_t *scene)
 {
-    struct Ctx { int removed; } ctx { 0 };
+    struct Ctx { int removed; unsigned counter; } ctx { 0, 0 };
     auto cb = [](obs_scene_t * /*scn*/, obs_sceneitem_t *item, void *param) -> bool {
         Ctx *c = static_cast<Ctx *>(param);
         obs_source_t *src = obs_sceneitem_get_source(item);
@@ -122,6 +136,10 @@ int remove_managed_items(obs_scene_t *scene)
             const char *n = obs_source_get_name(src);
             if (n && (is_managed_variant(n, kCaptureSourceName)
                    || is_managed_variant(n, kFrontendStubName))) {
+                std::string retired = "PulsarRetired-"
+                    + std::to_string(reinterpret_cast<uintptr_t>(src))
+                    + "-" + std::to_string(c->counter++);
+                obs_source_set_name(src, retired.c_str());
                 obs_sceneitem_remove(item);
                 c->removed += 1;
             }
@@ -196,19 +214,31 @@ void on_set_capture_source(obs_data_t *req, obs_data_t *res, void *)
         return;
     }
 
-    // Drop any prior managed items FIRST — while the old source still
-    // owns the canonical name, obs_source_create above may have been
-    // de-duped to "PulsarSceneSource 2" (#110). Removing the old item
-    // frees its libobs refcount (the scene held the only ref), which
-    // releases the source and frees the canonical name synchronously.
+    // Drop any prior managed items FIRST. While the old source still owns
+    // the canonical name, obs_source_create above may have been de-duped to
+    // "PulsarSceneSource 2" (#110). remove_managed_items renames every
+    // outgoing managed source out of the canonical name SYNCHRONOUSLY (see
+    // its comment), so the canonical name is guaranteed free once it returns
+    // — no dependency on libobs's deferred source destruction.
     int removed = remove_managed_items(scene);
 
-    // Reclaim the canonical name now that it is free, so the fresh
-    // source is always "PulsarSceneSource" — never a numbered variant
-    // that a name-based consumer (Prism's findBrowserSourceName) could
-    // lock onto. No-op on the first call, where no de-dup occurred.
-    if (std::strcmp(obs_source_get_name(new_source), kCaptureSourceName) != 0)
+    // Reclaim the canonical name now that it is free, so the fresh source is
+    // always "PulsarSceneSource" — never a numbered variant a name-based
+    // consumer (Prism's findBrowserSourceName) could lock onto. No-op on the
+    // first call, where no de-dup occurred. VERIFY the rename actually took
+    // (read the name back) instead of assuming it did : if some source we
+    // did not sweep still held the canonical name, libobs would silently
+    // re-de-dup and we surface that as a warning rather than a silent drift.
+    if (std::strcmp(obs_source_get_name(new_source), kCaptureSourceName) != 0) {
         obs_source_set_name(new_source, kCaptureSourceName);
+        const char *applied = obs_source_get_name(new_source);
+        if (!applied || std::strcmp(applied, kCaptureSourceName) != 0) {
+            blog(LOG_WARNING,
+                 "[pulsar-scene-source] canonical name still held after retire "
+                 "(fresh source is '%s') — name-based consumers may drift",
+                 applied ? applied : "(null)");
+        }
+    }
 
     obs_sceneitem_t *item = obs_scene_add(scene, new_source);
     if (!item) {

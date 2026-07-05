@@ -72,9 +72,12 @@ EVENT_SUBSCRIPTION_ALL = 0x7FF
 
 # Must match plugins/pulsar-scene-source/src/plugin-main.cpp.
 CANONICAL_NAME = "PulsarSceneSource"
-# How many re-points to drive. The investigation reproduced two coexisting
-# sources by the 4th call; go a bit further to be sure it never drifts.
-N_CALLS = 6
+# How many re-points to drive. The bug is an intermittent timing race (the
+# stale de-duped name surfaced on the 4th call of one CI run, not another),
+# so drive MANY rapid consecutive re-points to give the race every chance to
+# manifest. The original investigation reproduced coexistence by the 4th
+# call; we go well past that to keep a real fix from passing on luck.
+N_CALLS = 24
 
 
 def compute_auth(password: str, salt: str, challenge: str) -> str:

@@ -17,10 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variant, leaving them accreting on the scene indefinitely and letting a
   name-based consumer (Prism's `findBrowserSourceName`) lock onto a stale
   instance from the 3rd re-point on. The cleanup now runs before the fresh
-  source is added, the fresh source reclaims the canonical name, and the
-  managed-item matcher recognises libobs de-dup variants (`base <n>`) so any
-  pre-existing drift is swept too. Regression-guarded by
-  `scripts/probe-scene-name-drift.py` in the offline probe suite.
+  source is added; the outgoing managed source is renamed out of the
+  canonical name **synchronously** (`obs_source_set_name` updates libobs's
+  global name table under lock, whereas scene-item removal only *schedules*
+  the source's deferred destruction — relying on that release was an
+  intermittent race), so the fresh source can then reliably reclaim the
+  canonical name; and the managed-item matcher recognises libobs de-dup
+  variants (`base <n>`) so any pre-existing drift is swept too.
+  Regression-guarded by `scripts/probe-scene-name-drift.py` (24 rapid
+  re-points) in the offline probe suite.
 
 ## [1.2.0] - 2026-07-03
 
