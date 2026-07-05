@@ -266,6 +266,33 @@ if (-not $ready) {
 }
 Write-Host "==> PULSAR_READY received"
 
+# --------------------------------------------------------------------
+# Phase 2a -- scene-source name-drift regression (probe-scene-name-drift.py,
+# #110). Connect-only: drives pulsar-scene:SetCaptureSource N times against
+# the shared instance and asserts the program scene keeps EXACTLY ONE
+# Pulsar-managed browser_source (canonically named) at every step -- no
+# stale "PulsarSceneSource 2" accumulation. Runs BEFORE the $probes loop so
+# its exit-3 (light build: obs-browser absent) can be tolerated explicitly,
+# same pattern as the Phase-1 skip-aware probes. On a -Full build (CI) it
+# asserts for real. It leaves one managed browser_source on the program
+# scene; harmless to the record/adaptive probes that follow (dead URL, no
+# paint).
+# --------------------------------------------------------------------
+$nameDriftProbe = Join-Path $repoRoot "scripts/probe-scene-name-drift.py"
+Write-Host "==> Running probe-scene-name-drift.py (connect-only, #110)"
+& python $nameDriftProbe
+$nameDriftCode = $LASTEXITCODE
+if ($nameDriftCode -eq 3) {
+    Write-Host "==> probe-scene-name-drift.py SKIPPED (light build -- browser_source absent)"
+} elseif ($nameDriftCode -ne 0) {
+    Write-Host "==> probe-scene-name-drift.py FAILED (exit $nameDriftCode)"
+    Write-Host "==> Stopping pulsar.exe"
+    if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force; $proc.WaitForExit(5000) | Out-Null }
+    exit 1
+} else {
+    Write-Host "==> probe-scene-name-drift.py OK"
+}
+
 # Connect-only probes. Each reads the shared instance's port/password
 # from bin/64bit/obs-websocket/config.json (seeded by the Phase 2 boot
 # above) and connects to the single live pulsar.exe.
