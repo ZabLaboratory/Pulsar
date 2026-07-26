@@ -163,6 +163,31 @@ if ($stingerCode -eq 3) {
 }
 
 # --------------------------------------------------------------------
+# Phase 1d-bis -- self-spawning REPLAY BUFFER probe (probe-replay.py,
+# issue #117 / ADR Prism 024 §3.1).
+#
+# Asserts the replay buffer is wired, not scaffolding: an off-air arm is
+# refused AND logged (no encoder started), then StartRecord brings the
+# shared encoders up, StartReplayBuffer really flips
+# GetReplayBufferStatus.outputActive to true, SaveReplayBuffer produces
+# a readable h264+aac MP4, and GetLastReplayBufferReplay returns its
+# REAL path (it used to return "" forever). Self-spawns its OWN
+# pulsar.exe child (fresh ephemeral port + isolated PULSAR_RECORD_DIR)
+# for the same config.json-reseed reason as the other Phase-1 probes.
+# Encoder-agnostic, so it runs on a light build too.
+# --------------------------------------------------------------------
+$replayProbe = Join-Path $repoRoot "scripts/probe-replay.py"
+Write-Host "==> Running probe-replay.py (self-spawn replay buffer, #117)"
+& python $replayProbe --exe $pulsar
+$replayCode = $LASTEXITCODE
+if ($replayCode -ne 0) {
+    Write-Host "==> probe-replay.py FAILED (exit $replayCode)"
+    Write-Host "==> The replay buffer did not arm/save a real file -- aborting before the shared suite."
+    exit 1
+}
+Write-Host "==> probe-replay.py OK"
+
+# --------------------------------------------------------------------
 # Phase 1e -- self-spawning M10 OVERLAY live end-to-end probe in
 # PROOF-ONLY mode (probe-m10-canvas-live.py, #79 / Solar-CEF pivot).
 #
