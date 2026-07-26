@@ -54,17 +54,39 @@ The notable v5 surfaces Pulsar exercises:
 | Outputs | `GetOutputList`, `GetOutputStatus` (informational; multi-destination control goes through `pulsar:*`) |
 | Vendor | `CallVendorRequest` (the transport for `pulsar:*`, see below) |
 
-Two things to keep in mind when driving the baseline against Pulsar:
+Three things to keep in mind when driving the baseline against Pulsar:
 
-1. **`StartStream` ≠ go live.** The v5 `StartStream` request talks to
+1. **A start/stop request never reports an effect it did not observe.**
+   `StartStream`/`StopStream`, `StartRecord`/`StopRecord`,
+   `StartReplayBuffer`/`StopReplayBuffer`/`SaveReplayBuffer` and
+   `StartVirtualCam`/`StopVirtualCam` re-read the real output state after
+   the action and answer:
+   - **success** when the output reached the requested state, or when
+     libobs accepted the action and is completing it asynchronously (an
+     rtmp connect thread, an `ffmpeg_muxer` flush);
+   - **error** — `OutputNotRunning` (501) for a start, `OutputRunning`
+     (500) for a stop — when the action was refused. The `comment`
+     carries `obs_output_get_last_error()` verbatim, never a generic
+     message.
+
+   These requests stay bounded and short: they verify a *refusal*, they
+   never wait for activation. The request signatures, response fields and
+   status enum are unchanged.
+
+   This replaces the pre-`#120` behaviour where an unconfigured output was
+   reported as started (`result: true` followed by
+   `GetXStatus.outputActive: false`).
+2. **`StartStream` ≠ go live.** The v5 `StartStream` request talks to
    the singleton `PulsarStream` rtmp_output created by
-   `pulsar-frontend-stub`. It succeeds on the wire even when no
-   streaming service URL is configured — the underlying
-   `obs_output_start` declines silently. To actually go live through
-   the v5 surface, configure a service via `SetStreamServiceSettings`
-   first; or use the `pulsar:StartDestination` multi-stream API
-   instead (recommended).
-2. **`StartRecord` writes to `<cwd>/recordings/`** by default. Override
+   `pulsar-frontend-stub`. With no streaming service configured it now
+   **fails** with `OutputNotRunning` instead of silently reporting
+   success. With a service configured it succeeds as soon as libobs
+   accepts the start — the TCP connect completes afterwards, so a success
+   here means "accepted", not "on air"; poll `GetStreamStatus` for that.
+   To actually go live, configure a service via
+   `SetStreamServiceSettings` first, or use the
+   `pulsar:StartDestination` multi-stream API instead (recommended).
+3. **`StartRecord` writes to `<cwd>/recordings/`** by default. Override
    with `PULSAR_RECORD_DIR` at spawn. Filenames are
    `pulsar-<YYYYMMDD-HHMMSS>.mp4`.
 
@@ -196,8 +218,12 @@ Full detail: `plugins/pulsar-scene-source/README.md`.
 
 `pulsar-frontend-stub` creates a replay-buffer output at boot, but no
 encoder is wired to it — it stays inactive. There is no `pulsar:*` or
-v5 request Pulsar exposes today to start/configure it; the output
-exists only as scaffolding for a future capability.
+v5 request Pulsar exposes today to configure it; the output exists only
+as scaffolding for a future capability (wiring is issue #117).
+
+Until it is wired, `StartReplayBuffer` **fails** with `OutputNotRunning`
+and the cause libobs recorded, instead of reporting success on a buffer
+that never started (issue #120).
 
 ## Environment variables (`PULSAR_*`)
 
@@ -226,6 +252,7 @@ value — operator/env-controlled only.
 | `PULSAR_STINGER_ASSET` | `pulsar-frontend-stub` | `<cwd>/../../data/pulsar/stinger-demo.webm` | Local path to the stinger media asset (never leaf/network-derived, ADR 003 Amendment 2 §A2.1). |
 | `PULSAR_NATIVE_STINGER` | `pulsar-frontend-stub` | off | Truthy set `1`/`true`/`on`/`yes` (case-insensitive) enables the dormant OBS-native stinger compositing path (#67); default off means the M10 transition renders via Solar/CEF overlay and OBS only hard-cuts. Security invariant: env-only, never leaf-reachable (Bastion #76, ADR 003 §A4.5 R1′·R7). |
 | `PULSAR_ADAPTIVE_BITRATE` | `pulsar-multi-stream` | enabled | Set to `off`/`0`/`false` to disable the adaptive bitrate worker at start. |
+| `PULSAR_OUTPUT_VERIFY_MS` | `pulsar-websocket` | `250` (ms) | Upper bound of the post-action state poll behind the start/stop verification above (`0..2000`; out-of-range ⇒ default with a warning). Only the non-nominal paths ever reach it — an output that activates inside `obs_output_start` settles on the first read. |
 
 ## Adaptive bitrate worker — operational notes
 

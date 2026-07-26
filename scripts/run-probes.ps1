@@ -201,6 +201,34 @@ if ($m10Code -eq 3) {
     Write-Host "==> probe-m10-canvas-live.py OK"
 }
 
+# --------------------------------------------------------------------
+# Phase 1f -- self-spawning output-effect probe (probe-output-effect.py,
+# #120 / ADR Prism 026 §3.2).
+#
+# Drives a REAL refusal in each of the four output families (replay buffer
+# with no encoder, stream with no service, record with an uncreatable
+# PULSAR_RECORD_DIR, virtualcam) and asserts the v5 request answers with an
+# explicit error carrying the cause -- never the pre-#120 "Success() then
+# outputActive:false". Also asserts the positive control (record into a
+# writable dir still succeeds) and the latency bound: the verification must
+# not have turned any start/stop into a wait for activation.
+#
+# Self-spawns TWO pulsar.exe children of its own (one per PULSAR_RECORD_DIR
+# world) and reaps them, so it belongs in Phase 1 for the same
+# config.json-reseed reason as the probes above. No skip path: it needs no
+# CEF, no capture target and no network -- it runs on a light build too.
+# --------------------------------------------------------------------
+$outputEffectProbe = Join-Path $repoRoot "scripts/probe-output-effect.py"
+Write-Host "==> Running probe-output-effect.py (self-spawn output effect, #120)"
+& python $outputEffectProbe --exe $pulsar
+$outputEffectCode = $LASTEXITCODE
+if ($outputEffectCode -ne 0) {
+    Write-Host "==> probe-output-effect.py FAILED (exit $outputEffectCode)"
+    Write-Host "==> An output request reported an effect it did not have -- aborting before the shared suite."
+    exit 1
+}
+Write-Host "==> probe-output-effect.py OK"
+
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
 # Port 0 -> bind a random free port so back-to-back ctest runs don't

@@ -18,6 +18,10 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
 #include "RequestHandler.h"
+#include "OutputEffect.h"
+
+using ActionWatch = Utils::Obs::OutputHelper::ActionWatch;
+using ActionVerdict = Utils::Obs::OutputHelper::ActionVerdict;
 
 static bool VirtualCamAvailable()
 {
@@ -30,6 +34,7 @@ static bool ReplayBufferAvailable()
 	OBSOutputAutoRelease output = obs_frontend_get_replay_buffer_output();
 	return output != nullptr;
 }
+
 
 /**
  * Gets the status of the virtualcam output.
@@ -70,15 +75,30 @@ RequestResult RequestHandler::ToggleVirtualCam(const Request &)
 	if (!VirtualCamAvailable())
 		return RequestResult::Error(RequestStatus::InvalidResourceState, "VirtualCam is not available.");
 
-	bool outputActive = obs_frontend_virtualcam_active();
+	bool wasActive = obs_frontend_virtualcam_active();
 
-	if (outputActive)
+	OBSOutputAutoRelease armed = obs_frontend_get_virtualcam_output();
+	ActionWatch watch(armed, wasActive ? "stopping" : "starting");
+
+	if (wasActive)
 		obs_frontend_stop_virtualcam();
 	else
 		obs_frontend_start_virtualcam();
 
+	// Re-acquire: obs_frontend_start_virtualcam re-creates its output the
+	// first time, once win-dshow has registered the output type.
+	OBSOutputAutoRelease output = obs_frontend_get_virtualcam_output();
+
+	if (wasActive) {
+		if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
+			return OutputStopFailure(output, "The virtualcam output");
+	} else {
+		if (Utils::Obs::OutputHelper::SettleStart(output, watch) == ActionVerdict::Refused)
+			return OutputStartFailure(output, "The virtualcam output");
+	}
+
 	json responseData;
-	responseData["outputActive"] = !outputActive;
+	responseData["outputActive"] = !wasActive;
 	return RequestResult::Success(responseData);
 }
 
@@ -100,7 +120,16 @@ RequestResult RequestHandler::StartVirtualCam(const Request &)
 	if (obs_frontend_virtualcam_active())
 		return RequestResult::Error(RequestStatus::OutputRunning);
 
+	OBSOutputAutoRelease armed = obs_frontend_get_virtualcam_output();
+	ActionWatch watch(armed, "starting");
+
 	obs_frontend_start_virtualcam();
+
+	// Re-acquire: obs_frontend_start_virtualcam re-creates its output the
+	// first time, once win-dshow has registered the output type.
+	OBSOutputAutoRelease output = obs_frontend_get_virtualcam_output();
+	if (Utils::Obs::OutputHelper::SettleStart(output, watch) == ActionVerdict::Refused)
+		return OutputStartFailure(output, "The virtualcam output");
 
 	return RequestResult::Success();
 }
@@ -123,7 +152,13 @@ RequestResult RequestHandler::StopVirtualCam(const Request &)
 	if (!obs_frontend_virtualcam_active())
 		return RequestResult::Error(RequestStatus::OutputNotRunning);
 
+	OBSOutputAutoRelease output = obs_frontend_get_virtualcam_output();
+	ActionWatch watch(output, "stopping");
+
 	obs_frontend_stop_virtualcam();
+
+	if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
+		return OutputStopFailure(output, "The virtualcam output");
 
 	return RequestResult::Success();
 }
@@ -167,15 +202,26 @@ RequestResult RequestHandler::ToggleReplayBuffer(const Request &)
 	if (!ReplayBufferAvailable())
 		return RequestResult::Error(RequestStatus::InvalidResourceState, "Replay buffer is not available.");
 
-	bool outputActive = obs_frontend_replay_buffer_active();
+	bool wasActive = obs_frontend_replay_buffer_active();
 
-	if (outputActive)
+	OBSOutputAutoRelease output = obs_frontend_get_replay_buffer_output();
+	ActionWatch watch(output, wasActive ? "stopping" : "starting");
+
+	if (wasActive)
 		obs_frontend_replay_buffer_stop();
 	else
 		obs_frontend_replay_buffer_start();
 
+	if (wasActive) {
+		if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
+			return OutputStopFailure(output, "The replay buffer");
+	} else {
+		if (Utils::Obs::OutputHelper::SettleStart(output, watch) == ActionVerdict::Refused)
+			return OutputStartFailure(output, "The replay buffer");
+	}
+
 	json responseData;
-	responseData["outputActive"] = !outputActive;
+	responseData["outputActive"] = !wasActive;
 	return RequestResult::Success(responseData);
 }
 
@@ -197,7 +243,13 @@ RequestResult RequestHandler::StartReplayBuffer(const Request &)
 	if (obs_frontend_replay_buffer_active())
 		return RequestResult::Error(RequestStatus::OutputRunning);
 
+	OBSOutputAutoRelease output = obs_frontend_get_replay_buffer_output();
+	ActionWatch watch(output, "starting");
+
 	obs_frontend_replay_buffer_start();
+
+	if (Utils::Obs::OutputHelper::SettleStart(output, watch) == ActionVerdict::Refused)
+		return OutputStartFailure(output, "The replay buffer");
 
 	return RequestResult::Success();
 }
@@ -220,7 +272,13 @@ RequestResult RequestHandler::StopReplayBuffer(const Request &)
 	if (!obs_frontend_replay_buffer_active())
 		return RequestResult::Error(RequestStatus::OutputNotRunning);
 
+	OBSOutputAutoRelease output = obs_frontend_get_replay_buffer_output();
+	ActionWatch watch(output, "stopping");
+
 	obs_frontend_replay_buffer_stop();
+
+	if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
+		return OutputStopFailure(output, "The replay buffer");
 
 	return RequestResult::Success();
 }
@@ -243,7 +301,25 @@ RequestResult RequestHandler::SaveReplayBuffer(const Request &)
 	if (!obs_frontend_replay_buffer_active())
 		return RequestResult::Error(RequestStatus::OutputNotRunning);
 
+	OBSOutputAutoRelease output = obs_frontend_get_replay_buffer_output();
+	ActionWatch watch(output, "saved");
+
 	obs_frontend_replay_buffer_save();
+
+	// Writing the segment is asynchronous, so "saved" may legitimately not
+	// have fired yet inside the bounded window. What we can refuse is a save
+	// that is provably going nowhere: the buffer stopped under us, or libobs
+	// recorded a cause. The file itself only becomes observable once the
+	// replay output is wired and lastReplay is populated (issue #117).
+	if (!watch.Accepted() && !obs_output_active(output))
+		return RequestResult::Error(RequestStatus::OutputNotRunning,
+					    "The replay buffer stopped without saving: " +
+						    Utils::Obs::OutputHelper::GetLastError(output));
+
+	std::string cause = Utils::Obs::OutputHelper::GetLastError(output);
+	if (!watch.Accepted() && !cause.empty())
+		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
+					    "The replay buffer refused to save: " + cause);
 
 	return RequestResult::Success();
 }

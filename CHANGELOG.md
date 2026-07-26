@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Fixed
+
+- `pulsar-websocket`: the four output families no longer report an effect
+  they never observed (#120, ADR Prism 026 §3.2). `StartReplayBuffer`,
+  `StartRecord`, `StartVirtualCam`, `StartStream` and their `Stop*` /
+  `Toggle*` counterparts called a `void` `obs-frontend-api` entry point and
+  returned `Success()` unconditionally; libobs declines silently on an
+  unconfigured output, so a client was told "started" while the next
+  `GetXStatus` reported `outputActive: false`. Each handler now re-reads the
+  real state after the action and answers an explicit error —
+  `OutputNotRunning` (501) for a start, `OutputRunning` (500) for a stop —
+  carrying the cause read off the server: `obs_output_get_last_error()` when
+  libobs recorded one, otherwise the structural state that made it refuse
+  (no service bound on a service output, no encoder bound on an encoded
+  one). **No signature change**: no new request, no new status enum, no new
+  response field.
+  The refusal is decided from the output's own `"starting"`/`"stopping"`
+  signal, which libobs emits only when it actually took the action — so an
+  asynchronous completion still in flight (an rtmp connect thread, an
+  `ffmpeg_muxer` flush) is reported as success, not as a failure, and no
+  request ever waits for activation. The residual state poll is bounded by
+  `PULSAR_OUTPUT_VERIFY_MS` (250 ms default) and is not reached on the
+  nominal path. `scripts/probe-output-effect.py` drives a real refusal in
+  each family plus a positive control and a latency bound.
+
 ## [1.2.2] - 2026-07-26
 
 ### 🔒 Security
