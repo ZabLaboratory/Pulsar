@@ -71,11 +71,27 @@ enum DestinationKind {
     Kind_Unknown,
 };
 
-// Twitch's primary RTMP ingest. Twitch publishes per-region ingests at
-// https://help.twitch.tv/s/twitch-ingest-recommendation but the global
-// "live" host LB-redirects to the closest one, which is fine for any
+// Twitch's global ingest, TLS-terminated. This is the `url_template_secure`
+// of the "Default" entry of https://ingest.twitch.tv/ingests -- the global
+// host LB-redirects to the closest region, which is fine for any
 // non-low-latency use case. Twitch's stream key is per-channel.
-constexpr const char *TWITCH_INGEST_URL = "rtmp://live.twitch.tv/app/";
+//
+// Must stay rtmps://: the stream key is a bearer credential and travels in
+// the RTMP connect handshake, so a plain rtmp:// ingest puts it on the wire
+// in cleartext at every go-live. The legacy `live.twitch.tv` host is not in
+// Twitch's published ingest list and is not documented to terminate TLS.
+// librtmp derives the transport from this scheme alone (parseurl.c, protocol
+// RTMP_PROTOCOL_RTMPS -> RTMP_FEATURE_SSL, default port 443) and fails the
+// connection outright if the TLS handshake or certificate verification fails
+// (rtmp.c RTMP_Connect1) -- there is no downgrade path to cleartext.
+constexpr const char *TWITCH_INGEST_URL = "rtmps://ingest.global-contribute.live-video.net/app/";
+
+// Fail closed at compile time: no future edit may point the pinned Twitch
+// destination at a cleartext ingest.
+static_assert(TWITCH_INGEST_URL[0] == 'r' && TWITCH_INGEST_URL[1] == 't' && TWITCH_INGEST_URL[2] == 'm' &&
+                      TWITCH_INGEST_URL[3] == 'p' && TWITCH_INGEST_URL[4] == 's' && TWITCH_INGEST_URL[5] == ':' &&
+                      TWITCH_INGEST_URL[6] == '/' && TWITCH_INGEST_URL[7] == '/',
+              "TWITCH_INGEST_URL must use the rtmps:// scheme -- the stream key must never travel in cleartext");
 
 const char *kind_to_string(DestinationKind k)
 {

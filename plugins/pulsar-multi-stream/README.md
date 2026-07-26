@@ -56,7 +56,7 @@ goes through the vendor namespace.
 |---|---|---|
 | `rtmp_custom` | RTMP server URL (`rtmp://...` or `rtmps://...`, validated) | required, non-empty stream key |
 | `vod_local` | output file path (parent dir is mkdir-p'd) | unused |
-| `twitch` | ignored on input — Pulsar pins the URL to `rtmp://live.twitch.tv/app/` and surfaces the pinned value in `GetDestinations` | required, non-empty Twitch stream key |
+| `twitch` | ignored on input — Pulsar pins the URL to `rtmps://ingest.global-contribute.live-video.net/app/` (TLS, so the stream key never travels in cleartext) and surfaces the pinned value in `GetDestinations` | required, non-empty Twitch stream key |
 
 Output paths for `vod_local` are NOT auto-timestamped — supply a fully
 resolved path; the client (Prism) is responsible for naming.

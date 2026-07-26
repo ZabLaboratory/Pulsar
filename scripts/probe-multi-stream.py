@@ -247,8 +247,11 @@ async def probe(url: str, password: str) -> int:
         if twitch_entry["kind"] != "twitch":
             print(f"error: kind mismatch: {twitch_entry}")
             return 1
-        if not twitch_entry["url"].startswith("rtmp://live.twitch.tv/"):
-            print(f"error: twitch url not pinned to live ingest: {twitch_entry['url']!r}")
+        if not twitch_entry["url"].startswith("rtmps://ingest.global-contribute.live-video.net/"):
+            print(f"error: twitch url not pinned to the secure global ingest: {twitch_entry['url']!r}")
+            return 1
+        if twitch_entry["url"].startswith("rtmp://"):
+            print(f"error: twitch url is cleartext rtmp, stream key would leak: {twitch_entry['url']!r}")
             return 1
         print(f"   <- twitch entry pinned to {twitch_entry['url']!r} OK")
 
