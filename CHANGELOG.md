@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-07-26
+
+### 🔒 Security
+
+- `pulsar-multi-stream`: the `twitch` destination kind no longer puts the
+  Twitch stream key on the wire in cleartext (#113, PR #114). The pinned
+  ingest URL moves from `rtmp://live.twitch.tv/app/` to
+  `rtmps://ingest.global-contribute.live-video.net/app/` — the
+  `url_template_secure` of the `Default` entry of
+  <https://ingest.twitch.tv/ingests>. The stream key is a bearer
+  credential and travels inside the RTMP connect handshake, so every
+  go-live previously exposed it to anyone on the path; the legacy
+  `live.twitch.tv` host is not in the published ingest list and refuses
+  TLS on :1935, so switching the scheme alone was not an option.
+  mbedTLS/librtmp already carry the TLS path (`obs-outputs` built with
+  `USE_MBEDTLS`) and librtmp derives the transport from the scheme — no
+  extra service setting. There is no cleartext downgrade: a failed
+  handshake or a failed certificate verification aborts in
+  `RTMP_Connect1`. A `static_assert` pins the scheme at compile time and
+  `scripts/probe-twitch-rtmps.py` guards it (real ingest passes the TLS
+  stage; two negative controls prove a TLS failure is loud and fatal).
+  Refs ADR 021 (Prism) palier 1.
+
+  **Consumers must upgrade** — the fix lives in the compiled plugin, so
+  a Prism/embedder still on `1.2.1` keeps streaming in cleartext even
+  with this source merged. Bump to `@clodocapeo/pulsar-bundle-full`
+  `1.2.2` (postinstall pulls `pulsar-windows-x64-full-v1.2.2.zip`).
+
 ## [1.2.1] - 2026-07-05
 
 ### 🐛 Fixed
