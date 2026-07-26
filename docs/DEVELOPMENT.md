@@ -76,7 +76,7 @@ import('./dist/index.js').then(async ({ PulsarClient }) => {
 
 ## Probes
 
-Six Python probe scripts live under `scripts/`. Each is self-contained
+Seven Python probe scripts live under `scripts/`. Each is self-contained
 and is the source of truth for what it asserts.
 
 | Probe | What it covers |
@@ -84,6 +84,7 @@ and is the source of truth for what it asserts.
 | `probe-websocket.py` | v5 handshake (Hello → Identify → Identified), `GetVersion` round-trip. |
 | `probe-source-kinds.py` | `GetInputKindList` against the expected V1 source matrix. |
 | `probe-events.py` | scene/input/source CRUD + the matching v5 events. |
+| `probe-scene-list-truth.py` | `CreateScene` → `GetSceneList` → `RemoveScene`: the scene list must be libobs's live truth, never a stub-side snapshot (#119, ADR Prism 026 §3.1). |
 | `probe-record.py` | `StartRecord` / `StopRecord` lifecycle, ffprobes the resulting MP4 (codec=h264, audio=aac, fps, bitrate). |
 | `probe-adaptive.py` | adaptive bitrate worker — drives a destination, induces drops by stress, checks `pulsar:BitrateAdjusted` event ordering. |
 | `probe-multi-stream.py` | multi-destination CRUD + start/stop. **Excluded** from `run-probes.ps1` because of upstream-obs races; covered by the live broadcast probe instead. |

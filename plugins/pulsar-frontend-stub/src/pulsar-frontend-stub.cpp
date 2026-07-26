@@ -540,7 +540,10 @@ private:
     obs_source_t *currentScene = nullptr;
     obs_source_t *previewScene = nullptr;
     obs_source_t *currentTransition = nullptr;
-    std::vector<obs_source_t *> scenes;     // one entry, owned (refcount held).
+    // Reference OWNER only -- never an enumeration source of truth (ADR Prism
+    // 026 §3.1, issue #119). It holds the ref on the boot "Default" scene so it
+    // outlives setup(); obs_frontend_get_scenes enumerates libobs, not this.
+    std::vector<obs_source_t *> scenes;
     std::vector<obs_source_t *> transitions; // fade + stinger, owned.
 
     obs_output_t *streamOutput = nullptr;
@@ -1212,11 +1215,30 @@ void PulsarFrontendAPI::emit(obs_frontend_event event)
 
 void PulsarFrontendAPI::obs_frontend_get_scenes(struct obs_frontend_source_list *sources)
 {
-    for (obs_source_t *s : scenes) {
-        obs_source_t *ref = obs_source_get_ref(s);
-        if (ref)
-            da_push_back(sources->sources, &ref);
-    }
+    // ADR Prism 026 §3.1 / issue #119 -- NO MIRROR of a state libobs owns.
+    // This used to iterate the internal `scenes` vector, which is only ever
+    // appended to at setup(). A scene created by any other path (an
+    // obs-websocket Scenes/CreateScene request, a plugin, a collection load)
+    // went straight to libobs and was therefore INVISIBLE to GetSceneList,
+    // even though CreateScene returned a real sceneUuid.
+    //
+    // libobs is the truth: obs_scene_create() registers the scene on the main
+    // canvas (obs-scene.c:1794-1797), which is exactly what obs_enum_scenes
+    // walks (obs.c:1888-1891). Filtered like upstream's scene list: groups are
+    // OBS_SOURCE_TYPE_SCENE sources too (group_info, obs-scene.c:1762-1764) and
+    // live on the same canvas, but upstream never lists them as scenes --
+    // same filter as Utils::Obs::ArrayHelper::GetCanvasGroupList.
+    obs_enum_scenes(
+        [](void *param, obs_source_t *scene) {
+            auto *out = static_cast<struct obs_frontend_source_list *>(param);
+            if (obs_source_is_group(scene))
+                return true; // groups are not scenes for the frontend API
+            obs_source_t *ref = obs_source_get_ref(scene);
+            if (ref)
+                da_push_back(out->sources, &ref);
+            return true;
+        },
+        sources);
 }
 
 obs_source_t *PulsarFrontendAPI::obs_frontend_get_current_scene(void)
