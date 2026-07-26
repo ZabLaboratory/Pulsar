@@ -270,6 +270,19 @@ public:
         studioMode = enable;
         emit(enable ? OBS_FRONTEND_EVENT_STUDIO_MODE_ENABLED : OBS_FRONTEND_EVENT_STUDIO_MODE_DISABLED);
     }
+    // Deliberately empty, and NOT dead weight we can delete: the base
+    // obs_frontend_callbacks declares it pure virtual
+    // (upstream frontend/api/obs-frontend-internal.hpp:97), so the override is
+    // mandatory to keep PulsarFrontendAPI instantiable.
+    //
+    // No obs-websocket v5 request routes here. TriggerStudioModeTransition
+    // performs the preview->program swap itself, via
+    // obs_frontend_set_current_scene() on the current preview scene
+    // (plugins/pulsar-websocket/src/requesthandler/RequestHandler_Transitions.cpp:277-287),
+    // which this stub implements for real. Studio mode therefore works; only
+    // this vtable slot is unused. Do not read the empty body as "the fork
+    // cannot transition" -- that misreading already produced a wrong
+    // conclusion in ADR 003 (see ADR Prism 026 3.4, issue #118).
     void obs_frontend_preview_program_trigger_transition(void) override {}
     bool obs_frontend_preview_enabled(void) override { return previewEnabled; }
     void obs_frontend_set_preview_enabled(bool enable) override { previewEnabled = enable; }
