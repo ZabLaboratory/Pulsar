@@ -30,7 +30,7 @@ capture items (named `PulsarCapture` from `pulsar-frontend-stub` or
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `kind` | string | required | Phase 13.4 ships `"browser_source"` only. `"window_capture"` revert lands in 13.4.b. |
+| `kind` | string | required | `"browser_source"` only, by decision — see `"kind_not_supported"` below. |
 | `url` | string | required | URL the CEF browser source loads. Loopback in practice (Prism's scene server). |
 | `width` | int | `1920` | Browser source render width. |
 | `height` | int | `1080` | Browser source render height. |

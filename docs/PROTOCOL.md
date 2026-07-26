@@ -151,6 +151,82 @@ includes `vendorName: "pulsar"`, `eventType`, and `eventData`.
 The v5 baseline events (`StreamStateChanged`, `RecordStateChanged`,
 `InputCreated`, …) are emitted unchanged by `pulsar-websocket`.
 
+## `pulsar-scene:*` vendor namespace
+
+A second, distinct vendor name — `pulsar-scene`, owned by the
+`pulsar-scene-source` plugin, not `pulsar-multi-stream`. obs-websocket's
+`vendor_register_cb` rejects a second `vendor_register` call under the
+same name, so each Pulsar plugin that needs vendor requests owns its
+own namespace.
+
+```jsonc
+{
+  "op": 6,
+  "d": {
+    "requestType": "CallVendorRequest",
+    "requestId": "<client-correlation-id>",
+    "requestData": {
+      "vendorName": "pulsar-scene",
+      "requestType": "SetCaptureSource",  // or GetCaptureSource
+      "requestData": { /* request-specific fields */ }
+    }
+  }
+}
+```
+
+| Request | Purpose | Request fields | Response fields |
+|---|---|---|---|
+| `SetCaptureSource` | Replace the active capture source with a fresh `browser_source` on the current frontend scene, removing any previously-installed Pulsar-managed capture item (`PulsarCapture` from `pulsar-frontend-stub`, or a prior `PulsarSceneSource`). | `kind` (only `"browser_source"` supported), `url`, `width?` (default `1920`), `height?` (default `1080`), `fps?` (default `60`), `reroute_audio?` (default `false`), `css?` | `kind`, `url`, `width`, `height`, `fps`, `reroute_audio`, `removed_prior: int`, `error?` |
+| `GetCaptureSource` | Return the active capture source state. | — | `kind` (`"browser_source"` after a successful `Set`, else `"window_capture"` — `pulsar-frontend-stub`'s boot default), `url?`, `width?`, `height?`, `fps?`, `reroute_audio?`, `last_change_unix: int` (`0` if never set), `error?` |
+
+**Errors** (`SetCaptureSource`) :
+
+| `error` | When |
+|---|---|
+| `"kind_not_supported"` | `kind` is anything other than `"browser_source"`. |
+| `"url_required"` | `url` missing or empty. |
+| `"browser_source_unavailable"` | `pulsar-browser` (obs-browser fork) not loaded — a non-`-Full` build. |
+| `"no_current_scene"` | `obs_frontend_get_current_scene()` returned null. |
+| `"current_source_not_a_scene"` | The frontend's "current scene" source didn't unwrap into an `obs_scene_t`. |
+| `"scene_add_failed"` | `obs_scene_add` returned null. |
+
+Full detail: `plugins/pulsar-scene-source/README.md`.
+
+## Replay buffer
+
+`pulsar-frontend-stub` creates a replay-buffer output at boot, but no
+encoder is wired to it — it stays inactive. There is no `pulsar:*` or
+v5 request Pulsar exposes today to start/configure it; the output
+exists only as scaffolding for a future capability.
+
+## Environment variables (`PULSAR_*`)
+
+Every variable below is read once at process boot (`std::getenv`), never
+re-read live, and never reachable from a leaf / obs-websocket / network
+value — operator/env-controlled only.
+
+| Variable | Read by | Default | Effect |
+|---|---|---|---|
+| `PULSAR_PORT` | `pulsar-headless` | `4455` | obs-websocket listen port. Rejected if outside `1..65535`. |
+| `PULSAR_PASSWORD` | `pulsar-headless` | fresh 22-char random string | obs-websocket session password, seeded into `obs-websocket/config.json` before module load. |
+| `PULSAR_FPS` | `pulsar-headless` | `60` | Output fps. Accepts only `24`/`30`/`48`/`60`/`120`; anything else is rejected with a warning. Boot-fixed (no live change). |
+| `PULSAR_RESOLUTION` | `pulsar-headless` | `1920x1080` | Base/output resolution, format `<W>x<H>`, up to `7680x4320`. Boot-fixed. |
+| `PULSAR_CAPTURE_WINDOW` | `pulsar-frontend-stub` | unset | `window_capture` target, format `<title>:<class>:<exe>`. Unset ⇒ source produces black frames (pipeline still encodes/records). Superseded per-scene by `pulsar-scene:SetCaptureSource` when used. |
+| `PULSAR_VIDEO_BITRATE` | `pulsar-frontend-stub` | `6000` (kbps) | Boot video bitrate, `200..50000`. Mutable live afterwards via `pulsar:SetVideoSettings`. |
+| `PULSAR_VIDEO_ENCODER` | `pulsar-frontend-stub` | `x264` | Encoder family: `x264`\|`nvenc`\|`qsv`\|`amf`\|`auto`. Resolved against the live `obs_enum_encoder_types()` set; unavailable/unknown/null-create all fall back silently to `obs_x264`. Boot-fixed, no live swap (ADR 004 §3.1-3.2/§3.4). |
+| `PULSAR_VIDEO_RATE_CONTROL` | `pulsar-frontend-stub` | `CBR` | `CBR`\|`VBR`\|`CQP`, only applied when a non-fallback encoder binds. |
+| `PULSAR_VIDEO_PROFILE` | `pulsar-frontend-stub` | `high` | `baseline`\|`main`\|`high`. |
+| `PULSAR_VIDEO_KEYINT_SEC` | `pulsar-frontend-stub` | `2` | Keyframe interval, `0..20` seconds. |
+| `PULSAR_VIDEO_PRESET` | `pulsar-frontend-stub` | family-specific | Validated against the preset set for the resolved encoder family; unknown value ⇒ family default. |
+| `PULSAR_AUDIO_BITRATE` | `pulsar-frontend-stub` | `160` (kbps) | `ffmpeg_aac` bitrate, `32..512`. Mutable live via `pulsar:SetVideoSettings` while the audio encoder is idle. |
+| `PULSAR_DESKTOP_AUDIO_DEVICE_ID` | `pulsar-frontend-stub` | `"default"` | `wasapi_output_capture` device id (mixer channel 1). |
+| `PULSAR_MIC_DEVICE_ID` | `pulsar-frontend-stub` | unset (source not created) | `wasapi_input_capture` device id (mixer channel 3) — opt-in, since mic devices are absent on CI/servers. |
+| `PULSAR_PROCESS_AUDIO_NAME` | `pulsar-frontend-stub` | unset (source not created) | Executable name for `wasapi_process_output_capture` (mixer channel 2, per-process loopback). Requires Windows 10 19041+ / recent win-wasapi; tolerated as unavailable otherwise. |
+| `PULSAR_RECORD_DIR` | `pulsar-frontend-stub` | `<cwd>/recordings` | Recording output directory, created lazily on first `recording_start`. |
+| `PULSAR_STINGER_ASSET` | `pulsar-frontend-stub` | `<cwd>/../../data/pulsar/stinger-demo.webm` | Local path to the stinger media asset (never leaf/network-derived, ADR 003 Amendment 2 §A2.1). |
+| `PULSAR_NATIVE_STINGER` | `pulsar-frontend-stub` | off | Truthy set `1`/`true`/`on`/`yes` (case-insensitive) enables the dormant OBS-native stinger compositing path (#67); default off means the M10 transition renders via Solar/CEF overlay and OBS only hard-cuts. Security invariant: env-only, never leaf-reachable (Bastion #76, ADR 003 §A4.5 R1′·R7). |
+| `PULSAR_ADAPTIVE_BITRATE` | `pulsar-multi-stream` | enabled | Set to `off`/`0`/`false` to disable the adaptive bitrate worker at start. |
+
 ## Adaptive bitrate worker — operational notes
 
 The worker samples `obs_output_get_total_frames` and
