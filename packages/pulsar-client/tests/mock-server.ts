@@ -289,7 +289,7 @@ export class MockObsWebSocket {
           id,
           name: (data["name"] as string | undefined) ?? id,
           kind,
-          url: kind === "twitch" ? "rtmp://live.twitch.tv/app/" : url,
+          url: kind === "twitch" ? "rtmps://ingest.global-contribute.live-video.net/app/" : url,
           enabled: false,
           active: false,
         };

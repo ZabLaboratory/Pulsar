@@ -50,8 +50,17 @@ describe("PulsarClient", () => {
         kind: "twitch",
         key: "live_dummy_dummy",
       });
-      expect(dest.url).toBe("rtmp://live.twitch.tv/app/");
+      expect(dest.url).toBe("rtmps://ingest.global-contribute.live-video.net/app/");
       expect(dest.kind).toBe("twitch");
+    });
+
+    it("twitch pinned url is TLS, never cleartext rtmp", async () => {
+      const dest = await client.destinations.create({
+        kind: "twitch",
+        key: "live_dummy_dummy",
+      });
+      expect(dest.url.startsWith("rtmps://")).toBe(true);
+      expect(dest.url.startsWith("rtmp://")).toBe(false);
     });
 
     it("propagates server validation errors as PulsarVendorError", async () => {
