@@ -66,6 +66,12 @@ the old binary — silently, because
    npm view @clodocapeo/pulsar-bundle-full version          # == X.Y.Z
    gh release view vX.Y.Z --json assets -q '.assets[].name' # full zip present
    ```
+   Then assert the *content*, not just the presence — for v1.2.2, grepping
+   the shipped `obs-plugins/64bit/pulsar-multi-stream.dll` out of
+   `pulsar-windows-x64-v1.2.2.zip` for URL literals returned exactly one
+   match, `rtmps://ingest.global-contribute.live-video.net/app/`, and no
+   cleartext `rtmp://`. Two minutes of work, and it is the only step that
+   actually proves the compiled fix shipped.
 9. **Bump every consumer** — Prism `package.json`
    (`@clodocapeo/pulsar-bundle-full`), branch `keeper/<slug>`, `npm install`,
    local gate (Prism CI is disabled: `lint && typecheck && build && test`).
@@ -81,6 +87,18 @@ the old binary — silently, because
   `live-test-twitch`, `cancel-in-progress: false`. A push to `main` plus the
   tag plus any open PR each queue a broadcast, so `release-attach` can sit
   waiting well past the build. Not a failure; do not re-run.
+- **A *pending* broadcast gets cancelled when a newer run queues into the
+  same group** — GitHub keeps at most one pending entry per concurrency
+  group, and `cancel-in-progress: false` does not protect it. This bit the
+  v1.2.2 release: a PR run queued behind the tag run, the tag run's
+  `live broadcast (Twitch)` flipped to `cancelled`, and `release-attach`
+  (`needs: [package, live-broadcast]`) was **skipped** — npm had 1.2.2 but
+  no Release, so every consumer postinstall would have 404'd and soft-failed
+  into a binary-less install. The whole run reads `cancelled`, not `failure`,
+  which is easy to skim past. Recovery: `gh run rerun <tag-run-id> --failed`
+  (the `pulsar-rundir` artefact is still there, 1-day retention), which
+  re-queues the broadcast as the newest entry. Always end a release by
+  checking the Release assets, not the npm version.
 - **A `push` to `main` cancels the in-flight `main` run** (concurrency
   `pipeline-${{ github.ref }}`, `cancel-in-progress: true`). Cutting a
   release right after a merge cancels that merge's run; the tag run covers
