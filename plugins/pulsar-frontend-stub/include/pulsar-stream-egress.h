@@ -57,6 +57,17 @@ namespace pulsar {
 // One wording for the C1 refusal, shared by the configuration seam
 // (SetStreamServiceSettings) and the start seam (obs_frontend_streaming_start)
 // so the two can never drift into telling the operator different stories.
+//
+// SCOPE -- read the wording narrowly: this gate closes the `rtmp_common`/Twitch
+// path, i.e. an ingest RESOLVED for us out of a downloaded list that can silently
+// degrade to cleartext. It does NOT close the general class "a Twitch key in
+// cleartext": `SetStreamServiceSettings{rtmp_custom, server "rtmp://live.twitch.tv/app",
+// key ...}` still passes every guard here -- it is not rtmp_common, `rtmp://` is
+// accepted by the deliberate parity with `pulsar:StartDestination` (which accepts
+// operator-supplied rtmp:// endpoints), and the key is non-empty. That residual is
+// the accepted one of ADR 010 section 5: an operator knowingly typing a cleartext
+// URL is the assumed rtmp_custom use. Pulsar cannot tell a Twitch key from any
+// other key on that generic path; that guard lives in Prism (R1), not here.
 inline constexpr const char *kTwitchOnV5Refusal =
 	"the Twitch service is not available on the v5 single-stream path: an rtmp_common "
 	"Twitch service resolves its ingest from a downloaded list and falls back to the "
