@@ -190,6 +190,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🔒 Security
 
+- **The obs-websocket server binds the loopback, not every interface**
+  (#134, Bastion on the PR #133 revalidation). `WebSocketServer::Start`
+  called `listen(port)` (the v6 any-address, dual-stack) or
+  `listen(tcp::v4(), port)` (`0.0.0.0`) — upstream's default for a desktop
+  app the user opts into exposing. In Pulsar it meant the entire v5
+  surface, **including the stream-egress path `#131` had just made live**,
+  was reachable from the LAN behind nothing but the session password —
+  a password the CI failure-log artefact carries in clear
+  (`pipeline.yml`, 7-day retention). Nothing needed that reach: every
+  consumer connects to `127.0.0.1` (`packages/pulsar-bundle*/src/spawn.ts`,
+  the `PULSAR_READY` sentinel, every `scripts/probe-*.py`), and
+  `docs/PROTOCOL.md` already **claimed** loopback-only — the code now
+  makes that claim true rather than the doc describe a wish.
+
+  The address is a single config field (`Config::BindAddress`, default
+  `127.0.0.1`), widened only by an explicit `PULSAR_WS_BIND`, which logs a
+  warning when it is not a loopback address. Env-only, deliberately: it is
+  the parent process that decides how far the server reaches, and keeping
+  it out of the persisted `config.json` means a stale or tampered config
+  cannot silently widen the bind on a later boot. `--websocket_ipv4_only`
+  is subsumed (the address decides the family) and says so when it
+  contradicts an explicit override.
+
+- **The v5 egress refusal covers every `rtmp_common` service, not just
+  Twitch** (#135, Bastion on the PR #133 revalidation). The rule the guard
+  states is "this path never resolves an ingest URL out of a downloaded
+  list we do not control" — but its predicate matched the literal service
+  name `Twitch`, so YouTube, Kick, Trovo and the hundreds of other
+  `rtmp_common` entries went through the very same `update_ingest`
+  resolution, out of the very same list, several of them with cleartext
+  `rtmp://` servers. The dangerous mechanism is the resolution, not the
+  platform. `IsTwitchCommonService(type, settings)` becomes
+  `IsRtmpCommonService(type)`: the **type alone** decides, at both seams,
+  and the refusal message names the mechanism instead of one platform.
+  No capability is lost — `rtmp_custom` with an explicit server already
+  covers the legitimate operator need, in the clear, which is the residual
+  ADR 010 §5 accepts.
+
+- **The boot placeholder is neutral** (#136). The stub created its
+  placeholder streaming service as `rtmp_common` / "Twitch", so the safety
+  of the state Pulsar boots in — before any operator configuration — rested
+  on the egress gate **refusing** it. Correct, but by rebuttal. It is now
+  an empty `rtmp_custom`: it names no platform, resolves nothing out of any
+  list, and simply has no destination to connect to. The default path is
+  safe by construction, with nothing to refuse; the gate still holds for
+  whatever a v5 client pushes afterwards, but is no longer what makes the
+  default safe.
+
 - **The v5 stream path can no longer send to Twitch in cleartext** — the
   regression `#131` would otherwise have introduced against `#114` /
   `1.2.2` (Bastion C1 on PR #133, form **(b)**). Binding `streamService` to
@@ -215,8 +263,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the refusal holds whatever the caller did upstream of it. Twitch
   egress goes through `pulsar:StartDestination`, which already carries the
   compile-time `rtmps://` guarantee. The v5 path stays alive for
-  `rtmp_custom` and non-Twitch services, which is the Stream Deck /
-  Companion compatibility `#131` exists for.
+  `rtmp_custom`, which is the Stream Deck / Companion compatibility `#131`
+  exists for. *(#135, above, has since widened this refusal from Twitch to
+  the whole `rtmp_common` type — the entry is kept as the record of how the
+  rule was first drawn.)*
 
   Two other forms were considered and rejected. *(a)* refusing any resolved
   `rtmp://` URL would break parity with the twin, which deliberately
@@ -249,15 +299,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✅ Tested
 
+- `scripts/probe-loopback-bind.py` — the executable form of #134, at the
+  **socket** layer (no v5 request: the property is about who can open the
+  socket at all). Wired into the offline suite (Phase 1f-ter). Three legs:
+  the loopback still accepts and still completes a v5 `Identify` (a bind
+  fix that broke *that* would be worse than the exposure); a TCP connect to
+  this host's own non-loopback address, on the same port, must **fail** —
+  it succeeds on the pre-fix binary; and `PULSAR_WS_BIND=0.0.0.0` does
+  re-open it, so the loopback default is a decision and not an accident.
+  The probe never touches the network (it asks the routing table which
+  local address would be used, via a UDP `connect()` to TEST-NET-1 that
+  sends no packet) and degrades to exit 3 (typed skip) on a host with no
+  routable address, where the boundary is unobservable.
+
 - `scripts/probe-stream-egress-guard.py` — the executable form of both
   guards above, wired into the offline suite as a **blocking** gate
   (Phase 1f-bis, no skip path, no `continue-on-error`: a security invariant
-  with a tolerated red is not an invariant). Seven cases, every one of them
-  red on the pre-fix binary: the **boot placeholder** (`rtmp_common`/Twitch)
-  must refuse `StartStream` before any request is made; the Twitch
-  configuration refusal in both spellings (`Twitch`, `twitch` — the guard
-  reads the setting case-insensitively, not a literal) and its atomicity
-  (the refused key must not be written anyway); a non-`rtmp` scheme; an
+  with a tolerated red is not an invariant). Widened with #135/#136: the
+  **boot placeholder** leg now requires a *neutral* placeholder (not
+  `rtmp_common`, no server, no key) and a `StartStream` refused for want of
+  a destination rather than by rebuttal, and the configuration leg drives
+  four more `rtmp_common` payloads — `YouTube - RTMPS`, `Kick`, `Trovo`
+  with a cleartext server, and one with **no** `service` setting at all —
+  each of which the #133 binary accepted. Both changes are red on that
+  binary and green here. The original cases stand: the Twitch
+  configuration refusal in both spellings (`Twitch`, `twitch`) and its
+  atomicity (the refused key must not be written anyway); a non-`rtmp`
+  scheme; an
   empty key; the **merge** path (pushing only `server` onto a service whose
   key is still empty must stay refused); and the non-regression leg —
   `#131`'s own nominal `rtmp_custom` destination still configures **and**

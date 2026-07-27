@@ -1,40 +1,53 @@
 #!/usr/bin/env python3
 """
-Pulsar v5 STREAM-EGRESS GUARD probe (Bastion C1/C2 on PR #133).
+Pulsar v5 STREAM-EGRESS GUARD probe (Bastion C1/C2 on PR #133, widened by
+#135 / #136).
 
 WHAT IT FENCES
 --------------
 #131 bound the frontend stub's `streamService` to `streamOutput`, turning the
 v5 `SetStreamServiceSettings` + `StartStream` path into a LIVE egress for the
 first time. That binding reopened the hole #114 had closed by leaving the path
-dead: the stub boots with an `rtmp_common` / "Twitch" placeholder, and upstream
-resolves an rtmp_common Twitch service through `update_ingest`
-(upstream/plugins/rtmp-services/rtmp-common.c), which falls back to the bundled
-`rtmp://live.twitch.tv/app` (service-specific/twitch.c:45) whenever the ingest
-list is missing -- first run, cold cache, offline. The stream key would travel
-in CLEARTEXT, on a path whose twin `pulsar:StartDestination` guarantees rtmps://
-by `static_assert`.
+dead: upstream resolves EVERY `rtmp_common` service through `update_ingest`
+(upstream/plugins/rtmp-services/rtmp-common.c) out of a service list downloaded
+at runtime -- hundreds of entries, many with cleartext `rtmp://` servers -- and
+for Twitch it falls back to the bundled `rtmp://live.twitch.tv/app`
+(service-specific/twitch.c:45) whenever that list is missing (first run, cold
+cache, offline). The stream key would travel in CLEARTEXT, on a path whose twin
+`pulsar:StartDestination` guarantees rtmps:// by `static_assert`.
 
 The fix (plugins/pulsar-frontend-stub/include/pulsar-stream-egress.h) is form
-(b): Twitch is barred from the v5 single-stream path -- it goes through
-`pulsar:StartDestination` -- and the v5 path gets the SAME front-loaded
-validation as that twin (rtmp scheme + non-empty key).
+(b): `rtmp_common` is barred from the v5 single-stream path -- Twitch goes
+through `pulsar:StartDestination`, everything else through `rtmp_custom` with
+an explicit server -- and the v5 path gets the SAME front-loaded validation as
+that twin (rtmp scheme + non-empty key).
 
-This probe is the executable statement of both. Every case below FAILS on the
-pre-fix binary and passes on the fixed one:
+#135 widened the predicate from "Twitch" to the whole `rtmp_common` type: the
+dangerous mechanism is the resolution, not the platform, so covering only
+Twitch left YouTube/Kick/Trovo/... going through the very list the rule refuses
+to depend on. #136 made the BOOT placeholder neutral (an empty `rtmp_custom`),
+so the default path no longer depends on a refusal for its safety.
 
-  C1a  the BOOT placeholder is rtmp_common/"Twitch": StartStream with no
-       request at all must be refused, naming Twitch and the cleartext URL.
-       Pre-fix: the placeholder had no key, so the refusal came from libobs by
-       accident -- change nothing but the key and the cleartext push is live.
+This probe is the executable statement of all of it. Every case below FAILS on
+the pre-fix binary and passes on the fixed one:
+
+  C1a  the BOOT placeholder must be NEUTRAL -- not `rtmp_common`, naming no
+       platform -- and StartStream with no request at all must still be refused,
+       for want of a destination rather than by rebuttal (#136).
+       Pre-#133 the placeholder was rtmp_common/"Twitch" with no key, so the
+       refusal came from libobs by accident -- change nothing but the key and
+       the cleartext push was live.
   C1b  SetStreamServiceSettings{rtmp_common, service:"Twitch", key:...} must be
        refused at the CONFIGURATION seam, including the exploit verbatim
-       (`server: "rtmp://live.twitch.tv/app"`). MEASURED on the pre-fix binary:
+       (`server: "rtmp://live.twitch.tv/app"`). MEASURED on the pre-#133 binary:
        Set answered `result: true`, StartStream answered `result: true`, and
        OBS_WEBSOCKET_OUTPUT_STARTING went on the wire -- the stream key leaving
        over unencrypted RTMP.
-  C1c  same, spelled "twitch" -- the guard reads the setting case-insensitively,
-       not a literal.
+  C1c  same, spelled "twitch" -- the guard reads the type, so no spelling of the
+       `service` setting gets through.
+  C1d  the SAME refusal for non-Twitch rtmp_common services (YouTube, Kick,
+       Trovo, and one with no `service` setting at all). Fails on the #133
+       binary, which only knew the literal "Twitch" (#135).
   C2a  a non-rtmp scheme (http://) must be refused. Pre-fix: accepted.
   C2b  an EMPTY stream key must be refused. Pre-fix: accepted.
   REG  the nominal rtmp_custom destination (#131's own reason to exist) still
@@ -276,7 +289,7 @@ def require_refusal(name: str, ok: bool, code, comment, expected_code: int, hint
     if ok:
         raise Failure(
             f"{name}: ACCEPTED. The v5 stream-egress guard is not enforcing -- this is the "
-            f"cleartext-Twitch / unvalidated-destination hole (Bastion C1/C2 on PR #133)."
+            f"resolved-cleartext-ingest / unvalidated-destination hole (Bastion C1/C2 on PR #133, #135)."
         )
     if code != expected_code:
         raise Failure(f"{name}: refused with code {code}, expected {expected_code} ({comment})")
@@ -297,23 +310,35 @@ async def set_service(c: Client, service_type: str, settings: dict):
 
 
 async def case_boot_placeholder_start(c: Client) -> None:
-    """C1a -- the state the binary boots in, before ANY request."""
-    print("-- C1a. boot placeholder (rtmp_common/Twitch) must not reach the wire")
+    """C1a -- the state the binary boots in, before ANY request (#136)."""
+    print("-- C1a. boot placeholder must be neutral AND must not reach the wire")
     ok, code, comment, data = await c.req("GetStreamServiceSettings")
     if not ok:
         raise Failure(f"GetStreamServiceSettings failed: {code} {comment}")
     svc_type = data.get("streamServiceType")
-    svc_name = (data.get("streamServiceSettings") or {}).get("service")
-    print(f"   boot service: type={svc_type!r} service={svc_name!r}")
-    if svc_type != "rtmp_common" or str(svc_name or "").lower() != "twitch":
+    svc_settings = data.get("streamServiceSettings") or {}
+    print(f"   boot service: type={svc_type!r} settings={svc_settings!r}")
+    if svc_type == "rtmp_common":
         raise Failure(
-            f"the boot placeholder is no longer rtmp_common/Twitch (got {svc_type!r}/{svc_name!r}). "
+            "the boot placeholder is an rtmp_common service -- the default path is safe only "
+            "because the guard refuses it (#136). It must name no platform and resolve nothing."
+        )
+    if svc_type != "rtmp_custom":
+        raise Failure(
+            f"the boot placeholder is neither rtmp_custom nor rtmp_common (got {svc_type!r}). "
             "This probe's premise moved -- re-read pulsar-frontend-stub.cpp setup() before relaxing it."
         )
+    if svc_settings.get("server") or svc_settings.get("key"):
+        raise Failure(
+            f"the boot placeholder carries a destination ({svc_settings!r}) -- it must be empty until "
+            "an operator or a v5 client says where to stream."
+        )
 
+    # Refused for want of a destination, not by rebuttal of a named platform:
+    # nothing to resolve, nothing to refuse on its content.
     ok, code, comment, _ = await c.req("StartStream")
     require_refusal("StartStream (boot placeholder)", ok, code, comment, STATUS_OUTPUT_NOT_RUNNING,
-                    ("twitch", "cleartext", "service"))
+                    ("service",))
 
     _, _, _, status = await c.req("GetStreamStatus")
     if status.get("outputActive"):
@@ -321,9 +346,9 @@ async def case_boot_placeholder_start(c: Client) -> None:
     print("   OK  GetStreamStatus agrees: outputActive=false")
 
 
-async def case_twitch_config_refused(c: Client) -> None:
-    """C1b/C1c -- the configuration seam, both spellings."""
-    print("-- C1b/c. SetStreamServiceSettings(rtmp_common, Twitch) refused at configuration time")
+async def case_rtmp_common_config_refused(c: Client) -> None:
+    """C1b/C1c/C1d -- the configuration seam, every rtmp_common service."""
+    print("-- C1b/c/d. SetStreamServiceSettings(rtmp_common, *) refused at configuration time")
     # The third payload is the EXPLOIT VERBATIM, measured on the pre-fix binary:
     # with an explicit cleartext `server` the pre-fix build answered
     # `result: true` to this Set, then `result: true` to StartStream, and put
@@ -331,23 +356,33 @@ async def case_twitch_config_refused(c: Client) -> None:
     # unencrypted RTMP. The first two payloads (no `server`) were accepted too;
     # they only stopped short at StartStream because rtmp_common has no server
     # to connect to, which is a bug-compatible accident, not a defence.
+    #
+    # C1d (#135): the four payloads after the Twitch ones are the widening.
+    # They resolve through the very same downloaded list, and several of the
+    # upstream entries are plain `rtmp://` -- the #133 binary accepted every
+    # one of them, because its predicate matched the literal "Twitch".
     payloads = (
         ("Twitch", {"service": "Twitch", "key": "live_123_secret"}),
         ("twitch", {"service": "twitch", "key": "live_123_secret"}),
         ("Twitch+cleartext server",
          {"service": "Twitch", "server": "rtmp://live.twitch.tv/app", "key": "live_123_secret"}),
+        ("YouTube - RTMPS", {"service": "YouTube - RTMPS", "key": "yt_123_secret"}),
+        ("Kick", {"service": "Kick", "key": "kick_123_secret"}),
+        ("Trovo+cleartext server",
+         {"service": "Trovo", "server": "rtmp://livepush.trovo.live/live", "key": "trovo_123_secret"}),
+        ("no service setting at all", {"key": "anon_123_secret"}),
     )
     for label, settings in payloads:
         ok, code, comment, _ = await set_service(c, "rtmp_common", settings)
         require_refusal(
             f"SetStreamServiceSettings(rtmp_common,{label})", ok, code, comment,
-            STATUS_INVALID_REQUEST_FIELD, ("twitch", "cleartext"),
+            STATUS_INVALID_REQUEST_FIELD, ("rtmp_common", "cleartext"),
         )
 
     # And it did not half-apply: the service is untouched.
     _, _, _, data = await c.req("GetStreamServiceSettings")
     if (data.get("streamServiceSettings") or {}).get("key"):
-        raise Failure("the refused Twitch key was written into the service anyway -- refusal must be atomic")
+        raise Failure("the refused stream key was written into the service anyway -- refusal must be atomic")
     print("   OK  the refused settings were not applied")
 
 
@@ -438,7 +473,7 @@ async def case_nominal_still_works(c: Client) -> None:
 
 CASES = [
     case_boot_placeholder_start,
-    case_twitch_config_refused,
+    case_rtmp_common_config_refused,
     case_scheme_and_key,
     case_nominal_still_works,
     case_merge_path,
@@ -471,7 +506,9 @@ async def run_child(exe: pathlib.Path, record_dir: str) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Pulsar v5 stream-egress guard probe (Bastion C1/C2, PR #133)")
+    ap = argparse.ArgumentParser(
+        description="Pulsar v5 stream-egress guard probe (Bastion C1/C2, PR #133; widened by #135/#136)"
+    )
     ap.add_argument("--exe", type=pathlib.Path, default=DEFAULT_EXE)
     args = ap.parse_args()
 
@@ -486,8 +523,8 @@ def main() -> int:
             print(f"\nFAIL: {exc}")
             return 1
 
-    print("\nprobe-stream-egress-guard: PASS -- Twitch is off the v5 path and the v5 path validates "
-          "its destination like pulsar:StartDestination does")
+    print("\nprobe-stream-egress-guard: PASS -- rtmp_common is off the v5 path, the boot placeholder is "
+          "neutral, and the v5 path validates its destination like pulsar:StartDestination does")
     return 0
 
 

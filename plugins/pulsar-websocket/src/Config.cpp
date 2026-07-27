@@ -17,6 +17,7 @@ You should have received a copy of the GNU General Public License along
 with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
+#include <cstdlib>
 #include <filesystem>
 
 #include <obs-frontend-api.h>
@@ -104,6 +105,16 @@ void Config::Load(json config)
 			blog(LOG_WARNING, "[Config::Load] Not overriding WebSocket port since integer conversion failed.");
 		}
 	}
+
+	// Pulsar fork (#134): PULSAR_WS_BIND overrides the loopback default.
+	//
+	// Env, not config.json and not a command-line flag: every other Pulsar knob
+	// is a PULSAR_* env var read at spawn (docs/PROTOCOL.md), the parent process
+	// is the only party that legitimately decides how far this server reaches,
+	// and keeping it out of the persisted config means a stale/tampered
+	// config.json cannot silently widen the bind on a later boot.
+	if (const char *e = std::getenv("PULSAR_WS_BIND"); e && *e)
+		BindAddress = e;
 
 	// Process `--websocket_ipv4_only` override
 	if (Utils::Platform::GetCommandLineFlagSet(CMDLINE_WEBSOCKET_IPV4_ONLY)) {

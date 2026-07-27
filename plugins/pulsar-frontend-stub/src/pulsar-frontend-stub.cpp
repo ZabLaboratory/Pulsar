@@ -906,13 +906,25 @@ bool PulsarFrontendAPI::setup()
     if (virtualcamOutput)
         hookOutputSignals(virtualcamOutput, OnVCamStart, OnVCamStop);
 
-    // Streaming service (rtmp_common). Configured to a placeholder Twitch-style
-    // service; pulsar-multi-stream will replace it via set_streaming_service.
+    // Streaming service placeholder -- NEUTRAL by construction (#136).
+    //
+    // It used to be an `rtmp_common` / "Twitch" service, which made the boot
+    // state depend on a REFUSAL for its safety: the v5 egress gate
+    // (include/pulsar-stream-egress.h) had to catch it at StartStream so the
+    // cleartext ingest resolution never happened. Safe, but by rebuttal.
+    // An empty `rtmp_custom` names no platform, resolves nothing out of any
+    // downloaded list, and simply has no destination to connect to -- there is
+    // nothing to refuse before the operator (or a v5 client, via
+    // SetStreamServiceSettings) has said where to stream. The gate still holds
+    // afterwards; it is no longer what makes the DEFAULT path safe.
+    //
+    // A service object must still exist: obs_output_set_service() needs one and
+    // GetStreamServiceSettings reads it back. pulsar-multi-stream replaces it
+    // via set_streaming_service.
     OBSDataAutoRelease svcSettings = obs_data_create();
-    obs_data_set_string(svcSettings, "service", "Twitch");
-    streamService = obs_service_create("rtmp_common", "PulsarService", svcSettings, nullptr);
+    streamService = obs_service_create("rtmp_custom", "PulsarService", svcSettings, nullptr);
     if (!streamService)
-        blog(LOG_WARNING, "[pulsar-frontend-stub] rtmp_common service unavailable");
+        blog(LOG_WARNING, "[pulsar-frontend-stub] rtmp_custom service unavailable");
 
     // ---- Phase 6 + 12a: capture source + encoders + record path ----
     // Encoders are bound to the global libobs video/audio mixers and
@@ -1514,11 +1526,13 @@ void PulsarFrontendAPI::obs_frontend_streaming_start(void)
     // #114 REGRESSION GUARD (Bastion C1, form (b)) -- see
     // include/pulsar-stream-egress.h for the full rationale. The binding below
     // is what makes this path a live egress; without this gate it would hand
-    // `streamOutput` an rtmp_common/"Twitch" service (which is exactly what
-    // setup() creates as the BOOT PLACEHOLDER, so no request is even needed to
-    // reach it) whose ingest resolution falls back to cleartext
-    // rtmp://live.twitch.tv/app. This is the LAST seam before libobs, so it
-    // holds whatever the caller did upstream of it.
+    // `streamOutput` any `rtmp_common` service a v5 client pushed, whose ingest
+    // is resolved out of a downloaded list and can degrade to cleartext (#135
+    // widened the refusal from Twitch to the whole type). The BOOT PLACEHOLDER
+    // is no longer one of those since #136 -- it is an empty rtmp_custom, which
+    // this gate refuses for want of a server, not for what it names. This is
+    // the LAST seam before libobs, so it holds whatever the caller did upstream
+    // of it.
     //
     // Refusing = not emitting the output's "starting" signal, which is exactly
     // what a libobs refusal looks like: OutputHelper::SettleStart reads

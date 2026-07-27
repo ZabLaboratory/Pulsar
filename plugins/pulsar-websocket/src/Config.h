@@ -40,6 +40,15 @@ struct Config {
 	// the entire reason the plugin exists, so enable by default.
 	std::atomic<bool> ServerEnabled = true;
 	std::atomic<uint16_t> ServerPort = 4455;
+	// Pulsar fork (#134): the listen address, LOOPBACK by default.
+	// Upstream obs-websocket listens on every interface because it is a
+	// desktop app the user opts into exposing. Pulsar is spawned as a child
+	// process and every consumer -- Prism (packages/pulsar-bundle*/src/spawn.ts
+	// -> ws://127.0.0.1:<port>), the CI probes, the PULSAR_READY sentinel --
+	// connects over the loopback, so a wider bind buys nothing and exposes the
+	// whole v5 surface (including the egress path #131 made live) to the LAN
+	// behind a single password. Widened only by an explicit PULSAR_WS_BIND.
+	std::string BindAddress = "127.0.0.1";
 	std::atomic<bool> Ipv4Only = false;
 	std::atomic<bool> DebugEnabled = false;
 	std::atomic<bool> AlertsEnabled = false;

@@ -323,17 +323,20 @@ Write-Host "==> probe-output-effect.py OK"
 
 # --------------------------------------------------------------------
 # Phase 1f-bis -- self-spawning v5 STREAM-EGRESS GUARD
-# (probe-stream-egress-guard.py, Bastion C1/C2 on PR #133).
+# (probe-stream-egress-guard.py, Bastion C1/C2 on PR #133, widened #135/#136).
 #
 # #131 made the v5 SetStreamServiceSettings + StartStream path a LIVE egress
 # for the first time by binding `streamService` to `streamOutput`. That is
-# exactly the path #114 had left dead so that an rtmp_common/"Twitch" service
-# -- which upstream resolves through a downloaded ingest list, falling back to
-# the CLEARTEXT rtmp://live.twitch.tv/app when the list is absent -- could
-# never reach the wire. This probe is the executable form of the two guards
-# that close it back: Twitch is barred from the v5 path (it goes through
-# pulsar:StartDestination, which pins rtmps:// by static_assert), and the v5
-# path validates scheme + non-empty key exactly like that twin does.
+# exactly the path #114 had left dead so that an rtmp_common service -- whose
+# ingest upstream resolves out of a service list downloaded at runtime,
+# falling back for Twitch to the CLEARTEXT rtmp://live.twitch.tv/app when the
+# list is absent -- could never reach the wire. This probe is the executable
+# form of the guards that close it back: rtmp_common as a whole is barred from
+# the v5 path (Twitch goes through pulsar:StartDestination, which pins rtmps://
+# by static_assert; everything else through rtmp_custom with an explicit
+# server), the boot placeholder is neutral so the default path has nothing to
+# refuse (#136), and the v5 path validates scheme + non-empty key exactly like
+# that twin does.
 #
 # BLOCKING, no skip path: it needs no CEF, no capture target and no network
 # (its nominal destination is a deliberately unreachable rtmp://127.0.0.1:1).
@@ -352,6 +355,35 @@ if ($egressCode -ne 0) {
     exit 1
 }
 Write-Host "==> probe-stream-egress-guard.py OK"
+
+# --------------------------------------------------------------------
+# Phase 1f-ter -- self-spawning LOOPBACK BIND probe
+# (probe-loopback-bind.py, #134).
+#
+# The obs-websocket server listened on every interface, so the whole v5
+# surface -- including the egress path above -- was reachable from the LAN
+# behind nothing but the session password. It now binds 127.0.0.1 unless
+# PULSAR_WS_BIND says otherwise. The assertion is at the SOCKET layer: the
+# loopback still speaks v5, a TCP connect to this host's own LAN address on
+# the same port is refused, and the explicit override does re-open it.
+#
+# SKIPS (exit 3) on a host with no non-loopback IPv4 -- there the boundary is
+# unobservable, and a probe that cannot observe must not invent a verdict.
+# Self-spawns its OWN pulsar.exe children (two, sequential). ~10 s wall clock.
+# --------------------------------------------------------------------
+$bindProbe = Join-Path $repoRoot "scripts/probe-loopback-bind.py"
+Write-Host "==> Running probe-loopback-bind.py (self-spawn loopback bind, #134)"
+& python $bindProbe --exe $pulsar
+$bindCode = $LASTEXITCODE
+if ($bindCode -eq 3) {
+    Write-Host "==> probe-loopback-bind.py SKIPPED (no non-loopback IPv4 on this host)"
+} elseif ($bindCode -ne 0) {
+    Write-Host "==> probe-loopback-bind.py FAILED (exit $bindCode)"
+    Write-Host "==> The v5 server is listening beyond the loopback -- aborting before the shared suite."
+    exit 1
+} else {
+    Write-Host "==> probe-loopback-bind.py OK"
+}
 
 # --------------------------------------------------------------------
 # Phase 1g -- self-spawning VCAM SOURCE-MODE probe
