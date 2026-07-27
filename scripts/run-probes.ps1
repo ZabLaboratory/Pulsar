@@ -291,6 +291,48 @@ if ($vcamCode -eq 3) {
     Write-Host "==> probe-vcam-scene-mode.py OK"
 }
 
+# --------------------------------------------------------------------
+# Phase 1h -- self-spawning v5 CAPABILITY CONTRACT gate
+# (probe-capability-contract.py, #121 / ADR Prism 026 §3.3 palier 3).
+#
+# The other probes assert that a named feature works. This one asks a
+# different question of the whole v5 surface: does a request that answers
+# `result: true` actually DO what it says? For each subject it re-queries
+# the server with a DIFFERENT request and classifies ok / explicit error /
+# ok-but-no-effect. An explicit refusal PASSES -- refusing honestly is
+# correct behaviour; only "success that did not happen" fails.
+#
+# It is wired here as a BLOCKING gate, no continue-on-error, because the
+# paliers were respected: it is green on its perimeter only since #117,
+# #119, #120 and #127 landed. Wiring it before those would have condemned
+# it to be ignored, then disarmed (ADR Prism 026 §3.3).
+#
+# The gate is BY TIERS: 32 request types across 13 families are frozen in
+# scripts/contracts/capability-coverage.json and cross-checked at the end
+# of every run (a subject that stops being driven fails the probe; a
+# subject driven but not declared fails it too). Families outside that
+# list are measured ignorance, not failures -- including two KNOWN reds
+# documented in the artefact (RemoveInput, PauseRecord-before-first-byte),
+# deliberately left out rather than gated onto a defect.
+#
+# Self-spawns its OWN pulsar.exe child (fresh ephemeral port + isolated
+# PULSAR_RECORD_DIR, cleaned up) for the same config.json-reseed reason as
+# the other Phase-1 probes. No skip path: it needs no CEF, no capture
+# target and no network, so it runs on a light build too -- a box with no
+# virtual-camera driver simply lands VirtualCam in the "explicit refusal"
+# branch, which passes. ~10 s wall clock.
+# --------------------------------------------------------------------
+$contractProbe = Join-Path $repoRoot "scripts/probe-capability-contract.py"
+Write-Host "==> Running probe-capability-contract.py (self-spawn v5 capability contract, #121)"
+& python $contractProbe --exe $pulsar
+$contractCode = $LASTEXITCODE
+if ($contractCode -ne 0) {
+    Write-Host "==> probe-capability-contract.py FAILED (exit $contractCode)"
+    Write-Host "==> A v5 request reported an effect it did not have, or the frozen coverage list drifted -- aborting before the shared suite."
+    exit 1
+}
+Write-Host "==> probe-capability-contract.py OK"
+
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
 # Port 0 -> bind a random free port so back-to-back ctest runs don't

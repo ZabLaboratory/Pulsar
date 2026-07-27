@@ -1,0 +1,141 @@
+{
+  "_artefact": "Frozen coverage list for scripts/probe-capability-contract.py.",
+  "_why": [
+    "ADR Prism 026 §3.3 palier 3 / Pulsar issue #121 resolution criterion 3: the",
+    "coverage of the capability-contract gate is an EXPLICIT, VERSIONED list, not",
+    "whatever the probe happens to walk on the day. The probe cross-checks itself",
+    "against this file and FAILS on drift in either direction:",
+    "  - a listed subject that was NOT driven  -> the gate silently lost coverage;",
+    "  - a driven subject that is NOT listed   -> this artefact went stale.",
+    "Removing a line from `subjects` therefore cannot happen by accident: it must",
+    "also be removed from the probe, which makes it a visible diff. That diff",
+    "failing REVIEW is the human control the ADR asks for -- it is deliberately",
+    "not a test (a test cannot tell a legitimate retirement from an amputation)."
+  ],
+  "_denominator": {
+    "advertised_request_types": 137,
+    "source": "docs/PROTOCOL.md -- the count Pulsar advertises as its v5 surface.",
+    "note": [
+      "GetVersion on a -Full build reports a larger availableRequests array (151)",
+      "because it includes the pulsar: vendor requests and the handlers upstream",
+      "registers but PROTOCOL.md does not advertise. 137 stays the denominator so",
+      "the ratio keeps meaning the same thing across builds."
+    ]
+  },
+
+  "subjects": {
+    "General": ["GetVersion", "GetStats"],
+    "Scenes": ["CreateScene", "SetCurrentProgramScene", "RemoveScene"],
+    "Inputs": ["CreateInput", "SetInputSettings"],
+    "SceneItems": ["SetSceneItemTransform", "SetSceneItemEnabled"],
+    "Filters": [
+      "CreateSourceFilter",
+      "SetSourceFilterSettings",
+      "SetSourceFilterEnabled",
+      "RemoveSourceFilter"
+    ],
+    "Transitions": ["SetCurrentSceneTransition"],
+    "Stream": ["SetStreamServiceSettings", "StartStream"],
+    "Record": ["StartRecord", "PauseRecord", "ResumeRecord", "StopRecord"],
+    "ReplayBuffer": ["StartReplayBuffer", "SaveReplayBuffer", "StopReplayBuffer"],
+    "VirtualCam": ["StartVirtualCam", "StopVirtualCam"],
+    "Outputs": ["GetOutputList", "GetOutputStatus", "StartOutput"],
+    "StudioMode": [
+      "SetStudioModeEnabled",
+      "SetCurrentPreviewScene",
+      "TriggerStudioModeTransition"
+    ],
+    "Canvases": ["GetCanvasList"]
+  },
+
+  "cross_check_requests": [
+    "GetCanvasList",
+    "GetCurrentProgramScene",
+    "GetCurrentSceneTransition",
+    "GetInputList",
+    "GetInputSettings",
+    "GetLastReplayBufferReplay",
+    "GetOutputList",
+    "GetOutputStatus",
+    "GetRecordStatus",
+    "GetReplayBufferStatus",
+    "GetSceneItemId",
+    "GetSceneItemEnabled",
+    "GetSceneItemList",
+    "GetSceneItemTransform",
+    "GetSceneList",
+    "GetSceneTransitionList",
+    "GetSourceFilterKindList",
+    "GetSourceFilter",
+    "GetSourceFilterList",
+    "GetStreamServiceSettings",
+    "GetStreamStatus",
+    "GetStudioModeEnabled",
+    "GetVideoSettings",
+    "GetVirtualCamStatus"
+  ],
+  "_cross_check_note": [
+    "Requests used ONLY as the independent re-query for someone else's verdict.",
+    "They are exercised for real (a broken one breaks the verdict it backs), but",
+    "they are not the subject under test, so they are not gated by name."
+  ],
+
+  "deliberately_uncovered": {
+    "RemoveInput": "Known red, see `open_findings_routed_out` below. Uncovered because the defect is real and unfixed, not because it is uninteresting -- it is the first thing to re-gate once the fix lands.",
+    "PauseRecord before the first written byte": "Known red, see `open_findings_routed_out` below. The healthy pause/resume path IS gated (Record family); only the wedge-triggering precondition is out.",
+    "Profiles / SceneCollections": "Pulsar is headless and boots one implicit profile+collection; Prism never drives these. No consumer, no gate -- covering them would test upstream, not Pulsar.",
+    "Hotkeys": "No input device in a headless service; TriggerHotkeyByName has no consumer in Prism. Same reasoning as above.",
+    "MediaInput cursor": "SetMediaInputCursor / OffsetMediaInputCursor / TriggerMediaInputAction need a real ffmpeg_source with a media file; the fixture cost is real and no Prism path drives them today. Next candidate after the ones below.",
+    "SplitRecordFile / CreateRecordChapter": "Both are format-conditional (fragmented mp4 / hybrid mp4) and would need their own record-format fixture. Left out of this pass on cost, not on principle.",
+    "SetSceneItemIndex / SetSceneItemBlendMode / SetSceneItemLocked": "Same family as the two SceneItem subjects already gated; adding them is mechanical and is exactly the kind of widening the ADR calls a separate job.",
+    "Projectors / Dialogs (Open*Projector, Open*Dialog)": "Qt frontend surface. Pulsar runs QT_QPA_PLATFORM=minimal with no UI; these are structurally inapplicable.",
+    "pulsar: vendor requests": "Multi-stream (pulsar:StartDestination) and pulsar:GetCapabilities have their own dedicated probes (probe-multi-stream.py, live-test.yml). Not re-litigated here."
+  },
+
+  "open_findings_routed_out": {
+    "RemoveInput reports success and removes nothing": [
+      "2026-07-27 Forge/#121 -- NEW, and the same shape as #119. RemoveInput",
+      "answers result=true, and 3 s later the input is still in GetInputList AND",
+      "its scene item is still in GetSceneItemList. The v5 contract for this",
+      "request is explicit ('will immediately remove all associated scene",
+      "items'); nothing of the sort happens. The source only really goes away",
+      "when the scene holding it is removed.",
+      "Probable root cause, to confirm: obs_source_remove() only flags the",
+      "source and emits the 'remove' signal -- in obs-studio it is the FRONTEND",
+      "that reacts and deletes the scene items. Pulsar's frontend stub has no",
+      "such handler, so the signal lands nowhere. Exactly the #119 pattern",
+      "(a stub that does not close a loop libobs expects the frontend to close).",
+      "NOT gated: this is a pre-existing red that palier 2 never covered, and",
+      "wiring the gate onto it would make the gate red on day one. Routed to",
+      "Atlas/Eleven as a candidate issue -- reproducible in 6 requests."
+    ],
+    "PauseRecord before the muxer's first bytes wedges record + replay": [
+      "2026-07-27 Forge/#121 -- reproduced while wiring this gate. PauseRecord",
+      "issued while GetRecordStatus.outputBytes is still 0 (i.e. immediately",
+      "after StartRecord reports outputActive) leaves the ffmpeg_muxer wedged:",
+      "SaveReplayBuffer then never produces a file, and StopReplayBuffer /",
+      "StopRecord answer Success() while outputActive stays true. That last part",
+      "is a #120-class honesty gap -- the effect verification does not catch it",
+      "because the output really is 'stopping', it just never stops.",
+      "Trigger is exotic (no Prism path pauses a recording that has not started",
+      "writing), and the same sequence with the recording actually producing",
+      "data is clean, so this is NOT gated here: widening a gate onto a known",
+      "red is exactly what ADR Prism 026 §3.3 forbids. Routed to Atlas/Eleven",
+      "as a candidate issue, with a live repro, rather than silenced.",
+      "Likely upstream (obs ffmpeg_muxer pause-before-first-packet), to confirm."
+    ],
+    "SetStreamServiceSettings has no effect on the v5 stream output": [
+      "2026-07-27 Forge/#121 -- SetStreamServiceSettings genuinely updates the",
+      "frontend-stub's `streamService` (GetStreamServiceSettings re-reads it, which",
+      "is what this probe gates), but obs_frontend_streaming_start() never binds",
+      "that service to `streamOutput` (pulsar-frontend-stub.cpp:1441-1450). The v5",
+      "single-stream StartStream path is therefore structurally unreachable in",
+      "Pulsar; the live path is the pulsar:StartDestination multi-stream API.",
+      "This is NOT silenced: StartStream is gated here and must answer with an",
+      "EXPLICIT refusal (post-#120 behaviour, which it does). Whether the v5 path",
+      "should be wired, or SetStreamServiceSettings should refuse instead of",
+      "reporting a success the output can never honour, is an architecture call --",
+      "routed to Atlas, not decided by the gate."
+    ]
+  }
+}
