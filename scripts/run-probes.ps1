@@ -269,10 +269,13 @@ Write-Host "==> probe-output-effect.py OK"
 # (GetVirtualCamStatus.outputActive) and the stub's own "virtual cam SOURCE
 # mode -> 'ZabVirtualCamSource'" log line.
 #
-# libobs only registers the `virtualcam_output` type when a virtual-camera
-# DirectShow filter is registered on the box (win-dshow/dshow-plugin.cpp:48).
-# A runner without one -> exit 3 (typed skip), tolerated here: the criterion
-# is untestable there, and the probe says so instead of pretending.
+# The DEVICE leg needs a working virtual-camera DirectShow filter on the box
+# (win-dshow/dshow-plugin.cpp:48 gates the whole `virtualcam_output` type on
+# it). A CI runner has none, so the probe splits the criterion: the SCENE
+# RESOLVE -- the only half the #119 mirror removal could have broken -- is
+# asserted everywhere, and only the device leg degrades to exit 3 (typed
+# skip), tolerated here. The probe then prints what to install; it never
+# passes silently.
 # --------------------------------------------------------------------
 $vcamProbe = Join-Path $repoRoot "scripts/probe-vcam-scene-mode.py"
 Write-Host "==> Running probe-vcam-scene-mode.py (self-spawn vcam source mode, #119 crit 3)"

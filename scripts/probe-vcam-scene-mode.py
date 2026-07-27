@@ -39,6 +39,11 @@ Sequence:
      "virtual cam SOURCE mode -> 'ZabVirtualCamSource'" — the observable
      proof that obs_get_source_by_name resolved and the dedicated view was
      wired, rather than the default obs_get_video() mix.
+     If the start is REFUSED, the two legs are split: the source-mode log
+     must still be there (the resolve happens before the device is touched,
+     and it is the only half #119 could have broken) — if it is, the probe
+     exits 3 with the device as the named reason; if it is not, that is a
+     real failure.
   6. StopVirtualCam must succeed and the cam must really be inactive.
 
 LICENSE INVARIANT (LICENSE-INVARIANTS.md #1/#2/#3): the probe talks to Pulsar
@@ -353,9 +358,32 @@ async def run(c: Client, proc: PulsarProcess) -> None:
     # 5. Start, and demand the effect + the source-mode evidence.
     ok, code, comment, _ = await c.req("StartVirtualCam")
     if not ok:
-        raise Failure(
-            f"StartVirtualCam failed on a machine that HAS the driver: {code} {comment}\n"
-            f"{proc.diag()}"
+        # `GetVirtualCamStatus` answering means the stub HOLDS a vcam output
+        # handle -- it does not mean libobs can open the DirectShow device on
+        # this machine (a CI runner registers no camera at all: libobs logs
+        # "Output ID 'virtualcam_output' not found" and the start is declined
+        # with no cause of its own).
+        #
+        # Split the two honestly. The #119-relevant half of the criterion runs
+        # BEFORE the device is ever touched: the stub resolves
+        # obs_get_source_by_name(VCAM_SCENE) and wires the dedicated obs_view,
+        # which it announces in the log. If that happened, the mirror removal
+        # is proven not to have broken the resolve, and only the device leg is
+        # untestable here -> typed skip. If it did NOT happen, the resolve is
+        # what broke, and that is a real failure.
+        hit = proc.find_log(SOURCE_MODE_LOG)
+        if hit is None:
+            raise Failure(
+                f"StartVirtualCam was refused ({code} {comment}) AND the stub never logged "
+                f"{SOURCE_MODE_LOG!r}: obs_get_source_by_name did not resolve {VCAM_SCENE!r} "
+                "-- the source-mode resolve itself is broken, not just the device\n"
+                f"{proc.diag()}"
+            )
+        if VCAM_SCENE not in hit:
+            raise Failure(f"source-mode log names the wrong scene: {hit!r}")
+        raise Skip(
+            f"the source-mode resolve DID happen ({hit.strip()!r}), but libobs could not open the "
+            f"virtual camera device on this machine: StartVirtualCam -> {code} {comment}"
         )
 
     status = await c.must("GetVirtualCamStatus")
@@ -429,12 +457,20 @@ def main() -> int:
     except Skip as exc:
         print(f"\nSKIP: {exc}")
         print(
-            "To exercise this criterion, register a virtual-camera DirectShow filter under "
-            "CLSID_OBS_VirtualVideo {A3FCE0F5-3493-419F-958A-ABA1250EC20B} in the 32-bit COM view "
-            "(HKCR\\WOW6432Node\\CLSID). Installing OBS Studio for Windows with the "
-            "'Virtual Camera' component does exactly that (regsvr32 of "
-            "obs-virtualcam-module32.dll). libobs only registers the `virtualcam_output` type "
-            "when that key exists (upstream/plugins/win-dshow/dshow-plugin.cpp:48)."
+            "To exercise the DEVICE leg of this criterion, the box needs a working virtual-camera\n"
+            "DirectShow filter:\n"
+            "  1. install OBS Studio for Windows WITH the 'Virtual Camera' component -- its\n"
+            "     installer regsvr32's obs-virtualcam-module32.dll AND ...module64.dll, which\n"
+            "     registers CLSID_OBS_VirtualVideo {A3FCE0F5-3493-419F-958A-ABA1250EC20B};\n"
+            "  2. libobs gates the whole `virtualcam_output` type on the 32-BIT COM view of that\n"
+            "     key (HKCR\\WOW6432Node\\CLSID), see\n"
+            "     upstream/plugins/win-dshow/dshow-plugin.cpp:48 -- a 64-bit-only registration is\n"
+            "     not enough;\n"
+            "  3. the filter DLLs must still be on disk at the registered path: an uninstall that\n"
+            "     leaves the key behind gives exactly the half-state a CI runner shows\n"
+            "     (\"Output ID 'virtualcam_output' not found\" and a start declined with no cause).\n"
+            "A headless CI runner has none of this. The SCENE-RESOLVE leg of the criterion (the\n"
+            "part #119 could actually have broken) is asserted above regardless."
         )
         return EXIT_SKIP
     except Failure as exc:

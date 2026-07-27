@@ -100,11 +100,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   program mix would show, then starts the cam and demands both the real
   effect (`GetVirtualCamStatus.outputActive`) and the stub's own
   `virtual cam SOURCE mode -> 'ZabVirtualCamSource'` log line. Wired into
-  the offline suite (Phase 1g). libobs only registers the
-  `virtualcam_output` type when a virtual-camera DirectShow filter is
-  registered on the machine (`win-dshow/dshow-plugin.cpp:48`); without one
-  the probe exits 3 (typed skip) and prints what to install, rather than
-  passing silently.
+  the offline suite (Phase 1g). The criterion is split along what each
+  machine can actually answer: the **scene resolve** — the only half the
+  mirror removal could have broken, and it runs before the device is
+  touched — is asserted everywhere, including on a CI runner; the **device**
+  leg needs a real virtual-camera DirectShow filter (libobs gates the whole
+  `virtualcam_output` type on it, `win-dshow/dshow-plugin.cpp:48`) and
+  degrades to exit 3 (typed skip) with what to install printed out, rather
+  than passing silently. Exercised end to end, device included, on a
+  workstation that has the OBS virtual camera installed.
 - both probes now force `errors="replace"` on their own stdout/stderr: on a
   non-English Windows the libobs log lines they quote are cp1252-hostile,
   and a failure used to surface as an `UnicodeEncodeError` traceback that
