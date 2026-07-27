@@ -16,10 +16,19 @@ that the legitimate paths still succeed and stay fast.
 
 Cases (each one is a genuine refusal on the spawned binary, not a mock):
 
-  A. Replay buffer — `pulsar-frontend-stub` creates `PulsarReplay` with no
-     encoder attached (issue #117), so `obs_output_start` declines.
-     Assert: StartReplayBuffer -> result:false, and GetReplayBufferStatus
-     still reports outputActive:false (the old bug was success + false).
+  A. Replay buffer — since #117 the stub DOES attach the shared encoders to
+     `PulsarReplay`, and refuses to arm the buffer off-air: the buffer borrows
+     the live stream/record encoders, so with nothing broadcasting they are
+     attached but idle (ADR Prism 024 §3.1, "pas de replay hors antenne").
+     Child 1 has no service bound and an uncreatable record dir, so nothing
+     can be live — the off-air refusal is deterministic.
+     That refusal is taken before `obs_output_start`, so libobs records no
+     cause of its own; #117 publishes it via obs_output_set_last_error so the
+     #120 verification names it instead of falling back to a generic
+     "the output is not configured".
+     Assert: StartReplayBuffer -> result:false, the comment names the idle
+     encoders (not a generic message), and GetReplayBufferStatus still
+     reports outputActive:false (the old bug was success + false).
 
   B. Stream — the singleton `PulsarStream` rtmp_output has no service bound,
      so obs_output_start bails before taking the action.
@@ -269,7 +278,14 @@ def note_latency(name: str, elapsed_ms: float) -> None:
     LATENCIES.append((name, elapsed_ms))
 
 
-def require_explicit_error(name: str, ok: bool, code, comment, expected_code: int, cause_hint: str | None = None) -> None:
+def require_explicit_error(
+    name: str,
+    ok: bool,
+    code,
+    comment,
+    expected_code: int,
+    cause_hint: str | tuple[str, ...] | None = None,
+) -> None:
     """The heart of #120: the request must FAIL, with the right code and a
     comment carrying the cause. A bare Success is the regression we fence;
     a bare code with no cause is the other half of the same defect."""
@@ -282,20 +298,24 @@ def require_explicit_error(name: str, ok: bool, code, comment, expected_code: in
         raise Failure(f"{name}: failed with code {code}, expected {expected_code}")
     if not comment or not str(comment).strip():
         raise Failure(f"{name}: failed with no comment -- the cause must be carried, never a bare code")
-    if cause_hint is not None and cause_hint.lower() not in str(comment).lower():
-        raise Failure(
-            f"{name}: comment {comment!r} does not name the actual cause "
-            f"(expected it to mention {cause_hint!r}) -- generic messages are not a cause"
-        )
+    if cause_hint is not None:
+        hints = (cause_hint,) if isinstance(cause_hint, str) else cause_hint
+        missing = [h for h in hints if h.lower() not in str(comment).lower()]
+        if missing:
+            raise Failure(
+                f"{name}: comment {comment!r} does not name the actual cause "
+                f"(expected it to mention {missing!r}) -- generic messages are not a cause"
+            )
     print(f"   OK  {name} -> error {code}: {comment}")
 
 
 async def case_replay(c: Client) -> None:
-    print("-- A. replay buffer (no encoder attached, #117)")
+    print("-- A. replay buffer (encoders attached but idle off-air, #117)")
     ok, code, comment, _, ms = await c.req("StartReplayBuffer")
     note_latency("StartReplayBuffer", ms)
     if ok:
-        # If it DID start (a future #117 world), the effect must be real.
+        # Nothing is live in this child, so #117 must refuse. If a future
+        # revision ever lets it start, the effect still has to be real.
         _, _, _, status, _ = await c.req("GetReplayBufferStatus")
         if not status.get("outputActive"):
             raise Failure(
@@ -305,9 +325,12 @@ async def case_replay(c: Client) -> None:
         print("   OK  StartReplayBuffer succeeded AND the buffer is genuinely active")
         await c.req("StopReplayBuffer")
         return
-    # The replay output has no encoder attached (#117) -- that is the cause
-    # the error must name, read off the output, not a generic failure.
-    require_explicit_error("StartReplayBuffer", ok, code, comment, STATUS_OUTPUT_NOT_RUNNING, "encoder")
+    # #117 refuses off-air: the encoders are attached but idle. That is the
+    # cause the error must name -- read off the output (obs_output_get_last_error,
+    # set by the stub at the point of refusal), never a generic failure.
+    require_explicit_error(
+        "StartReplayBuffer", ok, code, comment, STATUS_OUTPUT_NOT_RUNNING, ("encoder", "idle")
+    )
 
     _, _, _, status, _ = await c.req("GetReplayBufferStatus")
     if status.get("outputActive"):

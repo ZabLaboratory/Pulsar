@@ -58,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PULSAR_OUTPUT_VERIFY_MS` (250 ms default) and is not reached on the
   nominal path. `scripts/probe-output-effect.py` drives a real refusal in
   each family plus a positive control and a latency bound.
+  Integration of #117 with #120: the off-air replay refusal is Pulsar's own
+  policy, taken *before* `obs_output_start`, so libobs recorded no cause and
+  the verification could only answer the generic "the output is not
+  configured" — false, since the encoders *are* attached, just idle. The stub
+  now publishes the cause through `obs_output_set_last_error()` at the point
+  of refusal, so #120 names it like any libobs cause. Nothing has to clear
+  it: `obs_output_actual_start()` wipes `last_error_message` on the next real
+  start.
 
 ## [1.2.2] - 2026-07-26
 

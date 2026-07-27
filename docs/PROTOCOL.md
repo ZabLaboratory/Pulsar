@@ -237,10 +237,15 @@ the **six v5 baseline requests**, which Pulsar has always compiled
 
 **On-air only.** The buffer feeds off the shared encoders, which run only
 while the stream or the recording output is active. `StartReplayBuffer`
-issued with the encoders idle **fails** with `OutputNotRunning` and the
-cause libobs recorded (#120), rather than silently spinning an encoder up
-for a partial, off-air pipeline, or reporting success on a buffer that
-never started. Arm after go-live, disarm at stop.
+issued with the encoders idle **fails** with `OutputNotRunning` and a
+`comment` naming that exact cause (#120) — *"the encoders are idle —
+nothing is streaming or recording…"* — rather than silently spinning an
+encoder up for a partial, off-air pipeline, or reporting success on a
+buffer that never started. The refusal is Pulsar's own, decided before
+`obs_output_start`, so the stub publishes the cause through
+`obs_output_set_last_error()`: the verification reads it off the output
+like any libobs-recorded cause, and never falls back to a generic
+message. Arm after go-live, disarm at stop.
 
 Memory cost is `max_time_sec × (video + audio bitrate)`, held in RAM and
 capped by `max_size_mb` — ~23 MB at 30 s / 6 000 kbps.

@@ -1526,6 +1526,19 @@ void PulsarFrontendAPI::obs_frontend_replay_buffer_start(void)
     // the encoder. Being on-air (stream) or recording both qualify: either one
     // already has the encoders running, so the buffer only taps their packets.
     if (!videoEncoder || !obs_encoder_active(videoEncoder)) {
+        // The refusal is decided HERE, before obs_output_start, so libobs never
+        // records a cause of its own and obs_output_get_last_error stays empty.
+        // A consumer that reads state off the server (pulsar-websocket, issue
+        // #120) would then have nothing to quote and fall back to a generic
+        // "not configured" -- which is false: the encoders are attached, they
+        // are simply not running. Publish the cause where every consumer
+        // already looks. Nothing has to clear it: obs_output_actual_start()
+        // wipes last_error_message on the next real start (obs-output.c:365).
+        if (videoEncoder)
+            obs_output_set_last_error(replayOutput,
+                "the encoders are idle -- nothing is streaming or recording. The replay "
+                "buffer borrows the live encoders, it does not start them. Start the "
+                "stream or the recording first, then arm the buffer.");
         blog(LOG_WARNING, "[pulsar-frontend-stub] replay buffer start refused: encoders "
              "idle (not streaming or recording). Arm the buffer once the broadcast "
              "is up -- it borrows the live encoders, it does not start them.");
