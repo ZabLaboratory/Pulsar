@@ -23,20 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   #117, #119, #120 and #127 turned it green on its perimeter. Wiring it first
   would have made it red on day one, then ignored, then removed.
 
-  The gate is **by tiers**, not all-or-nothing. **32 request types across 13
+  The gate is **by tiers**, not all-or-nothing. **33 request types across 13
   families** (General, Scenes, Inputs, SceneItems, Filters, Transitions,
   Stream, Record, ReplayBuffer, VirtualCam, Outputs, StudioMode, Canvases) —
-  53 of the 137 advertised types once the independent re-queries are counted,
+  54 of the 137 advertised types once the independent re-queries are counted,
   up from the 15 of the first pass. The list is frozen in the versioned
   artefact `scripts/contracts/capability-coverage.json` and cross-checked in
   both directions on every run: a subject that stops being driven fails the
   probe, and a subject driven but not declared fails it too. Widening it is a
   separate job; narrowing it is a diff a human has to approve. Families
-  outside the list are measured ignorance, not failures — including two
-  **known reds documented in the artefact** (`RemoveInput` reports success and
-  removes nothing; `PauseRecord` before the muxer's first byte wedges the
-  record + replay outputs), deliberately left out rather than gated onto a
-  defect, and routed out as candidate issues rather than silenced.
+  outside the list are measured ignorance, not failures.
+
+  The pass turned up three defects it deliberately did **not** gate onto
+  (wiring a gate onto a known red is what ADR Prism 026 §3.3 forbids); they
+  were routed out as issues rather than silenced, and all three are fixed
+  below (#129, #130, #131). The gate closed over them in the same release:
+  `RemoveInput` is now a gated subject, `PauseRecord`'s two refusal
+  preconditions are driven for real, and `StartStream` is judged on the
+  `StreamStateChanged` event it puts on the wire.
 
 - `pulsar-frontend-stub`: the **replay buffer is wired** (#117, ADR Prism 024
   §3.1). `replayOutput` was created at boot but nothing was attached to it —
@@ -64,6 +68,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   MP4 on disk at the path the server reports.
 
 ### 🐛 Fixed
+
+- `pulsar-frontend-stub`: **the v5 `StartStream` path is wired at last**
+  (#131). `SetStreamServiceSettings` faithfully updated the stub's
+  `streamService` — `GetStreamServiceSettings` read it back — but
+  `obs_frontend_streaming_start()` never called `obs_output_set_service()`,
+  and `obs_output_start()` refuses a service-flagged `rtmp_output` on its
+  very first line when `output->service` is `NULL`. The v5 single-stream
+  path was therefore **structurally unreachable**: no sequence of requests
+  could make it work. The encoders had been attached all along; the whole
+  defect was one missing binding. This applies the doctrine the fork already
+  ratified in Phase 7 ("Approach A": the v5 `StartStream` / `StartRecord`
+  path keeps working for Stream Deck / Companion / Streamer.bot, and
+  multi-destination is purely additive) instead of revoking it.
+
+  Same commit, the honesty corollary: `OBS_FRONTEND_EVENT_STREAMING_STARTING`
+  was emitted **before** `obs_output_start()`, unconditionally, so a refused
+  start still put a `StreamStateChanged: OBS_WEBSOCKET_OUTPUT_STARTING` on
+  the wire — a #120-class lie, on the event channel instead of the response.
+  It now follows a start libobs really took. That ordering is what makes the
+  CI gate deterministic without a network: an rtmp output whose connect
+  thread is still in flight legitimately reads `outputActive: false`, so the
+  `STARTING` event — impossible to produce without the service binding — is
+  the evidence the contract probe requires.
+
+  `DescribeOutputRefusal` gained the matching cause: an output that *has* a
+  service which cannot be connected to (`rtmp_common` with no stream key,
+  say) is now named as such instead of falling back to the generic "the
+  output is not configured".
+
+- `pulsar-frontend-stub`: **`RemoveInput` actually removes the input and its
+  scene items** (#129) — the same defect family as #119, on a different
+  loop. `obs_source_remove()` only flags the source and fires the global
+  `source_remove` signal; the scene items holding the last references are
+  dropped by `obs_scene_prune_sources()`, which libobs calls **only** from
+  `scene_video_render` — that is, only for a scene it is actually rendering.
+  obs-studio closes that loop in its frontend; Pulsar's frontend stub did
+  not, so `RemoveInput` answered `result: true` and the input stayed in
+  `GetInputList` with its item in `GetSceneItemList` indefinitely (any scene
+  that is not the program scene, forever). The stub now connects
+  `source_remove` in `setup()`, disconnects it in `teardown()`, and prunes
+  every scene in **two phases** — collect the scene refs during
+  `obs_enum_scenes`, prune once the enumeration has returned — so the source
+  list mutex and the scene video lock are never nested.
+
+- `pulsar-websocket`: **`PauseRecord` / `ToggleRecordPause` refuse instead of
+  wedging the muxer** (#130). Two guards, both previously absent:
+  - pausing an output that is **not recording** answered `Success()`.
+    `obs_output_pause()` returns false there and
+    `obs_frontend_recording_pause()` is `void`, so the refusal was thrown
+    away — the #120 lie, on a request #120 did not cover. Now
+    `OutputNotRunning` (501).
+  - pausing **before the muxer wrote its first byte** (`outputBytes == 0`)
+    wedged `ffmpeg_muxer` permanently: `SaveReplayBuffer` then produced
+    nothing and `StopRecord` / `StopReplayBuffer` answered `Success()` while
+    `outputActive` stayed true. The root cause is upstream — libobs computes
+    the pause window from `pause->last_video_ts`, which is still `0` until
+    the first encoded frame, so the resume condition (an exact timestamp
+    match) is never met. Patching libobs for an exotic trigger is outside
+    this fork's mandate, so the websocket layer — the only layer that can
+    *name* a cause — refuses the precondition with
+    `InvalidResourceState` (604) and a comment saying exactly that.
+    `outputBytes > 0` is a conservative proxy: it can refuse a legitimate
+    pause for the few tens of milliseconds after `StartRecord`, never the
+    reverse, and the client lifts the condition itself with
+    `GetRecordStatus`.
 
 - `pulsar-websocket`: the four output families no longer report an effect
   they never observed (#120, ADR Prism 026 §3.2). `StartReplayBuffer`,
@@ -119,7 +188,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   real on both views) and H (the `outputReconnecting` invariants, asserted
   on every `GetOutputStatus` it issues).
 
+### 🔒 Security
+
+- **The v5 stream path can no longer send to Twitch in cleartext** — the
+  regression `#131` would otherwise have introduced against `#114` /
+  `1.2.2` (Bastion C1 on PR #133, form **(b)**). Binding `streamService` to
+  `streamOutput` (above) is what made the v5
+  `SetStreamServiceSettings` + `StartStream` path a **live egress** for the
+  first time; `#114` had closed the cleartext hole partly by leaving that
+  path dead. An `rtmp_common` service named `Twitch` resolves its ingest
+  through upstream's `update_ingest`
+  (`upstream/plugins/rtmp-services/rtmp-common.c`), which falls back to the
+  bundled default `rtmp://live.twitch.tv/app`
+  (`service-specific/twitch.c:45`) whenever the downloaded ingest list is
+  absent — first run, cold cache, offline. A v5 client pushing a Twitch
+  service plus a key and calling `StartStream` would have put that key on
+  the wire unencrypted, on a path whose twin `pulsar:StartDestination`
+  guarantees `rtmps://` by `static_assert`. Worse, the stub's own **boot
+  placeholder** is exactly that service, so no request was even needed to
+  arm the gun.
+
+  **Twitch is now barred from the v5 single-stream path**, at both seams:
+  `SetStreamServiceSettings` refuses `rtmp_common` + `service: "Twitch"`
+  with `InvalidRequestField` (400), and `obs_frontend_streaming_start()`
+  refuses to bind such a service at all — including the boot placeholder —
+  so the refusal holds whatever the caller did upstream of it. Twitch
+  egress goes through `pulsar:StartDestination`, which already carries the
+  compile-time `rtmps://` guarantee. The v5 path stays alive for
+  `rtmp_custom` and non-Twitch services, which is the Stream Deck /
+  Companion compatibility `#131` exists for.
+
+  Two other forms were considered and rejected. *(a)* refusing any resolved
+  `rtmp://` URL would break parity with the twin, which deliberately
+  accepts `rtmp://` for operator-supplied endpoints (a LAN relay), or force
+  two divergent scheme policies onto one product. *(c)* patching
+  `twitch.c:45` in the vendored submodule would bury a Pulsar security
+  invariant inside upstream code — re-litigated at every submodule bump,
+  invisible to anyone reading Pulsar's own sources. Form (b) keeps one
+  rule, "Twitch egress is the multi-stream plugin's job", enforced where
+  the egress is decided.
+
+- **`SetStreamServiceSettings` validates its destination like
+  `pulsar:StartDestination` does** (Bastion C2 on PR #133). The v5 request
+  applied no schema at all: any service type, any settings. Its twin
+  front-loads `is_rtmp_scheme()` + non-empty-key validation before any
+  `obs_output_*` allocation (`pulsar-multi-stream/src/plugin-main.cpp:100-121`).
+  A newly live egress path must not be more permissive than its twin, so
+  the same two rules now apply: the resolved server must be `rtmp://` or
+  `rtmps://` and the stream key must be non-empty, else the request answers
+  `InvalidRequestField` (400) naming the cause and **applies nothing**
+  (validated on a throwaway private service, so a refusal cannot half-write
+  the frontend's). Same-type calls still merge onto the current settings —
+  and it is the **merged** result that is validated, so a partial update
+  cannot inherit its way past the rules.
+
+  The predicate lives in one header-only file,
+  `plugins/pulsar-frontend-stub/include/pulsar-stream-egress.h`, shared
+  verbatim by the configuration seam (`pulsar-websocket`) and the start seam
+  (`pulsar-frontend-stub`): two link units, one rule, no drift.
+
 ### ✅ Tested
+
+- `scripts/probe-stream-egress-guard.py` — the executable form of both
+  guards above, wired into the offline suite as a **blocking** gate
+  (Phase 1f-bis, no skip path, no `continue-on-error`: a security invariant
+  with a tolerated red is not an invariant). Seven cases, every one of them
+  red on the pre-fix binary: the **boot placeholder** (`rtmp_common`/Twitch)
+  must refuse `StartStream` before any request is made; the Twitch
+  configuration refusal in both spellings (`Twitch`, `twitch` — the guard
+  reads the setting case-insensitively, not a literal) and its atomicity
+  (the refused key must not be written anyway); a non-`rtmp` scheme; an
+  empty key; the **merge** path (pushing only `server` onto a service whose
+  key is still empty must stay refused); and the non-regression leg —
+  `#131`'s own nominal `rtmp_custom` destination still configures **and**
+  still reaches `StreamStateChanged: OBS_WEBSOCKET_OUTPUT_STARTING`, so the
+  guard did not re-kill the path it protects. Every refusal must carry a
+  **named** cause; a bare code would be the `#120` defect wearing a security
+  hat. No network: the nominal destination is a deliberately unreachable
+  `rtmp://127.0.0.1:1`.
 
 - `scripts/probe-vcam-scene-mode.py` — **#119 resolution criterion 3**
   (virtual cam source mode, `VCAM_SCENE`) was reasoned about but never

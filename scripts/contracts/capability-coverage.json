@@ -26,7 +26,7 @@
   "subjects": {
     "General": ["GetVersion", "GetStats"],
     "Scenes": ["CreateScene", "SetCurrentProgramScene", "RemoveScene"],
-    "Inputs": ["CreateInput", "SetInputSettings"],
+    "Inputs": ["CreateInput", "SetInputSettings", "RemoveInput"],
     "SceneItems": ["SetSceneItemTransform", "SetSceneItemEnabled"],
     "Filters": [
       "CreateSourceFilter",
@@ -81,8 +81,6 @@
   ],
 
   "deliberately_uncovered": {
-    "RemoveInput": "Known red, see `open_findings_routed_out` below. Uncovered because the defect is real and unfixed, not because it is uninteresting -- it is the first thing to re-gate once the fix lands.",
-    "PauseRecord before the first written byte": "Known red, see `open_findings_routed_out` below. The healthy pause/resume path IS gated (Record family); only the wedge-triggering precondition is out.",
     "Profiles / SceneCollections": "Pulsar is headless and boots one implicit profile+collection; Prism never drives these. No consumer, no gate -- covering them would test upstream, not Pulsar.",
     "Hotkeys": "No input device in a headless service; TriggerHotkeyByName has no consumer in Prism. Same reasoning as above.",
     "MediaInput cursor": "SetMediaInputCursor / OffsetMediaInputCursor / TriggerMediaInputAction need a real ffmpeg_source with a media file; the fixture cost is real and no Prism path drives them today. Next candidate after the ones below.",
@@ -92,50 +90,59 @@
     "pulsar: vendor requests": "Multi-stream (pulsar:StartDestination) and pulsar:GetCapabilities have their own dedicated probes (probe-multi-stream.py, live-test.yml). Not re-litigated here."
   },
 
-  "open_findings_routed_out": {
+  "open_findings_routed_out": {},
+  "_closed_findings": {
     "RemoveInput reports success and removes nothing": [
-      "2026-07-27 Forge/#121 -- NEW, and the same shape as #119. RemoveInput",
-      "answers result=true, and 3 s later the input is still in GetInputList AND",
-      "its scene item is still in GetSceneItemList. The v5 contract for this",
-      "request is explicit ('will immediately remove all associated scene",
-      "items'); nothing of the sort happens. The source only really goes away",
-      "when the scene holding it is removed.",
-      "Probable root cause, to confirm: obs_source_remove() only flags the",
-      "source and emits the 'remove' signal -- in obs-studio it is the FRONTEND",
-      "that reacts and deletes the scene items. Pulsar's frontend stub has no",
-      "such handler, so the signal lands nowhere. Exactly the #119 pattern",
-      "(a stub that does not close a loop libobs expects the frontend to close).",
-      "NOT gated: this is a pre-existing red that palier 2 never covered, and",
-      "wiring the gate onto it would make the gate red on day one. Routed to",
-      "Atlas/Eleven as a candidate issue -- reproducible in 6 requests."
+      "OPENED 2026-07-27 Forge/#121, CLOSED 2026-07-27 by issue #129.",
+      "Root cause was the one Atlas confirmed: obs_source_remove() only flags",
+      "the source and fires the global `source_remove` signal; the scene items",
+      "holding the last refs are dropped by obs_scene_prune_sources(), which",
+      "libobs calls only from scene_video_render -- never for a scene it is not",
+      "rendering. obs-studio closes that loop in the FRONTEND; pulsar-frontend-stub",
+      "did not. It now connects `source_remove` in setup() and prunes every scene",
+      "in two phases (collect refs during obs_enum_scenes, prune after).",
+      "RemoveInput is a GATED subject from now on (Inputs family): the probe",
+      "removes the input from a scene that is NOT the program scene -- exactly",
+      "the condition under which the defect existed -- and requires it gone from",
+      "both GetInputList and GetSceneItemList."
     ],
     "PauseRecord before the muxer's first bytes wedges record + replay": [
-      "2026-07-27 Forge/#121 -- reproduced while wiring this gate. PauseRecord",
-      "issued while GetRecordStatus.outputBytes is still 0 (i.e. immediately",
-      "after StartRecord reports outputActive) leaves the ffmpeg_muxer wedged:",
-      "SaveReplayBuffer then never produces a file, and StopReplayBuffer /",
-      "StopRecord answer Success() while outputActive stays true. That last part",
-      "is a #120-class honesty gap -- the effect verification does not catch it",
-      "because the output really is 'stopping', it just never stops.",
-      "Trigger is exotic (no Prism path pauses a recording that has not started",
-      "writing), and the same sequence with the recording actually producing",
-      "data is clean, so this is NOT gated here: widening a gate onto a known",
-      "red is exactly what ADR Prism 026 §3.3 forbids. Routed to Atlas/Eleven",
-      "as a candidate issue, with a live repro, rather than silenced.",
-      "Likely upstream (obs ffmpeg_muxer pause-before-first-packet), to confirm."
+      "OPENED 2026-07-27 Forge/#121, CLOSED 2026-07-27 by issue #130.",
+      "Confirmed upstream (libobs obs-output.c get_closest_v_ts + obs-encoder.c",
+      "video_pause_check_internal): the pause window is computed from an encoder",
+      "timestamp that is still 0 before the first encoded frame, so the pause",
+      "never lifts. Patching libobs is out of the fork's mandate, so the refusal",
+      "lives in the only layer that can name a cause: RequestHandler_Record.cpp",
+      "refuses PauseRecord / ToggleRecordPause at outputBytes == 0 with",
+      "InvalidResourceState (604), and refuses both on an inactive output with",
+      "OutputNotRunning (501) -- the #120-family Success()-lie they also carried.",
+      "Now GATED (Record family, PauseRecord): the probe drives the off-air",
+      "pause and the 0-byte pause and requires an explicit refusal for each.",
+      "Driving them is only safe BECAUSE of the refusal -- before #130 that",
+      "sequence bricked the rest of the run."
     ],
     "SetStreamServiceSettings has no effect on the v5 stream output": [
-      "2026-07-27 Forge/#121 -- SetStreamServiceSettings genuinely updates the",
-      "frontend-stub's `streamService` (GetStreamServiceSettings re-reads it, which",
-      "is what this probe gates), but obs_frontend_streaming_start() never binds",
-      "that service to `streamOutput` (pulsar-frontend-stub.cpp:1441-1450). The v5",
-      "single-stream StartStream path is therefore structurally unreachable in",
-      "Pulsar; the live path is the pulsar:StartDestination multi-stream API.",
-      "This is NOT silenced: StartStream is gated here and must answer with an",
-      "EXPLICIT refusal (post-#120 behaviour, which it does). Whether the v5 path",
-      "should be wired, or SetStreamServiceSettings should refuse instead of",
-      "reporting a success the output can never honour, is an architecture call --",
-      "routed to Atlas, not decided by the gate."
+      "OPENED 2026-07-27 Forge/#121, CLOSED 2026-07-27 by issue #131.",
+      "Atlas ruled option 1 (wire the v5 path), applying the already-ratified",
+      "`Approach A` doctrine (pulsar-multi-stream/src/plugin-main.cpp:9-16: the",
+      "v5 StartStream/StartRecord path keeps working for Stream Deck / Companion",
+      "/ Streamer.bot; multi-destination is purely additive). The whole defect was",
+      "a missing obs_output_set_service() before obs_output_start() -- an",
+      "rtmp_output with a NULL service is refused by libobs on the first line of",
+      "obs_output_start. Fixed in obs_frontend_streaming_start, together with the",
+      "honesty corollary: OBS_FRONTEND_EVENT_STREAMING_STARTING is now emitted",
+      "only AFTER a successful obs_output_start (it used to fire unconditionally,",
+      "putting a STARTING event on the wire for a start that never happened).",
+      "That ordering is what makes the gate deterministic offline: the probe",
+      "requires a StreamStateChanged/OBS_WEBSOCKET_OUTPUT_STARTING event, which",
+      "is impossible to produce without the service binding, instead of an",
+      "outputActive read that a still-connecting rtmp output can never satisfy."
     ]
-  }
+  },
+  "_closed_findings_note": [
+    "Kept, not deleted: an emptied `open_findings_routed_out` with no trace of",
+    "what used to be in it is indistinguishable from a list that was quietly",
+    "truncated. Each entry names the issue that closed it and where the gate",
+    "went instead."
+  ]
 }

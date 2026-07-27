@@ -12,6 +12,15 @@ import type { PulsarClient } from "./client.js";
  * actually go live through this surface, configure a streaming service
  * via the v5 SetStreamServiceSettings request first, or use
  * `pulsar.destinations.start(id)` from the multi-stream API.
+ *
+ * TWITCH IS NOT AVAILABLE ON THIS SURFACE. SetStreamServiceSettings
+ * refuses `rtmp_common` + `service: "Twitch"` (InvalidRequestField):
+ * that service resolves its ingest from a list downloaded at runtime
+ * and falls back to the cleartext rtmp://live.twitch.tv/app when the
+ * list is absent, which would put the stream key on the wire
+ * unencrypted. Use `pulsar.destinations.create({ kind: "twitch", ... })`,
+ * whose rtmps:// ingest is pinned at compile time. The same request
+ * also requires an rtmp://|rtmps:// server and a non-empty key.
  */
 export class StreamNamespace {
   constructor(private readonly client: PulsarClient) {}

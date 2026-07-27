@@ -42,6 +42,12 @@ wired), #118 (dead stub documented), #119 (scene mirror removed), #120 +
 #127 (no Success() without a verified effect) -- so the probe is green on
 its perimeter before it is allowed to block anything.
 
+The same discipline applied to the three defects THIS probe found and routed
+out rather than gated: #129 (RemoveInput removed nothing), #130 (PauseRecord
+at 0 bytes wedged the muxer) and #131 (the v5 StartStream path was never
+bound to its service). All three are fixed, so all three are now gated here --
+the fix landed first, the gate widened after.
+
 The gate is BY TIERS, not all-or-nothing: a request family this probe does
 not cover is not a failure, it is measured ignorance. The covered set is
 frozen in the versioned artefact `scripts/contracts/capability-coverage.json`
@@ -122,19 +128,19 @@ STOP_ATTEMPTS = 60
 # Atlas/Eleven.
 # --------------------------------------------------------------------------
 KNOWN_OK_NO_EFFECT: dict[str, str] = {
-    # PROTOCOL.md:59-66 documents the bare "no service configured" case as
-    # intentional wire behaviour. It is NOT what this probe exercises -- since
-    # #120 the request answers with an explicit refusal, which is the correct
-    # branch here. This entry is kept as a name to point at if a future run
-    # ever walks the documented bare case.
-    # 2026-07-26 (Probe/B7) -> still open as an Atlas question, see
-    # capability-coverage.json `open_findings_routed_out`.
+    # PROTOCOL.md documents the bare "no service configured" case as intentional
+    # wire behaviour, and since #120 the request answers it with an explicit
+    # refusal -- the correct branch, never OK_NO_EFFECT. This entry is kept as a
+    # name to point at if a future run ever walks the documented bare case.
+    # 2026-07-27 (#131): the open Atlas question this used to carry is CLOSED --
+    # the v5 path is wired (obs_output_set_service before obs_output_start), so
+    # the probe now drives the CONFIGURED case and gates it on the STARTING
+    # event. Nothing here is excused today; the dict is a tripwire, not a mute.
     "StartStream:no-service-configured": (
-        "2026-07-26 Probe/B7 -- documented in PROTOCOL.md:59-66 as "
-        "intentional v5-baseline behaviour, upstream-shaped (obs-websocket "
-        "StartStream mirrors obs_output_start's fire-and-forget contract). "
-        "Decision (\"should this synchronously error instead\") not made -- "
-        "routed to Atlas, not silenced."
+        "2026-07-26 Probe/B7, closed 2026-07-27 by #131 -- documented in "
+        "PROTOCOL.md as intentional v5-baseline behaviour, upstream-shaped "
+        "(obs-websocket StartStream mirrors obs_output_start's fire-and-forget "
+        "contract). Unused: no verdict is excused through this key."
     ),
 }
 
@@ -288,6 +294,15 @@ class PulsarWs:
     def __init__(self, ws) -> None:
         self.ws = ws
         self._req_counter = 0
+        # Issue #131: some effects are only observable as EVENTS, never as a
+        # re-query (an output that libobs accepted but whose connect thread is
+        # still in flight reads back outputActive:false the whole time). The
+        # probe already identifies with eventSubscriptions 0x7FF -- it just
+        # threw the events away. Buffer them instead.
+        self.events: list[dict] = []
+        # requestStatus of the LAST req() call, so a driver can gate on the
+        # status CODE (e.g. 604 InvalidResourceState) and not only on `comment`.
+        self.last_status: dict = {}
 
     @classmethod
     async def connect(cls, url: str, password: str) -> "PulsarWs":
@@ -314,13 +329,59 @@ class PulsarWs:
         await self.ws.send(json.dumps({"op": 6, "d": payload}))
         while True:
             resp = json.loads(await asyncio.wait_for(self.ws.recv(), timeout=timeout))
+            if resp.get("op") == 5:
+                self.events.append(resp["d"])  # keep, do not drop (issue #131)
+                continue
             if resp.get("op") != 7:
-                continue  # skip events interleaved on the same socket
+                continue  # any other envelope interleaved on the same socket
             d = resp["d"]
             if d.get("requestId") != rid:
                 continue
             status = d["requestStatus"]
+            self.last_status = status
             return status.get("result", False), d.get("responseData", {}), status.get("comment")
+
+    # ---- event side of the wire (issue #131) ---------------------------
+    def clear_events(self) -> None:
+        self.events.clear()
+
+    def event_states(self, event_type: str) -> list[str]:
+        """Every `outputState` seen so far for `event_type`, in order."""
+        return [
+            e.get("eventData", {}).get("outputState")
+            for e in self.events
+            if e.get("eventType") == event_type
+        ]
+
+    def _seen(self, event_type: str, output_state: str | None) -> bool:
+        for e in self.events:
+            if e.get("eventType") != event_type:
+                continue
+            if output_state is None or e.get("eventData", {}).get("outputState") == output_state:
+                return True
+        return False
+
+    async def wait_for_event(self, event_type: str, output_state: str | None = None, timeout: float = 5.0) -> bool:
+        """Read the socket until the event shows up, or the budget runs out.
+
+        The PROBE waits, the server does not -- same discipline as `poll`."""
+        if self._seen(event_type, output_state):
+            return True
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                raw = await asyncio.wait_for(self.ws.recv(), timeout=remaining)
+            except (asyncio.TimeoutError, TimeoutError):
+                return False
+            msg = json.loads(raw)
+            if msg.get("op") != 5:
+                continue
+            self.events.append(msg["d"])
+            if self._seen(event_type, output_state):
+                return True
 
     async def poll(self, request_type: str, key: str, want: Any, attempts: int = 20, delay: float = 0.25) -> Any:
         """Re-query until `responseData[key] == want`, or give up and return
@@ -592,14 +653,24 @@ async def drive_stream(ws: PulsarWs) -> None:
 
     - SetStreamServiceSettings promises to set the stream service. It is
       cross-checked against GetStreamServiceSettings, which is the state it
-      actually owns. (That the service never reaches the rtmp output is a real,
-      separate finding -- see `open_findings_routed_out` in
-      scripts/contracts/capability-coverage.json. It is routed to Atlas, not
-      silenced, and NOT smuggled into this subject's verdict.)
-    - StartStream promises the output starts. Since #120 it answers with an
-      EXPLICIT refusal carrying the cause when it cannot -- which is the
-      correct branch, and what this gate protects against regressing back to
-      "Success() then outputActive:false".
+      actually owns.
+    - StartStream promises the v5 single-stream path really starts. Since #131
+      the frontend stub binds `streamService` to `streamOutput` before
+      obs_output_start(), so this path is reachable at all for the first time;
+      before that fix no combination of requests could make it succeed.
+
+    Why the verdict is now built on an EVENT and not on GetStreamStatus: the
+    service pushed above points at rtmp://127.0.0.1:1 on purpose -- this probe
+    never touches the network. libobs accepts the start and hands the connect
+    to its own thread, so `outputActive` legitimately stays false the whole
+    time and re-querying it proves nothing either way. What cannot happen
+    without the binding is the EVENT: `OBS_FRONTEND_EVENT_STREAMING_STARTING`
+    is emitted only after obs_output_start() returned true (#131 honesty
+    corollary -- it used to be emitted before, unconditionally), and
+    obs_output_start() returns false on the spot when the output has no
+    service. A StreamStateChanged/OBS_WEBSOCKET_OUTPUT_STARTING on the wire is
+    therefore proof the service reached the output -- deterministic, offline,
+    and impossible to produce before #131.
     """
     ok, _, comment = await ws.req(
         "SetStreamServiceSettings",
@@ -620,27 +691,58 @@ async def drive_stream(ws: PulsarWs) -> None:
             f"result=True but GetStreamServiceSettings reports type={svc_type!r} server={svc_server!r}",
         )
 
+    ws.clear_events()
     ok_start, _, comment = await ws.req("StartStream")
-    await asyncio.sleep(0.5)
-    _, status_data, _ = await ws.req("GetStreamStatus")
-    active = status_data.get("outputActive")
+    starting = await ws.wait_for_event("StreamStateChanged", "OBS_WEBSOCKET_OUTPUT_STARTING", timeout=8.0)
+    # Drain a little longer so the sequel shows up in the detail line. The
+    # unreachable endpoint means STOPPED normally follows within a second --
+    # that is EXPECTED and named here, not an error: the contract StartStream
+    # signs is "libobs took the action", not "the TCP connect succeeded"
+    # (PROTOCOL.md, start/stop semantics).
+    await ws.wait_for_event("StreamStateChanged", "OBS_WEBSOCKET_OUTPUT_STOPPED", timeout=4.0)
+    states = [s for s in ws.event_states("StreamStateChanged") if s]
     if not ok_start:
         record("Stream", "StartStream", Verdict.ERROR_EXPLICIT, f"comment={comment}")
-    elif active:
-        record("Stream", "StartStream", Verdict.OK, "GetStreamStatus.outputActive == True after StartStream")
+    elif starting:
+        record(
+            "Stream",
+            "StartStream",
+            Verdict.OK,
+            f"StreamStateChanged on the wire: {states} -- STARTING proves the service is bound to the "
+            "output (#131); the trailing STOPPED is the deliberately unreachable rtmp endpoint",
+        )
     else:
         record(
             "Stream",
             "StartStream",
             Verdict.OK_NO_EFFECT,
-            f"result=True but outputActive={active} -- a success that did not happen",
+            f"result=True but no StreamStateChanged/OBS_WEBSOCKET_OUTPUT_STARTING was emitted "
+            f"(states seen: {states}) -- obs_output_start never took the action",
         )
     await ws.req("StopStream")
 
 
 async def drive_record(ws: PulsarWs) -> bool:
     """Record family. Returns True if the recording is running when we leave
-    it (the replay-buffer driver needs the shared encoders up)."""
+    it (the replay-buffer driver needs the shared encoders up).
+
+    PauseRecord carries THREE verdicts since #130, all on the same subject:
+    the off-air refusal, the 0-byte refusal, and the healthy pause.
+    """
+    # Issue #130 (guard 1 / #120 family): pausing an output that is not
+    # recording used to answer Success(). obs_output_pause() returns false on
+    # an inactive output and obs_frontend_recording_pause() returns void, so
+    # the refusal was thrown away. Fully deterministic -- nothing has started
+    # yet at this point in the run.
+    ok, _, comment = await ws.req("PauseRecord")
+    code = ws.last_status.get("code")
+    if ok:
+        record("Record", "PauseRecord", Verdict.OK_NO_EFFECT,
+               "result=True for PauseRecord issued with no recording running")
+    else:
+        record("Record", "PauseRecord", Verdict.ERROR_EXPLICIT,
+               f"off-air pause refused (code={code}, expected 501 OutputNotRunning): {comment}")
+
     ok, _, comment = await ws.req("StartRecord")
     active = await ws.poll("GetRecordStatus", "outputActive", True)
     if not ok:
@@ -655,17 +757,36 @@ async def drive_record(ws: PulsarWs) -> bool:
         return False
     record("Record", "StartRecord", Verdict.OK, "GetRecordStatus.outputActive flips to True")
 
-    # Let the muxer write its first bytes before pausing.
-    #
-    # This is NOT probe padding. Pausing an ffmpeg_muxer that has not yet
-    # written anything (outputBytes == 0) wedges it: the replay buffer that
-    # borrows the same encoders can no longer save, and StopReplayBuffer /
-    # StopRecord then answer Success() while outputActive stays true -- a
-    # #120-class honesty gap with an exotic trigger. Found 2026-07-27 while
-    # wiring this gate (#121); recorded in capability-coverage.json under
-    # `open_findings_routed_out` and routed out, NOT silenced. The probe
-    # drives pause the way an operator does -- on a recording that is really
-    # recording -- instead of manufacturing that precondition itself.
+    # Issue #130 (guard 2): pausing an ffmpeg_muxer that has not written a byte
+    # yet wedges it FOR GOOD -- libobs computes the pause window from an
+    # encoder timestamp that is still 0, so the pause never lifts, the replay
+    # buffer borrowing the same encoders stops producing files, and Stop*
+    # answer Success() while outputActive stays true. The root cause is
+    # upstream (obs-output.c / obs-encoder.c) and out of Pulsar's mandate; the
+    # websocket layer refuses the precondition with the cause named
+    # (InvalidResourceState 604). Driving it here is now safe BECAUSE of that
+    # refusal -- before #130 this sequence bricked the rest of the run, which
+    # is why the case was routed out of the gate instead of wired into it.
+    _, st, _ = await ws.req("GetRecordStatus")
+    bytes_before_pause = st.get("outputBytes") or 0
+    ok, _, comment = await ws.req("PauseRecord")
+    code = ws.last_status.get("code")
+    if bytes_before_pause > 0:
+        # The muxer beat the probe to its first byte: the wedging precondition
+        # was not reachable this run. Say so and undo -- do not manufacture a
+        # verdict out of a case that did not happen.
+        print(f"  (0-byte pause precondition not reachable this run: outputBytes={bytes_before_pause})")
+        if ok:
+            await ws.req("ResumeRecord")
+    elif ok:
+        record("Record", "PauseRecord", Verdict.OK_NO_EFFECT,
+               "result=True for a pause issued at outputBytes==0 -- libobs's pause timeline is now wedged (#130)")
+    else:
+        record("Record", "PauseRecord", Verdict.ERROR_EXPLICIT,
+               f"0-byte pause refused (code={code}, expected 604 InvalidResourceState): {comment}")
+
+    # Now let the muxer write its first bytes, and drive pause the way an
+    # operator does -- on a recording that is really recording.
     for _ in range(STOP_ATTEMPTS):
         _, st, _ = await ws.req("GetRecordStatus")
         if (st.get("outputBytes") or 0) > 0:
@@ -960,13 +1081,37 @@ async def drive_cleanup(ws: PulsarWs) -> None:
     """RemoveScene is cleanup AND a subject: "removed" must mean gone from the
     listing, the mirror image of the #119 finding.
 
-    RemoveInput is deliberately NOT a subject -- it is a KNOWN red, see
-    `open_findings_routed_out` in scripts/contracts/capability-coverage.json.
-    Gating it here would wire the gate onto a defect that palier 2 never fixed,
-    which is precisely what ADR Prism 026 §3.3 forbids. It is still CALLED, so
-    the scene teardown below is the thing that really disposes of the source.
+    RemoveInput became a subject with #129. The v5 contract is explicit -- it
+    "will immediately remove all associated scene items" -- and until the
+    frontend stub grew a `source_remove` handler it removed NEITHER: the input
+    stayed in GetInputList and its item in GetSceneItemList indefinitely, since
+    libobs only prunes a scene it actually renders and SCENE_A is not the
+    program scene here. That non-rendered scene is precisely why this is the
+    honest place to gate it.
     """
-    await ws.req("RemoveInput", {"inputName": COLOR_SRC})
+    ok, _, comment = await ws.req("RemoveInput", {"inputName": COLOR_SRC})
+    # The prune runs synchronously in the signal handler, but libobs defers the
+    # final source destruction to its own thread, so the disappearance from
+    # GetInputList lands a tick or two later. The probe waits; the request does
+    # not.
+    in_inputs = True
+    in_items = True
+    for _ in range(20):
+        _, inputs_data, _ = await ws.req("GetInputList")
+        in_inputs = COLOR_SRC in {i["inputName"] for i in inputs_data.get("inputs", [])}
+        _, items_data, _ = await ws.req("GetSceneItemList", {"sceneName": SCENE_A})
+        in_items = COLOR_SRC in {i["sourceName"] for i in items_data.get("sceneItems", [])}
+        if not in_inputs and not in_items:
+            break
+        await asyncio.sleep(0.25)
+    if not ok:
+        record("Inputs", "RemoveInput", Verdict.ERROR_EXPLICIT, f"comment={comment}")
+    elif not in_inputs and not in_items:
+        record("Inputs", "RemoveInput", Verdict.OK,
+               "gone from GetInputList AND its scene item gone from GetSceneItemList")
+    else:
+        record("Inputs", "RemoveInput", Verdict.OK_NO_EFFECT,
+               f"result=True but still listed: in GetInputList={in_inputs}, in GetSceneItemList={in_items}")
 
     ok_a, _, comment_a = await ws.req("RemoveScene", {"sceneName": SCENE_A})
     ok_b, _, comment_b = await ws.req("RemoveScene", {"sceneName": SCENE_B})
@@ -1023,6 +1168,14 @@ async def run_contract(url: str, password: str) -> bool:
         await drive_filters(ws)
         print("== Transitions ==")
         await drive_transitions(ws)
+        # ORDER MATTERS (issue #131). drive_outputs gates the #127 by-name
+        # StartOutput on the rtmp output REFUSING for want of a service; since
+        # #131 the frontend binds `streamService` to that same output on the
+        # first StartStream, and libobs keeps the binding afterwards. Driving
+        # Outputs BEFORE Stream keeps both gates deterministic: no service is
+        # bound yet here, and the Stream family below is what binds it.
+        print("== Outputs, generic by-name (ADR 026 §3.3 widening #3, #127) ==")
+        await drive_outputs(ws)
         print("== Stream (calibration) ==")
         await drive_stream(ws)
         print("== ReplayBuffer -- off-air arm (encoders idle, #117/#120) ==")
@@ -1034,8 +1187,6 @@ async def run_contract(url: str, password: str) -> bool:
         await finish_record(ws)
         print("== VirtualCam (ADR 026 §3.3 widening #1) ==")
         await drive_virtualcam(ws)
-        print("== Outputs, generic by-name (ADR 026 §3.3 widening #3, #127) ==")
-        await drive_outputs(ws)
         print("== StudioMode (suspect, B7) ==")
         await drive_studio_mode(ws)
         print("== Canvases (suspect, B7) ==")

@@ -125,6 +125,11 @@ target_include_directories(pulsar-websocket PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}"        # plugin-macros.generated.h
     "${PROJECT_SOURCE_DIR}/src"
     "${PROJECT_SOURCE_DIR}/lib"
+    # pulsar-stream-egress.h -- the v5 stream-egress gate, shared verbatim with
+    # pulsar-frontend-stub (header-only). Both link units enforce the SAME
+    # predicate: the configuration seam here, the start seam in the stub. Not a
+    # link dependency on the stub, which is a static lib inside pulsar-headless.
+    "${PROJECT_SOURCE_DIR}/../pulsar-frontend-stub/include"
     "${PULSAR_LIBOBS_HEADERS}"
     "${PULSAR_LIBOBS_BUILD}"
     "${PULSAR_LIBOBS_CONFIG}"

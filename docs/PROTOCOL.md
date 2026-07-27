@@ -92,19 +92,75 @@ Three things to keep in mind when driving the baseline against Pulsar:
    output reports **both** `outputActive: true` and
    `outputReconnecting: true`. Read the pair — `outputActive` alone does
    not mean bytes are leaving.
+   **Pause is guarded the same way** (`#130`). `PauseRecord` and the pause
+   branch of `ToggleRecordPause` refuse rather than report a pause they did
+   not take:
+   - `OutputNotRunning` (501) when no recording is running at all —
+     `obs_output_pause()` returns false on an inactive output and the
+     frontend entry point is `void`, so this used to answer success;
+   - `InvalidResourceState` (604) when `GetRecordStatus.outputBytes` is
+     still `0`. Pausing before the muxer wrote its first byte wedges
+     libobs' pause timeline permanently (upstream defect: the pause
+     window is computed from an encoder timestamp that is still zero, so
+     the pause never lifts and the replay buffer sharing those encoders
+     stops producing files). The `comment` names that cause; the client
+     lifts the condition itself by polling `outputBytes` — the field is
+     already part of `GetRecordStatus`.
 2. **`StartStream` ≠ go live.** The v5 `StartStream` request talks to
    the singleton `PulsarStream` rtmp_output created by
-   `pulsar-frontend-stub`. With no streaming service configured it now
-   **fails** with `OutputNotRunning` instead of silently reporting
-   success. With a service configured it succeeds as soon as libobs
-   accepts the start — the TCP connect completes afterwards, so a success
-   here means "accepted", not "on air"; poll `GetStreamStatus` for that.
-   To actually go live, configure a service via
-   `SetStreamServiceSettings` first, or use the
-   `pulsar:StartDestination` multi-stream API instead (recommended).
+   `pulsar-frontend-stub`. Since `#131` the frontend **binds the
+   configured service to that output** (`obs_output_set_service`) before
+   starting it, so the v5 single-stream path is genuinely usable by
+   standard v5 clients (Stream Deck, Companion, Streamer.bot, Aitum) —
+   configure a service with `SetStreamServiceSettings`, then
+   `StartStream`. It succeeds as soon as libobs accepts the start; the
+   TCP connect completes afterwards, so a success here means "accepted",
+   not "on air" — poll `GetStreamStatus` for that, and expect
+   `outputActive: false` for as long as the connect is in flight.
+   When the bound service cannot be connected to at all (no service, or
+   an `rtmp_common`/`rtmp_custom` whose server or key is missing) the
+   request **fails** with `OutputNotRunning` and a `comment` naming the
+   service as the cause.
+
+   **Twitch is not available on this path.** `SetStreamServiceSettings`
+   with `rtmp_common` + `service: "Twitch"` is refused
+   (`InvalidRequestField`, 400), and so is a `StartStream` that would
+   reach such a service — including the boot placeholder the frontend
+   stub creates. An `rtmp_common` Twitch service resolves its ingest
+   from a list downloaded at runtime and falls back to the **cleartext**
+   `rtmp://live.twitch.tv/app` when that list is absent (first run, cold
+   cache, offline), which would put the stream key on the wire
+   unencrypted. Send to Twitch with `pulsar:StartDestination`, whose
+   ingest is an `rtmps://` constant pinned at compile time
+   (`static_assert`, `pulsar-multi-stream`).
+
+   **The destination is validated up front**, with the same rules
+   `pulsar:StartDestination` applies: the resolved server must be an
+   `rtmp://` or `rtmps://` URL and the stream key must be non-empty, or
+   `SetStreamServiceSettings` answers `InvalidRequestField` (400) with
+   the cause named and **applies nothing**. Same-type calls still merge
+   onto the current settings (unchanged), and it is the merged result
+   that is validated — a partial update cannot inherit its way past the
+   rules.
+   `StreamStateChanged` with `outputState: OBS_WEBSOCKET_OUTPUT_STARTING`
+   is emitted **only after** `obs_output_start()` really took the action
+   (it used to be emitted unconditionally, ahead of the start, so a
+   refused start still put a `STARTING` on the wire). The event is
+   therefore a reliable signal that libobs accepted the start; the
+   `STOPPED` that follows a failed connect is the normal sequel.
+   `pulsar:StartDestination` (multi-stream) remains the recommended path
+   for Prism and for anything sending to more than one destination.
 3. **`StartRecord` writes to `<cwd>/recordings/`** by default. Override
    with `PULSAR_RECORD_DIR` at spawn. Filenames are
    `pulsar-<YYYYMMDD-HHMMSS>.mp4`.
+4. **`RemoveInput` really removes** (`#129`). The v5 contract promises the
+   input's scene items go with it; libobs delegates that prune to the
+   frontend, and Pulsar's frontend stub did not implement it, so the input
+   and its items stayed listed forever unless the scene holding them was
+   itself removed. The stub now handles libobs' `source_remove` signal and
+   prunes every scene, so `GetInputList` and `GetSceneItemList` both stop
+   listing the source — including in scenes that are not the program scene
+   (which is precisely where the defect used to hide).
 
 ## `pulsar:*` vendor namespace
 

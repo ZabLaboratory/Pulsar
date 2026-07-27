@@ -30,9 +30,14 @@ Cases (each one is a genuine refusal on the spawned binary, not a mock):
      encoders (not a generic message), and GetReplayBufferStatus still
      reports outputActive:false (the old bug was success + false).
 
-  B. Stream — the singleton `PulsarStream` rtmp_output has no service bound,
-     so obs_output_start bails before taking the action.
-     Assert: StartStream -> result:false.
+  B. Stream — the singleton `PulsarStream` rtmp_output cannot connect: since
+     #131 the frontend DOES bind `streamService` to the output before starting
+     it, but nothing has pushed a usable service in this child, so the boot
+     placeholder (rtmp_common with no stream key) answers false to
+     obs_service_can_try_to_connect and obs_output_start bails before taking
+     the action.
+     Assert: StartStream -> result:false, and the comment names the SERVICE as
+     the cause (never a generic "the output is not configured").
 
   C. Record — the child is spawned with PULSAR_RECORD_DIR pointing at an
      uncreatable path, so the stub's mkdir fails and it never reaches
@@ -58,9 +63,9 @@ Cases (each one is a genuine refusal on the spawned binary, not a mock):
      were deliberately left out of #120: they called obs_output_start /
      obs_output_stop and returned Success() unconditionally, exactly like the
      four families before the fix. Driven here against `PulsarStream`, the
-     singleton rtmp_output with no service bound in child 1.
+     singleton rtmp_output that has no connectable service in child 1.
      Assert: StartOutput -> result:false naming BOTH the output and the
-     structural cause (no service), GetOutputStatus still reports
+     structural cause (the service), GetOutputStatus still reports
      outputActive:false, ToggleOutput on the same output is refused too (not
      "success + outputActive:true"), and StopOutput keeps its idle guard.
 
@@ -422,7 +427,7 @@ async def case_replay(c: Client) -> None:
 
 
 async def case_stream(c: Client) -> None:
-    print("-- B. stream (singleton rtmp_output, no service bound)")
+    print("-- B. stream (singleton rtmp_output, no connectable service)")
     ok, code, comment, _, ms = await c.req("StartStream")
     note_latency("StartStream", ms)
     if ok:
@@ -499,7 +504,7 @@ async def case_record_nominal(c: Client) -> None:
 
 
 async def case_generic_refused(c: Client) -> None:
-    print(f"-- F. generic outputs, refusal leg ({GENERIC_STREAM_OUTPUT}, no service bound)")
+    print(f"-- F. generic outputs, refusal leg ({GENERIC_STREAM_OUTPUT}, no connectable service)")
 
     # A never-connected output: the reconnect atomic must read false, and the
     # invariants of case H hold on every read below (output_status asserts).
