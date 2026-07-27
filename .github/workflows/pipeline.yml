@@ -11,19 +11,25 @@
 #
 #   lint  ──► build ──┬─► binary-gate
 #                     ├─► offline-probes
-#                     ├─► live-broadcast ──► publish-gh-pages
-#                     │                  └─► release-attach
+#                     ├─► live-broadcast (tag / dispatch ONLY, #132)
+#                     │        ├─► publish-gh-pages
+#                     │        └─► release-attach
 #                     └─► package ──────────► release-attach
 #                ────► npm-publish
 #
 # Trigger / behaviour matrix (each job carries its own `if:`) :
-#   push to feature branch              : lint, build, gates, 60 s broadcast
-#   push to main (post-PR merge)        : + 30 min broadcast + gh-pages publish
-#   push tag v*.*.*                     : + package + release attach + npm publish
-#   pull_request to main                : full minus release-grade publish
+#   push to feature branch              : lint, build, gates (NO broadcast)
+#   push to main (post-PR merge)        : same (NO broadcast, NO gh-pages)
+#   push tag v*.*.*                     : + broadcast + gh-pages + package
+#                                         + release attach + npm publish
+#   pull_request to main                : lint, build, gates (NO broadcast)
 #   workflow_dispatch                   : full pipeline + operator-chosen
 #                                         broadcast duration / fps + opt-in
 #                                         release-grade stages via inputs
+#
+# The Twitch broadcast left the per-commit path in #132 (CI wall-clock,
+# porteur decision) -- rationale and the coverage it costs are written
+# out above the `live-broadcast` job itself.
 #
 # paths-ignore : touching only docs / changelog / .gitignore / LICENSE
 # skips the whole pipeline -- nothing in those paths affects what
@@ -349,9 +355,38 @@ jobs:
           command: ctest --test-dir build --output-on-failure -C RelWithDebInfo
 
   # ── Stage 3c : live broadcast (Twitch + record + diagnostic) ─────
+  #
+  # OFF the routine path since #132 (porteur decision : CI wall-clock).
+  # It was the second cost centre after the C++ build -- ~17 min on a
+  # push to main (10 min of real stream + submodule checkout + ffmpeg
+  # setup + VOD transcode + upload), and it serialises on a repo-wide
+  # non-cancelling Twitch lock, so two changes in flight queue behind
+  # each other.
+  #
+  # It is NOT deleted, because "rien n'est valide sans live Twitch
+  # complet" stays the project's validation criterion: the job still
+  # runs, unchanged, on a **tag push** (release-grade broadcast that
+  # feeds gh-pages + the Release attach) and on **workflow_dispatch**
+  # (operator-chosen duration/fps). What we give up is per-commit
+  # coverage of the real-ingest chain:
+  #   - encoder -> real Twitch RTMPS ingest, sustained (regressions in
+  #     rtmp_output / the service lifecycle now surface at tag time, or
+  #     on the antenna run, instead of on the PR that caused them),
+  #   - the VOD proof MP4 + diagnostic.json for that commit,
+  #   - the gh-pages proof refresh on every push to main.
+  # The offline suite covers the wire contract, the encoders and the
+  # record path -- not a real ingest. Re-arm per-commit coverage by
+  # deleting the `if:` below.
+  #
+  # `live broadcast (Twitch)` is a REQUIRED status check on main: it
+  # must be dropped from the branch-protection contexts in the same
+  # move, or every PR waits forever on a check that no longer reports.
   live-broadcast:
     name: live broadcast (Twitch)
     needs: build
+    if: >-
+      startsWith(github.ref, 'refs/tags/v')
+      || github.event_name == 'workflow_dispatch'
     runs-on: windows-2022
     timeout-minutes: 60
     permissions:
@@ -393,9 +428,11 @@ jobs:
         env:
           TWITCH_STREAM_KEY:  ${{ secrets.TWITCH_STREAM_KEY }}
           # Duration matrix : workflow_dispatch input wins ; else
-          # 600 s (10 min) for push-to-main / tag (release-grade
-          # broadcast that publishes to gh-pages + Release) ; else
-          # 60 s (1 min) for any other branch / PR push.
+          # 600 s (10 min) for a tag (release-grade broadcast that
+          # publishes to gh-pages + Release). The 60 s branch/PR arm is
+          # now dead code -- the job's `if:` keeps it off that path
+          # (#132) -- and is kept so re-arming per-commit coverage is a
+          # one-line revert, not a rewrite.
           LIVE_TEST_DURATION: >-
             ${{
               (github.event_name == 'workflow_dispatch' && github.event.inputs.duration_seconds)

@@ -41,16 +41,16 @@ End-to-end validated against a live Twitch ingest: 1080p60 frames + audio pushed
 
 ## Live broadcast proof
 
-Every push runs the live-broadcast job inside the [`pipeline.yml` workflow](.github/workflows/pipeline.yml) on a clean `windows-2022` runner — it builds Pulsar from source, spawns `pulsar.exe`, opens a hand-coded HTML/CSS/JS scene through CEF + `browser_source` (Apple-keynote intro, telemetry HUD bound to live `pulsar:GetAdaptiveState` data, Web Audio sound design), and pushes a real broadcast to Twitch using the project's stream key. Throughout, an in-process `StartRecord` writes the same broadcast to a local MP4 — same encoders, same source, same frames the Twitch ingest receives. The MP4 is then re-encoded with `ffmpeg -c:v libx264 -preset fast -crf 23` (typically 5–20× smaller than the source CBR 6 Mbps) and uploaded.
+The live-broadcast job inside the [`pipeline.yml` workflow](.github/workflows/pipeline.yml) on a clean `windows-2022` runner — it builds Pulsar from source, spawns `pulsar.exe`, opens a hand-coded HTML/CSS/JS scene through CEF + `browser_source` (Apple-keynote intro, telemetry HUD bound to live `pulsar:GetAdaptiveState` data, Web Audio sound design), and pushes a real broadcast to Twitch using the project's stream key. Throughout, an in-process `StartRecord` writes the same broadcast to a local MP4 — same encoders, same source, same frames the Twitch ingest receives. The MP4 is then re-encoded with `ffmpeg -c:v libx264 -preset fast -crf 23` (typically 5–20× smaller than the source CBR 6 Mbps) and uploaded.
 
 | Trigger | Duration | Where the MP4 lands |
 |---|---|---|
-| Push to a feature branch | **1 min** smoke | workflow artefact (90 days retention) |
-| Push to `main` (post-PR merge) | **30 min** release-grade | workflow artefact **+ GitHub Pages** (replaces the README inline player) |
-| Push tag `v*.*.*` | **30 min** release-grade | workflow artefact + GitHub Pages **+ GitHub Release** asset (download) |
+| Push to a feature branch | — | not run since #132 (CI wall-clock) |
+| Push to `main` (post-PR merge) | — | not run since #132 (CI wall-clock) |
+| Push tag `v*.*.*` | **10 min** release-grade | workflow artefact + GitHub Pages **+ GitHub Release** asset (download) |
 | `workflow_dispatch` (manual) | configurable | workflow artefact |
 
-What you can play below is the broadcast produced for the **latest release-grade run** (push to `main` or tag `v*.*.*`). The MP4 is published to GitHub Pages on every release-grade run so it streams inline in the player below — no download required. If the player shows 404 / never loads, no release-grade run has fired yet since the workflow was wired up; the file populates on the next push to `main`.
+What you can play below is the broadcast produced for the **latest release-grade run** (tag `v*.*.*`, or a manual `workflow_dispatch`). The MP4 is published to GitHub Pages on every release-grade run so it streams inline in the player below — no download required. Since #132 the broadcast no longer runs per commit, so the player refreshes at release time rather than on every push to `main`.
 
 <video src="https://zablaboratory.github.io/Pulsar/pulsar-live-broadcast-proof.mp4" controls preload="metadata" width="720">
   Your browser doesn't support inline MP4 playback.
@@ -318,7 +318,7 @@ Pulsar's own CI enforces the source-side and binary-side invariants on every pus
 | `build` | every PR + push to main | full Windows build via `scripts/build-win.ps1 -Full`, uploads `pulsar-rundir` artefact consumed by the rest |
 | `binary-gate` | every PR + push to main | `scripts/check-binary-exports.ps1` over `pulsar.exe`, `pulsar-browser-page.exe`, and every plugin DLL (only the OBS module ABI symbols allowed) |
 | `offline-probes` | every PR + push to main | ctest run (`scripts/run-probes.ps1`) — websocket handshake, source kinds, events, adaptive bitrate, recording |
-| `live-broadcast` | every PR + push to main | end-to-end Twitch broadcast probe with diagnostic JSON + MP4 recording |
+| `live-broadcast` | tag `v*.*.*` push + `workflow_dispatch` only (see #132) | end-to-end Twitch broadcast probe with diagnostic JSON + MP4 recording |
 | `publish-gh-pages` | push to main + tag | publishes the broadcast MP4 to GitHub Pages so the README inline player streams the latest run |
 | `package` | tag `v*.*.*` push | runs `scripts/package-win.ps1 -Zip` for both light + full variants |
 | `release-attach` | tag `v*.*.*` push | `softprops/action-gh-release` with the zips + MP4 + diagnostic JSON attached |
