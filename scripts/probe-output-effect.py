@@ -53,6 +53,37 @@ Cases (each one is a genuine refusal on the spawned binary, not a mock):
      start/stop request took longer than MAX_REQUEST_MS. The verification
      must not have turned any request into a wait for activation.
 
+  F. Generic outputs, refusal leg (follow-up to #120, same defect class).
+     StartOutput / StopOutput / ToggleOutput address an output BY NAME and
+     were deliberately left out of #120: they called obs_output_start /
+     obs_output_stop and returned Success() unconditionally, exactly like the
+     four families before the fix. Driven here against `PulsarStream`, the
+     singleton rtmp_output with no service bound in child 1.
+     Assert: StartOutput -> result:false naming BOTH the output and the
+     structural cause (no service), GetOutputStatus still reports
+     outputActive:false, ToggleOutput on the same output is refused too (not
+     "success + outputActive:true"), and StopOutput keeps its idle guard.
+
+  G. Generic outputs, positive-control leg, in child 2 (writable record dir).
+     StartRecord brings `PulsarRecord` up through the frontend, then the
+     GENERIC requests are driven against that same output by name:
+     GetOutputStatus agrees it is active, StartOutput is refused with the
+     running guard, StopOutput succeeds AND the effect is real (both
+     GetRecordStatus and GetOutputStatus flip to inactive). This is the
+     false-negative fence: the verification must not turn a legitimate
+     generic stop into an error.
+
+  H. outputReconnecting (same audit, GetOutputStatus).
+     The field is a straight read of libobs' reconnect atomic
+     (obs_output_reconnecting -> os_atomic_load_bool(&output->reconnecting),
+     libobs/obs-output.c:3245) -- there is no server-side mirror of it in the
+     plugin, so it cannot drift the way a pre-#120 Success() could. What the
+     probe fences is the observable contract: the field is always present and
+     boolean, it is false on an output that has never connected, and it never
+     contradicts outputActive (libobs defines obs_output_active as
+     `active || reconnecting`, obs-output.c:563, so reconnecting implies
+     active). Asserted on every GetOutputStatus this probe issues.
+
 LICENSE INVARIANT (LICENSE-INVARIANTS.md #1/#2/#3): the probe talks to
 Pulsar over the WebSocket process boundary ONLY. It spawns pulsar.exe as a
 separate OS process and exchanges nothing but obs-websocket v5 frames. No
@@ -110,6 +141,17 @@ STATUS_OUTPUT_RUNNING = 500
 STATUS_OUTPUT_NOT_RUNNING = 501
 STATUS_INVALID_RESOURCE_STATE = 604
 
+# Outputs the frontend stub creates by name (pulsar-frontend-stub.cpp), which
+# is what the GENERIC by-name requests address.
+GENERIC_STREAM_OUTPUT = "PulsarStream"
+GENERIC_RECORD_OUTPUT = "PulsarRecord"
+
+# How long the EFFECT of a legitimate stop may take to become observable.
+# A Success on a Pending verdict is correct by contract (ffmpeg_muxer
+# finalises the mp4 on its own thread), but it must still land -- this is the
+# ceiling on "eventually", not on the request itself (MAX_REQUEST_MS).
+STOP_SETTLE_S = 10.0
+
 # Resolution criterion 3: start/stop stay bounded and short. The server-side
 # poll is capped at PULSAR_OUTPUT_VERIFY_MS (250 ms default); this budget
 # leaves generous room for WS round-trip + CI runner jitter while still
@@ -124,6 +166,18 @@ UNCREATABLE_DIR_LEAF = "not-a-dir"
 
 class Failure(Exception):
     pass
+
+
+# libobs log lines carry the OS locale (a French Windows says "Impossible de
+# créer un fichier déjà existant"), and the diagnostics below quote them
+# verbatim. On a console whose default encoding is cp1252 that turns a probe
+# FAILURE into an UnicodeEncodeError traceback, hiding the very assertion that
+# fired. Never let the reporting channel outrank the verdict.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError):
+        pass
 
 
 # --------------------------------------------------------------------------
@@ -309,6 +363,28 @@ def require_explicit_error(
     print(f"   OK  {name} -> error {code}: {comment}")
 
 
+async def output_status(c: Client, name: str) -> dict:
+    """GetOutputStatus + the case-H invariants, asserted on every read."""
+    ok, code, comment, data, _ = await c.req("GetOutputStatus", {"outputName": name})
+    if not ok:
+        raise Failure(f"GetOutputStatus({name}) failed: {code} {comment}")
+
+    if "outputReconnecting" not in data:
+        raise Failure(f"GetOutputStatus({name}): outputReconnecting is missing from the response")
+
+    reconnecting = data["outputReconnecting"]
+    active = data.get("outputActive")
+    if not isinstance(reconnecting, bool):
+        raise Failure(f"GetOutputStatus({name}): outputReconnecting is {reconnecting!r}, expected a boolean")
+    if reconnecting and not active:
+        raise Failure(
+            f"GetOutputStatus({name}): outputReconnecting=true while outputActive=false -- "
+            "libobs defines obs_output_active as `active || reconnecting`, so this pair cannot both "
+            "come from a live read; one of them is inferred"
+        )
+    return data
+
+
 async def case_replay(c: Client) -> None:
     print("-- A. replay buffer (encoders attached but idle off-air, #117)")
     ok, code, comment, _, ms = await c.req("StartReplayBuffer")
@@ -422,6 +498,107 @@ async def case_record_nominal(c: Client) -> None:
     print(f"   OK  StopRecord succeeded (outputPath={data.get('outputPath')!r})")
 
 
+async def case_generic_refused(c: Client) -> None:
+    print(f"-- F. generic outputs, refusal leg ({GENERIC_STREAM_OUTPUT}, no service bound)")
+
+    # A never-connected output: the reconnect atomic must read false, and the
+    # invariants of case H hold on every read below (output_status asserts).
+    status = await output_status(c, GENERIC_STREAM_OUTPUT)
+    if status.get("outputActive"):
+        raise Failure(f"{GENERIC_STREAM_OUTPUT} is already active in child 1 -- the refusal case is void")
+    if status["outputReconnecting"]:
+        raise Failure(
+            f"GetOutputStatus({GENERIC_STREAM_OUTPUT}): outputReconnecting=true on an output that "
+            "never connected -- the field is not a live read"
+        )
+    print("   OK  GetOutputStatus: outputActive=false, outputReconnecting=false (live read)")
+
+    ok, code, comment, _, ms = await c.req("StartOutput", {"outputName": GENERIC_STREAM_OUTPUT})
+    note_latency("StartOutput(refused)", ms)
+    require_explicit_error(
+        "StartOutput", ok, code, comment, STATUS_OUTPUT_NOT_RUNNING, (GENERIC_STREAM_OUTPUT, "service")
+    )
+
+    status = await output_status(c, GENERIC_STREAM_OUTPUT)
+    if status.get("outputActive"):
+        raise Failure("GetOutputStatus reports active after a refused StartOutput -- inconsistent")
+    print("   OK  GetOutputStatus agrees: outputActive=false")
+
+    # Toggle takes the same start leg: it must refuse too, never answer
+    # "success + outputActive:true" off a `!wasActive` guess.
+    ok, code, comment, data, ms = await c.req("ToggleOutput", {"outputName": GENERIC_STREAM_OUTPUT})
+    note_latency("ToggleOutput(refused)", ms)
+    if ok:
+        raise Failure(
+            f"ToggleOutput: reported SUCCESS (outputActive={data.get('outputActive')!r}) on an output "
+            "that cannot start -- the #120 defect on the generic path"
+        )
+    require_explicit_error(
+        "ToggleOutput", ok, code, comment, STATUS_OUTPUT_NOT_RUNNING, (GENERIC_STREAM_OUTPUT, "service")
+    )
+
+    # Pre-existing guard, untouched by the verification.
+    ok, code, _, _, ms = await c.req("StopOutput", {"outputName": GENERIC_STREAM_OUTPUT})
+    note_latency("StopOutput(idle)", ms)
+    if ok or code != STATUS_OUTPUT_NOT_RUNNING:
+        raise Failure(f"StopOutput on an idle output: ok={ok} code={code}, expected 501")
+    print("   OK  StopOutput -> 501 (idle guard intact)")
+
+
+async def case_generic_nominal(c: Client) -> None:
+    print(f"-- G. generic outputs, positive control ({GENERIC_RECORD_OUTPUT} via StartRecord)")
+
+    ok, code, comment, _, _ = await c.req("StartRecord")
+    if not ok:
+        raise Failure(f"StartRecord failed on a writable record dir: {code} {comment}")
+
+    status = await output_status(c, GENERIC_RECORD_OUTPUT)
+    if not status.get("outputActive"):
+        raise Failure(
+            f"GetOutputStatus({GENERIC_RECORD_OUTPUT}): outputActive=false while StartRecord succeeded "
+            "-- the by-name view disagrees with the frontend view"
+        )
+    if status["outputReconnecting"]:
+        raise Failure(f"GetOutputStatus({GENERIC_RECORD_OUTPUT}): outputReconnecting=true on a local muxer")
+    print("   OK  GetOutputStatus by name agrees the recording is active")
+
+    ok, code, _, _, ms = await c.req("StartOutput", {"outputName": GENERIC_RECORD_OUTPUT})
+    note_latency("StartOutput(running guard)", ms)
+    if ok or code != STATUS_OUTPUT_RUNNING:
+        raise Failure(f"StartOutput on a running output: ok={ok} code={code}, expected 500")
+    print("   OK  StartOutput -> 500 (running guard intact)")
+
+    await asyncio.sleep(1.0)
+
+    # The false-negative fence: a legitimate generic stop must still succeed,
+    # and the effect must be real on BOTH views.
+    ok, code, comment, _, ms = await c.req("StopOutput", {"outputName": GENERIC_RECORD_OUTPUT})
+    note_latency("StopOutput(nominal)", ms)
+    if not ok:
+        raise Failure(
+            f"StopOutput failed on a genuinely running output: {code} {comment}\n"
+            "This is the false-negative the verification must NEVER produce."
+        )
+
+    # A Pending verdict is a legitimate Success (ffmpeg_muxer flushes and
+    # finalises the mp4 asynchronously), so give the effect a bounded window
+    # to become observable -- but demand that it DOES become observable.
+    deadline = time.monotonic() + STOP_SETTLE_S
+    while True:
+        status = await output_status(c, GENERIC_RECORD_OUTPUT)
+        _, _, _, record_status, _ = await c.req("GetRecordStatus")
+        if not status.get("outputActive") and not record_status.get("outputActive"):
+            break
+        if time.monotonic() >= deadline:
+            raise Failure(
+                f"StopOutput reported success but the output is still active {STOP_SETTLE_S:.0f}s later "
+                f"(GetOutputStatus={status.get('outputActive')!r}, "
+                f"GetRecordStatus={record_status.get('outputActive')!r})"
+            )
+        await asyncio.sleep(0.2)
+    print("   OK  StopOutput succeeded AND both views agree the output really stopped")
+
+
 def assert_bounded() -> None:
     print("-- latency bound (Resolution criterion 3)")
     worst = max(LATENCIES, key=lambda kv: kv[1])
@@ -484,18 +661,24 @@ def main() -> int:
         good_dir = tmpdir / "recordings"
 
         try:
-            print("=== child 1: refusal cases (A replay, B stream, C record, D virtualcam)")
-            asyncio.run(run_child(args.exe, bad_dir, [case_replay, case_stream, case_record_refused, case_virtualcam]))
+            print("=== child 1: refusal cases (A replay, B stream, C record, D virtualcam, F generic)")
+            asyncio.run(
+                run_child(
+                    args.exe,
+                    bad_dir,
+                    [case_replay, case_stream, case_record_refused, case_virtualcam, case_generic_refused],
+                )
+            )
 
-            print("=== child 2: positive control (E record)")
-            asyncio.run(run_child(args.exe, str(good_dir), [case_record_nominal]))
+            print("=== child 2: positive controls (E record, G generic)")
+            asyncio.run(run_child(args.exe, str(good_dir), [case_record_nominal, case_generic_nominal]))
 
             assert_bounded()
         except Failure as exc:
             print(f"\nFAIL: {exc}")
             return 1
 
-    print("\nprobe-output-effect: PASS -- no Success() without a verified effect (#120)")
+    print("\nprobe-output-effect: PASS -- no Success() without a verified effect (#120 + generic outputs)")
     return 0
 
 

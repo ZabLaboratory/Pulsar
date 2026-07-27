@@ -51,7 +51,7 @@ The notable v5 surfaces Pulsar exercises:
 | Record | `StartRecord`, `StopRecord`, `PauseRecord`, `ResumeRecord`, `GetRecordStatus` |
 | Audio | `GetInputVolume`, `SetInputVolume`, `GetInputMute`, `SetInputMute`, `GetInputAudioSyncOffset` |
 | Filters | `GetSourceFilterList`, `CreateSourceFilter`, `RemoveSourceFilter`, `SetSourceFilterSettings` |
-| Outputs | `GetOutputList`, `GetOutputStatus` (informational; multi-destination control goes through `pulsar:*`) |
+| Outputs | `GetOutputList`, `GetOutputStatus`, `StartOutput`, `StopOutput`, `ToggleOutput` (by-name; multi-destination control goes through `pulsar:*`) |
 | Vendor | `CallVendorRequest` (the transport for `pulsar:*`, see below) |
 
 Three things to keep in mind when driving the baseline against Pulsar:
@@ -59,8 +59,9 @@ Three things to keep in mind when driving the baseline against Pulsar:
 1. **A start/stop request never reports an effect it did not observe.**
    `StartStream`/`StopStream`, `StartRecord`/`StopRecord`,
    `StartReplayBuffer`/`StopReplayBuffer`/`SaveReplayBuffer` and
-   `StartVirtualCam`/`StopVirtualCam` re-read the real output state after
-   the action and answer:
+   `StartVirtualCam`/`StopVirtualCam` — **and the by-name generic trio
+   `StartOutput`/`StopOutput`/`ToggleOutput`** — re-read the real output
+   state after the action and answer:
    - **success** when the output reached the requested state, or when
      libobs accepted the action and is completing it asynchronously (an
      rtmp connect thread, an `ffmpeg_muxer` flush);
@@ -76,6 +77,21 @@ Three things to keep in mind when driving the baseline against Pulsar:
    This replaces the pre-`#120` behaviour where an unconfigured output was
    reported as started (`result: true` followed by
    `GetXStatus.outputActive: false`).
+
+   On the generic trio the refusal `comment` also **names the output**:
+   ``The output `PulsarStream` did not start: no streaming service is
+   configured …``. `ToggleOutput`'s `outputActive` response field is the
+   state **read back** from libobs after the action, not `!wasActive` — on
+   an accepted-but-still-connecting start it is `false`, matching the
+   `GetOutputStatus` the client issues next.
+
+   `GetOutputStatus.outputReconnecting` is a straight read of libobs'
+   reconnect atomic (`obs_output_reconnecting`); no mirror of it exists
+   anywhere in the plugin. Note the libobs semantics it comes with:
+   `obs_output_active` is `active || reconnecting`, so a reconnecting
+   output reports **both** `outputActive: true` and
+   `outputReconnecting: true`. Read the pair — `outputActive` alone does
+   not mean bytes are leaving.
 2. **`StartStream` ≠ go live.** The v5 `StartStream` request talks to
    the singleton `PulsarStream` rtmp_output created by
    `pulsar-frontend-stub`. With no streaming service configured it now

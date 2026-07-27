@@ -66,6 +66,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of refusal, so #120 names it like any libobs cause. Nothing has to clear
   it: `obs_output_actual_start()` wipes `last_error_message` on the next real
   start.
+- `pulsar-websocket`: the **by-name generic outputs** carry the same
+  verification (follow-up to #120, same defect class, left out of scope
+  there). `StartOutput`, `StopOutput` and `ToggleOutput` called
+  `obs_output_start` / `obs_output_stop` and returned `Success()`
+  unconditionally — reachable on every output the stub creates
+  (`PulsarStream`, `PulsarRecord`, `PulsarReplay`, `PulsarVCam`) and on every
+  `pulsar-multi-stream` destination. They now reuse
+  `Utils::Obs::OutputHelper` (the #120 helper, not a second mechanism) and
+  answer the same way; the refusal `comment` additionally **names the
+  output** — ``The output `PulsarStream` did not start: no streaming service
+  is configured …``. `ToggleOutput`'s `outputActive` response field is now
+  the state read back from libobs, not `!wasActive`.
+  `GetOutputStatus.outputReconnecting` was audited under the same rule and
+  left unchanged: it is a straight read of libobs' reconnect atomic
+  (`os_atomic_load_bool(&output->reconnecting)`), with no server-side mirror
+  that could drift. What it inherits and is now documented is the libobs
+  pairing — `obs_output_active` is `active || reconnecting`, so a
+  reconnecting output reports both flags true.
+  `scripts/probe-output-effect.py` gains cases F (real refusal on
+  `PulsarStream`, no service bound), G (positive control: a legitimate
+  generic stop of a live `PulsarRecord` still succeeds and the effect is
+  real on both views) and H (the `outputReconnecting` invariants, asserted
+  on every `GetOutputStatus` it issues).
+
+### ✅ Tested
+
+- `scripts/probe-vcam-scene-mode.py` — **#119 resolution criterion 3**
+  (virtual cam source mode, `VCAM_SCENE`) was reasoned about but never
+  exercised. The probe creates `ZabVirtualCamSource` over the **wire**,
+  asserts `GetSceneList` now lists it (the scene mirror used to hide exactly
+  that), puts a *different* scene on program so a silent fallback to the
+  program mix would show, then starts the cam and demands both the real
+  effect (`GetVirtualCamStatus.outputActive`) and the stub's own
+  `virtual cam SOURCE mode -> 'ZabVirtualCamSource'` log line. Wired into
+  the offline suite (Phase 1g). The criterion is split along what each
+  machine can actually answer: the **scene resolve** — the only half the
+  mirror removal could have broken, and it runs before the device is
+  touched — is asserted everywhere, including on a CI runner; the **device**
+  leg needs a real virtual-camera DirectShow filter (libobs gates the whole
+  `virtualcam_output` type on it, `win-dshow/dshow-plugin.cpp:48`) and
+  degrades to exit 3 (typed skip) with what to install printed out, rather
+  than passing silently. Exercised end to end, device included, on a
+  workstation that has the OBS virtual camera installed.
+- both probes now force `errors="replace"` on their own stdout/stderr: on a
+  non-English Windows the libobs log lines they quote are cp1252-hostile,
+  and a failure used to surface as an `UnicodeEncodeError` traceback that
+  hid the assertion which actually fired.
 
 ## [1.2.2] - 2026-07-26
 
