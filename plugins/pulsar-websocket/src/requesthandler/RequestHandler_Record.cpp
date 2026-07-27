@@ -18,6 +18,10 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
 #include "RequestHandler.h"
+#include "OutputEffect.h"
+
+using ActionWatch = Utils::Obs::OutputHelper::ActionWatch;
+using ActionVerdict = Utils::Obs::OutputHelper::ActionVerdict;
 
 /**
  * Gets the status of the record output.
@@ -65,15 +69,26 @@ RequestResult RequestHandler::GetRecordStatus(const Request &)
  */
 RequestResult RequestHandler::ToggleRecord(const Request &)
 {
-	json responseData;
-	if (obs_frontend_recording_active()) {
+	bool wasActive = obs_frontend_recording_active();
+
+	OBSOutputAutoRelease output = obs_frontend_get_recording_output();
+	ActionWatch watch(output, wasActive ? "stopping" : "starting");
+
+	if (wasActive)
 		obs_frontend_recording_stop();
-		responseData["outputActive"] = false;
-	} else {
+	else
 		obs_frontend_recording_start();
-		responseData["outputActive"] = true;
+
+	if (wasActive) {
+		if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
+			return OutputStopFailure(output, "The record output");
+	} else {
+		if (Utils::Obs::OutputHelper::SettleStart(output, watch) == ActionVerdict::Refused)
+			return OutputStartFailure(output, "The record output");
 	}
 
+	json responseData;
+	responseData["outputActive"] = !wasActive;
 	return RequestResult::Success(responseData);
 }
 
@@ -92,8 +107,13 @@ RequestResult RequestHandler::StartRecord(const Request &)
 	if (obs_frontend_recording_active())
 		return RequestResult::Error(RequestStatus::OutputRunning);
 
-	// TODO: Call signal directly to perform blocking wait
+	OBSOutputAutoRelease output = obs_frontend_get_recording_output();
+	ActionWatch watch(output, "starting");
+
 	obs_frontend_recording_start();
+
+	if (Utils::Obs::OutputHelper::SettleStart(output, watch) == ActionVerdict::Refused)
+		return OutputStartFailure(output, "The record output");
 
 	return RequestResult::Success();
 }
@@ -115,8 +135,13 @@ RequestResult RequestHandler::StopRecord(const Request &)
 	if (!obs_frontend_recording_active())
 		return RequestResult::Error(RequestStatus::OutputNotRunning);
 
-	// TODO: Call signal directly to perform blocking wait
+	OBSOutputAutoRelease output = obs_frontend_get_recording_output();
+	ActionWatch watch(output, "stopping");
+
 	obs_frontend_recording_stop();
+
+	if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
+		return OutputStopFailure(output, "The record output");
 
 	json responseData;
 	responseData["outputPath"] = Utils::Obs::StringHelper::GetLastRecordFileName();
