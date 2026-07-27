@@ -73,6 +73,7 @@
 #include <vector>
 
 #include "pulsar-frontend-stub.h"
+#include "pulsar-stream-egress.h"
 
 namespace {
 
@@ -1510,8 +1511,28 @@ void PulsarFrontendAPI::obs_frontend_streaming_start(void)
     // never touches `streamOutput` / `streamService`, so there is nothing to
     // arbitrate: StartStream simply becomes one more destination sharing the
     // same encoders (encode-once / fan-out-N).
-    if (streamService)
-        obs_output_set_service(streamOutput, streamService);
+    // #114 REGRESSION GUARD (Bastion C1, form (b)) -- see
+    // include/pulsar-stream-egress.h for the full rationale. The binding below
+    // is what makes this path a live egress; without this gate it would hand
+    // `streamOutput` an rtmp_common/"Twitch" service (which is exactly what
+    // setup() creates as the BOOT PLACEHOLDER, so no request is even needed to
+    // reach it) whose ingest resolution falls back to cleartext
+    // rtmp://live.twitch.tv/app. This is the LAST seam before libobs, so it
+    // holds whatever the caller did upstream of it.
+    //
+    // Refusing = not emitting the output's "starting" signal, which is exactly
+    // what a libobs refusal looks like: OutputHelper::SettleStart reads
+    // Refused, and OutputStartFailure quotes the cause we plant below via
+    // obs_output_set_last_error (OutputEffect.h reads it first). The v5 client
+    // gets a named refusal, not a silent no-op.
+    std::string egressRefusal;
+    if (!pulsar::ValidateStreamServiceEgress(streamService, egressRefusal)) {
+        obs_output_set_last_error(streamOutput, egressRefusal.c_str());
+        blog(LOG_WARNING, "[pulsar-frontend-stub] StartStream refused: %s", egressRefusal.c_str());
+        return;
+    }
+
+    obs_output_set_service(streamOutput, streamService);
 
     // Honesty corollary (issue #131, #120 family): STREAMING_STARTING used to be
     // emitted BEFORE obs_output_start(), so a REFUSED start still put a

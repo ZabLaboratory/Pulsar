@@ -255,6 +255,38 @@ if ($outputEffectCode -ne 0) {
 Write-Host "==> probe-output-effect.py OK"
 
 # --------------------------------------------------------------------
+# Phase 1f-bis -- self-spawning v5 STREAM-EGRESS GUARD
+# (probe-stream-egress-guard.py, Bastion C1/C2 on PR #133).
+#
+# #131 made the v5 SetStreamServiceSettings + StartStream path a LIVE egress
+# for the first time by binding `streamService` to `streamOutput`. That is
+# exactly the path #114 had left dead so that an rtmp_common/"Twitch" service
+# -- which upstream resolves through a downloaded ingest list, falling back to
+# the CLEARTEXT rtmp://live.twitch.tv/app when the list is absent -- could
+# never reach the wire. This probe is the executable form of the two guards
+# that close it back: Twitch is barred from the v5 path (it goes through
+# pulsar:StartDestination, which pins rtmps:// by static_assert), and the v5
+# path validates scheme + non-empty key exactly like that twin does.
+#
+# BLOCKING, no skip path: it needs no CEF, no capture target and no network
+# (its nominal destination is a deliberately unreachable rtmp://127.0.0.1:1).
+# A security invariant with a tolerated red is not an invariant.
+#
+# Self-spawns its OWN pulsar.exe child for the same config.json-reseed reason
+# as the other Phase-1 probes. ~5 s wall clock.
+# --------------------------------------------------------------------
+$egressProbe = Join-Path $repoRoot "scripts/probe-stream-egress-guard.py"
+Write-Host "==> Running probe-stream-egress-guard.py (self-spawn v5 egress guard, #133 C1/C2)"
+& python $egressProbe --exe $pulsar
+$egressCode = $LASTEXITCODE
+if ($egressCode -ne 0) {
+    Write-Host "==> probe-stream-egress-guard.py FAILED (exit $egressCode)"
+    Write-Host "==> The v5 stream path accepted a destination it must refuse -- aborting before the shared suite."
+    exit 1
+}
+Write-Host "==> probe-stream-egress-guard.py OK"
+
+# --------------------------------------------------------------------
 # Phase 1g -- self-spawning VCAM SOURCE-MODE probe
 # (probe-vcam-scene-mode.py, #119 resolution criterion 3).
 #

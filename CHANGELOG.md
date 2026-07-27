@@ -188,7 +188,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   real on both views) and H (the `outputReconnecting` invariants, asserted
   on every `GetOutputStatus` it issues).
 
+### 🔒 Security
+
+- **The v5 stream path can no longer send to Twitch in cleartext** — the
+  regression `#131` would otherwise have introduced against `#114` /
+  `1.2.2` (Bastion C1 on PR #133, form **(b)**). Binding `streamService` to
+  `streamOutput` (above) is what made the v5
+  `SetStreamServiceSettings` + `StartStream` path a **live egress** for the
+  first time; `#114` had closed the cleartext hole partly by leaving that
+  path dead. An `rtmp_common` service named `Twitch` resolves its ingest
+  through upstream's `update_ingest`
+  (`upstream/plugins/rtmp-services/rtmp-common.c`), which falls back to the
+  bundled default `rtmp://live.twitch.tv/app`
+  (`service-specific/twitch.c:45`) whenever the downloaded ingest list is
+  absent — first run, cold cache, offline. A v5 client pushing a Twitch
+  service plus a key and calling `StartStream` would have put that key on
+  the wire unencrypted, on a path whose twin `pulsar:StartDestination`
+  guarantees `rtmps://` by `static_assert`. Worse, the stub's own **boot
+  placeholder** is exactly that service, so no request was even needed to
+  arm the gun.
+
+  **Twitch is now barred from the v5 single-stream path**, at both seams:
+  `SetStreamServiceSettings` refuses `rtmp_common` + `service: "Twitch"`
+  with `InvalidRequestField` (400), and `obs_frontend_streaming_start()`
+  refuses to bind such a service at all — including the boot placeholder —
+  so the refusal holds whatever the caller did upstream of it. Twitch
+  egress goes through `pulsar:StartDestination`, which already carries the
+  compile-time `rtmps://` guarantee. The v5 path stays alive for
+  `rtmp_custom` and non-Twitch services, which is the Stream Deck /
+  Companion compatibility `#131` exists for.
+
+  Two other forms were considered and rejected. *(a)* refusing any resolved
+  `rtmp://` URL would break parity with the twin, which deliberately
+  accepts `rtmp://` for operator-supplied endpoints (a LAN relay), or force
+  two divergent scheme policies onto one product. *(c)* patching
+  `twitch.c:45` in the vendored submodule would bury a Pulsar security
+  invariant inside upstream code — re-litigated at every submodule bump,
+  invisible to anyone reading Pulsar's own sources. Form (b) keeps one
+  rule, "Twitch egress is the multi-stream plugin's job", enforced where
+  the egress is decided.
+
+- **`SetStreamServiceSettings` validates its destination like
+  `pulsar:StartDestination` does** (Bastion C2 on PR #133). The v5 request
+  applied no schema at all: any service type, any settings. Its twin
+  front-loads `is_rtmp_scheme()` + non-empty-key validation before any
+  `obs_output_*` allocation (`pulsar-multi-stream/src/plugin-main.cpp:100-121`).
+  A newly live egress path must not be more permissive than its twin, so
+  the same two rules now apply: the resolved server must be `rtmp://` or
+  `rtmps://` and the stream key must be non-empty, else the request answers
+  `InvalidRequestField` (400) naming the cause and **applies nothing**
+  (validated on a throwaway private service, so a refusal cannot half-write
+  the frontend's). Same-type calls still merge onto the current settings —
+  and it is the **merged** result that is validated, so a partial update
+  cannot inherit its way past the rules.
+
+  The predicate lives in one header-only file,
+  `plugins/pulsar-frontend-stub/include/pulsar-stream-egress.h`, shared
+  verbatim by the configuration seam (`pulsar-websocket`) and the start seam
+  (`pulsar-frontend-stub`): two link units, one rule, no drift.
+
 ### ✅ Tested
+
+- `scripts/probe-stream-egress-guard.py` — the executable form of both
+  guards above, wired into the offline suite as a **blocking** gate
+  (Phase 1f-bis, no skip path, no `continue-on-error`: a security invariant
+  with a tolerated red is not an invariant). Seven cases, every one of them
+  red on the pre-fix binary: the **boot placeholder** (`rtmp_common`/Twitch)
+  must refuse `StartStream` before any request is made; the Twitch
+  configuration refusal in both spellings (`Twitch`, `twitch` — the guard
+  reads the setting case-insensitively, not a literal) and its atomicity
+  (the refused key must not be written anyway); a non-`rtmp` scheme; an
+  empty key; the **merge** path (pushing only `server` onto a service whose
+  key is still empty must stay refused); and the non-regression leg —
+  `#131`'s own nominal `rtmp_custom` destination still configures **and**
+  still reaches `StreamStateChanged: OBS_WEBSOCKET_OUTPUT_STARTING`, so the
+  guard did not re-kill the path it protects. Every refusal must carry a
+  **named** cause; a bare code would be the `#120` defect wearing a security
+  hat. No network: the nominal destination is a deliberately unreachable
+  `rtmp://127.0.0.1:1`.
 
 - `scripts/probe-vcam-scene-mode.py` — **#119 resolution criterion 3**
   (virtual cam source mode, `VCAM_SCENE`) was reasoned about but never

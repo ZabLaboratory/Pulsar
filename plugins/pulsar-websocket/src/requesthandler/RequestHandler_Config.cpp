@@ -21,6 +21,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <util/config-file.h>
 
 #include "RequestHandler.h"
+#include "pulsar-stream-egress.h"
 
 #define GLOBAL_PERSISTENT_DATA_FILE_NAME "persistent_data.json"
 
@@ -577,20 +578,57 @@ RequestResult RequestHandler::SetStreamServiceSettings(const Request &request)
 	OBSDataAutoRelease requestedStreamServiceSettings =
 		Utils::Json::JsonToObsData(request.RequestData["streamServiceSettings"]);
 
-	// Don't create a new service if the current service is the same type.
+	// Effective settings = what the service will actually hold once applied.
+	// Same-type updates MERGE onto the current settings (upstream behaviour,
+	// preserved below), so validating the request payload alone would let a
+	// half-payload inherit a rejected field from the previous service.
+	// TODO: Add `overlay` field
+	OBSDataAutoRelease newStreamServiceSettings = obs_data_create();
 	if (streamServiceType == requestedStreamServiceType) {
 		OBSDataAutoRelease currentStreamServiceSettings = obs_service_get_settings(currentStreamService);
-
-		// TODO: Add `overlay` field
-		OBSDataAutoRelease newStreamServiceSettings = obs_data_create();
 		obs_data_apply(newStreamServiceSettings, currentStreamServiceSettings);
-		obs_data_apply(newStreamServiceSettings, requestedStreamServiceSettings);
+	}
+	obs_data_apply(newStreamServiceSettings, requestedStreamServiceSettings);
 
+	// Bastion C1/C2 -- the v5 egress gate, front-loaded exactly like its twin
+	// `pulsar:StartDestination` (pulsar-multi-stream/src/plugin-main.cpp:100-121):
+	// nothing is created, applied or persisted until the destination is known
+	// good. Rationale + the three forms considered: plugins/pulsar-frontend-stub/
+	// include/pulsar-stream-egress.h.
+	//
+	// The Twitch check runs BEFORE instantiating anything: creating an
+	// rtmp_common/"Twitch" service is what triggers the ingest resolution whose
+	// cleartext fallback we are refusing to depend on. Refuse it, don't build it.
+	if (pulsar::IsTwitchCommonService(requestedStreamServiceType.c_str(), newStreamServiceSettings))
+		return RequestResult::Error(RequestStatus::InvalidRequestField,
+					    std::string("streamServiceSettings rejected: ") +
+						    pulsar::kTwitchOnV5Refusal);
+
+	// Every other type is validated on a THROWAWAY private service: the scheme
+	// and key must be read off a real service object (rtmp_custom and
+	// rtmp_common resolve them differently), and building a private one leaves
+	// the frontend's service untouched if the answer is "no".
+	{
+		OBSServiceAutoRelease probeService = obs_service_create_private(
+			requestedStreamServiceType.c_str(), "pulsar_egress_probe", newStreamServiceSettings);
+		if (!probeService)
+			return RequestResult::Error(
+				RequestStatus::ResourceCreationFailed,
+				"Failed to create the stream service with the requested streamServiceType. It may be an invalid type.");
+
+		std::string egressError;
+		if (!pulsar::ValidateStreamServiceEgress(probeService, egressError))
+			return RequestResult::Error(RequestStatus::InvalidRequestField,
+						    "streamServiceSettings rejected: " + egressError);
+	}
+
+	// Don't create a new service if the current service is the same type.
+	if (streamServiceType == requestedStreamServiceType) {
 		obs_service_update(currentStreamService, newStreamServiceSettings);
 	} else {
 		OBSServiceAutoRelease newStreamService = obs_service_create(requestedStreamServiceType.c_str(),
 									    "obs_websocket_custom_service",
-									    requestedStreamServiceSettings, nullptr);
+									    newStreamServiceSettings, nullptr);
 		// TODO: Check service type here, instead of relying on service creation to fail.
 		if (!newStreamService)
 			return RequestResult::Error(

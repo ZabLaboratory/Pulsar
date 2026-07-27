@@ -400,6 +400,16 @@ class StreamNamespace {
 > use `pulsar.destinations.create({ kind: "twitch", … })` +
 > `pulsar.destinations.start(id)` instead. The multi-destination API
 > is the recommended path.
+>
+> ⛔ **Twitch is refused on this surface.**
+> `SetStreamServiceSettings` with `rtmp_common` + `service: "Twitch"`
+> answers `InvalidRequestField` (400): that service resolves its ingest
+> from a list downloaded at runtime and falls back to the **cleartext**
+> `rtmp://live.twitch.tv/app` when the list is absent, which would send
+> the stream key unencrypted. Use
+> `pulsar.destinations.create({ kind: "twitch", … })` — its `rtmps://`
+> ingest is pinned at compile time. The same request also requires an
+> `rtmp://`/`rtmps://` server and a non-empty key.
 
 ### `audio` namespace
 

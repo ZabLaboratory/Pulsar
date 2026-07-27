@@ -121,6 +121,27 @@ Three things to keep in mind when driving the baseline against Pulsar:
    an `rtmp_common`/`rtmp_custom` whose server or key is missing) the
    request **fails** with `OutputNotRunning` and a `comment` naming the
    service as the cause.
+
+   **Twitch is not available on this path.** `SetStreamServiceSettings`
+   with `rtmp_common` + `service: "Twitch"` is refused
+   (`InvalidRequestField`, 400), and so is a `StartStream` that would
+   reach such a service — including the boot placeholder the frontend
+   stub creates. An `rtmp_common` Twitch service resolves its ingest
+   from a list downloaded at runtime and falls back to the **cleartext**
+   `rtmp://live.twitch.tv/app` when that list is absent (first run, cold
+   cache, offline), which would put the stream key on the wire
+   unencrypted. Send to Twitch with `pulsar:StartDestination`, whose
+   ingest is an `rtmps://` constant pinned at compile time
+   (`static_assert`, `pulsar-multi-stream`).
+
+   **The destination is validated up front**, with the same rules
+   `pulsar:StartDestination` applies: the resolved server must be an
+   `rtmp://` or `rtmps://` URL and the stream key must be non-empty, or
+   `SetStreamServiceSettings` answers `InvalidRequestField` (400) with
+   the cause named and **applies nothing**. Same-type calls still merge
+   onto the current settings (unchanged), and it is the merged result
+   that is validated — a partial update cannot inherit its way past the
+   rules.
    `StreamStateChanged` with `outputState: OBS_WEBSOCKET_OUTPUT_STARTING`
    is emitted **only after** `obs_output_start()` really took the action
    (it used to be emitted unconditionally, ahead of the start, so a
