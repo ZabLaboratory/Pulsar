@@ -29,10 +29,15 @@ Flow (ADR 008 §8, M6):
   6. StopDestination + StopRecord + RemoveDestination, reap pulsar.
      Idempotent, no orphan.
 
-SECRET HANDLING: TWITCH_STREAM_KEY is read from the environment ONLY (set by
-the caller from the etage-1 secret file). It is NEVER printed, logged, or
-written anywhere. Any log line that could contain it is redacted to <KEY>.
-The proof PNG is the rendered scene -- not a secret -- and is safe to save.
+SECRET HANDLING: TWITCH_STREAM_KEY *and* M6_SHOW_TOKEN are read from the
+environment ONLY (set by the caller from the etage-1 secret files). Neither is
+ever printed, logged, or written anywhere: both are registered with the
+redactor at startup, and any ``token=eyJ…`` shaped string is masked on top of
+that. NO token is ever hard-coded in this file -- a JWT committed here leaks
+its full HS256 signature on a public repo, which is an offline cracking oracle
+against ZabAuth's signing secret (that is exactly what happened once; do not
+reintroduce it). The proof PNG is the rendered scene -- not a secret -- and is
+safe to save.
 
 LICENSE INVARIANT (LICENSE-INVARIANTS.md #1/#2/#3, ADR 008 §3.1): this probe
 talks to Pulsar over the WebSocket process boundary ONLY. It spawns
@@ -45,15 +50,21 @@ tree. Pure aggregation -- Pulsar's GPL never crosses into this probe.
 Usage (from the repo root, against the built rundir):
     pip install websockets
     export TWITCH_STREAM_KEY=...        # from etage-1 secret, NEVER committed
+    export M6_SHOW_TOKEN=...            # from etage-1 secret, NEVER committed
     python scripts/probe-m6-live.py
     python scripts/probe-m6-live.py --solar-url '<override>'   # tunnel URL
     python scripts/probe-m6-live.py --preflight-only           # no broadcast
 
 Required env:
   TWITCH_STREAM_KEY   Twitch stream key (opaque; never logged)
+  M6_SHOW_TOKEN       viewer show-token for the Orion LSDP wire (never logged).
+                      Mandatory unless a full URL is given via SOLAR_SCENE_URL /
+                      --solar-url; the probe refuses to run without it (exit 2).
 
 Optional env / flags:
-  SOLAR_SCENE_URL     override the Solar live URL (default = the tunnel URL)
+  SOLAR_SCENE_URL     full Solar live URL override (bypasses M6_SHOW_TOKEN)
+  SOLAR_HOST_URL      override the Solar host page (default = the tunnel page)
+  ORION_LSDP_URL      override the Orion LSDP wire URL (default = the tunnel WS)
   PULSAR_EXE / --exe  override pulsar.exe path
   LIVE_TEST_DURATION  broadcast seconds (default 25)
   LIVE_TEST_FPS       encoder fps target (default 60)
@@ -61,7 +72,7 @@ Optional env / flags:
 Exit codes:
   0  pass (pre-flight non-blank confirmed; if not --preflight-only, live ok)
   1  fail (Solar never rendered / broadcast assertion failed)
-  2  config error (no key, no exe, bad args)
+  2  config error (no key, no show-token, no exe, bad args)
   3  typed skip (browser_source not registered -- LIGHT build, needs -Full)
 """
 from __future__ import annotations
@@ -81,6 +92,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import zlib
 from typing import Callable, Optional
 
@@ -115,22 +127,36 @@ BUILD_DIR = REPO_ROOT / "build"
 PROOF_PNG = BUILD_DIR / "m6-live-scene.png"
 
 # The live Solar page served by Orion over LSDP, reachable here through an SSH
-# tunnel (host.html on :8099 -> gateway WS on :14000). The query carries the
-# Orion LSDP wire URL + a *viewer* show-token (public, read-only) + broadcast
-# mode. Overridable via SOLAR_SCENE_URL / --solar-url when the tunnel moves.
-# NOTE: the token here is a VIEWER show-token (role=viewer), not a secret in
-# the TWITCH_STREAM_KEY sense -- it only grants read-only subscription to the
-# show stream. It is intentionally part of the default so the probe is
-# runnable as-is against the standing tunnel.
-DEFAULT_SOLAR_URL = (
-    "http://127.0.0.1:8099/host.html"
-    "?orion=ws%3A//127.0.0.1%3A14000/orion/api/v1/show/stream.lsdp"
-    "%3Ftoken%3DeyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
-    ".eyJzdWIiOiJ2aWV3ZXIiLCJyb2xlIjoidmlld2VyIiwiYXVkIjoiemFiZ2F0ZSIsImlzcyI6"
-    "InphYmF1dGgiLCJleHAiOjE3ODA3MjA5MTZ9"
-    ".oDbQNgDgaVfgvdkQau_gLCo_S6OkmD0HGo_n-boH0ok"
-    "&mode=broadcast"
-)
+# tunnel (host.html on :8099 -> gateway WS on :14000). ONLY the non-secret
+# skeleton lives here: the host page + the Orion LSDP wire URL. The *viewer*
+# show-token is NEVER a default and never committed -- it is read from
+# M6_SHOW_TOKEN (etage-1) at run time and spliced in by build_solar_url(),
+# exactly like M10_SHOW_TOKEN in probe-m10-canvas-live.py. A show-token is a
+# signed JWT: committing one publishes its full HS256 signature, i.e. an
+# offline cracking oracle against ZabAuth's signing secret. Read-only scope
+# does NOT make it committable. Overridable via SOLAR_HOST_URL / ORION_LSDP_URL
+# when the tunnel moves, or bypassed wholesale with SOLAR_SCENE_URL/--solar-url.
+DEFAULT_SOLAR_HOST_URL = "http://127.0.0.1:8099/host.html"
+DEFAULT_ORION_LSDP_URL = "ws://127.0.0.1:14000/orion/api/v1/show/stream.lsdp"
+
+
+def build_solar_url(*, show_token: str,
+                    host_url: str = DEFAULT_SOLAR_HOST_URL,
+                    orion_lsdp_url: str = DEFAULT_ORION_LSDP_URL) -> str:
+    """Build the browser_source URL for the live Solar page.
+
+    Shape: {host}?orion={lsdp-wire-with-token}&mode=broadcast — the token rides
+    inside the (URL-encoded) ``orion=`` value, which is how the Solar host
+    bootstrap passes it to the gateway. ``show_token`` MUST come from the
+    environment (M6_SHOW_TOKEN, etage-1); it is registered with the redactor by
+    the caller before this URL is built or logged.
+    """
+    wire = f"{orion_lsdp_url}?token={urllib.parse.quote(show_token, safe='')}"
+    return (
+        f"{host_url}"
+        f"?orion={urllib.parse.quote(wire, safe='/')}"
+        f"&mode=broadcast"
+    )
 
 READY_RE = re.compile(r"^PULSAR_READY ws=(\S+) password=(\S+)$")
 READY_TIMEOUT_S = 60.0
@@ -175,12 +201,29 @@ BENIGN_LOG_SUBSTRINGS = [
 
 
 # --------------------------------------------------------------------------
-# Secret redaction. The stream key must never reach a log line.
+# Secret redaction. No live secret (stream key, show-token) may ever reach a
+# log line. Values are registered once at startup and replaced by a typed
+# placeholder everywhere; on top of that any JWT-shaped ``token=eyJ…`` is
+# masked defensively (mirrors probe-m10-canvas-live.py's Redactor).
 # --------------------------------------------------------------------------
-def redact(text: str, key: str) -> str:
-    if key and key in text:
-        return text.replace(key, "<KEY>")
-    return text
+_SECRETS: dict[str, str] = {}
+_JWT_TOKEN_RE = re.compile(r"((?:[?&]|%3[Ff])token(?:=|%3[Dd]))ey[\w.\-]+")
+
+
+def register_secret(value: Optional[str], label: str) -> None:
+    v = (value or "").strip()
+    if v:
+        _SECRETS[v] = f"<{label}>"
+
+
+def redact(text: str, key: str = "") -> str:
+    out = str(text)
+    if key and key in out:
+        out = out.replace(key, "<KEY>")
+    for secret, placeholder in _SECRETS.items():
+        if secret in out:
+            out = out.replace(secret, placeholder)
+    return _JWT_TOKEN_RE.sub(r"\1<redacted>", out)
 
 
 # --------------------------------------------------------------------------
@@ -850,8 +893,9 @@ def main() -> int:
                     default=pathlib.Path(os.environ.get("PULSAR_EXE", str(DEFAULT_EXE))),
                     help="path to pulsar.exe (default: built rundir)")
     ap.add_argument("--solar-url", type=str,
-                    default=os.environ.get("SOLAR_SCENE_URL", DEFAULT_SOLAR_URL),
-                    help="live Solar page URL (default: the standing tunnel URL)")
+                    default=os.environ.get("SOLAR_SCENE_URL", ""),
+                    help="full live Solar page URL override; by default the URL "
+                         "is built from the tunnel skeleton + M6_SHOW_TOKEN")
     ap.add_argument("--duration", type=int,
                     default=int(os.environ.get("LIVE_TEST_DURATION", "25")),
                     help="broadcast duration in seconds (default 25)")
@@ -874,14 +918,39 @@ def main() -> int:
         print("error: TWITCH_STREAM_KEY env var is empty (required unless "
               "--preflight-only). Set it from the etage-1 secret; never commit.")
         return 2
+    register_secret(stream_key, "stream-key")
+
+    # The viewer show-token is a run-time secret from etage-1, never a default.
+    # Register it with the redactor BEFORE the URL that embeds it is built or
+    # printed. No token -> no degraded run: refuse (exit 2).
+    show_token = os.environ.get("M6_SHOW_TOKEN", "").strip()
+    register_secret(show_token, "show-token")
+    solar_url = args.solar_url.strip()
+    if not solar_url:
+        if not show_token:
+            print("error: M6_SHOW_TOKEN env var is empty. The probe needs a "
+                  "viewer show-token (etage-1 secret) to reach the Orion LSDP "
+                  "wire; it is never committed and has no default. Export it, "
+                  "or pass a full URL via SOLAR_SCENE_URL / --solar-url. "
+                  "Refusing to run.")
+            return 2
+        solar_url = build_solar_url(
+            show_token=show_token,
+            host_url=os.environ.get("SOLAR_HOST_URL", DEFAULT_SOLAR_HOST_URL).strip()
+            or DEFAULT_SOLAR_HOST_URL,
+            orion_lsdp_url=os.environ.get(
+                "ORION_LSDP_URL", DEFAULT_ORION_LSDP_URL).strip()
+            or DEFAULT_ORION_LSDP_URL,
+        )
 
     port = pick_free_port()
     password = secrets.token_urlsafe(16)
     print(f"spawning: {exe}")
     print(f"  cwd={exe.parent}")
     print(f"  PULSAR_PORT={port}  PULSAR_PASSWORD=<redacted {len(password)} chars>")
-    print(f"  solar-url host: {args.solar_url.split('?')[0]}  (query redacted)")
+    print(f"  solar-url host: {redact(solar_url.split('?')[0])}  (query redacted)")
     print(f"  TWITCH_STREAM_KEY: {'<set, redacted>' if stream_key else '<unset>'}")
+    print(f"  M6_SHOW_TOKEN: {'<set, redacted>' if show_token else '<unset>'}")
 
     pulsar = PulsarProcess(exe, port, password, args.fps)
     rc = 1
@@ -890,7 +959,7 @@ def main() -> int:
         ws_url, sentinel_pw = pulsar.wait_ready(args.ready_timeout)
         print(f"READY: {ws_url}")
         rc = asyncio.run(run(
-            ws_url, sentinel_pw, args.solar_url, stream_key,
+            ws_url, sentinel_pw, solar_url, stream_key,
             args.duration, args.preflight_only, pulsar,
         ))
     except KeyboardInterrupt:
