@@ -163,6 +163,31 @@ if ($stingerCode -eq 3) {
 }
 
 # --------------------------------------------------------------------
+# Phase 1d-bis -- self-spawning REPLAY BUFFER probe (probe-replay.py,
+# issue #117 / ADR Prism 024 §3.1).
+#
+# Asserts the replay buffer is wired, not scaffolding: an off-air arm is
+# refused AND logged (no encoder started), then StartRecord brings the
+# shared encoders up, StartReplayBuffer really flips
+# GetReplayBufferStatus.outputActive to true, SaveReplayBuffer produces
+# a readable h264+aac MP4, and GetLastReplayBufferReplay returns its
+# REAL path (it used to return "" forever). Self-spawns its OWN
+# pulsar.exe child (fresh ephemeral port + isolated PULSAR_RECORD_DIR)
+# for the same config.json-reseed reason as the other Phase-1 probes.
+# Encoder-agnostic, so it runs on a light build too.
+# --------------------------------------------------------------------
+$replayProbe = Join-Path $repoRoot "scripts/probe-replay.py"
+Write-Host "==> Running probe-replay.py (self-spawn replay buffer, #117)"
+& python $replayProbe --exe $pulsar
+$replayCode = $LASTEXITCODE
+if ($replayCode -ne 0) {
+    Write-Host "==> probe-replay.py FAILED (exit $replayCode)"
+    Write-Host "==> The replay buffer did not arm/save a real file -- aborting before the shared suite."
+    exit 1
+}
+Write-Host "==> probe-replay.py OK"
+
+# --------------------------------------------------------------------
 # Phase 1e -- self-spawning M10 OVERLAY live end-to-end probe in
 # PROOF-ONLY mode (probe-m10-canvas-live.py, #79 / Solar-CEF pivot).
 #
@@ -200,6 +225,34 @@ if ($m10Code -eq 3) {
 } else {
     Write-Host "==> probe-m10-canvas-live.py OK"
 }
+
+# --------------------------------------------------------------------
+# Phase 1f -- self-spawning output-effect probe (probe-output-effect.py,
+# #120 / ADR Prism 026 §3.2).
+#
+# Drives a REAL refusal in each of the four output families (replay buffer
+# with no encoder, stream with no service, record with an uncreatable
+# PULSAR_RECORD_DIR, virtualcam) and asserts the v5 request answers with an
+# explicit error carrying the cause -- never the pre-#120 "Success() then
+# outputActive:false". Also asserts the positive control (record into a
+# writable dir still succeeds) and the latency bound: the verification must
+# not have turned any start/stop into a wait for activation.
+#
+# Self-spawns TWO pulsar.exe children of its own (one per PULSAR_RECORD_DIR
+# world) and reaps them, so it belongs in Phase 1 for the same
+# config.json-reseed reason as the probes above. No skip path: it needs no
+# CEF, no capture target and no network -- it runs on a light build too.
+# --------------------------------------------------------------------
+$outputEffectProbe = Join-Path $repoRoot "scripts/probe-output-effect.py"
+Write-Host "==> Running probe-output-effect.py (self-spawn output effect, #120)"
+& python $outputEffectProbe --exe $pulsar
+$outputEffectCode = $LASTEXITCODE
+if ($outputEffectCode -ne 0) {
+    Write-Host "==> probe-output-effect.py FAILED (exit $outputEffectCode)"
+    Write-Host "==> An output request reported an effect it did not have -- aborting before the shared suite."
+    exit 1
+}
+Write-Host "==> probe-output-effect.py OK"
 
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
@@ -303,6 +356,10 @@ if ($nameDriftCode -eq 3) {
 $probes = @(
     'probe-source-kinds.py',
     'probe-events.py',
+    # #119 / ADR Prism 026 §3.1 -- GetSceneList must enumerate libobs, not
+    # a stub-side snapshot. Creates and removes its own scene, so it leaves
+    # the instance exactly as it found it.
+    'probe-scene-list-truth.py',
     # probe-multi-stream.py is INTENTIONALLY excluded.
     # The destination lifecycle has known race-condition crash paths
     # in obs upstream (rtmp_output worker thread vs ECONNREFUSED-fast

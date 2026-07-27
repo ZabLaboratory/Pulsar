@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Added
+
+- `pulsar-frontend-stub`: the **replay buffer is wired** (#117, ADR Prism 024
+  §3.1). `replayOutput` was created at boot but nothing was attached to it —
+  no encoders, no settings — so `obs_output_start` declined, and
+  `GetLastReplayBufferReplay` returned an empty string forever. It now:
+  - **borrows** the very same video + audio encoders already bound to the
+    record and stream outputs (encode-once / fan-out, the pattern
+    `pulsar-multi-stream::ensure_output` already runs). Arming the buffer
+    adds **no** encoder to the process — the replay MP4 comes out at the
+    same 6 000 kbps h264 as the recording written beside it;
+  - carries real settings: `directory` = `recordDir`, filename template
+    `pulsar-replay-%CCYY%MM%DD-%hh%mm%ss.mp4`, `max_time_sec`
+    (`PULSAR_REPLAY_MAX_TIME_SEC`, 10..300, default 30) and `max_size_mb`
+    (`PULSAR_REPLAY_MAX_SIZE_MB`, 16..8192, default 512);
+  - fills `lastReplay` from the output's `get_last_replay` proc handler on
+    the `saved` signal, so `GetLastReplayBufferReplay` returns a real path;
+  - **refuses an off-air arm, loudly**. The buffer lives off the shared
+    encoders; arming it while they are idle would spin one up for a
+    partial, invisible pipeline. No replay off-air — an explicit no-go, not
+    an oversight.
+
+  The six v5 baseline requests were already compiled — no new `pulsar:*`
+  request. `scripts/probe-replay.py` (offline suite, Phase 1d-bis) proves
+  the whole round-trip: refused off-air, active on-air, a readable h264+aac
+  MP4 on disk at the path the server reports.
+
+### 🐛 Fixed
+
+- `pulsar-websocket`: the four output families no longer report an effect
+  they never observed (#120, ADR Prism 026 §3.2). `StartReplayBuffer`,
+  `StartRecord`, `StartVirtualCam`, `StartStream` and their `Stop*` /
+  `Toggle*` counterparts called a `void` `obs-frontend-api` entry point and
+  returned `Success()` unconditionally; libobs declines silently on an
+  unconfigured output, so a client was told "started" while the next
+  `GetXStatus` reported `outputActive: false`. Each handler now re-reads the
+  real state after the action and answers an explicit error —
+  `OutputNotRunning` (501) for a start, `OutputRunning` (500) for a stop —
+  carrying the cause read off the server: `obs_output_get_last_error()` when
+  libobs recorded one, otherwise the structural state that made it refuse
+  (no service bound on a service output, no encoder bound on an encoded
+  one). **No signature change**: no new request, no new status enum, no new
+  response field.
+  The refusal is decided from the output's own `"starting"`/`"stopping"`
+  signal, which libobs emits only when it actually took the action — so an
+  asynchronous completion still in flight (an rtmp connect thread, an
+  `ffmpeg_muxer` flush) is reported as success, not as a failure, and no
+  request ever waits for activation. The residual state poll is bounded by
+  `PULSAR_OUTPUT_VERIFY_MS` (250 ms default) and is not reached on the
+  nominal path. `scripts/probe-output-effect.py` drives a real refusal in
+  each family plus a positive control and a latency bound.
+  Integration of #117 with #120: the off-air replay refusal is Pulsar's own
+  policy, taken *before* `obs_output_start`, so libobs recorded no cause and
+  the verification could only answer the generic "the output is not
+  configured" — false, since the encoders *are* attached, just idle. The stub
+  now publishes the cause through `obs_output_set_last_error()` at the point
+  of refusal, so #120 names it like any libobs cause. Nothing has to clear
+  it: `obs_output_actual_start()` wipes `last_error_message` on the next real
+  start.
+
 ## [1.2.2] - 2026-07-26
 
 ### 🔒 Security

@@ -19,6 +19,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <obs.hpp>
 #include <obs-frontend-api.h>
@@ -289,6 +290,78 @@ namespace Utils {
 			CreateSourceFilter(obs_source_t *source, std::string filterName, std::string filterKind,
 					   obs_data_t *filterSettings); // Increments source ref. Use OBSSourceAutoRelease
 			void SetSourceFilterIndex(obs_source_t *source, obs_source_t *filter, size_t index);
+		}
+
+		// Post-action verification for the four output families -- replay
+		// buffer, record, virtualcam, stream (Pulsar issue #120, ADR Prism
+		// 026 §3.2).
+		//
+		// The obs-frontend-api start/stop entry points are `void`: a request
+		// handler that calls one and returns Success() is asserting an effect
+		// it never observed. libobs declines silently on an unconfigured
+		// output, so the client is told "started" while GetXStatus reports
+		// outputActive:false right after.
+		//
+		// The frontend signatures are NOT changed (upstream API divergence for
+		// no gain). Instead the caller re-interrogates the server state that
+		// is already available, using two facts libobs exposes:
+		//
+		//   - obs_output_active() -- the effect itself.
+		//   - the output's "starting"/"stopping" signals -- libobs emits them
+		//     ONLY when obs_output_start()/obs_output_stop() actually took the
+		//     action. That is what separates a REFUSAL (never emitted) from an
+		//     asynchronous completion still in flight (emitted, e.g. an rtmp
+		//     connect thread). Without it, "not active yet" is ambiguous and a
+		//     handler can only choose between blocking and lying.
+		//
+		// A start/stop request therefore never waits for activation: refusal
+		// is decided immediately (no signal, nothing running), and the bounded
+		// poll below only covers the few ms an output needs to flip its active
+		// flag once libobs has accepted the action.
+		namespace OutputHelper {
+			// Upper bound of the post-action poll, in milliseconds. Short by
+			// contract. Override at boot with PULSAR_OUTPUT_VERIFY_MS
+			// (clamped to 0..2000); read once, cached.
+			uint32_t VerifyTimeoutMs();
+
+			// obs_output_get_last_error(), normalised to std::string ("" when
+			// libobs recorded no cause).
+			std::string GetLastError(obs_output_t *output);
+
+			enum class ActionVerdict {
+				Landed,  // the output reached the requested state
+				Pending, // libobs accepted the action; completion is async
+				Refused, // the action was declined -- the effect is absent
+			};
+
+			// RAII watch on an output's libobs action signals. Construct it
+			// BEFORE invoking the frontend call, then hand it to SettleStart /
+			// SettleStop afterwards. Safe on a null output (Accepted() stays
+			// false, so the caller falls back to the active-state read).
+			class ActionWatch {
+			public:
+				// signalName: "starting" for a start, "stopping" for a stop.
+				ActionWatch(obs_output_t *output, const char *signalName);
+				~ActionWatch();
+				ActionWatch(const ActionWatch &) = delete;
+				ActionWatch &operator=(const ActionWatch &) = delete;
+
+				bool Accepted() const { return _accepted.load(); }
+
+			private:
+				static void OnSignal(void *param, calldata_t *cd);
+
+				OBSOutputAutoRelease _output;
+				const char *_signalName;
+				std::atomic_bool _accepted{false};
+			};
+
+			// `output` must be the CURRENT handle, re-acquired after the
+			// frontend call: obs_frontend_start_virtualcam may re-create its
+			// output, in which case the watch armed on the previous handle is
+			// mute and the active-state read is what decides.
+			ActionVerdict SettleStart(obs_output_t *output, const ActionWatch &watch);
+			ActionVerdict SettleStop(obs_output_t *output, const ActionWatch &watch);
 		}
 	}
 }
