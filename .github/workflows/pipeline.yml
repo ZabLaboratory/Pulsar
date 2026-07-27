@@ -499,6 +499,39 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+      # The pulsar-websocket config carries `server_password` in clear.
+      # Uploading the raw file put that password in a 7-day, org-readable
+      # artefact, so we stage a REDACTED copy instead : every key that is
+      # not on the safe allow-list is replaced by a marker. The allow-list
+      # is a *deny-by-default* : a future obs-websocket key lands redacted
+      # unless someone vets it here.
+      #
+      # The diagnostic value is preserved on purpose -- what failure
+      # triage actually needs from this file is (a) did pulsar drop a
+      # config at all, (b) on which port, (c) was a password seeded
+      # (probe-twitch-live.py waits for a NON-EMPTY password, so
+      # "seeded but empty" is a real failure mode). None of that
+      # requires the password itself.
+      #
+      # NB : the previous path `obs-websocket/config.json` was workspace-
+      # relative and matched nothing (the file lives under the rundir),
+      # so `if-no-files-found: ignore` silently uploaded nothing. This
+      # step also fixes that blind spot.
+      - name: Stage redacted pulsar-websocket config on failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs-websocket/config.json"
+          if [ ! -f "${src}" ]; then
+            echo "::warning::no pulsar-websocket config.json to redact (${src} absent)"
+            exit 0
+          fi
+          mkdir -p artefacts
+          python scripts/redact-websocket-config.py \
+            "${src}" artefacts/obs-websocket-config.redacted.json
+          echo "::notice::staged redacted pulsar-websocket config"
+
       - name: Upload pulsar log on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -506,7 +539,7 @@ jobs:
           name: pulsar-failure-log
           path: |
             probe-output.log
-            obs-websocket/config.json
+            artefacts/obs-websocket-config.redacted.json
           retention-days: 7
           if-no-files-found: ignore
 
