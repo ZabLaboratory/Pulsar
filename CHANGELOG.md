@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Added
+
+- `pulsar-frontend-stub`: the **replay buffer is wired** (#117, ADR Prism 024
+  §3.1). `replayOutput` was created at boot but nothing was attached to it —
+  no encoders, no settings — so `obs_output_start` declined, and
+  `GetLastReplayBufferReplay` returned an empty string forever. It now:
+  - **borrows** the very same video + audio encoders already bound to the
+    record and stream outputs (encode-once / fan-out, the pattern
+    `pulsar-multi-stream::ensure_output` already runs). Arming the buffer
+    adds **no** encoder to the process — the replay MP4 comes out at the
+    same 6 000 kbps h264 as the recording written beside it;
+  - carries real settings: `directory` = `recordDir`, filename template
+    `pulsar-replay-%CCYY%MM%DD-%hh%mm%ss.mp4`, `max_time_sec`
+    (`PULSAR_REPLAY_MAX_TIME_SEC`, 10..300, default 30) and `max_size_mb`
+    (`PULSAR_REPLAY_MAX_SIZE_MB`, 16..8192, default 512);
+  - fills `lastReplay` from the output's `get_last_replay` proc handler on
+    the `saved` signal, so `GetLastReplayBufferReplay` returns a real path;
+  - **refuses an off-air arm, loudly**. The buffer lives off the shared
+    encoders; arming it while they are idle would spin one up for a
+    partial, invisible pipeline. No replay off-air — an explicit no-go, not
+    an oversight.
+
+  The six v5 baseline requests were already compiled — no new `pulsar:*`
+  request. `scripts/probe-replay.py` (offline suite, Phase 1d-bis) proves
+  the whole round-trip: refused off-air, active on-air, a readable h264+aac
+  MP4 on disk at the path the server reports.
+
 ## [1.2.2] - 2026-07-26
 
 ### 🔒 Security

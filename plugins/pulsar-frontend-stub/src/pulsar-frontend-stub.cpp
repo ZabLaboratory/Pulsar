@@ -436,11 +436,32 @@ private:
     }
     static void OnReplaySaved(void *param, calldata_t *)
     {
-        // The replay-buffer output exposes the saved path through its
-        // proc handler "get_last_replay". Phase 5 leaves lastReplay as
-        // the empty default; pulsar-multi-stream (Phase 7+) will fetch
-        // and surface the path when replay buffer becomes wired.
-        static_cast<PulsarFrontendAPI *>(param)->emit(OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED);
+        // The replay-buffer output exposes the saved path through its proc
+        // handler "get_last_replay" (obs-ffmpeg-mux.c:944). That proc only
+        // yields a path once muxing has finished -- upstream clears the
+        // `muxing` flag immediately BEFORE emitting "saved"
+        // (obs-ffmpeg-mux.c:1129-1134), so reading it from this handler is
+        // exactly the ordering OBSBasic relies on. Without this,
+        // GetLastReplayBufferReplay would keep returning "" forever.
+        auto *self = static_cast<PulsarFrontendAPI *>(param);
+        if (self->replayOutput) {
+            proc_handler_t *ph = obs_output_get_proc_handler(self->replayOutput);
+            if (ph) {
+                calldata_t cd = {};
+                if (proc_handler_call(ph, "get_last_replay", &cd)) {
+                    const char *path = nullptr;
+                    if (calldata_get_string(&cd, "path", &path) && path && *path) {
+                        self->lastReplay = path;
+                        blog(LOG_INFO, "[pulsar-frontend-stub] replay saved -> %s", path);
+                    } else {
+                        blog(LOG_WARNING, "[pulsar-frontend-stub] replay saved but "
+                             "get_last_replay yielded no path");
+                    }
+                }
+                calldata_free(&cd);
+            }
+        }
+        self->emit(OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED);
     }
     static void OnVCamStart(void *param, calldata_t *)
     {
@@ -586,6 +607,14 @@ private:
     obs_source_t *micAudioSource = nullptr;     // channel 3
 
     std::string recordDirectory; // resolved at setup() from env or default
+
+    // Replay buffer sizing (ADR Prism 024 §3.1). Resolved ONCE at setup() from
+    // env, like every other PULSAR_* knob, and pushed into replayOutput's
+    // settings -- the replay buffer holds already-encoded packets in RAM, so
+    // max_time_sec x (video+audio bitrate) is the memory bill, capped by
+    // max_size_mb. Replays land in recordDirectory alongside recordings.
+    int replayMaxTimeSec = 30;
+    int replayMaxSizeMb = 512;
 
     int transitionDuration = 300;
     int tbarPosition = 0;
@@ -953,6 +982,12 @@ bool PulsarFrontendAPI::setup()
             obs_output_set_video_encoder(recordOutput, videoEncoder);
         if (streamOutput)
             obs_output_set_video_encoder(streamOutput, videoEncoder);
+        // ADR Prism 024 §3.1: the replay buffer BORROWS the very same encoder --
+        // encode-once / fan-out, the pattern pulsar-multi-stream::ensure_output
+        // already runs for every destination. Arming the buffer must never add
+        // a video encoder to the process.
+        if (replayOutput)
+            obs_output_set_video_encoder(replayOutput, videoEncoder);
         blog(LOG_INFO, "[pulsar-frontend-stub] video encoder configured: family=%s id=%s, "
              "%d kbps", encoderFamily.c_str(), encoderId, videoBitrate);
     }
@@ -974,6 +1009,8 @@ bool PulsarFrontendAPI::setup()
             obs_output_set_audio_encoder(recordOutput, audioEncoder, 0);
         if (streamOutput)
             obs_output_set_audio_encoder(streamOutput, audioEncoder, 0);
+        if (replayOutput) // same borrow as the video encoder above
+            obs_output_set_audio_encoder(replayOutput, audioEncoder, 0);
         blog(LOG_INFO, "[pulsar-frontend-stub] aac configured: %d kbps", audioBitrate);
     }
 
@@ -1082,6 +1119,45 @@ bool PulsarFrontendAPI::setup()
         recordDirectory = (std::filesystem::current_path() / "recordings").string();
     }
     blog(LOG_INFO, "[pulsar-frontend-stub] recordings will land under: %s", recordDirectory.c_str());
+
+    // ---- ADR Prism 024 §3.1: replay-buffer output settings ----
+    // The output was created with null settings, so every key below fell back
+    // to replay_buffer_defaults (obs-ffmpeg-mux.c:1250-1257) -- including an
+    // EMPTY "directory", which makes generate_filename() build a path rooted at
+    // "/" and the save fail. Posting real settings is the other half of the
+    // wiring, next to the borrowed encoders above.
+    //
+    // Bounds mirror the Prism-side registry keys (replay.durationSec [10,300],
+    // replay.maxSizeMb): out-of-range values are rejected with a warning and the
+    // default kept, exactly like every other PULSAR_* knob.
+    if (const char *e = std::getenv("PULSAR_REPLAY_MAX_TIME_SEC"); e && *e) {
+        int v = std::atoi(e);
+        if (v >= 10 && v <= 300) replayMaxTimeSec = v;
+        else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_REPLAY_MAX_TIME_SEC=%s "
+                  "rejected (10..300); using %d", e, replayMaxTimeSec);
+    }
+    if (const char *e = std::getenv("PULSAR_REPLAY_MAX_SIZE_MB"); e && *e) {
+        int v = std::atoi(e);
+        if (v >= 16 && v <= 8192) replayMaxSizeMb = v;
+        else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_REPLAY_MAX_SIZE_MB=%s "
+                  "rejected (16..8192); using %d", e, replayMaxSizeMb);
+    }
+    if (replayOutput) {
+        OBSDataAutoRelease replaySettings = obs_data_create();
+        obs_data_set_string(replaySettings, "directory", recordDirectory.c_str());
+        // "format" is the filename template consumed by
+        // os_generate_formatted_filename; the "pulsar-" prefix keeps replays
+        // recognisable next to the recordings written by recording_start.
+        obs_data_set_string(replaySettings, "format", "pulsar-replay-%CCYY%MM%DD-%hh%mm%ss");
+        obs_data_set_string(replaySettings, "extension", "mp4");
+        obs_data_set_bool(replaySettings, "allow_spaces", false);
+        obs_data_set_int(replaySettings, "max_time_sec", replayMaxTimeSec);
+        obs_data_set_int(replaySettings, "max_size_mb", replayMaxSizeMb);
+        obs_output_update(replayOutput, replaySettings);
+        blog(LOG_INFO, "[pulsar-frontend-stub] replay buffer configured: dir=%s "
+             "max_time_sec=%d max_size_mb=%d", recordDirectory.c_str(),
+             replayMaxTimeSec, replayMaxSizeMb);
+    }
 
     return true;
 }
@@ -1442,10 +1518,29 @@ void PulsarFrontendAPI::obs_frontend_replay_buffer_start(void)
 {
     if (!replayOutput || obs_output_active(replayOutput))
         return;
+
+    // ADR Prism 024 §3.1 -- "pas de replay hors antenne", explicit no-go. The
+    // buffer lives off the shared encoders; arming it while they are idle would
+    // make obs_output_start spin them up for the replay alone -- a partial,
+    // invisible pipeline burning CPU off-air. Refuse, loudly, and never touch
+    // the encoder. Being on-air (stream) or recording both qualify: either one
+    // already has the encoders running, so the buffer only taps their packets.
+    if (!videoEncoder || !obs_encoder_active(videoEncoder)) {
+        blog(LOG_WARNING, "[pulsar-frontend-stub] replay buffer start refused: encoders "
+             "idle (not streaming or recording). Arm the buffer once the broadcast "
+             "is up -- it borrows the live encoders, it does not start them.");
+        return;
+    }
+
     emit(OBS_FRONTEND_EVENT_REPLAY_BUFFER_STARTING);
-    if (!obs_output_start(replayOutput))
+    if (!obs_output_start(replayOutput)) {
+        const char *err = obs_output_get_last_error(replayOutput);
         blog(LOG_INFO, "[pulsar-frontend-stub] obs_output_start (replay) declined: %s",
-             obs_output_get_last_error(replayOutput));
+             err ? err : "(null)");
+        return;
+    }
+    blog(LOG_INFO, "[pulsar-frontend-stub] replay buffer armed (%d s / %d MB) -> %s",
+         replayMaxTimeSec, replayMaxSizeMb, recordDirectory.c_str());
 }
 
 void PulsarFrontendAPI::obs_frontend_replay_buffer_save(void)

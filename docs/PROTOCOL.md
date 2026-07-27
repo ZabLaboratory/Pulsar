@@ -194,10 +194,38 @@ Full detail: `plugins/pulsar-scene-source/README.md`.
 
 ## Replay buffer
 
-`pulsar-frontend-stub` creates a replay-buffer output at boot, but no
-encoder is wired to it — it stays inactive. There is no `pulsar:*` or
-v5 request Pulsar exposes today to start/configure it; the output
-exists only as scaffolding for a future capability.
+`pulsar-frontend-stub` creates a replay-buffer output (`PulsarReplay`) at
+boot **and wires it**: it borrows the exact same video/audio encoders
+already bound to the record and stream outputs — *encode-once / fan-out*,
+so arming the buffer adds **no** encoder to the process — and carries real
+settings (directory, filename template, `max_time_sec`, `max_size_mb`).
+
+No `pulsar:*` request is involved. The capability is driven entirely by
+the **six v5 baseline requests**, which Pulsar has always compiled
+(`RequestHandler.cpp:158-163`) and which now do what they say:
+
+| Request | Behaviour |
+|---|---|
+| `GetReplayBufferStatus` | `outputActive` — `true` once armed. |
+| `StartReplayBuffer` | Arms the buffer. **On-air only**, see below. |
+| `StopReplayBuffer` | Disarms. |
+| `ToggleReplayBuffer` | Arm/disarm. |
+| `SaveReplayBuffer` | Flushes the buffered packets to an MP4 under the recording directory. Asynchronous: the file exists once the `ReplayBufferSaved` event fires. |
+| `GetLastReplayBufferReplay` | `savedReplayPath` — the real path of the last saved replay (empty string until the first save of the session). |
+
+**On-air only.** The buffer feeds off the shared encoders, which run only
+while the stream or the recording output is active. `StartReplayBuffer`
+issued with the encoders idle is **refused and logged**
+(`replay buffer start refused: encoders idle`) rather than silently
+spinning an encoder up for a partial, off-air pipeline. Arm after
+go-live, disarm at stop.
+
+> ⚠️ `StartReplayBuffer` still answers `Success()` without checking (an
+> obs-websocket v5 upstream trait, tracked separately). Confirm with
+> `GetReplayBufferStatus.outputActive` rather than trusting the ack.
+
+Memory cost is `max_time_sec × (video + audio bitrate)`, held in RAM and
+capped by `max_size_mb` — ~23 MB at 30 s / 6 000 kbps.
 
 ## Environment variables (`PULSAR_*`)
 
@@ -222,7 +250,9 @@ value — operator/env-controlled only.
 | `PULSAR_DESKTOP_AUDIO_DEVICE_ID` | `pulsar-frontend-stub` | `"default"` | `wasapi_output_capture` device id (mixer channel 1). |
 | `PULSAR_MIC_DEVICE_ID` | `pulsar-frontend-stub` | unset (source not created) | `wasapi_input_capture` device id (mixer channel 3) — opt-in, since mic devices are absent on CI/servers. |
 | `PULSAR_PROCESS_AUDIO_NAME` | `pulsar-frontend-stub` | unset (source not created) | Executable name for `wasapi_process_output_capture` (mixer channel 2, per-process loopback). Requires Windows 10 19041+ / recent win-wasapi; tolerated as unavailable otherwise. |
-| `PULSAR_RECORD_DIR` | `pulsar-frontend-stub` | `<cwd>/recordings` | Recording output directory, created lazily on first `recording_start`. |
+| `PULSAR_RECORD_DIR` | `pulsar-frontend-stub` | `<cwd>/recordings` | Recording output directory, created lazily on first `recording_start`. Replay saves land here too. |
+| `PULSAR_REPLAY_MAX_TIME_SEC` | `pulsar-frontend-stub` | `30` | Replay buffer depth in seconds, `10..300`. Out of range ⇒ warning + default. Boot-fixed. |
+| `PULSAR_REPLAY_MAX_SIZE_MB` | `pulsar-frontend-stub` | `512` | Replay buffer RAM cap in MB, `16..8192`. Out of range ⇒ warning + default. Boot-fixed. |
 | `PULSAR_STINGER_ASSET` | `pulsar-frontend-stub` | `<cwd>/../../data/pulsar/stinger-demo.webm` | Local path to the stinger media asset (never leaf/network-derived, ADR 003 Amendment 2 §A2.1). |
 | `PULSAR_NATIVE_STINGER` | `pulsar-frontend-stub` | off | Truthy set `1`/`true`/`on`/`yes` (case-insensitive) enables the dormant OBS-native stinger compositing path (#67); default off means the M10 transition renders via Solar/CEF overlay and OBS only hard-cuts. Security invariant: env-only, never leaf-reachable (Bastion #76, ADR 003 §A4.5 R1′·R7). |
 | `PULSAR_ADAPTIVE_BITRATE` | `pulsar-multi-stream` | enabled | Set to `off`/`0`/`false` to disable the adaptive bitrate worker at start. |

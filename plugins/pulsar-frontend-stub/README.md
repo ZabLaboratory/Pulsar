@@ -75,7 +75,8 @@ plugin-registered factories) is built *after* `obs_post_load_modules()`.
 - **Audio** (Phase 9) — `wasapi_output_capture` on channel 1 (desktop), `wasapi_input_capture` on channel 3 (mic). Both use `device_id="default"` unless overridden via `PULSAR_DESKTOP_AUDIO_DEVICE_ID` / `PULSAR_MIC_DEVICE_ID`. Channel 2 is reserved for `wasapi_process_output_capture` (per-process loopback, e.g. a Google Meet tab in Chrome) — created only when `PULSAR_PROCESS_AUDIO_NAME` is set, and tolerated as missing on Windows builds older than 10 19041 where the source ID isn't registered.
 - `recording_start()` resolves `<recordDir>/pulsar-<YYYYMMDD-HHMMSS>.mp4`, mkdir-p the directory, `obs_output_update({path})`, then `obs_output_start`. `recordDir` defaults to `<cwd>/recordings`, override via `PULSAR_RECORD_DIR`.
 - `streaming_start()` returns without effect until `pulsar-multi-stream` configures a real destination URL via `set_streaming_service`.
-- Virtual camera and replay buffer outputs created but inactive — no encoders are wired to them yet.
+- **Replay buffer** (ADR Prism 024 §3.1) — `replayOutput` borrows the *same* video + audio encoders as the record/stream outputs (encode-once / fan-out, no extra encoding) and carries real settings: `directory` = `recordDir`, filename template `pulsar-replay-%CCYY%MM%DD-%hh%mm%ss.mp4`, `max_time_sec` (`PULSAR_REPLAY_MAX_TIME_SEC`, 10..300, default 30), `max_size_mb` (`PULSAR_REPLAY_MAX_SIZE_MB`, 16..8192, default 512). `replay_buffer_start()` **refuses and logs** when the encoders are idle — no off-air replay, an explicit no-go: the buffer taps the live encoders, it never starts them. On the output's `saved` signal the stub pulls the path from the `get_last_replay` proc handler into `lastReplay`, so `GetLastReplayBufferReplay` returns a real path.
+- Virtual camera output created but inactive — no encoders wired to it yet.
 
 ### Audio mixer convention
 
