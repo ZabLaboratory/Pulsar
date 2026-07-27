@@ -35,6 +35,15 @@ static bool ReplayBufferAvailable()
 	return output != nullptr;
 }
 
+// The generic output requests address an output BY NAME, so a refusal must say
+// which one -- "The output `PulsarStream` did not start: ..." rather than the
+// anonymous label the four frontend families can afford.
+static std::string OutputLabel(obs_output_t *output)
+{
+	const char *name = output ? obs_output_get_name(output) : nullptr;
+	return std::string("The output `") + (name ? name : "(unnamed)") + "`";
+}
+
 
 /**
  * Gets the status of the virtualcam output.
@@ -400,6 +409,19 @@ RequestResult RequestHandler::GetOutputStatus(const Request &request)
 	uint64_t outputDuration = Utils::Obs::NumberHelper::GetOutputDuration(output);
 
 	json responseData;
+	// Both booleans are READ off libobs, never inferred from a request we
+	// served (the #120 defect). obs_output_reconnecting() is
+	// os_atomic_load_bool(&output->reconnecting) (libobs/obs-output.c:3245),
+	// an atomic owned by the reconnect thread alone -- set at the point the
+	// reconnect starts, cleared on success, on give-up and on stop. There is
+	// no server-side mirror of it anywhere in this plugin, so it cannot go
+	// stale the way the pre-#119 scene list or a pre-#120 Success() could.
+	//
+	// Note the libobs semantics the two fields inherit: obs_output_active()
+	// is `active || reconnecting` (obs-output.c:563), so a reconnecting
+	// output reports outputActive:true AND outputReconnecting:true. That is
+	// the upstream v5 contract -- read the pair, not outputActive alone, to
+	// know whether bytes are actually leaving.
 	responseData["outputActive"] = obs_output_active(output);
 	responseData["outputReconnecting"] = obs_output_reconnecting(output);
 	responseData["outputTimecode"] = Utils::Obs::StringHelper::DurationToTimecode(outputDuration);
@@ -434,14 +456,29 @@ RequestResult RequestHandler::ToggleOutput(const Request &request)
 	if (!output)
 		return RequestResult::Error(statusCode, comment);
 
-	bool outputActive = obs_output_active(output);
-	if (outputActive)
+	bool wasActive = obs_output_active(output);
+	ActionWatch watch(output, wasActive ? "stopping" : "starting");
+
+	if (wasActive)
 		obs_output_stop(output);
 	else
 		obs_output_start(output);
 
+	const std::string label = OutputLabel(output);
+	if (wasActive) {
+		if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
+			return OutputStopFailure(output, label.c_str());
+	} else {
+		if (Utils::Obs::OutputHelper::SettleStart(output, watch) == ActionVerdict::Refused)
+			return OutputStartFailure(output, label.c_str());
+	}
+
 	json responseData;
-	responseData["outputActive"] = !outputActive;
+	// Report the state the server can SEE, not the one the action promised.
+	// On a Pending verdict (an rtmp connect thread still running its course)
+	// this is still false -- honest, and consistent with the GetOutputStatus
+	// the client will issue a millisecond later.
+	responseData["outputActive"] = obs_output_active(output);
 	return RequestResult::Success(responseData);
 }
 
@@ -468,7 +505,13 @@ RequestResult RequestHandler::StartOutput(const Request &request)
 	if (obs_output_active(output))
 		return RequestResult::Error(RequestStatus::OutputRunning);
 
+	ActionWatch watch(output, "starting");
+
 	obs_output_start(output);
+
+	const std::string label = OutputLabel(output);
+	if (Utils::Obs::OutputHelper::SettleStart(output, watch) == ActionVerdict::Refused)
+		return OutputStartFailure(output, label.c_str());
 
 	return RequestResult::Success();
 }
@@ -496,7 +539,13 @@ RequestResult RequestHandler::StopOutput(const Request &request)
 	if (!obs_output_active(output))
 		return RequestResult::Error(RequestStatus::OutputNotRunning);
 
+	ActionWatch watch(output, "stopping");
+
 	obs_output_stop(output);
+
+	const std::string label = OutputLabel(output);
+	if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
+		return OutputStopFailure(output, label.c_str());
 
 	return RequestResult::Success();
 }

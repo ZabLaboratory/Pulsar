@@ -254,6 +254,40 @@ if ($outputEffectCode -ne 0) {
 }
 Write-Host "==> probe-output-effect.py OK"
 
+# --------------------------------------------------------------------
+# Phase 1g -- self-spawning VCAM SOURCE-MODE probe
+# (probe-vcam-scene-mode.py, #119 resolution criterion 3).
+#
+# #119 criterion 3 is a NON-REGRESSION clause: the virtual cam in source mode
+# (VCAM_SCENE) must behave as before the scene-mirror removal. That path
+# resolves obs_get_source_by_name("ZabVirtualCamSource"), never
+# obs_frontend_get_scenes -- so the criterion was only ever reasoned about.
+# This probe exercises it: creates the scene over the WIRE, asserts
+# GetSceneList now lists it (the mirror used to hide exactly that), puts a
+# DIFFERENT scene on program so a fallback to the program mix would show,
+# then starts the cam and demands both the real effect
+# (GetVirtualCamStatus.outputActive) and the stub's own "virtual cam SOURCE
+# mode -> 'ZabVirtualCamSource'" log line.
+#
+# libobs only registers the `virtualcam_output` type when a virtual-camera
+# DirectShow filter is registered on the box (win-dshow/dshow-plugin.cpp:48).
+# A runner without one -> exit 3 (typed skip), tolerated here: the criterion
+# is untestable there, and the probe says so instead of pretending.
+# --------------------------------------------------------------------
+$vcamProbe = Join-Path $repoRoot "scripts/probe-vcam-scene-mode.py"
+Write-Host "==> Running probe-vcam-scene-mode.py (self-spawn vcam source mode, #119 crit 3)"
+& python $vcamProbe --exe $pulsar
+$vcamCode = $LASTEXITCODE
+if ($vcamCode -eq 3) {
+    Write-Host "==> probe-vcam-scene-mode.py SKIPPED (no virtual-camera driver registered on this machine)"
+} elseif ($vcamCode -ne 0) {
+    Write-Host "==> probe-vcam-scene-mode.py FAILED (exit $vcamCode)"
+    Write-Host "==> The vcam source mode regressed after the #119 mirror removal -- aborting before the shared suite."
+    exit 1
+} else {
+    Write-Host "==> probe-vcam-scene-mode.py OK"
+}
+
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
 # Port 0 -> bind a random free port so back-to-back ctest runs don't
