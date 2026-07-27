@@ -19,6 +19,18 @@ which exposes typed wrappers over both surfaces.
 | Auth | Standard obs-websocket v5 challenge/response (sha256 of password + salt + challenge). A plain v5 client implementation handles the handshake unchanged. |
 | Identify | `rpcVersion: 1`. `eventSubscriptions` defaults to `0x7FF` (all baseline categories). |
 
+**Third-party clients: use `127.0.0.1`, not `localhost`.** The bind is a
+single address at a time (`Config::BindAddress`, one value — never both
+stacks at once), and that address is IPv4 loopback only, never `::1`. On
+Windows, a client that resolves `localhost` may get the `::1` (IPv6)
+candidate first and fail to connect, since nothing is listening there.
+Prism is unaffected — it always targets `127.0.0.1` explicitly (see the
+`PULSAR_READY` sentinel below) — but a third-party integration (Stream
+Deck, Companion, Streamer.bot) configured with the hostname `localhost`
+should be pointed at `127.0.0.1` explicitly instead. `PULSAR_WS_BIND`
+(env table below) overrides the bound address if a different reach is
+ever needed.
+
 The READY sentinel format is stable and machine-parseable:
 
 ```
