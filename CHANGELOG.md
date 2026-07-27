@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Added
 
+- **The v5 capability contract is a blocking CI gate** (#121, ADR Prism 026
+  §3.3 palier 3). `scripts/probe-capability-contract.py` — until now an
+  instrument you ran by hand (#116) — is wired into `scripts/run-probes.ps1`
+  (Phase 1h), so `ctest` and the `offline probe suite (CTest)` job now fail on
+  any v5 request that answers `result: true` without the effect it promises.
+  No `continue-on-error`. It asks a question no other probe asks: not "does
+  this feature work" but "does this request tell the truth". An **explicit
+  refusal passes** — refusing honestly is correct behaviour; only a success
+  that did not happen fails.
+
+  The order matters and is visible in the history: the gate went in *after*
+  #117, #119, #120 and #127 turned it green on its perimeter. Wiring it first
+  would have made it red on day one, then ignored, then removed.
+
+  The gate is **by tiers**, not all-or-nothing. **32 request types across 13
+  families** (General, Scenes, Inputs, SceneItems, Filters, Transitions,
+  Stream, Record, ReplayBuffer, VirtualCam, Outputs, StudioMode, Canvases) —
+  53 of the 137 advertised types once the independent re-queries are counted,
+  up from the 15 of the first pass. The list is frozen in the versioned
+  artefact `scripts/contracts/capability-coverage.json` and cross-checked in
+  both directions on every run: a subject that stops being driven fails the
+  probe, and a subject driven but not declared fails it too. Widening it is a
+  separate job; narrowing it is a diff a human has to approve. Families
+  outside the list are measured ignorance, not failures — including two
+  **known reds documented in the artefact** (`RemoveInput` reports success and
+  removes nothing; `PauseRecord` before the muxer's first byte wedges the
+  record + replay outputs), deliberately left out rather than gated onto a
+  defect, and routed out as candidate issues rather than silenced.
+
 - `pulsar-frontend-stub`: the **replay buffer is wired** (#117, ADR Prism 024
   §3.1). `replayOutput` was created at boot but nothing was attached to it —
   no encoders, no settings — so `obs_output_start` declined, and
