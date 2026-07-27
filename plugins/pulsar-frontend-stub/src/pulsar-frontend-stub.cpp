@@ -463,6 +463,42 @@ private:
         }
         self->emit(OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED);
     }
+    // Issue #129 (mirror of #119): libobs DELEGATES scene-item cleanup to the
+    // frontend. obs_source_remove() only flags the source and fires the global
+    // "source_remove" signal (obs-source.c:927-944); the scene items that hold
+    // the last refs are only dropped by obs_scene_prune_sources(), which libobs
+    // itself calls exclusively from scene_video_render (obs-scene.c:1071) --
+    // i.e. never for a scene that is not being rendered. obs-studio closes the
+    // loop in OBSBasic (InitOBSCallbacks -> SourceRemoved, and
+    // RemoveSceneAndReleaseNested in OBSBasic_Scenes.cpp:322-331). The stub had
+    // no such handler, so RemoveInput answered success and removed nothing: the
+    // input stayed in GetInputList and its item in GetSceneItemList forever.
+    static void OnSourceRemove(void *, calldata_t *)
+    {
+        // Two phases ON PURPOSE. obs_enum_scenes walks libobs's source list
+        // holding obs->data.sources_mutex, while obs_scene_prune_sources takes
+        // the scene's video lock (obs-scene.c:4130-4143). Pruning from inside
+        // the enumeration callback would nest those two locks; collecting refs
+        // first and pruning after the enumeration returned keeps them disjoint.
+        std::vector<obs_source_t *> sceneRefs;
+        obs_enum_scenes(
+            [](void *param, obs_source_t *scene) {
+                auto *out = static_cast<std::vector<obs_source_t *> *>(param);
+                if (obs_source_is_group(scene))
+                    return true; // groups are pruned with their owning scene
+                if (obs_source_t *ref = obs_source_get_ref(scene))
+                    out->push_back(ref);
+                return true;
+            },
+            &sceneRefs);
+
+        for (obs_source_t *s : sceneRefs) {
+            if (obs_scene_t *sc = obs_scene_from_source(s))
+                obs_scene_prune_sources(sc);
+            obs_source_release(s);
+        }
+    }
+
     static void OnVCamStart(void *param, calldata_t *)
     {
         static_cast<PulsarFrontendAPI *>(param)->emit(OBS_FRONTEND_EVENT_VIRTUALCAM_STARTED);
@@ -753,6 +789,15 @@ void applyX264Defaults(obs_data_t *s, int bitrate)
 
 bool PulsarFrontendAPI::setup()
 {
+    // Issue #129: close the loop libobs expects the FRONTEND to close on
+    // source removal (see OnSourceRemove). Connected before anything else is
+    // created so no removal can slip through, disconnected in teardown().
+    if (signal_handler_t *globalSh = obs_get_signal_handler())
+        signal_handler_connect(globalSh, "source_remove", OnSourceRemove, this);
+    else
+        blog(LOG_WARNING, "[pulsar-frontend-stub] no global signal handler: "
+             "RemoveInput will not prune scene items");
+
     // Default scene.
     obs_scene_t *scene = obs_scene_create("Default");
     if (!scene) {
@@ -1195,6 +1240,11 @@ void PulsarFrontendAPI::teardown()
         if (t)
             obs_transition_clear(t);
 
+    // Issue #129: drop the global source_remove handler before the sources it
+    // would walk start being released below.
+    if (signal_handler_t *globalSh = obs_get_signal_handler())
+        signal_handler_disconnect(globalSh, "source_remove", OnSourceRemove, this);
+
     if (streamOutput) {
         signal_handler_t *sh = obs_output_get_signal_handler(streamOutput);
         if (sh) {
@@ -1442,10 +1492,43 @@ void PulsarFrontendAPI::obs_frontend_streaming_start(void)
 {
     if (!streamOutput || obs_output_active(streamOutput))
         return;
-    emit(OBS_FRONTEND_EVENT_STREAMING_STARTING);
-    if (!obs_output_start(streamOutput))
+
+    // Issue #131 -- THE binding that was missing. `streamOutput` is an
+    // rtmp_output, i.e. a service-flagged output: obs_output_start() bails out
+    // on its very first line when `output->service` is NULL
+    // (upstream/libobs/obs-output.c, flag_service -> obs_service_can_try_to_connect
+    // / obs_service_initialize). Nothing in this stub ever called
+    // obs_output_set_service(), so SetStreamServiceSettings genuinely updated
+    // `streamService` (GetStreamServiceSettings re-read it) yet the v5
+    // single-stream StartStream path could not succeed by ANY combination of
+    // requests. The encoders were already attached (setup(), above).
+    //
+    // Doctrine, not a new decision: pulsar-multi-stream/src/plugin-main.cpp:9-16
+    // ("Approach A") promises the v5 StartStream / StartRecord path keeps
+    // working for Stream Deck / Companion / Streamer.bot alongside the additive
+    // multi-destination API. Multi-stream builds its own rtmp_custom outputs and
+    // never touches `streamOutput` / `streamService`, so there is nothing to
+    // arbitrate: StartStream simply becomes one more destination sharing the
+    // same encoders (encode-once / fan-out-N).
+    if (streamService)
+        obs_output_set_service(streamOutput, streamService);
+
+    // Honesty corollary (issue #131, #120 family): STREAMING_STARTING used to be
+    // emitted BEFORE obs_output_start(), so a REFUSED start still put a
+    // StreamStateChanged/OBS_WEBSOCKET_OUTPUT_STARTING event on the wire -- an
+    // event asserting an action that never happened. Emit it only once libobs
+    // has really taken the action.
+    //
+    // This does NOT affect the #120 refusal verification: Utils::Obs::OutputHelper's
+    // ActionWatch/SettleStart listen to the OUTPUT's own libobs "starting" signal
+    // (obs-output.c), not to this frontend event, so their Refused/Pending verdict
+    // is decided by libobs regardless of when the frontend event is emitted.
+    if (!obs_output_start(streamOutput)) {
         blog(LOG_INFO, "[pulsar-frontend-stub] obs_output_start (stream) declined: %s",
              obs_output_get_last_error(streamOutput));
+        return;
+    }
+    emit(OBS_FRONTEND_EVENT_STREAMING_STARTING);
 }
 
 void PulsarFrontendAPI::obs_frontend_streaming_stop(void)

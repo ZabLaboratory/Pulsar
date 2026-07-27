@@ -71,9 +71,24 @@ inline std::string DescribeOutputRefusal(obs_output_t *output)
 
 	uint32_t flags = obs_output_get_flags(output);
 
-	if ((flags & OBS_OUTPUT_SERVICE) != 0 && !obs_output_get_service(output))
-		return "no streaming service is configured -- call SetStreamServiceSettings first, "
-		       "or use the pulsar:StartDestination multi-stream API.";
+	if ((flags & OBS_OUTPUT_SERVICE) != 0) {
+		// obs_output_get_service borrows -- no ref to release.
+		obs_service_t *service = obs_output_get_service(output);
+		if (!service)
+			return "no streaming service is configured -- call SetStreamServiceSettings first, "
+			       "or use the pulsar:StartDestination multi-stream API.";
+		// Issue #131: since the frontend binds `streamService` to the output
+		// before starting it, "no service at all" is no longer the only
+		// service-shaped refusal libobs can produce. obs_output_start's first
+		// gate is obs_service_can_try_to_connect(), which an rtmp_common
+		// service still missing its server/key answers false to -- observable,
+		// so name it instead of falling through to the generic sentence.
+		if (!obs_service_can_try_to_connect(service))
+			return "the configured streaming service is not ready to connect -- its "
+			       "server/key are incomplete. Push a complete service with "
+			       "SetStreamServiceSettings, or use the pulsar:StartDestination "
+			       "multi-stream API.";
+	}
 
 	if ((flags & OBS_OUTPUT_ENCODED) != 0 && !obs_output_get_video_encoder(output))
 		return "no video encoder is attached to this output.";

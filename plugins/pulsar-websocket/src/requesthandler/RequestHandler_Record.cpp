@@ -23,6 +23,40 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 using ActionWatch = Utils::Obs::OutputHelper::ActionWatch;
 using ActionVerdict = Utils::Obs::OutputHelper::ActionVerdict;
 
+// Issue #130 -- DEFENSIVE REFUSAL, the cause is upstream.
+//
+// obs_output_pause() has no guard on "has the encoder produced a frame yet".
+// It computes the pause start from pause->last_video_ts (obs-output.c,
+// get_closest_v_ts), which video_pause_check_internal only ever fills when the
+// FIRST encoded frame goes through (libobs/obs-encoder.c). Before that it is 0,
+// so ts_start is quantised against the wall clock instead of the encoder
+// timeline; video_pause_check_internal then drops every frame with
+// ts >= pause->ts_start and only lifts the pause on an EXACT ts == pause->ts_end,
+// which that faulty base never reaches. The muxer is wedged for good: the replay
+// buffer sharing the encoders stops producing files, and Stop* answer Success()
+// while outputActive stays true.
+//
+// Fixing libobs is out of Pulsar's mandate (LICENSE-INVARIANTS.md / fork
+// doctrine: no divergence from libobs for an exotic trigger). The websocket
+// layer is the only layer that can NAME the cause -- obs_frontend_recording_pause()
+// returns void -- so it refuses the precondition instead of entering the wedge.
+// outputBytes > 0 is a conservative proxy for "the muxer took at least one
+// encoded packet": it can refuse a legitimate pause for the few tens of ms after
+// StartRecord, never the reverse. The client lifts the condition itself --
+// outputBytes is already a GetRecordStatus response field.
+static constexpr const char *kPauseBeforeFirstByte =
+	"Cannot pause the recording before the muxer has written its first byte "
+	"(outputBytes is still 0). libobs's pause timeline is not initialised until "
+	"the first encoded frame is muxed; pausing now wedges the output permanently. "
+	"Poll GetRecordStatus until outputBytes > 0, then retry.";
+
+// True when the record output has not muxed a single byte yet.
+static bool RecordOutputHasNoBytesYet()
+{
+	OBSOutputAutoRelease output = obs_frontend_get_recording_output();
+	return !output || obs_output_get_total_bytes(output) == 0;
+}
+
 /**
  * Gets the status of the record output.
  *
@@ -161,11 +195,21 @@ RequestResult RequestHandler::StopRecord(const Request &)
  */
 RequestResult RequestHandler::ToggleRecordPause(const Request &)
 {
+	// Issue #130 / #120 family: neither branch checked that a recording was
+	// running at all. obs_output_pause() returns false on an inactive output
+	// and obs_frontend_recording_pause() swallows it, so this answered
+	// Success() with outputPaused flipped in the response and nothing paused
+	// on the server.
+	if (!obs_frontend_recording_active())
+		return RequestResult::Error(RequestStatus::OutputNotRunning);
+
 	json responseData;
 	if (obs_frontend_recording_paused()) {
 		obs_frontend_recording_pause(false);
 		responseData["outputPaused"] = false;
 	} else {
+		if (RecordOutputHasNoBytesYet())
+			return RequestResult::Error(RequestStatus::InvalidResourceState, kPauseBeforeFirstByte);
 		obs_frontend_recording_pause(true);
 		responseData["outputPaused"] = true;
 	}
@@ -185,8 +229,18 @@ RequestResult RequestHandler::ToggleRecordPause(const Request &)
  */
 RequestResult RequestHandler::PauseRecord(const Request &)
 {
+	// Issue #130 / #120 family: an inactive output cannot be paused --
+	// obs_output_pause() returns false and obs_frontend_recording_pause()
+	// discards that, so this used to answer Success() having done nothing.
+	if (!obs_frontend_recording_active())
+		return RequestResult::Error(RequestStatus::OutputNotRunning);
+
 	if (obs_frontend_recording_paused())
 		return RequestResult::Error(RequestStatus::OutputPaused);
+
+	// Issue #130: refuse the muxer-wedging precondition, with the cause named.
+	if (RecordOutputHasNoBytesYet())
+		return RequestResult::Error(RequestStatus::InvalidResourceState, kPauseBeforeFirstByte);
 
 	// TODO: Call signal directly to perform blocking wait
 	obs_frontend_recording_pause(true);
