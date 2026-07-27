@@ -303,6 +303,10 @@ if ($nameDriftCode -eq 3) {
 $probes = @(
     'probe-source-kinds.py',
     'probe-events.py',
+    # #119 / ADR Prism 026 §3.1 -- GetSceneList must enumerate libobs, not
+    # a stub-side snapshot. Creates and removes its own scene, so it leaves
+    # the instance exactly as it found it.
+    'probe-scene-list-truth.py',
     # probe-multi-stream.py is INTENTIONALLY excluded.
     # The destination lifecycle has known race-condition crash paths
     # in obs upstream (rtmp_output worker thread vs ECONNREFUSED-fast
