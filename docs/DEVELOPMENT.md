@@ -107,6 +107,11 @@ part of the offline suite — it needs a real Twitch stream key + ~1 min
 of network bandwidth. It runs from the `live-broadcast` job in
 `pipeline.yml` against the project's Twitch credentials, produces a
 local MP4 + a diagnostic JSON, and uploads them as artefacts.
+Since #132 that job is **off the per-commit path** — tag push and
+`workflow_dispatch` only — so a real-ingest regression surfaces at
+release time or on an antenna run, not on the PR that introduced it.
+Run it on demand from the Actions tab before merging anything that
+touches the encoder / service / rtmp lifecycle.
 
 ## CI — `.github/workflows/pipeline.yml`
 
@@ -119,7 +124,7 @@ its artefact via `upload-artifact` / `download-artifact`.
 | `build` | windows-2022 | every PR + push to main | `scripts/build-win.ps1 -Full`, uploads `pulsar-rundir` artefact consumed by all subsequent gates |
 | `binary-gate` | windows-2022 | every PR + push to main | `scripts/check-binary-exports.ps1` over `pulsar.exe`, `pulsar-browser-page.exe`, and every plugin DLL |
 | `offline-probes` | windows-2022 | every PR + push to main | `ctest` with retry, runs the offline probe suite |
-| `live-broadcast` | windows-2022 | every PR + push to main | end-to-end Twitch broadcast — 60 s on PR, 600 s on main / tag — produces MP4 + diagnostic JSON |
+| `live-broadcast` | windows-2022 | tag `v*.*.*` + `workflow_dispatch` **only** (#132) | end-to-end Twitch broadcast — 600 s on tag, operator-chosen on dispatch — produces MP4 + diagnostic JSON |
 | `publish-gh-pages` | ubuntu-latest | push to main + tag | `peaceiris/actions-gh-pages` — publishes the broadcast MP4 to `gh-pages` so the README inline player streams the latest run |
 | `package` | windows-2022 | tag `v*.*.*` push | `scripts/package-win.ps1 -Zip` for both light + full variants |
 | `release-attach` | ubuntu-latest | tag push | `softprops/action-gh-release` with the zips + MP4 + diagnostic JSON |
