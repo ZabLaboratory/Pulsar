@@ -328,6 +328,15 @@ jobs:
         # pulsar-multi-stream::release_destination_handles_locked.
         # One automatic retry is enough to cover the residual flake ;
         # if both attempts fail, that's a real regression.
+        #
+        # Reading a failure : run-probes.ps1 now names the two cases
+        # apart, so DON'T guess from the client-side error.
+        #   - "==> FATAL: the shared pulsar.exe DIED" -> a server crash.
+        #     The ConnectionClosedError / [WinError 1225] lines under it
+        #     are consequences ; the suite stops there and prints the
+        #     libobs stderr tail. Retrying that is not a diagnosis.
+        #   - no FATAL banner -> the server stayed up and a probe
+        #     assertion genuinely failed. Read the probe, not the infra.
         # TODO(upstream-obs) : investigate the worker-thread vs
         # service-ref-release race + WASAPI source destroy path,
         # submit fixes upstream.

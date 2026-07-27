@@ -399,6 +399,54 @@ if (-not $ready) {
 Write-Host "==> PULSAR_READY received"
 
 # --------------------------------------------------------------------
+# Server-death detector (#128 follow-up).
+#
+# A connect-only probe that finds the shared instance gone reports a
+# CLIENT-side symptom and nothing else: `websockets` raises
+# ConnectionClosedError ("no close frame received or sent") for the probe
+# that was mid-session when the server vanished, then
+# ConnectionRefusedError ([WinError 1225]) for every probe queued behind
+# it. Read literally, that reads like a network flake and invites a blind
+# retry. It is not a network flake -- it means pulsar.exe DIED, and the
+# probes after it prove nothing at all.
+#
+# Until this check existed, the suite printed only the stdout tail, and
+# nothing said whether the process was still alive -- so a server crash
+# and a genuine probe assertion failure looked identical in the CI log.
+# libobs writes its own log to STDERR, which was never surfaced: the
+# crash context was captured on disk and thrown away. Both are dumped
+# here, and the exit code of the process is named.
+#
+# This does NOT retry and does NOT tolerate: it converts a misleading
+# failure into a named one, and stops the suite at the first probe that
+# runs against a corpse.
+# --------------------------------------------------------------------
+function Show-PulsarDeath {
+    param(
+        [Parameter(Mandatory = $true)] $Proc,
+        [string] $LastAliveProbe,
+        [Parameter(Mandatory = $true)] [string] $StdoutLog,
+        [Parameter(Mandatory = $true)] [string] $StderrLog
+    )
+    $code = 'unknown'
+    try { $code = $Proc.ExitCode } catch { }
+    Write-Host ""
+    Write-Host "==> FATAL: the shared pulsar.exe DIED (pid $($Proc.Id), exit code $code)."
+    if ($LastAliveProbe) {
+        Write-Host "==>        Last probe that had it alive: $LastAliveProbe"
+    } else {
+        Write-Host "==>        It died before the first connect-only probe completed."
+    }
+    Write-Host "==>        Any 'connection closed / refused' above is a CONSEQUENCE, not the cause."
+    Write-Host "==>        This is a SERVER-side defect (crash in the libobs/plugin lifecycle),"
+    Write-Host "==>        not CI flakiness -- diagnose the tails below, do not retry blind."
+    Write-Host "==> Pulsar stdout tail:"
+    Get-Content $StdoutLog -Tail 60 -ErrorAction SilentlyContinue
+    Write-Host "==> Pulsar stderr tail (libobs log -- crash context lives here):"
+    Get-Content $StderrLog -Tail 60 -ErrorAction SilentlyContinue
+}
+
+# --------------------------------------------------------------------
 # Phase 2a -- scene-source name-drift regression (probe-scene-name-drift.py,
 # #110). Connect-only: drives pulsar-scene:SetCaptureSource N times against
 # the shared instance and asserts the program scene keeps EXACTLY ONE
@@ -418,8 +466,12 @@ if ($nameDriftCode -eq 3) {
     Write-Host "==> probe-scene-name-drift.py SKIPPED (light build -- browser_source absent)"
 } elseif ($nameDriftCode -ne 0) {
     Write-Host "==> probe-scene-name-drift.py FAILED (exit $nameDriftCode)"
-    Write-Host "==> Stopping pulsar.exe"
-    if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force; $proc.WaitForExit(5000) | Out-Null }
+    if ($proc.HasExited) {
+        Show-PulsarDeath -Proc $proc -LastAliveProbe '' -StdoutLog $stdoutLog -StderrLog $stderrLog
+    } else {
+        Write-Host "==> Stopping pulsar.exe"
+        Stop-Process -Id $proc.Id -Force; $proc.WaitForExit(5000) | Out-Null
+    }
     exit 1
 } else {
     Write-Host "==> probe-scene-name-drift.py OK"
@@ -458,7 +510,21 @@ $probes = @(
 )
 
 $failed = @()
-foreach ($p in $probes) {
+$died = $false
+$lastAlive = ''
+for ($i = 0; $i -lt $probes.Count; $i++) {
+    $p = $probes[$i]
+
+    # The server must be alive BEFORE the probe runs -- otherwise the probe
+    # only measures the corpse (WinError 1225) and buries the real event.
+    if ($proc.HasExited) {
+        Show-PulsarDeath -Proc $proc -LastAliveProbe $lastAlive -StdoutLog $stdoutLog -StderrLog $stderrLog
+        $skipped = $probes[$i..($probes.Count - 1)]
+        Write-Host "==> NOT RUN (nothing to connect to): $($skipped -join ', ')"
+        $died = $true
+        break
+    }
+
     $script = Join-Path $repoRoot "scripts/$p"
     Write-Host ""
     Write-Host "==> Running $p"
@@ -467,22 +533,45 @@ foreach ($p in $probes) {
     if ($code -ne 0) {
         Write-Host "==> $p FAILED (exit $code)"
         $failed += $p
+        # Distinguish "the probe's assertion failed" from "the server died
+        # under it" -- same exit code, opposite diagnosis.
+        if ($proc.HasExited) {
+            Show-PulsarDeath -Proc $proc -LastAliveProbe $lastAlive -StdoutLog $stdoutLog -StderrLog $stderrLog
+            Write-Host "==>        $p is the probe it died UNDER, not necessarily the culprit."
+            if ($i -lt $probes.Count - 1) {
+                $skipped = $probes[($i + 1)..($probes.Count - 1)]
+                Write-Host "==> NOT RUN (nothing to connect to): $($skipped -join ', ')"
+            }
+            $died = $true
+            break
+        }
     } else {
         Write-Host "==> $p OK"
+        $lastAlive = $p
     }
 }
 
 Write-Host ""
-Write-Host "==> Stopping pulsar.exe"
-if (-not $proc.HasExited) {
+if ($proc.HasExited) {
+    Write-Host "==> pulsar.exe already exited on its own -- nothing to stop."
+} else {
+    Write-Host "==> Stopping pulsar.exe"
     Stop-Process -Id $proc.Id -Force
     $proc.WaitForExit(5000) | Out-Null
 }
 
+if ($died) {
+    Write-Host "==> SUITE ABORTED -- shared pulsar.exe crash (see FATAL above)."
+    exit 1
+}
+
 if ($failed.Count -gt 0) {
     Write-Host "==> $($failed.Count) probe(s) failed: $($failed -join ', ')"
+    Write-Host "==> (pulsar.exe stayed alive throughout -- these are real assertion failures.)"
     Write-Host "==> Pulsar stdout tail:"
     Get-Content $stdoutLog -Tail 50 -ErrorAction SilentlyContinue
+    Write-Host "==> Pulsar stderr tail (libobs log):"
+    Get-Content $stderrLog -Tail 50 -ErrorAction SilentlyContinue
     exit 1
 }
 
