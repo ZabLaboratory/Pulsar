@@ -99,22 +99,39 @@ void WebSocketServer::Start()
 
 	_server.reset();
 
+	// Pulsar fork (#134): bind ONE address, the loopback by default.
+	//
+	// Upstream listened on every interface (`listen(port)` = the v6 any-address
+	// with dual-stack, or `tcp::v4()` = 0.0.0.0 under --websocket_ipv4_only),
+	// which put the whole v5 surface -- including the egress path #131 made
+	// live -- on the LAN behind nothing but the session password. Every Pulsar
+	// consumer talks to 127.0.0.1 (packages/pulsar-bundle*/src/spawn.ts, the
+	// PULSAR_READY sentinel, scripts/probe-*.py), so the loopback is the real
+	// contract; docs/PROTOCOL.md already stated it.
+	//
+	// The address decides the family, so `--websocket_ipv4_only` is subsumed:
+	// the default IS v4. It is only worth a word when it contradicts an
+	// explicit override, and then the explicit address wins.
+	const std::string &bindAddress = conf->BindAddress;
+	const bool loopbackOnly = bindAddress == "127.0.0.1" || bindAddress == "::1" || bindAddress == "localhost";
+
+	if (conf->Ipv4Only && bindAddress != "127.0.0.1")
+		blog(LOG_WARNING,
+		     "[WebSocketServer::Start] --websocket_ipv4_only ignored: PULSAR_WS_BIND=%s decides the address family",
+		     bindAddress.c_str());
+	if (!loopbackOnly)
+		blog(LOG_WARNING,
+		     "[WebSocketServer::Start] PULSAR_WS_BIND=%s -- binding a NON-LOOPBACK address. The v5 API is "
+		     "reachable from the network, guarded only by the session password.",
+		     bindAddress.c_str());
+
 	websocketpp::lib::error_code errorCode;
-	if (conf->Ipv4Only) {
-		blog(LOG_INFO, "[WebSocketServer::Start] Locked to IPv4 bindings");
-		_server.listen(websocketpp::lib::asio::ip::tcp::v4(), conf->ServerPort, errorCode);
-	} else {
-		blog(LOG_INFO, "[WebSocketServer::Start] Not locked to IPv4 bindings");
-		_server.listen(conf->ServerPort, errorCode);
-		if (errorCode && errorCode == websocketpp::lib::asio::error::address_family_not_supported) {
-			blog(LOG_INFO, "[WebSocketServer::Start] IPv6 address family not supported, binding only to IPv4");
-			_server.listen(websocketpp::lib::asio::ip::tcp::v4(), conf->ServerPort, errorCode);
-		}
-	}
+	_server.listen(bindAddress, std::to_string(conf->ServerPort.load()), errorCode);
 
 	if (errorCode) {
 		std::string errorCodeMessage = errorCode.message();
-		blog(LOG_INFO, "[WebSocketServer::Start] Listen failed: %s", errorCodeMessage.c_str());
+		blog(LOG_INFO, "[WebSocketServer::Start] Listen on %s:%d failed: %s", bindAddress.c_str(),
+		     conf->ServerPort.load(), errorCodeMessage.c_str());
 		return;
 	}
 
@@ -122,8 +139,10 @@ void WebSocketServer::Start()
 
 	_serverThread = std::thread(&WebSocketServer::ServerRunner, this);
 
-	blog(LOG_INFO, "[WebSocketServer::Start] Server started successfully on port %d. Possible connect address: %s",
-	     conf->ServerPort.load(), Utils::Platform::GetLocalAddress().c_str());
+	const std::string reachableFrom =
+		loopbackOnly ? std::string() : " Possible connect address: " + Utils::Platform::GetLocalAddress();
+	blog(LOG_INFO, "[WebSocketServer::Start] Server started successfully on %s:%d.%s", bindAddress.c_str(),
+	     conf->ServerPort.load(), reachableFrom.c_str());
 }
 
 void WebSocketServer::Stop()

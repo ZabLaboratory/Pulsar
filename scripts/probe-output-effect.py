@@ -32,10 +32,10 @@ Cases (each one is a genuine refusal on the spawned binary, not a mock):
 
   B. Stream — the singleton `PulsarStream` rtmp_output cannot connect: since
      #131 the frontend DOES bind `streamService` to the output before starting
-     it, but nothing has pushed a usable service in this child, so the boot
-     placeholder (rtmp_common with no stream key) answers false to
-     obs_service_can_try_to_connect and obs_output_start bails before taking
-     the action.
+     it, but nothing has pushed a usable service in this child, so the neutral
+     boot placeholder (#136: an rtmp_custom with no server and no key) is
+     refused by the v5 egress gate for want of a destination, before
+     obs_output_start is even reached.
      Assert: StartStream -> result:false, and the comment names the SERVICE as
      the cause (never a generic "the output is not configured").
 

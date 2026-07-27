@@ -596,13 +596,15 @@ RequestResult RequestHandler::SetStreamServiceSettings(const Request &request)
 	// good. Rationale + the three forms considered: plugins/pulsar-frontend-stub/
 	// include/pulsar-stream-egress.h.
 	//
-	// The Twitch check runs BEFORE instantiating anything: creating an
-	// rtmp_common/"Twitch" service is what triggers the ingest resolution whose
-	// cleartext fallback we are refusing to depend on. Refuse it, don't build it.
-	if (pulsar::IsTwitchCommonService(requestedStreamServiceType.c_str(), newStreamServiceSettings))
+	// The rtmp_common check runs BEFORE instantiating anything: creating an
+	// rtmp_common service is what triggers the ingest resolution whose cleartext
+	// fallback we are refusing to depend on. Refuse it, don't build it. #135
+	// widened this from "Twitch" to the whole type -- same mechanism, same
+	// downloaded list, whatever platform the settings name.
+	if (pulsar::IsRtmpCommonService(requestedStreamServiceType.c_str()))
 		return RequestResult::Error(RequestStatus::InvalidRequestField,
 					    std::string("streamServiceSettings rejected: ") +
-						    pulsar::kTwitchOnV5Refusal);
+						    pulsar::kRtmpCommonOnV5Refusal);
 
 	// Every other type is validated on a THROWAWAY private service: the scheme
 	// and key must be read off a real service object (rtmp_custom and

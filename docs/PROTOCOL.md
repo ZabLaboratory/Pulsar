@@ -13,7 +13,7 @@ which exposes typed wrappers over both surfaces.
 
 | | |
 |---|---|
-| Transport | WebSocket over TCP, **loopback (`127.0.0.1`) only**. |
+| Transport | WebSocket over TCP, **loopback (`127.0.0.1`) only** — the server binds that address and nothing else, so it is unreachable from the LAN. Widened only by an explicit `PULSAR_WS_BIND` (see the env table). |
 | Port | `PULSAR_PORT` env var at spawn (default `4455`). The chosen port is echoed in the `PULSAR_READY` stdout sentinel. |
 | Password | `PULSAR_PASSWORD` env var at spawn. Unset = Pulsar generates a fresh 22-char URL-safe random string and exposes it in the same sentinel. The seeded values are written to `<cwd>/obs-websocket/config.json` before `obs_module_load`, so a stale on-disk password from a prior session is never trusted. |
 | Auth | Standard obs-websocket v5 challenge/response (sha256 of password + salt + challenge). A plain v5 client implementation handles the handshake unchanged. |
@@ -122,17 +122,26 @@ Three things to keep in mind when driving the baseline against Pulsar:
    request **fails** with `OutputNotRunning` and a `comment` naming the
    service as the cause.
 
-   **Twitch is not available on this path.** `SetStreamServiceSettings`
-   with `rtmp_common` + `service: "Twitch"` is refused
-   (`InvalidRequestField`, 400), and so is a `StartStream` that would
-   reach such a service — including the boot placeholder the frontend
-   stub creates. An `rtmp_common` Twitch service resolves its ingest
-   from a list downloaded at runtime and falls back to the **cleartext**
-   `rtmp://live.twitch.tv/app` when that list is absent (first run, cold
-   cache, offline), which would put the stream key on the wire
-   unencrypted. Send to Twitch with `pulsar:StartDestination`, whose
-   ingest is an `rtmps://` constant pinned at compile time
-   (`static_assert`, `pulsar-multi-stream`).
+   **The `rtmp_common` service type is not available on this path.**
+   `SetStreamServiceSettings` with `streamServiceType: "rtmp_common"` is
+   refused (`InvalidRequestField`, 400) whatever platform the settings
+   name — Twitch, YouTube, Kick, Trovo, or none at all — and so is a
+   `StartStream` that would reach such a service. An `rtmp_common`
+   service resolves its ingest from a service list downloaded at runtime,
+   which Pulsar does not control, which carries **cleartext** `rtmp://`
+   entries, and which falls back to the cleartext
+   `rtmp://live.twitch.tv/app` for Twitch when the list is absent (first
+   run, cold cache, offline) — the stream key would go on the wire
+   unencrypted. Push an `rtmp_custom` service with an explicit server
+   instead; for Twitch, send with `pulsar:StartDestination`, whose ingest
+   is an `rtmps://` constant pinned at compile time (`static_assert`,
+   `pulsar-multi-stream`).
+
+   The **boot placeholder is neutral**: before any configuration the
+   stream service is an empty `rtmp_custom` naming no platform, so
+   `GetStreamServiceSettings` reports `rtmp_custom` with no server and no
+   key, and `StartStream` fails with `OutputNotRunning` for want of a
+   destination — not because a platform was rebutted.
 
    **The destination is validated up front**, with the same rules
    `pulsar:StartDestination` applies: the resolved server must be an
@@ -332,6 +341,7 @@ value — operator/env-controlled only.
 |---|---|---|---|
 | `PULSAR_PORT` | `pulsar-headless` | `4455` | obs-websocket listen port. Rejected if outside `1..65535`. |
 | `PULSAR_PASSWORD` | `pulsar-headless` | fresh 22-char random string | obs-websocket session password, seeded into `obs-websocket/config.json` before module load. |
+| `PULSAR_WS_BIND` | `pulsar-websocket` | `127.0.0.1` | Address the obs-websocket server binds. The default keeps the v5 surface off the network entirely; any other value is an explicit decision and logs a warning when it is not a loopback address. Not persisted in `config.json`. |
 | `PULSAR_FPS` | `pulsar-headless` | `60` | Output fps. Accepts only `24`/`30`/`48`/`60`/`120`; anything else is rejected with a warning. Boot-fixed (no live change). |
 | `PULSAR_RESOLUTION` | `pulsar-headless` | `1920x1080` | Base/output resolution, format `<W>x<H>`, up to `7680x4320`. Boot-fixed. |
 | `PULSAR_CAPTURE_WINDOW` | `pulsar-frontend-stub` | unset | `window_capture` target, format `<title>:<class>:<exe>`. Unset ⇒ source produces black frames (pipeline still encodes/records). Superseded per-scene by `pulsar-scene:SetCaptureSource` when used. |
@@ -378,8 +388,17 @@ sustained drop event; they re-converge during recovery.
 ## Authentication details
 
 - v5 challenge/response — `sha256(base64(sha256(password + salt)) + challenge)`.
-- Pulsar binds `127.0.0.1` and `::1` only. Connections from non-loopback
-  addresses are refused at the socket layer.
+- Pulsar binds `127.0.0.1` only. Connections from non-loopback addresses
+  are refused at the socket layer — there is no listener for them. This
+  is enforced in `plugins/pulsar-websocket` (`Config.h` `BindAddress`,
+  `WebSocketServer::Start`) and asserted by
+  `scripts/probe-loopback-bind.py`, which connects to this host's own LAN
+  address on the same port and requires the connect to fail.
+- `PULSAR_WS_BIND` overrides the address (e.g. `0.0.0.0`, `::1`, a
+  specific interface). A non-loopback value logs a warning at start: the
+  whole v5 surface, including the stream egress path, then sits behind
+  the session password alone. Env only — never read from
+  `config.json`, so a stale or tampered config cannot widen the bind.
 - The same `password` is honoured across reconnects within a single
   Pulsar lifetime. After a `pulsar.exe` restart the password rotates
   (unless pinned via `PULSAR_PASSWORD`).

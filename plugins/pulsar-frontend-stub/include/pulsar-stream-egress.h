@@ -5,13 +5,16 @@
 // Issue #131 bound the frontend stub's `streamService` to `streamOutput`, which
 // made the v5 `SetStreamServiceSettings` + `StartStream` path a LIVE egress for
 // the first time. Before that binding the path was dead, and #114 relied on that
-// deadness: the stub creates its boot placeholder as `rtmp_common` / "Twitch"
-// (pulsar-frontend-stub.cpp, setup()), and upstream resolves an rtmp_common
-// Twitch service through `update_ingest` (upstream/plugins/rtmp-services/
-// rtmp-common.c) -- which falls back to the bundled default
+// deadness: the stub then created its boot placeholder as `rtmp_common` /
+// "Twitch" (pulsar-frontend-stub.cpp, setup()), and upstream resolves an
+// rtmp_common Twitch service through `update_ingest` (upstream/plugins/
+// rtmp-services/rtmp-common.c) -- which falls back to the bundled default
 // `rtmp://live.twitch.tv/app` (upstream/plugins/rtmp-services/service-specific/
 // twitch.c:45) whenever the ingest list is missing: first run, cold cache, or
 // offline. CLEARTEXT. The stream key would travel unencrypted.
+// (Issue #136 has since made that placeholder a NEUTRAL empty `rtmp_custom`, so
+// the default path has nothing to refuse; the gate below is what holds once an
+// operator or a v5 client starts pushing services.)
 //
 // The multi-stream twin (`pulsar:StartDestination`) cannot do this: its Twitch
 // ingest is a compile-time constant guarded by a `static_assert` on the
@@ -19,12 +22,21 @@
 // front-loads `is_rtmp_scheme()` + non-empty-key validation before any
 // obs_output_* allocation (plugin-main.cpp:100-121).
 //
-// THE RULE (C1, form (b)): Twitch is barred from the v5 single-stream path.
-// Twitch egress goes through `pulsar:StartDestination`, which carries the
-// compile-time RTMPS guarantee. The v5 path stays alive for `rtmp_custom` and
-// non-Twitch services -- that is the Stream Deck / Companion compatibility #131
-// exists for -- but it never resolves an ingest URL out of a downloaded list we
-// do not control.
+// THE RULE (C1, form (b)): `rtmp_common` as a whole is barred from the v5
+// single-stream path -- it never resolves an ingest URL out of a downloaded
+// list we do not control. Twitch egress goes through
+// `pulsar:StartDestination`, which carries the compile-time RTMPS guarantee;
+// every other destination goes through `rtmp_custom` with an explicit server,
+// which is the Stream Deck / Companion compatibility #131 exists for.
+//
+// ISSUE #135 widened the predicate from "Twitch" to "rtmp_common". The
+// dangerous mechanism is the RESOLUTION, not the platform: `update_ingest`
+// serves every rtmp_common service out of the same downloaded `services.json`
+// (hundreds of entries, many with cleartext `rtmp://` servers), so barring
+// only Twitch left the same hole open for YouTube, Kick, Trovo and the rest
+// while claiming the rule above. `rtmp_custom` already covers the legitimate
+// operator need in the clear (a LAN relay), which is the residual ADR 010
+// section 5 accepts -- so widening costs no capability.
 //
 // Form (b) was chosen over (a) "refuse any resolved rtmp:// URL" and (c) "patch
 // twitch.c in the submodule":
@@ -34,8 +46,9 @@
 //   - (c) puts a Pulsar security invariant inside a vendored upstream file, i.e.
 //     re-litigated at every submodule bump and invisible to anyone reading
 //     Pulsar's own sources. The invariant belongs where the egress is decided.
-// Form (b) keeps ONE rule -- "Twitch egress is the multi-stream plugin's job" --
-// enforced in Pulsar's own code, at both the configuration and start seams.
+// Form (b) keeps ONE rule -- "this path never streams to a destination it did
+// not read verbatim from the caller" -- enforced in Pulsar's own code, at both
+// the configuration and start seams.
 //
 // THE PARITY (C2): the same front-loaded validation the twin applies --
 // `rtmp://`/`rtmps://` scheme and non-empty stream key -- is applied here.
@@ -47,7 +60,7 @@
 #pragma once
 
 #include <obs.h>
-#include <obs.hpp> // OBSDataAutoRelease
+#include <obs.hpp>
 
 #include <cstring>
 #include <string>
@@ -58,22 +71,24 @@ namespace pulsar {
 // (SetStreamServiceSettings) and the start seam (obs_frontend_streaming_start)
 // so the two can never drift into telling the operator different stories.
 //
-// SCOPE -- read the wording narrowly: this gate closes the `rtmp_common`/Twitch
-// path, i.e. an ingest RESOLVED for us out of a downloaded list that can silently
-// degrade to cleartext. It does NOT close the general class "a Twitch key in
+// SCOPE -- read the wording narrowly: this gate closes the `rtmp_common` path,
+// i.e. an ingest RESOLVED for us out of a downloaded list that can silently
+// degrade to cleartext. It does NOT close the general class "a platform key in
 // cleartext": `SetStreamServiceSettings{rtmp_custom, server "rtmp://live.twitch.tv/app",
 // key ...}` still passes every guard here -- it is not rtmp_common, `rtmp://` is
 // accepted by the deliberate parity with `pulsar:StartDestination` (which accepts
 // operator-supplied rtmp:// endpoints), and the key is non-empty. That residual is
 // the accepted one of ADR 010 section 5: an operator knowingly typing a cleartext
-// URL is the assumed rtmp_custom use. Pulsar cannot tell a Twitch key from any
+// URL is the assumed rtmp_custom use. Pulsar cannot tell a platform key from any
 // other key on that generic path; that guard lives in Prism (R1), not here.
-inline constexpr const char *kTwitchOnV5Refusal =
-	"the Twitch service is not available on the v5 single-stream path: an rtmp_common "
-	"Twitch service resolves its ingest from a downloaded list and falls back to the "
-	"CLEARTEXT rtmp://live.twitch.tv/app when that list is absent. Stream to Twitch with "
-	"the pulsar:StartDestination multi-stream API, which pins an rtmps:// ingest at "
-	"compile time.";
+inline constexpr const char *kRtmpCommonOnV5Refusal =
+	"the rtmp_common service type is not available on the v5 single-stream path: such a "
+	"service (Twitch, YouTube, Kick, ... ) resolves its ingest from a service list "
+	"downloaded at runtime, which we do not control, which carries CLEARTEXT rtmp:// "
+	"entries, and which falls back to a bundled cleartext default when it is absent. Push "
+	"an rtmp_custom service with an explicit server instead, or -- for Twitch -- use the "
+	"pulsar:StartDestination multi-stream API, which pins an rtmps:// ingest at compile "
+	"time.";
 
 // True if url starts with "rtmp://" or "rtmps://".
 // Mirrors pulsar-multi-stream/src/plugin-main.cpp `is_rtmp_scheme`.
@@ -84,33 +99,13 @@ inline bool IsRtmpScheme(const char *url)
 	return std::strncmp(url, "rtmp://", 7) == 0 || std::strncmp(url, "rtmps://", 8) == 0;
 }
 
-inline bool EqualsIgnoreCase(const char *a, const char *b)
+// C1 (b), widened by #135. EVERY `rtmp_common` service resolves through
+// update_ingest, whatever platform its "service" setting names -- so the TYPE
+// alone decides. Identified from the requested type, never from the resolved
+// URL: that resolution is exactly what we refuse to depend on.
+inline bool IsRtmpCommonService(const char *serviceType)
 {
-	if (!a || !b)
-		return false;
-	while (*a && *b) {
-		char ca = *a++, cb = *b++;
-		if (ca >= 'A' && ca <= 'Z')
-			ca = static_cast<char>(ca - 'A' + 'a');
-		if (cb >= 'A' && cb <= 'Z')
-			cb = static_cast<char>(cb - 'A' + 'a');
-		if (ca != cb)
-			return false;
-	}
-	return *a == '\0' && *b == '\0';
-}
-
-// C1 (b). An `rtmp_common` service whose "service" setting names Twitch is the
-// one that resolves through update_ingest -> twitch.c's cleartext default.
-// Identified from the SETTINGS, not from the resolved URL: the resolution is
-// exactly what we refuse to depend on.
-inline bool IsTwitchCommonService(const char *serviceType, obs_data_t *settings)
-{
-	if (!serviceType || std::strcmp(serviceType, "rtmp_common") != 0)
-		return false;
-	if (!settings)
-		return false;
-	return EqualsIgnoreCase(obs_data_get_string(settings, "service"), "Twitch");
+	return serviceType && std::strcmp(serviceType, "rtmp_common") == 0;
 }
 
 // The gate. `errOut` always carries a NAMED cause on refusal -- it is what the
@@ -127,11 +122,8 @@ inline bool ValidateStreamServiceEgress(obs_service_t *service, std::string &err
 		return false;
 	}
 
-	const char *type = obs_service_get_type(service);
-	OBSDataAutoRelease settings = obs_service_get_settings(service);
-
-	if (IsTwitchCommonService(type, settings)) {
-		errOut = kTwitchOnV5Refusal;
+	if (IsRtmpCommonService(obs_service_get_type(service))) {
+		errOut = kRtmpCommonOnV5Refusal;
 		return false;
 	}
 
