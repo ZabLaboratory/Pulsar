@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-28
+
+Minor: the release is **additive** — no `pulsar:*` request was removed or
+changed shape, no env var renamed. `GetCapabilities` grew a versioned manifest
+alongside the four fields it already answered, and `capabilitiesFromWire` keeps
+mapping a pre-`version` response unchanged.
+
+**Consumers must upgrade to read the manifest.** `@clodocapeo/pulsar-client`
+1.2.2 has no `version` / `capabilities` / `regimes` in
+`WireGetCapabilitiesResponse`, so a 1.2.2 parser silently drops the whole
+manifest off the wire even when the binary sends it: the C++ merge alone is
+**not** the delivery.
+
 ### ✨ Added
 
 - **The capability manifest declares what each encoder family offers** (#142,
