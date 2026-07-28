@@ -60,7 +60,7 @@ The notable v5 surfaces Pulsar exercises:
 | Inputs | `GetInputList`, `CreateInput`, `RemoveInput`, `SetInputSettings`, `GetInputSettings`, `GetInputKindList` |
 | Scene items | `CreateSceneItem`, `RemoveSceneItem`, `SetSceneItemTransform`, `GetSceneItemList` |
 | Stream | `StartStream`, `StopStream`, `GetStreamStatus`, `SetStreamServiceSettings` |
-| Record | `StartRecord`, `StopRecord`, `PauseRecord`, `ResumeRecord`, `GetRecordStatus` |
+| Record | `StartRecord`, `StopRecord`, `PauseRecord`, `ResumeRecord`, `GetRecordStatus`, `SplitRecordFile`, `CreateRecordChapter` (see *Recording — manual split and chapter markers*) |
 | Audio | `GetInputVolume`, `SetInputVolume`, `GetInputMute`, `SetInputMute`, `GetInputAudioSyncOffset` |
 | Filters | `GetSourceFilterList`, `CreateSourceFilter`, `RemoveSourceFilter`, `SetSourceFilterSettings` |
 | Outputs | `GetOutputList`, `GetOutputStatus`, `StartOutput`, `StopOutput`, `ToggleOutput` (by-name; multi-destination control goes through `pulsar:*`) |
@@ -646,6 +646,55 @@ reachable state, not a hypothetical one.
 There is no third regime: a Pulsar-managed browser source is either the active
 capture source, or gone. `removed_prior` in the `SetCaptureSource` response is
 how many items that swap retired.
+
+## Recording — manual split and chapter markers
+
+Until `#169` the two frontend entry points behind these requests
+(`obs_frontend_recording_split_file`, `obs_frontend_recording_add_chapter`)
+were stubbed to an unconditional `false`: the requests were registered
+and advertised, but could only ever fail. They now **delegate to the
+recording output's proc handler**, the way upstream does, and every
+refusal carries its cause.
+
+| Request | Behaviour |
+|---|---|
+| `SplitRecordFile` | Closes the current file and opens the next one, **without stopping the recording**. Success means the muxer armed the split; the switch itself lands on the next keyframe and is announced by the `RecordFileChanged` event, whose `newOutputPath` is the file now being written. |
+| `CreateRecordChapter` | **Always refused on this build**, with the cause named — see below. |
+
+**File splitting is enabled on the record output, thresholds are not.**
+`recording_start` posts `split_file: true` alongside `directory` /
+`format` / `extension`, because the muxer builds the *next* file name
+from those three keys and not from `path`. Both automatic thresholds
+(`max_time_sec`, `max_size_mb`) stay at `0`, so **nothing splits by
+itself**: the only trigger is an explicit `SplitRecordFile`. Split files
+follow the same `pulsar-<CCYY><MM><DD>-<hh><mm><ss>.mp4` template as the
+first one, in `PULSAR_RECORD_DIR`.
+
+**Chapter markers are not available.** Chapters exist only on OBS's
+hybrid-MP4 output (`mp4_output`); Pulsar records through `ffmpeg_muxer`,
+which does not expose the `add_chapter` procedure at all.
+`CreateRecordChapter` therefore fails — `RequestProcessingFailed` — with
+a `comment` **naming the output and the missing procedure**, not
+upstream's generic "verify that the output being used supports chapter
+markers". Changing the recording container to gain chapters is a
+separate decision, not a defect of this path.
+
+Both requests refuse rather than pretend, and the refusal is never mute
+(ADR Prism 026 §3.2): the frontend publishes the cause through
+`obs_output_set_last_error()` on the record output, and the request
+reads it back verbatim into its `comment`. The refusals you can meet:
+
+- no recording running — `OutputNotRunning` (the request's own guard);
+- recording paused — the split/chapter would apply to a frozen timeline;
+- the output does not expose the procedure (chapters, always; splitting,
+  never on this build);
+- file splitting disabled on the output (cannot happen while
+  `recording_start` sets it, kept as a real refusal rather than an
+  assumption).
+
+`scripts/probe-record-split.py` (offline suite) holds the contract: it
+proves the split **on disk** — two files, plus the `RecordFileChanged`
+event — and that the chapter refusal names its cause.
 
 ## Replay buffer
 

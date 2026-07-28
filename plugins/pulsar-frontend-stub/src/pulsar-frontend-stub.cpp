@@ -62,6 +62,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -154,8 +155,8 @@ public:
     }
     void obs_frontend_recording_pause(bool pause) override;
     bool obs_frontend_recording_paused(void) override { return recordingPaused.load(); }
-    bool obs_frontend_recording_split_file(void) override { return false; }
-    bool obs_frontend_recording_add_chapter(const char *) override { return false; }
+    bool obs_frontend_recording_split_file(void) override;
+    bool obs_frontend_recording_add_chapter(const char *name) override;
 
     // ---------- replay buffer ----------
     void obs_frontend_replay_buffer_start(void) override;
@@ -1659,6 +1660,24 @@ void PulsarFrontendAPI::obs_frontend_recording_start(void)
 
     OBSDataAutoRelease settings = obs_data_create();
     obs_data_set_string(settings, "path", mp4.string().c_str());
+    // Issue #169. `path` names the FIRST file only. ffmpeg_muxer's manual split
+    // (proc "split_file") is a no-op unless the `split_file` setting is on --
+    // split_file_proc reports it back through `split_file_enabled` and returns
+    // without arming anything (obs-ffmpeg-mux.c:84-93) -- and the file it
+    // switches to is built by generate_filename() from directory/format/
+    // extension, NOT from `path` (obs-ffmpeg-mux.c:574-602). An empty
+    // "directory" would root the next file at "/" and lose it, exactly the
+    // replay-buffer trap fixed at boot below.
+    //
+    // Both thresholds stay unset (max_time_sec / max_size_mb default to 0), and
+    // should_split() only ever returns true for a threshold > 0
+    // (obs-ffmpeg-mux.c:695-708): nothing splits on its own. The single trigger
+    // is an explicit SplitRecordFile.
+    obs_data_set_bool(settings, "split_file", true);
+    obs_data_set_string(settings, "directory", recordDirectory.c_str());
+    obs_data_set_string(settings, "format", "pulsar-%CCYY%MM%DD-%hh%mm%ss");
+    obs_data_set_string(settings, "extension", "mp4");
+    obs_data_set_bool(settings, "allow_spaces", false);
     // Empty muxer_settings -> ffmpeg picks defaults from extension (mp4 -> faststart on stop).
     obs_output_update(recordOutput, settings);
 
@@ -1684,6 +1703,104 @@ void PulsarFrontendAPI::obs_frontend_recording_pause(bool pause)
     if (!recordOutput || !obs_output_active(recordOutput))
         return;
     obs_output_pause(recordOutput, pause);
+}
+
+// Issue #169 / ADR Prism 028 §3.5 -- publish the cause where every consumer
+// already looks. Both entry points below return `bool` and the websocket layer
+// turns a `false` into an error; without a cause on the output that error can
+// only be generic, which ADR Prism 026 §3.2 forbids. Same idiom as the replay
+// buffer's on-air refusal: obs_output_set_last_error() + a log line, read back
+// verbatim by pulsar-websocket. Nothing has to clear it -- obs_output_actual_start()
+// wipes last_error_message on the next real start (obs-output.c:365).
+static void refuse_record_proc(obs_output_t *output, const char *what, const char *cause)
+{
+    if (output)
+        obs_output_set_last_error(output, cause);
+    blog(LOG_WARNING, "[pulsar-frontend-stub] %s refused: %s", what, cause);
+}
+
+// Issue #169. Both of these were stubbed to an unconditional `false`: the
+// SplitRecordFile / CreateRecordChapter requests were registered but could only
+// ever fail. There is no splitting logic to write here -- upstream
+// (OBSStudioAPI.cpp:261-289) delegates to the recording output's proc handler,
+// and the stub owns that output directly, so the same delegation applies as-is.
+bool PulsarFrontendAPI::obs_frontend_recording_split_file(void)
+{
+    if (!recordOutput || !obs_output_active(recordOutput)) {
+        refuse_record_proc(recordOutput, "split_file",
+            "no recording is running -- start the recording before splitting its file.");
+        return false;
+    }
+    // Upstream guards on the same pair (active && !paused): a split taken while
+    // the muxer is paused would be applied against a frozen packet timeline.
+    if (recordingPaused.load()) {
+        refuse_record_proc(recordOutput, "split_file",
+            "the recording is paused -- resume it before splitting its file.");
+        return false;
+    }
+
+    proc_handler_t *ph = obs_output_get_proc_handler(recordOutput);
+    uint8_t stack[128];
+    calldata cd;
+    calldata_init_fixed(&cd, stack, sizeof(stack));
+    if (!ph || !proc_handler_call(ph, "split_file", &cd)) {
+        char cause[320];
+        std::snprintf(cause, sizeof(cause),
+                 "the recording output (%s) does not expose the \"split_file\" procedure.",
+                 obs_output_get_id(recordOutput));
+        refuse_record_proc(recordOutput, "split_file", cause);
+        return false;
+    }
+    // The proc always answers; `split_file_enabled` is the muxer telling us
+    // whether it armed a split or ignored the call. Reading the return code
+    // alone would report a success the muxer never took.
+    if (!calldata_bool(&cd, "split_file_enabled")) {
+        refuse_record_proc(recordOutput, "split_file",
+            "file splitting is disabled on the recording output -- its \"split_file\" "
+            "setting is off, so the muxer ignored the request.");
+        return false;
+    }
+
+    blog(LOG_INFO, "[pulsar-frontend-stub] split_file armed; the muxer switches file on "
+         "the next keyframe (RecordFileChanged carries the new name)");
+    return true;
+}
+
+bool PulsarFrontendAPI::obs_frontend_recording_add_chapter(const char *name)
+{
+    if (!recordOutput || !obs_output_active(recordOutput)) {
+        refuse_record_proc(recordOutput, "add_chapter",
+            "no recording is running -- start the recording before adding a chapter.");
+        return false;
+    }
+    if (recordingPaused.load()) {
+        refuse_record_proc(recordOutput, "add_chapter",
+            "the recording is paused -- resume it before adding a chapter.");
+        return false;
+    }
+
+    proc_handler_t *ph = obs_output_get_proc_handler(recordOutput);
+    calldata_t cd = {};
+    calldata_set_string(&cd, "chapter_name", name);
+    bool called = ph && proc_handler_call(ph, "add_chapter", &cd);
+    calldata_free(&cd);
+
+    if (!called) {
+        // Not a defect of this port: chapter markers live on the hybrid-MP4
+        // output only (mp4_output.c:218 registers "add_chapter"; ffmpeg_muxer
+        // registers "split_file" alone, obs-ffmpeg-mux.c:107). Name the output
+        // that refused rather than let the client read a generic failure.
+        char cause[320];
+        std::snprintf(cause, sizeof(cause),
+                 "the recording output (%s) does not expose the \"add_chapter\" procedure "
+                 "-- chapter markers exist only on the hybrid-MP4 output (mp4_output).",
+                 obs_output_get_id(recordOutput));
+        refuse_record_proc(recordOutput, "add_chapter", cause);
+        return false;
+    }
+
+    blog(LOG_INFO, "[pulsar-frontend-stub] chapter added: %s", name ? name : "(unnamed)");
+    return true;
 }
 
 void PulsarFrontendAPI::obs_frontend_replay_buffer_start(void)

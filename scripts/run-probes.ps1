@@ -681,7 +681,14 @@ $probes = @(
     # obs_output_signal_stop ordering on ECONNREFUSED ; audit
     # ffmpeg_muxer Stop flush path ; submit fixes to obs-studio.
     'probe-adaptive.py',
-    'probe-record.py'
+    'probe-record.py',
+    # #169 / ADR Prism 028 §3.5 -- obs_frontend_recording_split_file and
+    # obs_frontend_recording_add_chapter were stubbed to `false`. Proves the
+    # split on the DISK (two files, plus the RecordFileChanged event) and that
+    # the chapter refusal names its cause instead of failing mutely. Runs after
+    # probe-record.py: it drives its own StartRecord/StopRecord cycle and leaves
+    # the instance idle.
+    'probe-record-split.py'
 )
 
 $failed = @()
