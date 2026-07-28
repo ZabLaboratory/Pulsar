@@ -833,8 +833,64 @@ RequestResult RequestHandler::GetInputAudioTracks(const Request &request)
 	return RequestResult::Success(responseData);
 }
 
+// ---------------------------------------------------------------------------
+// SetInputAudioTracks -- the oracle is the OUTPUT, not the input.
+// (Pulsar #157, ADR Prism 028 §3.2 / ADR Prism 026 §3.2.)
+//
+// obs_source_set_audio_mixers() really does write the mixer bit on the input,
+// so re-reading the input after the call always answers "enabled" -- an
+// input-side oracle would CONFIRM the lie instead of detecting it. libobs even
+// hands every fresh source `audio_mixers = 0xFF` (obs-source.c:260), so
+// GetInputAudioTracks reports all six tracks on a process whose streaming
+// output carries exactly one.
+//
+// The lie is downstream: nothing consumes a track that no output encoder is
+// bound to. The streaming output is built with a single audio encoder, at slot
+// 0 (pulsar-frontend-stub.cpp:1122-1123, borrowed as-is by
+// pulsar-multi-stream/plugin-main.cpp:270-276).
+//
+// The oracle is therefore the walk pulsar-multi-stream already publishes as
+// the `audio_tracks.bound` capability (plugin-main.cpp:958-967). That function
+// is `static` in another module; what follows is the same libobs READ, not a
+// copy of a decree -- which is what keeps this fix entirely inside the fork.
+static bool ReadOutputBoundAudioTrackMask(uint32_t &boundMask)
+{
+	OBSOutputAutoRelease output = obs_frontend_get_streaming_output();
+	if (!output)
+		return false;
+
+	boundMask = 0;
+	for (size_t i = 0; i < (size_t)MAX_AUDIO_MIXES; i++) {
+		if (obs_output_get_audio_encoder(output, i))
+			boundMask |= (1u << i);
+	}
+
+	return true;
+}
+
+// Track numbers behind a mixer mask, as a client reads them ("1, 3"). The
+// refusal must name what was read off libobs, not restate a hex mask.
+static std::string DescribeAudioTrackMask(uint32_t mask)
+{
+	std::string out;
+	for (uint32_t i = 0; i < MAX_AUDIO_MIXES; i++) {
+		if (!((mask >> i) & 1))
+			continue;
+		if (!out.empty())
+			out += ", ";
+		out += std::to_string(i + 1);
+	}
+
+	return out.empty() ? "none" : out;
+}
+
 /**
  * Sets the enable state of audio tracks of an input.
+ *
+ * Enabling a track that no encoder of the streaming output consumes is
+ * refused (`InvalidResourceState`) and applies nothing: the mixer bit would be
+ * written on the input and carry no audio anywhere. The comment names the
+ * tracks requested and the tracks actually bound, both read from libobs.
  *
  * @requestField ?inputName       | String | Name of the input
  * @requestField ?inputUuid       | String | UUID of the input
@@ -861,6 +917,7 @@ RequestResult RequestHandler::SetInputAudioTracks(const Request &request)
 	json inputAudioTracks = request.RequestData["inputAudioTracks"];
 
 	uint32_t mixers = obs_source_get_audio_mixers(input);
+	uint32_t requestedEnabled = 0;
 
 	for (uint32_t i = 0; i < MAX_AUDIO_MIXES; i++) {
 		std::string track = std::to_string(i + 1);
@@ -874,10 +931,34 @@ RequestResult RequestHandler::SetInputAudioTracks(const Request &request)
 
 		bool enabled = inputAudioTracks[track];
 
-		if (enabled)
+		if (enabled) {
 			mixers |= (1 << i);
-		else
+			requestedEnabled |= (1u << i);
+		} else {
 			mixers &= ~(1 << i);
+		}
+	}
+
+	// The effect is verifiable, so it is verified BEFORE the write (ADR Prism
+	// 026 §3.2). Only the tracks this request asks to ENABLE are judged:
+	// disabling a track is honest whatever the output carries, and a mixer bit
+	// inherited from libobs' 0xFF default is not something this call asserted.
+	//
+	// The refusal is only ever OBSERVED -- when no streaming output exists there
+	// is nothing to read and nothing is refused, rather than a guess either way.
+	// Note this closes the LIE, it does not deliver real multi-track output:
+	// binding more encoders to the output is a separate capability.
+	uint32_t boundMask = 0;
+	if (requestedEnabled && ReadOutputBoundAudioTrackMask(boundMask)) {
+		uint32_t unbacked = requestedEnabled & ~boundMask;
+		if (unbacked)
+			return RequestResult::Error(
+				RequestStatus::InvalidResourceState,
+				"Audio track(s) " + DescribeAudioTrackMask(unbacked) +
+					" carry no encoder on the streaming output, so enabling them would have no effect. Requested: " +
+					DescribeAudioTrackMask(requestedEnabled) + ". Bound to the output: " +
+					DescribeAudioTrackMask(boundMask) +
+					" (read from the streaming output's encoder slots). Nothing was changed.");
 	}
 
 	// Decided that checking if tracks have actually changed is unnecessary

@@ -655,6 +655,11 @@ $probes = @(
     # bounds are ADR 023 §3.3's, under its own clearance). Read-only probe:
     # it calls GetCapabilities and touches nothing.
     'probe-manifest-inventories.py',
+    # #157 / ADR Prism 028 §3.2 -- SetInputAudioTracks must be judged by the
+    # OUTPUT (the encoder slots actually bound), never by the input, whose
+    # mixer bit is written whatever the output carries. Creates and removes
+    # its own scene + input.
+    'probe-audio-tracks-oracle.py',
     # probe-multi-stream.py is INTENTIONALLY excluded.
     # The destination lifecycle has known race-condition crash paths
     # in obs upstream (rtmp_output worker thread vs ECONNREFUSED-fast

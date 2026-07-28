@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Fixed
+
+- **`SetInputAudioTracks` no longer reports an effect it does not have
+  (#157, ADR Prism 028 §3.2 / 026 §3.2).** Enabling a track that no encoder
+  of the streaming output consumes now fails with `InvalidResourceState`
+  (604) and applies nothing, the `comment` naming the tracks requested and
+  the tracks actually bound — both read off libobs. It used to answer
+  success while nothing carried the audio.
+
+  **Behaviour change, not a regression:** an operator who enabled track 2+
+  used to see a success and no audio; they now see an error. The oracle is
+  the output's encoder slots (the walk already published as
+  `capabilities.audio_tracks.bound`), **not** the input — `obs_source_set_audio_mixers`
+  writes the mixer bit whatever the output carries, and libobs defaults every
+  fresh source to all six tracks enabled, so an input-side check would have
+  confirmed the lie. Disabling a track still succeeds, and **real multi-track
+  output is not delivered here**: the streaming output still binds a single
+  audio encoder, at slot 0.
+
 ### 🔒 Security
 
 - **`webpage_control_level` pinned to `None` on every browser source, and a
