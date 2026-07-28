@@ -1089,6 +1089,19 @@ static const char *const kPresetPropNames[] = {"preset", "preset2", "target_usag
 static const char *const kProfilePropNames[] = {"profile"};
 static const char *const kRateControlPropNames[] = {"rate_control"};
 
+// The preset an encoder ACTUALLY carries, read under whichever of those names
+// its plugin uses. Reading only "preset" reported "" for every QSV spawn, whose
+// key is "target_usage" -- the same mismatch that made the boot setter a no-op
+// there. First non-empty wins: no encoder exposes two of these.
+static const char *applied_preset(obs_data_t *s)
+{
+    for (const char *name : kPresetPropNames) {
+        const char *v = obs_data_get_string(s, name);
+        if (v && *v) return v;
+    }
+    return "";
+}
+
 static bool iequals(const char *a, const char *b)
 {
     if (!a || !b) return false;
@@ -1116,12 +1129,12 @@ static bool policy_admits_profile(const char *v)
 }
 
 // Presets are deliberately NOT narrowed. The boot whitelist is a per-family
-// table (pulsar-frontend-stub.cpp:741) and mirroring it here would recreate
-// the very decree this block removes; it is also demonstrably wrong for QSV,
-// whose knob is "target_usage" with values TU1..TU7 -- a narrowing would
-// publish an empty set for a family that has seven presets. The manifest
-// states what the binary offers; reconciling the boot whitelist with it is
-// tracked separately.
+// table (pulsar-frontend-stub.cpp:presetsForFamily) and mirroring it here would
+// recreate the very decree this block removes. The QSV divergence that made a
+// narrowing actively wrong -- the table held speed/balanced/quality against a
+// knob whose values are TU1..TU7 -- is fixed at the source: that table now
+// holds the encoder's own seven levels, so the published list and the boot
+// whitelist agree without either one copying the other.
 static bool admits_any(const char *) { return true; }
 
 // Reads a libobs string-list property into an array of {value} items, keeping
@@ -1210,7 +1223,7 @@ void on_get_video_settings(obs_data_t * /*req*/, obs_data_t *res, void *)
         obs_data_set_int(res, "video_keyint_sec", obs_data_get_int(s, "keyint_sec"));
         // ADR 004 §3.4: complete off-air snapshot of the boot-fixed encoder.
         obs_data_set_string(res, "video_encoder", active_encoder_family(vEnc));
-        obs_data_set_string(res, "video_preset", obs_data_get_string(s, "preset"));
+        obs_data_set_string(res, "video_preset", applied_preset(s));
         obs_data_set_string(res, "video_profile", obs_data_get_string(s, "profile"));
     }
     if (aEnc) {

@@ -128,6 +128,15 @@ jobs:
       - name: License isolation source-tree audit
         run: bash scripts/check-license-isolation.sh
 
+      # Hardware-free half of the QSV preset proof: the boot setter, the
+      # GetVideoSettings reader and obs-qsv11's OWN source must agree on the
+      # property name / values / default of the QSV preset knob. Runs here,
+      # before the patch-lint step touches the submodule tree, because no
+      # patch modifies obs-qsv11 sources. The runtime half needs an Intel QSV
+      # device (scripts/probe-qsv-preset.py, partial on this fleet).
+      - name: QSV preset property contract (source consistency)
+        run: python3 scripts/check-qsv-preset-contract.py
+
       - name: Patch lint (apply against pinned upstream SHA)
         run: |
           set -e

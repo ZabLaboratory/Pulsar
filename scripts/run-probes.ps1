@@ -464,6 +464,40 @@ if ($contractCode -ne 0) {
 }
 Write-Host "==> probe-capability-contract.py OK"
 
+# --------------------------------------------------------------------
+# Phase 1i -- self-spawning PRESET ROUND-TRIP probe
+# (probe-qsv-preset.py, QSV target_usage mismatch).
+#
+# PULSAR_VIDEO_PRESET was written to the obs_data key "preset" for every
+# family; obs-qsv11 has no such key (its knob is "target_usage"), so QSV
+# spawns silently encoded at their own TU4 default, and the reader --
+# which looked only at "preset" -- reported "" for them. This probe
+# spawns with an explicit preset and asks GetVideoSettings what was
+# actually applied.
+#
+# The x264 leg (P1) runs on every machine and is the blocking one. The
+# QSV legs (P2/P3) need an Intel QSV device: without one the boot falls
+# back to x264 and the probe prints a NAMED partial and exits 0 -- it
+# asserts nothing about QSV rather than pretending. No runner in the
+# current fleet has that device; the hardware-free half of the proof is
+# scripts/check-qsv-preset-contract.py in the lint job, which pins the
+# property name / values / default against obs-qsv11's own source.
+#
+# Self-spawns its own children (fresh ephemeral port + isolated
+# PULSAR_RECORD_DIR) for the same config.json-reseed reason as the other
+# Phase-1 probes.
+# --------------------------------------------------------------------
+$presetProbe = Join-Path $repoRoot "scripts/probe-qsv-preset.py"
+Write-Host "==> Running probe-qsv-preset.py (self-spawn preset round-trip)"
+& python $presetProbe --exe $pulsar
+$presetCode = $LASTEXITCODE
+if ($presetCode -ne 0) {
+    Write-Host "==> probe-qsv-preset.py FAILED (exit $presetCode)"
+    Write-Host "==> The preset asked for at boot is not the preset the encoder carries -- aborting before the shared suite."
+    exit 1
+}
+Write-Host "==> probe-qsv-preset.py OK"
+
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
 # Port 0 -> bind a random free port so back-to-back ctest runs don't

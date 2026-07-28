@@ -731,11 +731,23 @@ const char *encoderFamilyForId(const char *id)
     return "x264";
 }
 
-// Per-family whitelisted preset set + default. An env preset outside the set is
-// normalised to the default (logged), never passed raw to create (ADR R5).
+// Per-family whitelisted preset set + default + the libobs PROPERTY NAME that
+// family spells the knob with. An env preset outside the set is normalised to
+// the default (logged), never passed raw to create (ADR R5).
+//
+// The property name is NOT uniformly "preset": obs-qsv11 registers no "preset"
+// key at all -- its knob is "target_usage"
+// (upstream/plugins/obs-qsv11/obs-qsv11.c:390), values TU1..TU7
+// (QSV_Encoder.h:89), default TU4 (obs-qsv11.c:165). Writing "preset" for a QSV
+// spawn was a silent no-op: every QSV encoder ran at its own TU4 default
+// whatever PULSAR_VIDEO_PRESET said. The QSV set below is the encoder's own
+// seven levels, so it is exactly what capabilities.encoder_families publishes
+// from that same property list (#148) -- the boot whitelist and the manifest
+// cannot disagree.
 struct PresetSet {
     const char *const *values;
     const char *dflt;
+    const char *prop;
 };
 
 PresetSet presetsForFamily(const std::string &family)
@@ -743,20 +755,14 @@ PresetSet presetsForFamily(const std::string &family)
     static const char *const kX264[]  = {"ultrafast", "superfast", "veryfast", "faster", "fast",
                                          "medium", "slow", "slower", "veryslow", nullptr};
     static const char *const kNvenc[] = {"p1", "p2", "p3", "p4", "p5", "p6", "p7", nullptr};
-    static const char *const kQsv[]   = {"speed", "balanced", "quality", nullptr};
+    // Named apart from the kQsv encoder-ID list above: these are preset values.
+    static const char *const kQsvPresets[] = {"TU1", "TU2", "TU3", "TU4",
+                                              "TU5", "TU6", "TU7", nullptr};
     static const char *const kAmf[]   = {"speed", "balanced", "quality", nullptr};
-    if (family == "nvenc") return {kNvenc, "p5"};
-    if (family == "qsv")   return {kQsv, "balanced"};
-    if (family == "amf")   return {kAmf, "balanced"};
-    return {kX264, "veryfast"};
-}
-
-bool valueInSet(const char *const *set, const std::string &v)
-{
-    for (size_t i = 0; set[i]; ++i)
-        if (v == set[i])
-            return true;
-    return false;
+    if (family == "nvenc") return {kNvenc, "p5", "preset"};
+    if (family == "qsv")   return {kQsvPresets, "TU4", "target_usage"};
+    if (family == "amf")   return {kAmf, "balanced", "preset"};
+    return {kX264, "veryfast", "preset"};
 }
 
 std::string toLower(const char *s)
@@ -773,6 +779,20 @@ std::string toUpper(const char *s)
     std::transform(out.begin(), out.end(), out.begin(),
                    [](unsigned char c) { return (char)std::toupper(c); });
     return out;
+}
+
+// Case-insensitive membership returning the SET's OWN spelling. libobs compares
+// these values case-insensitively, but the value we write is also the value
+// GetVideoSettings reports and the manifest advertises (QSV spells them
+// "TU1".."TU7"), so a lowercased echo of the env var would read back as a value
+// the published set does not contain. nullptr = not a member.
+const char *canonicalInSet(const char *const *set, const char *v)
+{
+    const std::string needle = toLower(v);
+    for (size_t i = 0; set[i]; ++i)
+        if (needle == toLower(set[i]))
+            return set[i];
+    return nullptr;
 }
 
 // Today's exact x264 parameter set (ADR RC2 / §3.2(3) byte-for-byte fallback).
@@ -999,8 +1019,7 @@ bool PulsarFrontendAPI::setup()
         PresetSet presets = presetsForFamily(reportFamily);
         std::string preset = presets.dflt;
         if (const char *e = std::getenv("PULSAR_VIDEO_PRESET"); e && *e) {
-            std::string p = toLower(e);
-            if (valueInSet(presets.values, p)) preset = p;
+            if (const char *canonical = canonicalInSet(presets.values, e)) preset = canonical;
             else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_VIDEO_PRESET=%s unknown "
                       "for encoder '%s'; using default '%s'", e, reportFamily, presets.dflt);
         }
@@ -1008,7 +1027,7 @@ bool PulsarFrontendAPI::setup()
         obs_data_set_int(vEncSettings, "bitrate", videoBitrate);
         obs_data_set_string(vEncSettings, "rate_control", rateControl.c_str());
         obs_data_set_int(vEncSettings, "keyint_sec", keyintSec);
-        obs_data_set_string(vEncSettings, "preset", preset.c_str());
+        obs_data_set_string(vEncSettings, presets.prop, preset.c_str());
         obs_data_set_string(vEncSettings, "profile", profile.c_str());
         if (std::strcmp(encoderId, "obs_x264") == 0)
             obs_data_set_string(vEncSettings, "tune", "zerolatency"); // x264-only knob
