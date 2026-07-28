@@ -15,9 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handed it `window.obsstudio` at the fork's default level (`ReadObs`) — enough
   for a partner overlay, a sponsor widget or any third-party page to read this
   process's streaming / recording / replay-buffer / virtual-cam status. The
-  level is now pinned explicitly at both creation paths
-  (`pulsar-scene:SetCaptureSource` and the v5 `CreateInput`), the v5 pin
-  **overrides** an explicit request rather than honouring it, and
+  level is now pinned explicitly on every path that can hand obs-browser a
+  settings object — `pulsar-scene:SetCaptureSource`, the v5 `CreateInput`, and
+  the v5 `SetInputSettings` (both `overlay` branches: pinning only at creation
+  would be self-cancelling, since that request re-writes the same key on a live
+  source and `overlay=false` clears the settings first). The v5 pin
+  **overrides** an explicit request rather than honouring it — the vector is a
+  settings blob nobody chose (an imported scene collection, an overlay template
+  copied from an OBS profile), not a hostile client. And
   `DEFAULT_CONTROL_LEVEL` is `None` so a collection loaded from disk inherits
   the same floor. Second half, same surface: `SetCaptureSource` now sweeps the
   Pulsar-managed capture items out of **every** scene, not just the current

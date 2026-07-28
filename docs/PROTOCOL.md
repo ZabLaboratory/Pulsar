@@ -507,13 +507,27 @@ Pulsar loads third-party pages by design — partner overlays, sponsor widgets,
 Solar compositions built from authored scenes. So:
 
 - **`webpage_control_level` is pinned to `0` (`ControlLevel::None`) on every
-  creation path**, explicitly, never inherited:
+  path that can hand obs-browser a settings object**, explicitly, never
+  inherited:
   - `pulsar-scene:SetCaptureSource` (`pulsar-scene-source/src/plugin-main.cpp`),
-  - the v5 `CreateInput` request (`pulsar-websocket`, `Obs_ActionHelper.cpp`).
-- On the v5 path the pin **overrides the request**. A `CreateInput` carrying
+  - the v5 `CreateInput` request (`pulsar-websocket`, `Obs_ActionHelper.cpp`),
+  - the v5 `SetInputSettings` request, **both** `overlay=true`
+    (`obs_source_update`) and `overlay=false` (`obs_source_reset_settings`).
+    Creation is not the whole surface: this request re-writes the very key the
+    creation pin set, on a source that is already live, and the `overlay=false`
+    branch clears the user settings before applying. Pinning only at creation
+    would be self-cancelling.
+- All three go through one function,
+  `Utils::Obs::ActionHelper::PinBrowserControlLevel` — one policy, one
+  implementation.
+- On the v5 paths the pin **overrides the request**. A request carrying
   `webpage_control_level` is logged and pinned back to `None` anyway. Nothing
   in Zab reads `window.obsstudio`, so there is no named need to honour; raising
   the level for one would be a reviewed code change here, not a wire field.
+  The threat this answers is not a hostile client — a client on that socket
+  already starts streams — but a **settings blob nobody chose**: a scene
+  collection imported into Prism, an overlay template copied from an OBS
+  profile. That blob reaches `SetInputSettings` as easily as `CreateInput`.
 - `DEFAULT_CONTROL_LEVEL` in `pulsar-browser` is `ControlLevel::None` too. That
   default is a **floor**, not the mechanism: it covers the one case with no
   creation call at all — a scene collection loaded from disk whose stored
@@ -523,7 +537,8 @@ Solar compositions built from authored scenes. So:
   never fires. Every other `window.obsstudio` getter answers `null`.
 
 Gates: `scripts/check-webpage-control-level.py` (lint job — fails on any
-creation path that does not pin) and `scripts/probe-webpage-control-level.py`
+creation *or* settings-update path that does not pin) and
+`scripts/probe-webpage-control-level.py`
 (offline probe suite — asserts, from inside a real CEF page, that the level is
 `None` and that `getStatus` / `getCurrentScene` / `getScenes` return nothing).
 

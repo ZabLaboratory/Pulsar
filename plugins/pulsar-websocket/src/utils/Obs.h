@@ -290,6 +290,17 @@ namespace Utils {
 			CreateSourceFilter(obs_source_t *source, std::string filterName, std::string filterKind,
 					   obs_data_t *filterSettings); // Increments source ref. Use OBSSourceAutoRelease
 			void SetSourceFilterIndex(obs_source_t *source, obs_source_t *filter, size_t index);
+
+			// #158 / ADR Prism 028 §3.2 -- force `webpage_control_level` to
+			// ControlLevel::None on a `browser_source` settings object, whatever
+			// the caller asked for. No-op for any other kind. `settings` is
+			// mutated in place and must be owned by the caller.
+			//
+			// One policy, one implementation: every v5 path that can hand
+			// obs-browser a settings object goes through here -- CreateInput and
+			// SetInputSettings alike. Splitting them is how the two drifted apart
+			// in the first place (Bastion, PR #161).
+			void PinBrowserControlLevel(obs_data_t *settings, const char *inputKind, const char *context);
 		}
 
 		// Post-action verification for the four output families -- replay

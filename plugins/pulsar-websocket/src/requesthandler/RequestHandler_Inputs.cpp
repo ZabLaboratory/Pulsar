@@ -365,6 +365,25 @@ RequestResult RequestHandler::SetInputSettings(const Request &request)
 		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
 					    "An internal data conversion operation failed. Please report this!");
 
+	// SECURITY (#158 / ADR Prism 028 §3.2 ; Bastion on PR #161). CreateInput
+	// pins `webpage_control_level` to None and OVERRIDES an explicit value on
+	// the wire. This request updates the very same settings on an already-live
+	// source, so leaving it un-pinned would make the policy self-cancelling: a
+	// page created sandboxed could be handed `getStatus` / `getScenes` /
+	// program-scene control one request later, for free.
+	//
+	// The vector is the same one the creation override answers -- a settings
+	// blob carrying a level nobody chose (an imported scene collection, an
+	// overlay template copied from an OBS profile), not a hostile client. That
+	// blob reaches HERE just as easily. One policy, one implementation:
+	// PinBrowserControlLevel is the same call CreateInput makes.
+	//
+	// Placed before BOTH branches on purpose. `overlay=false` goes through
+	// obs_source_reset_settings, which clears the user settings first -- an
+	// unpinned reset would drop the pinned key and let the source fall back to
+	// obs-browser's default. Pinning the incoming object covers both.
+	Utils::Obs::ActionHelper::PinBrowserControlLevel(newSettings, obs_source_get_id(input), "SetInputSettings");
+
 	if (overlay)
 		// Applies the new settings on top of the existing user settings
 		obs_source_update(input, newSettings);

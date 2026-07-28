@@ -27,6 +27,12 @@ B. The same request ASKING for level 5 (`All`): still pinned to 0. The pin
    OBS control by whoever creates it.
 C. `pulsar-scene:SetCaptureSource` — the path Prism actually uses to arm the
    antenna: still 0.
+F. `SetInputSettings` on an ALREADY-LIVE source, asking for level 5, through
+   BOTH branches — `overlay=true` (`obs_source_update`) and `overlay=false`
+   (`obs_source_reset_settings`, which clears the user settings first and would
+   otherwise drop the pin). Still 0. Pinning only at creation would be
+   self-cancelling: a page created sandboxed could be handed OBS control one
+   request later (Bastion on PR #161).
 D. LIFECYCLE (D2 of the report, resolved here, not separately):
    D1. A browser source KEEPS its JS state across a program-scene change — the
        page keeps beating while it is the active capture source. That is
@@ -551,6 +557,70 @@ async def run(url: str, password: str, server: LocalPageServer, store: PageStore
 
             await request(inbox, ws, "RemoveInput", f"ri-{page_id}",
                           {"inputName": input_name})
+
+        # ---- F : SetInputSettings on an ALREADY-LIVE source ---------------
+        # Bastion on PR #161: pinning only at creation is self-cancelling. This
+        # request re-writes the very key the creation pin set, on a source that
+        # is already loaded and already sandboxed. Both branches are exercised
+        # because they differ: `overlay=true` -> obs_source_update, merged onto
+        # the existing settings; `overlay=false` -> obs_source_reset_settings,
+        # which CLEARS the user settings first and would drop the pin.
+        f_input = "probe-wcl-f"
+        print("\n-> F: CreateInput, then SetInputSettings asking for level "
+              f"{CONTROL_LEVEL_ALL} on the live source")
+        r = await request(inbox, ws, "CreateInput", "ci-F1", {
+            "sceneName": base_scene,
+            "inputName": f_input,
+            "inputKind": INPUT_KIND,
+            "inputSettings": {
+                "url": server.url_for("F1"), "is_local_file": False,
+                "width": CANVAS_W, "height": CANVAS_H,
+                "fps_custom": True, "fps": 15,
+                "shutdown": False, "restart_when_active": False,
+                "reroute_audio": False,
+            },
+            "sceneItemEnabled": True,
+        })
+        if not r["requestStatus"]["result"]:
+            print(f"error: CreateInput(F1) declined: {r['requestStatus']}")
+            return 1
+        if await await_report(store, "F1", REPORT_DEADLINE_S) is None:
+            failures.append("F1: the freshly created page never reported — no verdict on F.")
+
+        for label, page_id, overlay in (
+            ("F2 (SetInputSettings overlay=true, obs_source_update)", "F2", True),
+            ("F3 (SetInputSettings overlay=false, obs_source_reset_settings)", "F3", False),
+        ):
+            r = await request(inbox, ws, "SetInputSettings", f"sis-{page_id}", {
+                "inputName": f_input,
+                "overlay": overlay,
+                "inputSettings": {
+                    "url": server.url_for(page_id), "is_local_file": False,
+                    "width": CANVAS_W, "height": CANVAS_H,
+                    "fps_custom": True, "fps": 15,
+                    "shutdown": False, "restart_when_active": False,
+                    "reroute_audio": False,
+                    # The escalation attempt this leg exists to defeat.
+                    "webpage_control_level": CONTROL_LEVEL_ALL,
+                },
+            })
+            if not r["requestStatus"]["result"]:
+                print(f"error: SetInputSettings({page_id}) declined: {r['requestStatus']}")
+                return 1
+            rep = await await_report(store, page_id, REPORT_DEADLINE_S)
+            if rep is None:
+                failures.append(
+                    f"{label}: the page never reported back after the settings "
+                    f"update within {REPORT_DEADLINE_S:.0f}s — no verdict."
+                )
+                continue
+            print(f"   page report: {json.dumps(rep.get('calls', {}), sort_keys=True)}")
+            problems = judge_report(label, rep)
+            failures += problems
+            if not problems:
+                print(f"   {label}: still sandboxed after the update")
+
+        await request(inbox, ws, "RemoveInput", "ri-F", {"inputName": f_input})
 
         # ---- C + D : the pulsar-scene:SetCaptureSource path ---------------
         print("\n-> C (pulsar-scene:SetCaptureSource)")
