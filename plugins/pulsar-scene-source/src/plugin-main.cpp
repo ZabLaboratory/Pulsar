@@ -6,13 +6,19 @@
 // pulsar-frontend-stub at boot) to a `browser_source` pointed at a
 // scene-server URL.
 //
-// The plumbing is intentionally surgical : the plugin walks the current
-// frontend scene, removes any previously-installed Pulsar-managed
-// capture items (PulsarCapture, PulsarSceneSource), and adds the new
-// one. The frontend-stub-built window_capture stays referenced by the
-// frontend until it is removed from every scene that references it ;
-// after that libobs's internal refcount drops to zero and the source
-// is freed.
+// The plumbing is intentionally surgical : the plugin walks EVERY scene
+// libobs knows, removes any previously-installed Pulsar-managed capture
+// items (PulsarCapture, PulsarSceneSource), and adds the new one to the
+// current frontend scene. The frontend-stub-built window_capture stays
+// referenced by the frontend until it is removed from every scene that
+// references it ; after that libobs's internal refcount drops to zero
+// and the source is freed.
+//
+// Browser sources created here are pinned to webpage_control_level=None
+// and are destroyed — never parked — on every swap (#158 / ADR Prism
+// 028 §3.2). docs/PROTOCOL.md, "Browser sources — control level and
+// lifecycle", is the normative statement ; the two blocks below are its
+// implementation.
 //
 // Threading : obs-websocket dispatches handler calls on a worker
 // thread. Source / scene mutations through libobs's public API are
@@ -62,6 +68,22 @@ constexpr const char *kCaptureSourceName    = "PulsarSceneSource";
 constexpr const char *kFrontendStubName     = "PulsarCapture";
 
 obs_websocket_vendor g_vendor = nullptr;
+
+// obs-browser's `webpage_control_level` (ControlLevel::None == 0, see
+// plugins/pulsar-browser/obs-browser-source.hpp). Duplicated as a literal
+// rather than included : pulling obs-browser-source.hpp in would drag the CEF
+// headers into a plugin that has no business linking CEF. The value is pinned
+// by scripts/check-webpage-control-level.py, which reads BOTH this constant and
+// the enum it mirrors and fails the lint job if they ever drift apart.
+//
+// SECURITY (#158 / ADR Prism 028 §3.2) : the URL handed to SetCaptureSource is
+// arbitrary third-party content (partner overlay, sponsor widget, an authored
+// Solar composition). At any level above None the page can read this process's
+// OBS state through `window.obsstudio` -- streaming / recording status at
+// ReadObs, the scene list at ReadUser, and it can DRIVE the program scene at
+// Advanced. Nothing in Zab reads `window.obsstudio`, so nothing needs more
+// than None ; pin it here rather than inherit whatever the fork defaults to.
+constexpr int kWebpageControlLevelNone = 0;
 
 struct ActiveSnapshot {
     std::string kind;            // "browser_source" once set, otherwise empty
@@ -150,6 +172,39 @@ int remove_managed_items(obs_scene_t *scene)
     return ctx.removed;
 }
 
+// Same sweep, over EVERY scene libobs knows -- not just the current frontend
+// one.
+//
+// #158 / D2 (lifecycle). The single-scene sweep left a real hole: a managed
+// browser source stranded on a scene the operator has since left kept its CEF
+// browser and its JS state alive indefinitely, because the sweep never visited
+// that scene and nothing else dropped the reference. A third-party page could
+// therefore outlive the capture-source swap that was supposed to retire it,
+// invisible to the program mix and to GetCaptureSource alike. Scenes other
+// than the boot one are reachable over the v5 wire (Scenes/CreateScene), so
+// this is not a theoretical arrangement.
+//
+// obs_frontend_get_scenes enumerates libobs itself (pulsar-frontend-stub, #119
+// -- no mirror), so every scene that exists is visited, including ones created
+// after boot. The per-scene sweep is idempotent and the retire-rename it does
+// is what frees the canonical name synchronously (see above), so visiting the
+// current scene as part of the list is exactly equivalent to visiting it alone.
+int remove_managed_items_everywhere()
+{
+    struct obs_frontend_source_list scenes = {};
+    obs_frontend_get_scenes(&scenes);
+
+    int removed = 0;
+    for (size_t i = 0; i < scenes.sources.num; i++) {
+        obs_scene_t *s = obs_scene_from_source(scenes.sources.array[i]);
+        if (s)
+            removed += remove_managed_items(s);
+    }
+
+    obs_frontend_source_list_free(&scenes);
+    return removed;
+}
+
 void on_set_capture_source(obs_data_t *req, obs_data_t *res, void *)
 {
     const char *kind = obs_data_get_string(req, "kind");
@@ -185,8 +240,25 @@ void on_set_capture_source(obs_data_t *req, obs_data_t *res, void *)
     obs_data_set_int   (settings, "fps",                static_cast<int>(fps));
     obs_data_set_bool  (settings, "fps_custom",         true);
     obs_data_set_bool  (settings, "reroute_audio",      reroute_audio);
+    // LIFECYCLE (#158 / D2). `shutdown=false` + `restart_when_active=false` are
+    // deliberate and are NOT the security knob :
+    //   - Pulsar is scene-agnostic (single-live invariant) : a program-scene
+    //     change composes INSIDE the page, it does not swap the browser source.
+    //     Tearing CEF down whenever the item is not "visible" would blank the
+    //     antenna on every cut, so the source is KEPT ALIVE, with its JS state,
+    //     for as long as it IS the active capture source.
+    //   - What bounds a third-party page's lifetime is not visibility, it is
+    //     remove_managed_items_everywhere() below : the moment a capture source
+    //     is replaced, the outgoing one is dropped from EVERY scene, its
+    //     refcount reaches zero and libobs frees it -- CEF browser and JS state
+    //     with it. A page never survives a swap and is never parked, still
+    //     running, on a scene the operator has left.
+    // Written up in docs/PROTOCOL.md, "Browser sources -- control level and
+    // lifecycle".
     obs_data_set_bool  (settings, "shutdown",           false);
     obs_data_set_bool  (settings, "restart_when_active", false);
+    // Pin the page's reach into OBS explicitly -- see kWebpageControlLevelNone.
+    obs_data_set_int   (settings, "webpage_control_level", kWebpageControlLevelNone);
     if (css && *css) obs_data_set_string(settings, "css", css);
 
     // Create the source. Caller of obs_source_create owns one ref ; we
@@ -214,13 +286,15 @@ void on_set_capture_source(obs_data_t *req, obs_data_t *res, void *)
         return;
     }
 
-    // Drop any prior managed items FIRST. While the old source still owns
+    // Drop any prior managed items FIRST, on EVERY scene (#158 / D2 — a
+    // stranded browser source on a scene we no longer show is a third-party
+    // page still running in this process). While the old source still owns
     // the canonical name, obs_source_create above may have been de-duped to
     // "PulsarSceneSource 2" (#110). remove_managed_items renames every
     // outgoing managed source out of the canonical name SYNCHRONOUSLY (see
     // its comment), so the canonical name is guaranteed free once it returns
     // — no dependency on libobs's deferred source destruction.
-    int removed = remove_managed_items(scene);
+    int removed = remove_managed_items_everywhere();
 
     // Reclaim the canonical name now that it is free, so the fresh source is
     // always "PulsarSceneSource" — never a numbered variant a name-based

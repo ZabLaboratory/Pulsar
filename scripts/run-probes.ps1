@@ -197,6 +197,46 @@ if ($browserCode -eq 3) {
 }
 
 # --------------------------------------------------------------------
+# Phase 1c-bis -- self-spawning WEBPAGE CONTROL LEVEL + browser-source
+# LIFECYCLE probe (probe-webpage-control-level.py, #158 / ADR Prism 028
+# §3.2).
+#
+# M3 above proves a page RENDERS. This one asks what that page can DO, from
+# inside the page: it serves a local page that calls window.obsstudio and
+# reports what came back, then drives a browser source at it through BOTH
+# creation paths (v5 CreateInput and pulsar-scene:SetCaptureSource) and
+# demands the page see webpage_control_level=None and get nothing from
+# getStatus / getCurrentScene / getScenes. A CreateInput request that ASKS
+# for level All must still land on None -- the pin overrides the wire.
+#
+# It also settles the lifecycle (D2 of the same issue), in both directions:
+# the active capture page KEEPS its JS state across a program-scene change
+# (tearing CEF down on a cut would blank the antenna), and a page left on a
+# scene the operator has since left DIES when the capture source is swapped
+# -- the regression test for the sweep that used to visit only the current
+# frontend scene.
+#
+# Skip-aware for the same reason as M3: no CEF on a light build -> exit 3.
+# The SOURCE half of the guarantee is gated build-free in the lint job
+# (scripts/check-webpage-control-level.py), so a light build still fails on
+# an unpinned creation path. ~70 s wall clock (two report deadlines + the
+# retire grace window).
+# --------------------------------------------------------------------
+$wclProbe = Join-Path $repoRoot "scripts/probe-webpage-control-level.py"
+Write-Host "==> Running probe-webpage-control-level.py (self-spawn control level + lifecycle, #158)"
+& python $wclProbe --exe $pulsar
+$wclCode = $LASTEXITCODE
+if ($wclCode -eq 3) {
+    Write-Host "==> probe-webpage-control-level.py SKIPPED (light build -- browser_source absent, no CEF)"
+} elseif ($wclCode -ne 0) {
+    Write-Host "==> probe-webpage-control-level.py FAILED (exit $wclCode)"
+    Write-Host "==> A third-party page can reach OBS state, or a retired page is still running -- aborting before the shared suite."
+    exit 1
+} else {
+    Write-Host "==> probe-webpage-control-level.py OK"
+}
+
+# --------------------------------------------------------------------
 # Phase 1d -- self-spawning FLAG-AWARE stinger smoke (probe-stinger-
 # smoke.py, M10 #79 / pivot).
 #

@@ -66,9 +66,52 @@ obs_sceneitem_t *Utils::Obs::ActionHelper::CreateSceneItem(obs_source_t *source,
 	return data.sceneItem;
 }
 
+// obs-browser's `webpage_control_level`, ControlLevel::None == 0
+// (plugins/pulsar-browser/obs-browser-source.hpp). Duplicated as a literal so
+// this translation unit does not have to link CEF ;
+// scripts/check-webpage-control-level.py cross-checks the two and fails the
+// lint job on drift.
+static constexpr const char *kBrowserSourceKind = "browser_source";
+static constexpr int kWebpageControlLevelNone = 0;
+
 obs_sceneitem_t *Utils::Obs::ActionHelper::CreateInput(std::string inputName, std::string inputKind, obs_data_t *inputSettings,
 						       obs_scene_t *scene, bool sceneItemEnabled)
 {
+	// SECURITY (#158 / ADR Prism 028 §3.2) -- the v5 CreateInput surface is the
+	// OTHER way a browser source enters this process, and it takes its settings
+	// verbatim from the caller. Left alone, a `browser_source` created without a
+	// `webpage_control_level` key inherits obs-browser's default, i.e. a level
+	// chosen by the fork rather than by us : the page then reads this process's
+	// streaming / recording state through `window.obsstudio`.
+	//
+	// Pin it, on this single choke point (every v5 input creation goes through
+	// here), and pin it HARD : an explicit value in the request is overridden,
+	// not honoured. Zab has no overlay that reads `window.obsstudio`, so a
+	// request asking for more is either a mistake or an escalation attempt, and
+	// granting one on demand would be a new capability -- which #158 forbids.
+	// Raising the level for a NAMED need is a code change here, reviewed, not a
+	// field in a wire request.
+	// `inputSettings` belongs to the caller (RequestHandler::CreateInput builds
+	// it fresh from the request and drops it right after), so pinning in place
+	// is safe -- and it is the only form that also covers the request that sent
+	// no settings object at all.
+	OBSDataAutoRelease ownedSettings = nullptr;
+	if (inputKind == kBrowserSourceKind) {
+		if (!inputSettings) {
+			ownedSettings = obs_data_create();
+			inputSettings = ownedSettings;
+		}
+		if (obs_data_has_user_value(inputSettings, "webpage_control_level")) {
+			long long asked = obs_data_get_int(inputSettings, "webpage_control_level");
+			if (asked != kWebpageControlLevelNone)
+				blog(LOG_WARNING,
+				     "[pulsar-websocket] CreateInput('%s') asked for webpage_control_level=%lld ; "
+				     "pinned to %d (None) -- #158, no page in Zab reads window.obsstudio",
+				     inputName.c_str(), asked, kWebpageControlLevelNone);
+		}
+		obs_data_set_int(inputSettings, "webpage_control_level", kWebpageControlLevelNone);
+	}
+
 	// Create the input
 	OBSSourceAutoRelease input = obs_source_create(inputKind.c_str(), inputName.c_str(), inputSettings, nullptr);
 

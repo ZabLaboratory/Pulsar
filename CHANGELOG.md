@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔒 Security
+
+- **`webpage_control_level` pinned to `None` on every browser source, and a
+  retired page is now really destroyed (#158, ADR Prism 028 §3.2).** A page
+  loaded in a browser source runs inside the broadcast process, and obs-browser
+  handed it `window.obsstudio` at the fork's default level (`ReadObs`) — enough
+  for a partner overlay, a sponsor widget or any third-party page to read this
+  process's streaming / recording / replay-buffer / virtual-cam status. The
+  level is now pinned explicitly at both creation paths
+  (`pulsar-scene:SetCaptureSource` and the v5 `CreateInput`), the v5 pin
+  **overrides** an explicit request rather than honouring it, and
+  `DEFAULT_CONTROL_LEVEL` is `None` so a collection loaded from disk inherits
+  the same floor. Second half, same surface: `SetCaptureSource` now sweeps the
+  Pulsar-managed capture items out of **every** scene, not just the current
+  frontend one — a browser source stranded on a scene the operator had left
+  used to keep its CEF browser, its JS state and its network access alive for
+  the rest of the session. Behaviour for the operator is unchanged: nothing in
+  Zab reads `window.obsstudio`, and the active capture source still keeps its
+  JS state across a program-scene change (`shutdown = false`), because Pulsar
+  composes cuts inside the page. Written up in `docs/PROTOCOL.md`, *Browser
+  sources — control level and lifecycle*; gated by
+  `scripts/check-webpage-control-level.py` (lint) and
+  `scripts/probe-webpage-control-level.py` (offline probe suite).
+
 ## [1.4.0] - 2026-07-28
 
 Minor: no `pulsar:*` request changed shape and no env var was renamed, but the
