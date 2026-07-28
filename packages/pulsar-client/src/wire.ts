@@ -8,6 +8,7 @@
 import type {
   AdaptiveState,
   BitrateAdjustedEvent,
+  CapabilityRegime,
   CreateDestinationInput,
   Destination,
   DestinationKind,
@@ -87,11 +88,24 @@ export interface WireValueItem<T> {
   value: T;
 }
 
+// ADR 027 §3.2 (#141): every manifest entry declares its application regime
+// next to its values. Unknown entries and unknown regimes are tolerated -- the
+// manifest is additive by contract, so a client older than the server must not
+// choke on a block it has never heard of.
+export interface WireCapabilityEntry {
+  applicability?: string;
+  [k: string]: unknown;
+}
+
 export interface WireGetCapabilitiesResponse {
+  /** Manifest schema version. Absent on a pre-#141 Pulsar. */
+  version?: number;
   encoders?: WireValueItem<string>[];
   active_encoder?: string;
   video_bitrate?: { min?: number; max?: number };
   audio_bitrate?: WireValueItem<number>[];
+  /** Regime-carrying map, keyed by capability name. Absent on a pre-#141 Pulsar. */
+  capabilities?: Record<string, WireCapabilityEntry | undefined>;
   error?: string;
 }
 
@@ -173,8 +187,35 @@ export function videoSettingsFromWire(w: WireGetVideoSettingsResponse): VideoSet
   };
 }
 
+const CAPABILITY_REGIMES: readonly CapabilityRegime[] = ["live", "boot-fixed", "read-only"];
+
+/** A regime string the server sent that this client does not know is dropped,
+ *  never coerced into one of the three we do know. */
+function regimeOf(
+  w: WireGetCapabilitiesResponse,
+  key: string,
+): CapabilityRegime | undefined {
+  const a = w.capabilities?.[key]?.applicability;
+  return CAPABILITY_REGIMES.includes(a as CapabilityRegime) ? (a as CapabilityRegime) : undefined;
+}
+
 export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapabilities {
+  // Regimes are only populated for entries the manifest actually declares. A
+  // pre-#141 Pulsar sends no `capabilities` block at all: every regime is then
+  // `undefined` and the consumer keeps its own static assumption -- an absent
+  // block leaves the static bound intact (ADR 027 §3.3).
+  const regimes: PulsarCapabilities["regimes"] = {};
+  const encodersRegime = regimeOf(w, "encoders");
+  if (encodersRegime) regimes.encoders = encodersRegime;
+  const activeRegime = regimeOf(w, "active_encoder");
+  if (activeRegime) regimes.activeEncoder = activeRegime;
+  const videoRegime = regimeOf(w, "video_bitrate");
+  if (videoRegime) regimes.videoBitrateKbps = videoRegime;
+  const audioRegime = regimeOf(w, "audio_bitrate");
+  if (audioRegime) regimes.audioBitrateKbps = audioRegime;
+
   return {
+    version: w.version ?? 0,
     encoders: (w.encoders ?? []).map((e) => e.value),
     activeEncoder: w.active_encoder ?? "",
     videoBitrateKbps: {
@@ -182,6 +223,7 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
       max: w.video_bitrate?.max ?? 0,
     },
     audioBitrateKbps: (w.audio_bitrate ?? []).map((e) => e.value),
+    regimes,
   };
 }
 

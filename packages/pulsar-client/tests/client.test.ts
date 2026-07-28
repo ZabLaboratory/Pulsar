@@ -129,11 +129,111 @@ describe("PulsarClient", () => {
     it("get unwraps the wire {value} lists into flat typed arrays", async () => {
       const caps = await client.capabilities.get();
       expect(caps).toEqual({
+        version: 1,
         encoders: ["x264", "nvenc"],
         activeEncoder: "x264",
         videoBitrateKbps: { min: 200, max: 50000 },
         audioBitrateKbps: [64, 96, 128, 160, 192, 224, 256, 320],
+        regimes: {
+          encoders: "boot-fixed",
+          activeEncoder: "boot-fixed",
+          videoBitrateKbps: "live",
+          audioBitrateKbps: "live",
+        },
       });
+    });
+
+    // ---- ADR 027 §3.2 / issue #141: manifest shape ------------------------
+
+    it("carries a version and a regime for every declared entry", async () => {
+      const caps = await client.capabilities.get();
+      expect(caps.version).toBeGreaterThanOrEqual(1);
+      for (const regime of Object.values(caps.regimes)) {
+        expect(["live", "boot-fixed", "read-only"]).toContain(regime);
+      }
+      // The four entries Pulsar declares today all carry one.
+      expect(Object.keys(caps.regimes).sort()).toEqual([
+        "activeEncoder",
+        "audioBitrateKbps",
+        "encoders",
+        "videoBitrateKbps",
+      ]);
+    });
+
+    it("ignores an unknown block and an unknown entry without erroring", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 99,
+              encoders: [{ value: "x264" }],
+              active_encoder: "x264",
+              video_bitrate: { min: 200, max: 50000 },
+              audio_bitrate: [{ value: 128 }],
+              capabilities: {
+                video_bitrate: { applicability: "live", min: 200, max: 50000 },
+                // a block this client version has never heard of
+                colorimetry: { applicability: "read-only", spaces: [{ value: "sRGB" }] },
+              },
+              // a top-level block this client version has never heard of
+              inventories: { filters: [{ value: "color_filter_v2" }] },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.version).toBe(99);
+      expect(caps.regimes.videoBitrateKbps).toBe("live");
+      expect(caps.encoders).toEqual(["x264"]);
+    });
+
+    it("stays backward compatible with a pre-#141 payload (no version, no regimes)", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              encoders: [{ value: "x264" }],
+              active_encoder: "x264",
+              video_bitrate: { min: 200, max: 50000 },
+              audio_bitrate: [{ value: 128 }],
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.version).toBe(0);
+      expect(caps.regimes).toEqual({});
+      expect(caps.videoBitrateKbps).toEqual({ min: 200, max: 50000 });
+    });
+
+    it("declares a capability absent rather than inventing a bound", async () => {
+      // Pulsar omits the entry when libobs exposes no readable window
+      // (ADR 027 §3.2, "absence positive"). The client must not fabricate one,
+      // and must not report a regime for something that was never declared.
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              encoders: [{ value: "x264" }],
+              active_encoder: "x264",
+              capabilities: {
+                encoders: { applicability: "boot-fixed", values: [{ value: "x264" }] },
+                active_encoder: { applicability: "boot-fixed", value: "x264" },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.videoBitrateKbps).toEqual({ min: 0, max: 0 });
+      expect(caps.audioBitrateKbps).toEqual([]);
+      expect(caps.regimes.videoBitrateKbps).toBeUndefined();
+      expect(caps.regimes.audioBitrateKbps).toBeUndefined();
+    });
+
+    it("drops a regime string it does not know instead of coercing it", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              video_bitrate: { min: 200, max: 50000 },
+              capabilities: { video_bitrate: { applicability: "sometimes", min: 200, max: 50000 } },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.regimes.videoBitrateKbps).toBeUndefined();
     });
 
     it("always advertises at least x264", async () => {
