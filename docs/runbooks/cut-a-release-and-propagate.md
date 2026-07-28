@@ -2,12 +2,17 @@
 
 **Owner**: Keeper. **First written**: 2026-07-26, during the v1.2.2 release
 (RTMPS Twitch ingest, #113 / PR #114 — the fix that motivated the runbook).
-**Last exercised**: 2026-07-28, v1.4.0 (nv-filters strip / NS1 + NVENC preset,
-PR #155) — release cut squash-merged by Keeper without review under the hotfix
-exception (`docs/rules/git.md`, Gate point 2): urgent (a DLL-planting surface in
-the process holding the stream key stayed open on every operator until an
-artefact shipped), infra-pure (VERSION / CHANGELOG / 3 × package.json /
-lockfile, zero code), documented here. Consumer side: Prism PR #471.
+**Last exercised**: 2026-07-28, v1.5.0 (`youtube` destination kind #162 +
+graphics adapters / output scales manifest block #163, PR #164) — release cut
+squash-merged by Keeper without review under the hotfix exception
+(`docs/rules/git.md`, Gate point 2): urgent (the merged chain is dormant on the
+artefact side, and Prism #473 plus the B8/B1 issues are blocked on it),
+infra-pure (VERSION / CHANGELOG / 3 × package.json / lockfile, zero code),
+documented here. Consumer side: Prism PR #476.
+Previously: 2026-07-28, v1.4.0 (nv-filters strip / NS1 + NVENC preset,
+PR #155; consumer Prism PR #471) — same exception, urgent because a
+DLL-planting surface in the process holding the stream key stayed open on
+every operator until an artefact shipped.
 Previously: 2026-07-28, v1.3.0 (ADR 027 capability manifest, PR #149; consumer
 Prism PR #469) — the run that produced the first four field traps below.
 
@@ -91,6 +96,23 @@ the old binary — silently, because
 
 ## Traps met in the field
 
+- **`## [Unreleased]` is not a reliable inventory of what you are about to ship**
+  (v1.5.0). #162 merged to `main` with no CHANGELOG entry at all, so cutting on
+  the section as written would have published a first-class `youtube`
+  destination kind silently. Diff the commits, not the document:
+  `git log --oneline v<previous>..main` and reconcile every PR against the
+  `Unreleased` body **before** renaming the header. Writing the missing entry is
+  part of the release commit, not a follow-up.
+- **Pre-empt the broadcast concurrency squeeze instead of recovering from it**
+  (v1.5.0). The known trap below is that a *pending* `live broadcast (Twitch)`
+  is evicted when a newer run queues into `live-test-twitch`. Cutting a release
+  produces three runs within seconds — the PR run, the `main` run, the tag run.
+  Cancel the first two as soon as the tag run appears (`gh run cancel <id>`):
+  the PR branch is already merged and the runbook's own note says the tag run
+  covers the same ground plus the release stages. At v1.5.0 that left the tag
+  run alone in the group and `release-attach` landed on the first attempt, with
+  no rerun.
+
 - **`live broadcast (Twitch)` serialises across runs** — concurrency group
   `live-test-twitch`, `cancel-in-progress: false`. A push to `main` plus the
   tag plus any open PR each queue a broadcast, so `release-attach` can sit
@@ -161,6 +183,27 @@ the old binary — silently, because
   on a machine without the NVIDIA SDKs, so it was already absent from the
   capture. Do not infer from a green-after-recapture that the strip was inert —
   the capture reflects the *capturing* machine, the zip reflects the ship.
+- **For a manifest-shaped release, the consumer's re-capture *is* the content
+  proof** (v1.5.0) — cheaper than unzipping the asset and it exercises the
+  binary rather than the archive. `npm run manifest:capture` on Prism after the
+  bump returned exactly `bundleVersion` 1.4.0 → 1.5.0, `libobsVersion`,
+  `destination_kinds` + `youtube`, and the two new blocks
+  (`graphics_adapters`, `output_scales`). A capture that moves only the two
+  version lines means the payload did **not** ship: stop and check the zip.
+- **A new capability block does not necessarily move the inclusion guard.**
+  At v1.5.0 `EXPECTED_UNDECLARED` stayed empty and the guard's six categories
+  were untouched, because `graphics_adapters` / `output_scales` are not yet
+  enumerated by Prism's registry (that is the B8 / B1 work). Re-capture, run
+  the guard, and leave the dead-man switch alone — do not add categories to
+  `CATEGORIES` "while you are there": the guard is meant to fire when the
+  registry starts driving them, and pre-wiring it disarms exactly that.
+- **`npx eslint .` on Prism can run past 30 min on the dev box** while the same
+  tree's 2 018 vitest tests finish in 40 s, and it gets dramatically worse with
+  two concurrent runs. Never chain `npm run lint && npm run typecheck` behind a
+  short timeout and conclude the tree is broken: `tsc` on both tsconfigs, the
+  build and the full suite all complete in minutes, and the PR's
+  `Lint + typecheck + build` job on CI is the authoritative answer. Scope
+  locally (`npx eslint <path>`) if you need a fast signal.
 - **Prism's full `vitest run` fails 2 suites under parallel load on the dev
   box** — `broadcast-engine.test.ts` and `scene-server.test.ts`, on 5 s timeouts.
   Both are fully `vi.mock`-ed (they never spawn `pulsar.exe`), both pass in
