@@ -8,9 +8,14 @@ export { PulsarVendorError, PulsarNotConnectedError } from "./errors.js";
 export { TypedEventEmitter } from "./events.js";
 export type {
   AdaptiveState,
+  AudioCapabilities,
   AudioDevice,
   AudioInput,
+  AudioMonitoringCapability,
   BitrateAdjustedEvent,
+  // Exported alongside the audio block: PulsarCapabilities.regimes is typed with
+  // it, so a consumer could not name the type it already receives (#141 gap).
+  CapabilityRegime,
   ConnectOptions,
   CreateDestinationInput,
   Destination,
