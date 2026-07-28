@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Fixed
+
+- **`PULSAR_VIDEO_PRESET` was a no-op on QSV, and unreadable there too.** The
+  boot setter wrote the preset to the obs_data key `"preset"` for every family;
+  `obs-qsv11` registers no such key — its knob is `target_usage`
+  (`upstream/plugins/obs-qsv11/obs-qsv11.c:390`), values `TU1..TU7`
+  (`QSV_Encoder.h:89`), default `TU4`. Every QSV spawn therefore encoded at TU4
+  whatever the env var said, silently: nothing logged, and `GetVideoSettings`
+  — which read only `"preset"` — answered `""`, so the lie was invisible from
+  the wire as well.
+
+  The preset set now carries the **property name** per family, and QSV's set is
+  the encoder's own seven levels (`TU1..TU7`, default `TU4`) instead of the
+  three aliases `speed`/`balanced`/`quality` written against the wrong key. That
+  set is exactly what `capabilities.encoder_families` publishes from the same
+  libobs property list (#148), so the boot whitelist and the manifest agree
+  without either copying the other. Input matching is case-insensitive but the
+  value applied — and reported — is the canonical spelling the manifest lists.
+  `on_get_video_settings` reads the preset through `kPresetPropNames`
+  (`preset` / `preset2` / `target_usage`) instead of the single hardcoded name.
+
+  Proof: `scripts/probe-qsv-preset.py` asserts the boot→`GetVideoSettings`
+  round-trip (x264 everywhere; QSV with a value that is *not* the encoder
+  default, so a spawn that ignored the env var fails). **QSV needs an Intel QSV
+  device: no runner in the fleet has one** (and `patches/0002` disables
+  `obs-qsv11` outright when ATL is absent), so those legs print a named partial
+  rather than a pass. The hardware-free half —
+  `scripts/check-qsv-preset-contract.py`, wired into `lint` — pins the property
+  name, the seven values and the default against `obs-qsv11`'s own source, and
+  fails the day either side drifts.
+
 ## [1.3.0] - 2026-07-28
 
 Minor: the release is **additive** — no `pulsar:*` request was removed or
