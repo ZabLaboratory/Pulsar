@@ -41,6 +41,7 @@
 
 #include <obs-websocket-api.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -843,6 +844,115 @@ static void get_current_encoders(obs_encoder_t *&vEnc, obs_encoder_t *&aEnc)
     aEnc = obs_output_get_audio_encoder(srcOutput, 0);
 }
 
+// ---- Capability manifest (Prism ADR 027 §3.1/§3.2, issue #141) --------------
+//
+// GetCapabilities is the single authoritative statement of what THIS Pulsar can
+// do. Two structural rules hold for every entry, now and for the encoder /
+// audio / inventory / video blocks that land in #142-#144:
+//
+//   1. Values are READ, never decreed. A number that cannot be obtained from
+//      libobs is declared ABSENT (the key is simply omitted) -- it is never
+//      replaced by a plausible constant. Absence is a positive answer and is
+//      distinct from a regime: the consumer keeps its own static bound.
+//   2. Every entry carries its APPLICATION REGIME alongside its values, so the
+//      consumer derives its apply-class instead of decreeing one.
+//
+// Payload shape (additive; the pre-#141 top-level keys are kept verbatim so a
+// client that only knows the old contract keeps working):
+//
+//   {
+//     "version": 1,
+//     "encoders": [{value}], "active_encoder": "...",        // legacy mirrors
+//     "video_bitrate": {min,max}, "audio_bitrate": [{value}], // legacy mirrors
+//     "capabilities": {
+//       "<name>": { "applicability": "live"|"boot-fixed"|"read-only", ... }
+//     }
+//   }
+//
+// A consumer that does not know "capabilities" ignores it; a consumer that does
+// must tolerate entries it has never heard of.
+
+// Bumped only on a STRUCTURAL change to the payload. Adding a new entry under
+// "capabilities" is additive and does NOT bump it -- that is the whole point of
+// the block being a map.
+static constexpr long long kCapabilityManifestVersion = 1;
+
+// The three regimes of ADR 027 §3.2. kRegimeReadOnly belongs to the vocabulary
+// from day one so consumers can be written against the full set; the first
+// entries to use it arrive with the audio/video blocks (#143/#144).
+static constexpr const char *kRegimeLive = "live";
+static constexpr const char *kRegimeBootFixed = "boot-fixed";
+[[maybe_unused]] static constexpr const char *kRegimeReadOnly = "read-only";
+
+// Pulsar's own service policy for the streaming bitrates. This is NOT an
+// encoder capability -- it is the range Pulsar itself accepts, enforced by
+// on_set_video_settings below and mirrored by the PULSAR_VIDEO_BITRATE boot
+// clamp (pulsar-frontend-stub.cpp:942). The manifest publishes the
+// INTERSECTION of this policy with what the encoder advertises, so the
+// manifest can never announce a value the setter would reject (ADR 027 §3.1:
+// the manifest may only narrow, never widen).
+static constexpr long long kPolicyVideoBitrateMinKbps = 200;
+static constexpr long long kPolicyVideoBitrateMaxKbps = 50000;
+static constexpr long long kPolicyAudioBitrateMinKbps = 32;
+static constexpr long long kPolicyAudioBitrateMaxKbps = 512;
+
+// obs_properties_t has no OBSRefAutoRelease alias in obs.hpp; scope it here.
+class PropsGuard {
+public:
+    explicit PropsGuard(obs_properties_t *p) : props(p) {}
+    ~PropsGuard() { if (props) obs_properties_destroy(props); }
+    PropsGuard(const PropsGuard &) = delete;
+    PropsGuard &operator=(const PropsGuard &) = delete;
+    obs_properties_t *get() const { return props; }
+    explicit operator bool() const { return props != nullptr; }
+
+private:
+    obs_properties_t *props;
+};
+
+// Properties of the encoder actually bound to the streaming output, or -- when
+// nothing is bound (off-air detection) -- of the registered encoder id that
+// active_encoder_family()/frontend-stub would use. Both paths read libobs; the
+// caller never synthesises a value.
+static obs_properties_t *encoder_properties_or_id(obs_encoder_t *enc, const char *fallbackId)
+{
+    if (enc) return obs_encoder_properties(enc);
+    if (fallbackId && *fallbackId) return obs_get_encoder_properties(fallbackId);
+    return nullptr;
+}
+
+// Reads the [min,max] kbps window the encoder advertises for "bitrate".
+// Returns false when the property is missing or is not an int range -- the
+// caller then declares the capability absent.
+static bool read_bitrate_window(obs_encoder_t *enc, const char *fallbackId, long long &minKbps,
+                                long long &maxKbps, long long &stepKbps)
+{
+    PropsGuard props(encoder_properties_or_id(enc, fallbackId));
+    if (!props) return false;
+    obs_property_t *p = obs_properties_get(props.get(), "bitrate");
+    if (!p || obs_property_get_type(p) != OBS_PROPERTY_INT) return false;
+
+    const long long lo = obs_property_int_min(p);
+    const long long hi = obs_property_int_max(p);
+    const long long step = obs_property_int_step(p);
+    if (lo <= 0 || hi < lo) return false;
+
+    minKbps = lo;
+    maxKbps = hi;
+    stepKbps = step > 0 ? step : 1;
+    return true;
+}
+
+// Narrows an encoder-advertised window by the Pulsar policy window. Returns
+// false when the intersection is empty, in which case the entry is omitted
+// rather than published as a window nothing would accept.
+static bool narrow_to_policy(long long &lo, long long &hi, long long policyLo, long long policyHi)
+{
+    lo = std::max(lo, policyLo);
+    hi = std::min(hi, policyHi);
+    return lo <= hi;
+}
+
 void on_get_video_settings(obs_data_t * /*req*/, obs_data_t *res, void *)
 {
     obs_video_info ovi = {};
@@ -940,7 +1050,7 @@ void on_set_video_settings(obs_data_t *req, obs_data_t *res, void *)
 
     if (obs_data_has_user_value(req, "video_bitrate") && vEnc) {
         long long newKbps = obs_data_get_int(req, "video_bitrate");
-        if (newKbps < 200 || newKbps > 50000) {
+        if (newKbps < kPolicyVideoBitrateMinKbps || newKbps > kPolicyVideoBitrateMaxKbps) {
             obs_data_set_string(res, "error", "video_bitrate must be in [200, 50000] kbps");
             return;
         }
@@ -953,7 +1063,7 @@ void on_set_video_settings(obs_data_t *req, obs_data_t *res, void *)
 
     if (obs_data_has_user_value(req, "audio_bitrate") && aEnc) {
         long long newKbps = obs_data_get_int(req, "audio_bitrate");
-        if (newKbps < 32 || newKbps > 512) {
+        if (newKbps < kPolicyAudioBitrateMinKbps || newKbps > kPolicyAudioBitrateMaxKbps) {
             obs_data_set_string(res, "error", "audio_bitrate must be in [32, 512] kbps");
             return;
         }
@@ -976,12 +1086,20 @@ void on_set_video_settings(obs_data_t *req, obs_data_t *res, void *)
 }
 
 // ADR 004 §3.3: enumerate the encoders this build actually exposes and report
-// them as the whitelisted family short names Prism's registry consumes. The
-// bitrate window mirrors the bounds SetVideoSettings enforces ([200,50000]);
-// audio_bitrate is the standard ffmpeg_aac ladder. active_encoder is the family
-// currently bound to the streaming output (feeds GetVideoSettings §3.4).
+// them as the whitelisted family short names Prism's registry consumes.
+// active_encoder is the family currently bound to the streaming output (feeds
+// GetVideoSettings §3.4).
+//
+// ADR 027 §3.2 (#141): the response now carries a "version" and a
+// "capabilities" map in which every entry declares its application regime next
+// to its values, and both bitrate windows are READ from the encoder's libobs
+// properties instead of being written as literals. See the manifest comment
+// block above get_current_encoders() for the contract.
 void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
 {
+    obs_data_set_int(res, "version", kCapabilityManifestVersion);
+    OBSDataAutoRelease caps = obs_data_create();
+
     OBSDataArrayAutoRelease encoders = obs_data_array_create();
     bool seen[5] = {false, false, false, false, false}; // x264,nvenc,qsv,amf sentinel
     auto family_index = [](const char *f) -> int {
@@ -1007,21 +1125,88 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
 
     obs_encoder_t *vEnc = nullptr, *aEnc = nullptr;
     get_current_encoders(vEnc, aEnc);
-    obs_data_set_string(res, "active_encoder", active_encoder_family(vEnc));
+    const char *activeFamily = active_encoder_family(vEnc);
+    obs_data_set_string(res, "active_encoder", activeFamily);
 
-    OBSDataAutoRelease vb = obs_data_create();
-    obs_data_set_int(vb, "min", 200);
-    obs_data_set_int(vb, "max", 50000);
-    obs_data_set_obj(res, "video_bitrate", vb);
-
-    OBSDataArrayAutoRelease ab = obs_data_array_create();
-    static const int kAudioLadder[] = {64, 96, 128, 160, 192, 224, 256, 320};
-    for (int kbps : kAudioLadder) {
-        OBSDataAutoRelease item = obs_data_create();
-        obs_data_set_int(item, "value", kbps);
-        obs_data_array_push_back(ab, item);
+    // Encoder identity is boot-fixed: on_set_video_settings rejects any live
+    // mutation of video_encoder / video_preset / video_profile (see above).
+    {
+        OBSDataAutoRelease entry = obs_data_create();
+        obs_data_set_string(entry, "applicability", kRegimeBootFixed);
+        obs_data_set_array(entry, "values", encoders);
+        obs_data_set_obj(caps, "encoders", entry);
     }
-    obs_data_set_array(res, "audio_bitrate", ab);
+    {
+        OBSDataAutoRelease entry = obs_data_create();
+        obs_data_set_string(entry, "applicability", kRegimeBootFixed);
+        obs_data_set_string(entry, "value", activeFamily);
+        obs_data_set_obj(caps, "active_encoder", entry);
+    }
+
+    // Video bitrate: read the window the active (or, off-air, the registered)
+    // encoder advertises, narrowed by the Pulsar policy window. Unreadable ->
+    // the entry AND its legacy mirror are omitted, never guessed.
+    {
+        long long lo = 0, hi = 0, step = 0;
+        if (read_bitrate_window(vEnc, "obs_x264", lo, hi, step) &&
+            narrow_to_policy(lo, hi, kPolicyVideoBitrateMinKbps, kPolicyVideoBitrateMaxKbps)) {
+            OBSDataAutoRelease legacy = obs_data_create();
+            obs_data_set_int(legacy, "min", lo);
+            obs_data_set_int(legacy, "max", hi);
+            obs_data_set_obj(res, "video_bitrate", legacy);
+
+            OBSDataAutoRelease entry = obs_data_create();
+            obs_data_set_string(entry, "applicability", kRegimeLive);
+            obs_data_set_int(entry, "min", lo);
+            obs_data_set_int(entry, "max", hi);
+            obs_data_set_int(entry, "step", step);
+            obs_data_set_obj(caps, "video_bitrate", entry);
+        }
+    }
+
+    // Audio bitrate: ffmpeg_aac advertises "bitrate" as an int range with a
+    // step (obs-ffmpeg-audio-encoders.c), NOT as a list -- so the discrete
+    // ladder is DERIVED from that range, it is no longer a literal table. The
+    // legacy array mirror is generated from the same derived values.
+    {
+        long long rawLo = 0, rawHi = 0, step = 0;
+        if (read_bitrate_window(aEnc, "ffmpeg_aac", rawLo, rawHi, step)) {
+            long long lo = rawLo, hi = rawHi;
+            if (narrow_to_policy(lo, hi, kPolicyAudioBitrateMinKbps, kPolicyAudioBitrateMaxKbps)) {
+                // Walk the encoder's own grid (rawLo + k*step) and keep the
+                // points the policy admits, so a narrowed bound never invents
+                // an offset value the encoder does not offer.
+                OBSDataArrayAutoRelease ladder = obs_data_array_create();
+                long long first = 0, last = 0;
+                bool any = false;
+                for (long long kbps = rawLo; kbps <= rawHi; kbps += step) {
+                    if (kbps < lo) continue;
+                    if (kbps > hi) break;
+                    OBSDataAutoRelease item = obs_data_create();
+                    obs_data_set_int(item, "value", kbps);
+                    obs_data_array_push_back(ladder, item);
+                    if (!any) first = kbps;
+                    last = kbps;
+                    any = true;
+                }
+                // No grid point survives the policy window -> the capability is
+                // declared absent rather than published empty.
+                if (any) {
+                    obs_data_set_array(res, "audio_bitrate", ladder);
+
+                    OBSDataAutoRelease entry = obs_data_create();
+                    obs_data_set_string(entry, "applicability", kRegimeLive);
+                    obs_data_set_int(entry, "min", first);
+                    obs_data_set_int(entry, "max", last);
+                    obs_data_set_int(entry, "step", step);
+                    obs_data_set_array(entry, "values", ladder);
+                    obs_data_set_obj(caps, "audio_bitrate", entry);
+                }
+            }
+        }
+    }
+
+    obs_data_set_obj(res, "capabilities", caps);
 }
 
 

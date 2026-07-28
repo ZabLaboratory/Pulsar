@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Added
 
+- **`GetCapabilities` becomes a versioned capability manifest** (#141, ADR Prism
+  027 §3.1/§3.2 — P1 socle). The response now carries a `version` and a
+  `capabilities` map in which **every entry declares its application regime**
+  (`live` / `boot-fixed` / `read-only`) next to its values. That second field is
+  the point of the change: Prism *derives* its apply-class from what Pulsar says
+  instead of decreeing one, which is what made a preset silently unsettable and
+  a replay bound silently wrong.
+
+  The two hard-coded bounds are gone. The video bitrate window and the audio
+  bitrate ladder are **read from the active encoder's libobs properties**
+  (`obs_encoder_properties` off the streaming output, or
+  `obs_get_encoder_properties` on the registered id when off-air), then narrowed
+  by Pulsar's own setter policy — so the manifest can only ever announce
+  something `SetVideoSettings` would accept. It may narrow, never widen.
+
+  A window libobs does not expose is **declared absent**: the key is omitted, it
+  is not replaced by a plausible constant. Absence is a positive answer and a
+  consumer reads it as "keep your own static bound".
+
+  Backward compatible in both directions: the pre-#141 top-level keys are still
+  emitted verbatim, a client that ignores `capabilities` keeps working, and
+  `@clodocapeo/pulsar-client` tolerates entries and regime strings it has never
+  heard of. The encoder / audio / inventory / video blocks of ADR 027 §3.3 land
+  separately (#142/#143/#144) — this change is their scaffolding, not them.
+
 - **The v5 capability contract is a blocking CI gate** (#121, ADR Prism 026
   §3.3 palier 3). `scripts/probe-capability-contract.py` — until now an
   instrument you ran by hand (#116) — is wired into `scripts/run-probes.ps1`

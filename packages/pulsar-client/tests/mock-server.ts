@@ -340,13 +340,32 @@ export class MockObsWebSocket {
       case "GetVideoSettings":
         return { ...this.video };
 
-      case "GetCapabilities":
+      case "GetCapabilities": {
+        const audioLadder = [64, 96, 128, 160, 192, 224, 256, 320];
         return {
+          version: 1,
           encoders: this.capabilityEncoders.map((value) => ({ value })),
           active_encoder: this.video.video_encoder,
           video_bitrate: { min: 200, max: 50000 },
-          audio_bitrate: [64, 96, 128, 160, 192, 224, 256, 320].map((value) => ({ value })),
+          audio_bitrate: audioLadder.map((value) => ({ value })),
+          // ADR 027 §3.2 (#141): values + regime, side by side.
+          capabilities: {
+            encoders: {
+              applicability: "boot-fixed",
+              values: this.capabilityEncoders.map((value) => ({ value })),
+            },
+            active_encoder: { applicability: "boot-fixed", value: this.video.video_encoder },
+            video_bitrate: { applicability: "live", min: 200, max: 50000, step: 50 },
+            audio_bitrate: {
+              applicability: "live",
+              min: 64,
+              max: 320,
+              step: 32,
+              values: audioLadder.map((value) => ({ value })),
+            },
+          },
         };
+      }
 
       case "SetVideoSettings": {
         if ("fps" in data || "width" in data || "height" in data) {

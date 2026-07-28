@@ -52,16 +52,40 @@ export interface VideoSettings {
   videoProfile: string;
 }
 
-/** Capabilities snapshot returned by GetCapabilities (ADR 004 §3.3). */
+/**
+ * Application regime of a manifest entry (Prism ADR 027 §3.2).
+ *
+ * - `live`        — settable on a running Pulsar.
+ * - `boot-fixed`  — fixed at boot (env), refused hot.
+ * - `read-only`   — observable, never settable.
+ *
+ * A capability the manifest does not declare at all is a fourth, distinct
+ * answer — an *absence*, not a regime: the consumer keeps its own static
+ * assumption instead of deriving one.
+ */
+export type CapabilityRegime = "live" | "boot-fixed" | "read-only";
+
+/** Capabilities snapshot returned by GetCapabilities (ADR 004 §3.3, ADR 027 §3.2). */
 export interface PulsarCapabilities {
+  /** Manifest schema version. `0` when talking to a pre-#141 Pulsar. */
+  version: number;
   /** Encoder families this build exposes (always contains "x264"). */
   encoders: string[];
   /** Encoder family currently bound to the streaming output. */
   activeEncoder: string;
-  /** Inclusive video bitrate window SetVideoSettings enforces, in kbps. */
+  /** Inclusive video bitrate window, in kbps. `{min:0,max:0}` when the manifest
+   *  declares it absent — the encoder did not advertise a readable range. */
   videoBitrateKbps: { min: number; max: number };
-  /** Discrete audio bitrate ladder, in kbps. */
+  /** Discrete audio bitrate ladder, in kbps. Empty when declared absent. */
   audioBitrateKbps: number[];
+  /** Regime per entry. A key is present only if the manifest declared it, so
+   *  `undefined` means "not declared", never "live". */
+  regimes: {
+    encoders?: CapabilityRegime;
+    activeEncoder?: CapabilityRegime;
+    videoBitrateKbps?: CapabilityRegime;
+    audioBitrateKbps?: CapabilityRegime;
+  };
 }
 
 /** Mutations accepted by SetVideoSettings. fps/width/height changes are

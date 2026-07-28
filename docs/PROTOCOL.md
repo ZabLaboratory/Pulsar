@@ -231,9 +231,61 @@ clients see snake_case on the wire.
 | `StopAllDestinations` | Mirror of the above. | — | `ok: bool`, `error?` |
 | `GetVideoSettings` | Snapshot the encoder + reset_video state. Includes the boot-fixed encoder identity (`video_encoder` / `video_preset` / `video_profile`). | — | `fps`, `width`, `height`, `video_bitrate`, `video_rate_control`, `video_keyint_sec`, `audio_bitrate`, `video_encoder`, `video_preset`, `video_profile`, `error?` |
 | `SetVideoSettings` | Mutate encoder bitrates **live**. Setting `fps` / `width` / `height` is rejected — those require boot-time env vars (`PULSAR_FPS`, `PULSAR_RESOLUTION`). `video_encoder` / `video_preset` / `video_profile` are likewise rejected: encoder identity is boot-fixed via `PULSAR_VIDEO_ENCODER` (no live swap — see ADR 004 §3.4). Audio bitrate is only applied while the audio encoder is idle. | `video_bitrate?`, `audio_bitrate?` | `changed: bool`, `video_bitrate?`, `audio_bitrate?`, `error?` |
-| `GetCapabilities` | Enumerate the encoder families this build exposes (via `obs_enum_encoder_types()`, mapped to Pulsar short names) plus the bitrate windows. Off-air detection; `active_encoder` is the family bound to the streaming output. See list-encoding note below. | — | `encoders: {value: string}[]`, `active_encoder: string`, `video_bitrate: {min, max}`, `audio_bitrate: {value: number}[]`, `error?` |
+| `GetCapabilities` | **Capability manifest** — the authoritative statement of what this Pulsar can do (Prism ADR 027 §3.1/§3.2). Enumerates the encoder families this build exposes (via `obs_enum_encoder_types()`, mapped to Pulsar short names) plus the bitrate windows, each with its application regime. Off-air detection; `active_encoder` is the family bound to the streaming output. See the manifest and list-encoding notes below. | — | `version: number`, `capabilities: { [name]: CapabilityEntry }`, `encoders: {value: string}[]`, `active_encoder: string`, `video_bitrate?: {min, max}`, `audio_bitrate?: {value: number}[]`, `error?` |
 | `GetAdaptiveState` | Snapshot the bitrate adaptation worker. | — | `enabled`, `target_kbps`, `current_kbps`, `floor_kbps`, `stable_ticks`, `adjustments_total`, `last_delta_total`, `last_delta_dropped`, `last_drop_ratio`, `error?` |
 | `SetAdaptiveEnabled` | Toggle the worker. Disabling pauses sampling; the encoder bitrate is left at whatever value the worker last applied. Re-enabling resets `stable_ticks` to 0 so the loop re-warms before any climb attempt. | `enabled` | `enabled: bool`, `error?` |
+
+#### The capability manifest (`GetCapabilities`)
+
+`GetCapabilities` is the **single authoritative statement** of what the running
+Pulsar can do. Two structural rules hold for every entry — including the
+encoder / audio / inventory / video blocks that land later:
+
+1. **Values are read, never decreed.** Every number comes from libobs (encoder
+   properties). A value Pulsar cannot read is **declared absent** — the key is
+   simply omitted — and is *never* replaced by a plausible constant. Absence is
+   a positive answer: the consumer keeps its own static bound.
+2. **Every entry declares its application regime** next to its values, so the
+   consumer derives its apply-class instead of decreeing one.
+
+| Regime | Meaning |
+|---|---|
+| `live` | settable on a running Pulsar |
+| `boot-fixed` | fixed at boot (env vars), refused hot |
+| `read-only` | observable, never settable |
+
+```jsonc
+{
+  "version": 1,
+  // Pre-manifest top-level keys, kept verbatim for backward compatibility.
+  "encoders": [{ "value": "x264" }],
+  "active_encoder": "x264",
+  "video_bitrate": { "min": 200, "max": 50000 },
+  "audio_bitrate": [{ "value": 64 }, { "value": 96 }],
+  // Regime-carrying entries, keyed by capability name.
+  "capabilities": {
+    "encoders":       { "applicability": "boot-fixed", "values": [{ "value": "x264" }] },
+    "active_encoder": { "applicability": "boot-fixed", "value": "x264" },
+    "video_bitrate":  { "applicability": "live", "min": 200, "max": 50000, "step": 50 },
+    "audio_bitrate":  { "applicability": "live", "min": 64, "max": 512, "step": 32,
+                        "values": [{ "value": 64 }] }
+  }
+}
+```
+
+Compatibility contract, in both directions:
+
+- **`version`** is bumped only on a *structural* change. Adding an entry under
+  `capabilities` is additive and does **not** bump it.
+- A client that does not know `capabilities` ignores it and keeps reading the
+  top-level keys. A client that does must tolerate entries — and regime strings
+  — it has never heard of.
+- A **missing block** leaves the consumer's static bound intact; it is not an
+  error and must not be read as `read-only`.
+- The published bitrate windows are the **intersection** of what the encoder
+  advertises and what Pulsar's own setter accepts (`SetVideoSettings`:
+  `200..50000` kbps video, `32..512` kbps audio). The manifest therefore can
+  never announce a value the setter would reject — it may only narrow.
 
 > **List encoding on the wire.** libobs vendor handlers can only serialise
 > arrays as arrays of *objects* (`Utils::Json::ObsDataToJson` walks each
