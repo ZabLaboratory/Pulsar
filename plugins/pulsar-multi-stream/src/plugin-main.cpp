@@ -877,12 +877,11 @@ static void get_current_encoders(obs_encoder_t *&vEnc, obs_encoder_t *&aEnc)
 // the block being a map.
 static constexpr long long kCapabilityManifestVersion = 1;
 
-// The three regimes of ADR 027 §3.2. kRegimeReadOnly belongs to the vocabulary
-// from day one so consumers can be written against the full set; the first
-// entries to use it arrive with the audio/video blocks (#143/#144).
+// The three regimes of ADR 027 §3.2. kRegimeReadOnly is carried by the whole
+// audio block (#143); the video block (#144) will use it too.
 static constexpr const char *kRegimeLive = "live";
 static constexpr const char *kRegimeBootFixed = "boot-fixed";
-[[maybe_unused]] static constexpr const char *kRegimeReadOnly = "read-only";
+static constexpr const char *kRegimeReadOnly = "read-only";
 
 // Pulsar's own service policy for the streaming bitrates. This is NOT an
 // encoder capability -- it is the range Pulsar itself accepts, enforced by
@@ -895,6 +894,56 @@ static constexpr long long kPolicyVideoBitrateMinKbps = 200;
 static constexpr long long kPolicyVideoBitrateMaxKbps = 50000;
 static constexpr long long kPolicyAudioBitrateMinKbps = 32;
 static constexpr long long kPolicyAudioBitrateMaxKbps = 512;
+
+// ---- Audio block (Prism ADR 027 §3.3 bloc 2, issue #143) -------------------
+//
+// Prism offers three headphone-monitoring keys as `applyClass: live`, "verified
+// by read-back" of a state nobody established comes back. It does not: NOTHING
+// in this tree ever calls obs_set_audio_monitoring_device(), so no monitoring
+// device is ever bound by Pulsar and no write path exists over the wire. The
+// regime is therefore read-only, not live (ADR 027 §3.2: `live` requires the
+// write AND the read-back to be genuinely supported hot).
+//
+// One trap deserves the explicit sentinel test below: libobs SEEDS
+// monitoring_device_name/_id with "Default"/"default" inside obs_init_audio()
+// (upstream/libobs/obs.c:916-917), before anyone chooses anything. Reporting
+// that seed as a bound device would republish exactly the fiction this block
+// exists to kill -- so a device counts as bound only when the id is present and
+// is not that seed. `device_bound` is always emitted, true or false: an absent
+// device is a positive, readable "no", never a silence (criterion 2).
+static constexpr const char *kMonitoringDeviceSeedId = "default";
+
+// Canonical name of a libobs speaker layout. Returns nullptr for
+// SPEAKERS_UNKNOWN -- the layout is then declared absent rather than published
+// as a placeholder string.
+static const char *speaker_layout_name(enum speaker_layout speakers)
+{
+    switch (speakers) {
+    case SPEAKERS_MONO:    return "mono";
+    case SPEAKERS_STEREO:  return "stereo";
+    case SPEAKERS_2POINT1: return "2.1";
+    case SPEAKERS_4POINT0: return "4.0";
+    case SPEAKERS_4POINT1: return "4.1";
+    case SPEAKERS_5POINT1: return "5.1";
+    case SPEAKERS_7POINT1: return "7.1";
+    case SPEAKERS_UNKNOWN: return nullptr;
+    }
+    return nullptr;
+}
+
+// Number of audio tracks the streaming output actually carries, read by walking
+// its mixer slots. Returns false when no output is bound (off-air), in which
+// case the caller declares the count absent instead of guessing one.
+static bool read_bound_audio_tracks(long long &bound)
+{
+    OBSOutputAutoRelease srcOutput = obs_frontend_get_streaming_output();
+    if (!srcOutput) return false;
+    bound = 0;
+    for (size_t i = 0; i < static_cast<size_t>(MAX_AUDIO_MIXES); i++) {
+        if (obs_output_get_audio_encoder(srcOutput, i)) bound++;
+    }
+    return true;
+}
 
 // obs_properties_t has no OBSRefAutoRelease alias in obs.hpp; scope it here.
 class PropsGuard {
@@ -1202,6 +1251,77 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
                     obs_data_set_array(entry, "values", ladder);
                     obs_data_set_obj(caps, "audio_bitrate", entry);
                 }
+            }
+        }
+    }
+
+    // ---- Audio block (ADR 027 §3.3 bloc 2, #143) ---------------------------
+    // Four entries, each with its own regime -- they are siblings in the map
+    // rather than one nested "audio" object precisely because their regimes
+    // differ, and a regime belongs to an entry, not to a family.
+
+    // Monitoring: read-only. See the kMonitoringDeviceSeedId comment above --
+    // Pulsar has no monitoring write path at all, so `live` would be a lie.
+    // `available` and `device_bound` are ALWAYS emitted; the identity keys only
+    // when a device is genuinely bound.
+    {
+        OBSDataAutoRelease entry = obs_data_create();
+        obs_data_set_string(entry, "applicability", kRegimeReadOnly);
+
+        const bool available = obs_audio_monitoring_available();
+        obs_data_set_bool(entry, "available", available);
+
+        const char *devName = nullptr;
+        const char *devId = nullptr;
+        if (available) obs_get_audio_monitoring_device(&devName, &devId);
+
+        const bool bound = available && devId && *devId &&
+                           std::strcmp(devId, kMonitoringDeviceSeedId) != 0;
+        obs_data_set_bool(entry, "device_bound", bound);
+        if (bound) {
+            obs_data_set_string(entry, "device_id", devId);
+            obs_data_set_string(entry, "device_name", devName ? devName : "");
+        }
+        obs_data_set_obj(caps, "audio_monitoring", entry);
+    }
+
+    // Tracks: read-only. `count` is libobs's own mixer-slot count (MAX_AUDIO_MIXES,
+    // media-io/audio-io.h) -- the ceiling of the running libobs, not a Pulsar
+    // literal. `bound` is read from the streaming output and is omitted off-air.
+    {
+        OBSDataAutoRelease entry = obs_data_create();
+        obs_data_set_string(entry, "applicability", kRegimeReadOnly);
+        obs_data_set_int(entry, "count", static_cast<long long>(MAX_AUDIO_MIXES));
+        long long bound = 0;
+        if (read_bound_audio_tracks(bound)) obs_data_set_int(entry, "bound", bound);
+        obs_data_set_obj(caps, "audio_tracks", entry);
+    }
+
+    // Sample rate and speaker layout come from the SAME obs_get_audio_info()
+    // read; when it fails both entries are declared absent rather than filled
+    // with the 48000/stereo pair pulsar-headless happens to boot with.
+    //
+    // Regime is read-only, NOT boot-fixed: boot-fixed means "settable at boot,
+    // refused hot", and there is no env knob for either -- pulsar-headless calls
+    // obs_reset_audio() with fixed values (pulsar-headless/main.cpp:181-183) and
+    // exposes no override. If such an env var ever lands, these move to
+    // boot-fixed; declaring it today would advertise a knob that does not exist.
+    {
+        obs_audio_info oai = {};
+        if (obs_get_audio_info(&oai)) {
+            if (oai.samples_per_sec > 0) {
+                OBSDataAutoRelease entry = obs_data_create();
+                obs_data_set_string(entry, "applicability", kRegimeReadOnly);
+                obs_data_set_int(entry, "hz", static_cast<long long>(oai.samples_per_sec));
+                obs_data_set_obj(caps, "audio_sample_rate", entry);
+            }
+            if (const char *layout = speaker_layout_name(oai.speakers)) {
+                OBSDataAutoRelease entry = obs_data_create();
+                obs_data_set_string(entry, "applicability", kRegimeReadOnly);
+                obs_data_set_string(entry, "layout", layout);
+                obs_data_set_int(entry, "channels",
+                                 static_cast<long long>(get_audio_channels(oai.speakers)));
+                obs_data_set_obj(caps, "audio_speaker_layout", entry);
             }
         }
     }

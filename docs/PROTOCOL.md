@@ -268,7 +268,14 @@ encoder / audio / inventory / video blocks that land later:
     "active_encoder": { "applicability": "boot-fixed", "value": "x264" },
     "video_bitrate":  { "applicability": "live", "min": 200, "max": 50000, "step": 50 },
     "audio_bitrate":  { "applicability": "live", "min": 64, "max": 512, "step": 32,
-                        "values": [{ "value": 64 }] }
+                        "values": [{ "value": 64 }] },
+    // Audio block (ADR 027 §3.3 bloc 2).
+    "audio_monitoring":    { "applicability": "read-only", "available": true,
+                             "device_bound": false },
+    "audio_tracks":        { "applicability": "read-only", "count": 6, "bound": 1 },
+    "audio_sample_rate":   { "applicability": "read-only", "hz": 48000 },
+    "audio_speaker_layout":{ "applicability": "read-only", "layout": "stereo",
+                             "channels": 2 }
   }
 }
 ```
@@ -286,6 +293,37 @@ Compatibility contract, in both directions:
   advertises and what Pulsar's own setter accepts (`SetVideoSettings`:
   `200..50000` kbps video, `32..512` kbps audio). The manifest therefore can
   never announce a value the setter would reject — it may only narrow.
+
+##### Audio entries (ADR 027 §3.3 bloc 2)
+
+| Entry | Fields | Regime | Source |
+|---|---|---|---|
+| `audio_monitoring` | `available: bool`, `device_bound: bool`, `device_id?`, `device_name?` | `read-only` | `obs_audio_monitoring_available()`, `obs_get_audio_monitoring_device()` |
+| `audio_tracks` | `count: number`, `bound?: number` | `read-only` | `MAX_AUDIO_MIXES`; `bound` walks the streaming output's mixer slots |
+| `audio_sample_rate` | `hz: number` | `read-only` | `obs_get_audio_info()` |
+| `audio_speaker_layout` | `layout: string`, `channels: number` | `read-only` | `obs_get_audio_info()` + `get_audio_channels()` |
+
+`layout` is one of `mono`, `stereo`, `2.1`, `4.0`, `4.1`, `5.1`, `7.1`. A libobs
+`SPEAKERS_UNKNOWN` yields **no** `audio_speaker_layout` entry at all — an unknown
+layout is declared absent, not published as the string `"unknown"`.
+
+Two points carry the whole block:
+
+- **`available` and `device_bound` are always emitted**, `true` or `false`. A
+  Pulsar with no monitoring device answers an explicit, readable `false`; it does
+  not stay silent. `device_id` / `device_name` appear **only** when
+  `device_bound` is `true`. A consumer must not read a *missing*
+  `audio_monitoring` entry (a pre-#143 Pulsar) as `device_bound: false` — an
+  absence is not a "no".
+- **Monitoring is `read-only`, not `live`.** `live` requires the write *and* the
+  read-back to be genuinely supported hot; Pulsar exposes **no** monitoring write
+  path — `obs_set_audio_monitoring_device()` is never called anywhere in this
+  tree — so nothing can bind a device today. Prism must not offer the headphone
+  monitoring keys as settable. (libobs seeds its monitoring device with
+  `"Default"` / `"default"` in `obs_init_audio()`; Pulsar treats that seed as
+  *not bound*, since it is a placeholder no one chose.)
+
+`bound` is omitted off-air, when no streaming output exists to read tracks from.
 
 > **List encoding on the wire.** libobs vendor handlers can only serialise
 > arrays as arrays of *objects* (`Utils::Json::ObsDataToJson` walks each

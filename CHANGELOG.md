@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Added
 
+- **The capability manifest declares the audio block** (#143, ADR Prism 027 §3.3
+  bloc 2). Four new entries — `audio_monitoring`, `audio_tracks`,
+  `audio_sample_rate`, `audio_speaker_layout` — each with its own regime.
+
+  The one that matters is the first. Prism offers three headphone-monitoring
+  keys as `applyClass: live`, "verified by read-back" of a state nobody ever
+  established comes back — and indeed it does not: **nothing in Pulsar calls
+  `obs_set_audio_monitoring_device()`**, so no device is ever bound and there is
+  no write path at all. The manifest now says so out loud: `available` and
+  `device_bound` are **always** emitted, `true` or `false`, and the regime is
+  `read-only`, not `live`. A "no" you can read beats a silence you have to guess
+  at. The device id/name appear only when a device is genuinely bound — libobs
+  seeds its own `"Default"` / `"default"` placeholder in `obs_init_audio()` and
+  Pulsar refuses to republish that seed as a binding.
+
+  Tracks, sample rate and speaker layout are **read** from libobs
+  (`MAX_AUDIO_MIXES`, the streaming output's mixer slots, `obs_get_audio_info()`),
+  never written as constants — a `SPEAKERS_UNKNOWN` layout is declared absent
+  rather than published as `"unknown"`, and the bound-track count is omitted
+  off-air. `@clodocapeo/pulsar-client` exposes the block as `capabilities.audio`
+  and, per the §3.2 rule, keeps a *missing* block absent instead of decoding it
+  into a "no".
+
 - **`GetCapabilities` becomes a versioned capability manifest** (#141, ADR Prism
   027 §3.1/§3.2 — P1 socle). The response now carries a `version` and a
   `capabilities` map in which **every entry declares its application regime**
