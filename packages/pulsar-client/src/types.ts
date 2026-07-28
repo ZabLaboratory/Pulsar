@@ -144,6 +144,32 @@ export interface PulsarCapabilities {
   videoBitrateKbps: { min: number; max: number };
   /** Discrete audio bitrate ladder, in kbps. Empty when declared absent. */
   audioBitrateKbps: number[];
+  /**
+   * Filter types registered in this binary (ADR 027 §3.3 block 3).
+   *
+   * **Presence, not permission.** This is the list of filters that *exist*; it
+   * says nothing about which of them may be configured, nor within which
+   * bounds. Those stay owned by the consumer's own closed whitelist
+   * (ADR 023 §3.3). Empty when the manifest declares no inventory — the
+   * consumer then keeps its own static list.
+   */
+  filters: string[];
+  /** Input (source) kinds this binary can instantiate. Presence only. */
+  sourceKinds: string[];
+  /** Destination kinds this binary can serve. Presence only: a kind the
+   *  consumer does not know stays ignorable, it is never routed. */
+  destinationKinds: string[];
+  /** Effective video colorimetry (ADR 027 §3.3 block 4), pinned at
+   *  `obs_reset_video`. Read-only: no request and no env var selects another.
+   *  `undefined` when the manifest declares it absent. */
+  colorimetry?: {
+    /** Compact colourspace token, e.g. `"709"` / `"601"` / `"srgb"`. */
+    colorSpace: string;
+    /** libobs range name, e.g. `"Partial"` / `"Full"`. */
+    range: string;
+    /** libobs pixel format name, e.g. `"NV12"`. */
+    format: string;
+  };
   /** Per-family encoder detail (ADR 027 §3.3 bloc 1). Empty when the manifest
    *  carries no encoder block — a pre-#142 Pulsar, whose absence leaves the
    *  consumer's static assumptions intact. */
@@ -159,6 +185,10 @@ export interface PulsarCapabilities {
     activeEncoder?: CapabilityRegime;
     videoBitrateKbps?: CapabilityRegime;
     audioBitrateKbps?: CapabilityRegime;
+    filters?: CapabilityRegime;
+    sourceKinds?: CapabilityRegime;
+    destinationKinds?: CapabilityRegime;
+    colorimetry?: CapabilityRegime;
     encoderFamilies?: CapabilityRegime;
     audioMonitoring?: CapabilityRegime;
     audioTracks?: CapabilityRegime;

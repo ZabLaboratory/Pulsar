@@ -575,6 +575,12 @@ $probes = @(
     # a stub-side snapshot. Creates and removes its own scene, so it leaves
     # the instance exactly as it found it.
     'probe-scene-list-truth.py',
+    # #144 / ADR Prism 027 §3.3 blocs 3-4 -- the capability manifest's
+    # inventories must stay presence-only on the EMITTER's side: every item
+    # carries exactly `value`, no filter property bound rides along (the
+    # bounds are ADR 023 §3.3's, under its own clearance). Read-only probe:
+    # it calls GetCapabilities and touches nothing.
+    'probe-manifest-inventories.py',
     # probe-multi-stream.py is INTENTIONALLY excluded.
     # The destination lifecycle has known race-condition crash paths
     # in obs upstream (rtmp_output worker thread vs ECONNREFUSED-fast
