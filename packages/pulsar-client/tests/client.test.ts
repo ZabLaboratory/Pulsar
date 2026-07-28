@@ -134,11 +134,19 @@ describe("PulsarClient", () => {
         activeEncoder: "x264",
         videoBitrateKbps: { min: 200, max: 50000 },
         audioBitrateKbps: [64, 96, 128, 160, 192, 224, 256, 320],
+        filters: ["color_filter_v2", "noise_suppress_filter_v2"],
+        sourceKinds: ["dshow_input", "window_capture"],
+        destinationKinds: ["rtmp_custom", "vod_local", "twitch"],
+        colorimetry: { colorSpace: "709", range: "Partial", format: "NV12" },
         regimes: {
           encoders: "boot-fixed",
           activeEncoder: "boot-fixed",
           videoBitrateKbps: "live",
           audioBitrateKbps: "live",
+          filters: "live",
+          sourceKinds: "live",
+          destinationKinds: "live",
+          colorimetry: "read-only",
         },
       });
     });
@@ -151,11 +159,15 @@ describe("PulsarClient", () => {
       for (const regime of Object.values(caps.regimes)) {
         expect(["live", "boot-fixed", "read-only"]).toContain(regime);
       }
-      // The four entries Pulsar declares today all carry one.
+      // The entries Pulsar declares today all carry one.
       expect(Object.keys(caps.regimes).sort()).toEqual([
         "activeEncoder",
         "audioBitrateKbps",
+        "colorimetry",
+        "destinationKinds",
         "encoders",
+        "filters",
+        "sourceKinds",
         "videoBitrateKbps",
       ]);
     });
@@ -234,6 +246,110 @@ describe("PulsarClient", () => {
           : undefined;
       const caps = await client.capabilities.get();
       expect(caps.regimes.videoBitrateKbps).toBeUndefined();
+    });
+
+    // ---- ADR 027 §3.3 blocks 3 + 4 / issue #144: inventories + colorimetry --
+
+    it("unwraps the presence-only inventories with their regime", async () => {
+      const caps = await client.capabilities.get();
+      expect(caps.filters).toEqual(["color_filter_v2", "noise_suppress_filter_v2"]);
+      expect(caps.sourceKinds).toEqual(["dshow_input", "window_capture"]);
+      expect(caps.destinationKinds).toEqual(["rtmp_custom", "vod_local", "twitch"]);
+      expect(caps.regimes.filters).toBe("live");
+      expect(caps.regimes.sourceKinds).toBe("live");
+      expect(caps.regimes.destinationKinds).toBe("live");
+    });
+
+    it("keeps the filter inventory a bare presence list, never a bound", async () => {
+      // ADR 027 §3.1 / ADR 023 §3.3: the manifest says WHICH filters exist. Any
+      // bound a server tried to smuggle beside them is not surfaced by the
+      // typed shape -- the whitelist stays the only source of what is settable.
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: {
+                filters: {
+                  applicability: "live",
+                  values: [{ value: "color_filter_v2", min: 0, max: 100 }],
+                  bounds: { opacity: { min: 0, max: 100 } },
+                },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.filters).toEqual(["color_filter_v2"]);
+      expect(Object.keys(caps)).not.toContain("bounds");
+      expect(caps.filters.every((f) => typeof f === "string")).toBe(true);
+    });
+
+    it("leaves the consumer's static list intact when an inventory is absent", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? { version: 1, capabilities: { encoders: { applicability: "boot-fixed" } } }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.filters).toEqual([]);
+      expect(caps.sourceKinds).toEqual([]);
+      expect(caps.destinationKinds).toEqual([]);
+      expect(caps.regimes.filters).toBeUndefined();
+      expect(caps.regimes.destinationKinds).toBeUndefined();
+    });
+
+    it("ignores a destination kind it does not know instead of routing it", async () => {
+      // ADR 010's discriminated union is untouched by the manifest: an unknown
+      // kind travels as a plain string and is the consumer's to drop.
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: {
+                destination_kinds: {
+                  applicability: "live",
+                  values: [{ value: "twitch" }, { value: "srt_relay_from_the_future" }],
+                },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.destinationKinds).toContain("srt_relay_from_the_future");
+      const known = ["rtmp_custom", "vod_local", "twitch"];
+      expect(caps.destinationKinds.filter((k) => known.includes(k))).toEqual(["twitch"]);
+    });
+
+    it("reports colorimetry read-only, and drops a partial entry", async () => {
+      const caps = await client.capabilities.get();
+      expect(caps.colorimetry).toEqual({ colorSpace: "709", range: "Partial", format: "NV12" });
+      expect(caps.regimes.colorimetry).toBe("read-only");
+
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: { video_colorimetry: { applicability: "read-only", value: "709" } },
+            }
+          : undefined;
+      const partial = await client.capabilities.get();
+      expect(partial.colorimetry).toBeUndefined();
+    });
+
+    it("drops malformed inventory items rather than half-reading them", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: {
+                filters: {
+                  applicability: "live",
+                  values: [{ value: "color_filter_v2" }, { value: 42 }, { value: "" }, null],
+                },
+                source_kinds: { applicability: "live", values: "not-an-array" },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.filters).toEqual(["color_filter_v2"]);
+      expect(caps.sourceKinds).toEqual([]);
     });
 
     it("always advertises at least x264", async () => {

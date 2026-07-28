@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Added
 
+- **The capability manifest declares its inventories and its colorimetry**
+  (#144, ADR Prism 027 §3.3 blocs 3 et 4). `GetCapabilities` now answers which
+  **filters are registered** (`obs_enum_filter_types`), which **source kinds**
+  can be instantiated (`obs_enum_input_types`), which **destination kinds** this
+  binary can actually serve (the `DestinationKind` enum, gated on the obs output
+  type that serves it being registered), and the **effective video colorimetry**
+  read back from `obs_get_video_info`. No hard-coded list behind any of them.
+
+  This block declares a **presence, never a permission**. Not one filter
+  property bound is emitted: which filter setting may be written, and between
+  which values, stays owned by Prism's closed whitelist (ADR 023 §3.3, under its
+  own security clearance) — deriving a bound from this inventory would void that
+  control. Likewise the destination kinds are informative only: ADR 010's
+  discriminated union and strict dispatch are untouched, and a kind the consumer
+  does not know stays ignorable.
+
+  Colorimetry is `read-only`, **not** `boot-fixed`: colourspace, range and pixel
+  format are pinned at `obs_reset_video` and no request *and no env var* selects
+  another one, so no list of "available" spaces is published — announcing a
+  choice the binary cannot honour is exactly the decree this manifest exists to
+  end. An enumeration that yields nothing publishes no entry at all, so the
+  consumer keeps its own static list instead of reading an empty array as "none".
+
 - **`GetCapabilities` becomes a versioned capability manifest** (#141, ADR Prism
   027 §3.1/§3.2 — P1 socle). The response now carries a `version` and a
   `capabilities` map in which **every entry declares its application regime**

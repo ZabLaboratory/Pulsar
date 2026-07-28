@@ -199,6 +199,26 @@ function regimeOf(
   return CAPABILITY_REGIMES.includes(a as CapabilityRegime) ? (a as CapabilityRegime) : undefined;
 }
 
+/** Unwraps the `values: [{value}]` list of an inventory entry (ADR 027 §3.3
+ *  block 3). Anything that is not a list of string-valued items yields `[]`:
+ *  the consumer keeps its own static list rather than trusting a malformed
+ *  block. */
+function inventoryOf(w: WireGetCapabilitiesResponse, key: string): string[] {
+  const raw = w.capabilities?.[key]?.values;
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    const v = (item as { value?: unknown } | null)?.value;
+    if (typeof v === "string" && v.length > 0) out.push(v);
+  }
+  return out;
+}
+
+function stringField(w: WireGetCapabilitiesResponse, key: string, field: string): string | undefined {
+  const v = w.capabilities?.[key]?.[field];
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
 export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapabilities {
   // Regimes are only populated for entries the manifest actually declares. A
   // pre-#141 Pulsar sends no `capabilities` block at all: every regime is then
@@ -213,8 +233,22 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
   if (videoRegime) regimes.videoBitrateKbps = videoRegime;
   const audioRegime = regimeOf(w, "audio_bitrate");
   if (audioRegime) regimes.audioBitrateKbps = audioRegime;
+  const filtersRegime = regimeOf(w, "filters");
+  if (filtersRegime) regimes.filters = filtersRegime;
+  const sourceKindsRegime = regimeOf(w, "source_kinds");
+  if (sourceKindsRegime) regimes.sourceKinds = sourceKindsRegime;
+  const destinationKindsRegime = regimeOf(w, "destination_kinds");
+  if (destinationKindsRegime) regimes.destinationKinds = destinationKindsRegime;
+  const colorimetryRegime = regimeOf(w, "video_colorimetry");
+  if (colorimetryRegime) regimes.colorimetry = colorimetryRegime;
 
-  return {
+  // Colorimetry is reported only when the three fields are there; a partial
+  // entry is treated as absent rather than half-read.
+  const colorSpace = stringField(w, "video_colorimetry", "value");
+  const range = stringField(w, "video_colorimetry", "range");
+  const format = stringField(w, "video_colorimetry", "format");
+
+  const caps: PulsarCapabilities = {
     version: w.version ?? 0,
     encoders: (w.encoders ?? []).map((e) => e.value),
     activeEncoder: w.active_encoder ?? "",
@@ -223,8 +257,13 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
       max: w.video_bitrate?.max ?? 0,
     },
     audioBitrateKbps: (w.audio_bitrate ?? []).map((e) => e.value),
+    filters: inventoryOf(w, "filters"),
+    sourceKinds: inventoryOf(w, "source_kinds"),
+    destinationKinds: inventoryOf(w, "destination_kinds"),
     regimes,
   };
+  if (colorSpace && range && format) caps.colorimetry = { colorSpace, range, format };
+  return caps;
 }
 
 export function videoPatchToWire(p: VideoSettingsPatch): WireSetVideoSettingsRequest {

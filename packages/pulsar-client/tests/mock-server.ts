@@ -363,6 +363,27 @@ export class MockObsWebSocket {
               step: 32,
               values: audioLadder.map((value) => ({ value })),
             },
+            // ADR 027 §3.3 blocks 3 + 4 (#144): presence-only inventories and
+            // the effective colorimetry. No filter property bound appears here
+            // -- that is the point of the block.
+            filters: {
+              applicability: "live",
+              values: [{ value: "color_filter_v2" }, { value: "noise_suppress_filter_v2" }],
+            },
+            source_kinds: {
+              applicability: "live",
+              values: [{ value: "dshow_input" }, { value: "window_capture" }],
+            },
+            destination_kinds: {
+              applicability: "live",
+              values: [{ value: "rtmp_custom" }, { value: "vod_local" }, { value: "twitch" }],
+            },
+            video_colorimetry: {
+              applicability: "read-only",
+              value: "709",
+              range: "Partial",
+              format: "NV12",
+            },
           },
         };
       }

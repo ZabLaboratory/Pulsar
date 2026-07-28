@@ -104,6 +104,20 @@ const char *kind_to_string(DestinationKind k)
     }
 }
 
+// The obs output type each kind is served by. Single source of truth: both
+// ensure_output() (which instantiates it) and the capability manifest (which
+// declares the kind available only if that type is registered in this binary)
+// read it from here, so the two can never disagree.
+const char *output_id_for_kind(DestinationKind k)
+{
+    switch (k) {
+    case Kind_RtmpCustom:
+    case Kind_Twitch:     return "rtmp_output";
+    case Kind_VodLocal:   return "ffmpeg_muxer";
+    default:              return nullptr;
+    }
+}
+
 DestinationKind kind_from_string(const char *s)
 {
     if (!s) return Kind_Unknown;
@@ -231,7 +245,11 @@ private:
 bool DestinationRegistry::ensure_output(Destination &d, std::string &errOut)
 {
     if (!d.output) {
-        const char *outId = (d.kind == Kind_VodLocal) ? "ffmpeg_muxer" : "rtmp_output";
+        const char *outId = output_id_for_kind(d.kind);
+        if (!outId) {
+            errOut = "unknown destination kind";
+            return false;
+        }
         std::string outName = "PulsarDest_" + d.id;
         d.output = obs_output_create(outId, outName.c_str(), nullptr, nullptr);
         if (!d.output) {
@@ -877,12 +895,10 @@ static void get_current_encoders(obs_encoder_t *&vEnc, obs_encoder_t *&aEnc)
 // the block being a map.
 static constexpr long long kCapabilityManifestVersion = 1;
 
-// The three regimes of ADR 027 §3.2. kRegimeReadOnly belongs to the vocabulary
-// from day one so consumers can be written against the full set; the first
-// entries to use it arrive with the audio/video blocks (#143/#144).
+// The three regimes of ADR 027 §3.2.
 static constexpr const char *kRegimeLive = "live";
 static constexpr const char *kRegimeBootFixed = "boot-fixed";
-[[maybe_unused]] static constexpr const char *kRegimeReadOnly = "read-only";
+static constexpr const char *kRegimeReadOnly = "read-only";
 
 // Pulsar's own service policy for the streaming bitrates. This is NOT an
 // encoder capability -- it is the range Pulsar itself accepts, enforced by
@@ -951,6 +967,55 @@ static bool narrow_to_policy(long long &lo, long long &hi, long long policyLo, l
     lo = std::max(lo, policyLo);
     hi = std::min(hi, policyHi);
     return lo <= hi;
+}
+
+// Pushes an { "value": <id> } item per enumerated id. Returns the number of
+// items pushed so the caller can declare an empty inventory ABSENT rather than
+// publish an empty list (§3.2: absence is a positive answer, an empty array
+// would read as "this binary registers nothing", which is not what an
+// enumeration that yielded nothing means).
+template <typename EnumFn>
+static size_t collect_ids(obs_data_array_t *out, EnumFn enumerate)
+{
+    size_t n = 0;
+    const char *id = nullptr;
+    for (size_t i = 0; enumerate(i, &id); ++i) {
+        if (!id || !*id) continue;
+        OBSDataAutoRelease item = obs_data_create();
+        obs_data_set_string(item, "value", id);
+        obs_data_array_push_back(out, item);
+        ++n;
+    }
+    return n;
+}
+
+// True iff this binary registers that obs output type.
+static bool output_type_registered(const char *wantedId)
+{
+    if (!wantedId) return false;
+    const char *id = nullptr;
+    for (size_t i = 0; obs_enum_output_types(i, &id); ++i) {
+        if (id && std::strcmp(id, wantedId) == 0) return true;
+    }
+    return false;
+}
+
+// Compact token for a libobs colourspace. Transcribes the switch of
+// get_video_colorspace_name() (libobs/media-io/video-io.h) -- including its
+// treatment of VIDEO_CS_DEFAULT as Rec. 709 -- into the vocabulary the
+// consumer already uses. An enum value libobs grows later maps to nullptr and
+// the entry is declared absent, never guessed.
+static const char *colorspace_token(enum video_colorspace cs)
+{
+    switch (cs) {
+    case VIDEO_CS_DEFAULT:
+    case VIDEO_CS_709:      return "709";
+    case VIDEO_CS_601:      return "601";
+    case VIDEO_CS_SRGB:     return "srgb";
+    case VIDEO_CS_2100_PQ:  return "2100pq";
+    case VIDEO_CS_2100_HLG: return "2100hlg";
+    }
+    return nullptr;
 }
 
 void on_get_video_settings(obs_data_t * /*req*/, obs_data_t *res, void *)
@@ -1203,6 +1268,100 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
                     obs_data_set_obj(caps, "audio_bitrate", entry);
                 }
             }
+        }
+    }
+
+    // ---- Inventories (ADR 027 §3.3 block 3, issue #144) --------------------
+    //
+    // PRESENCE ONLY, never permission. This block answers "what exists in this
+    // binary", and nothing else:
+    //
+    //   * filters -- WHICH filter types are registered. NO property bound of
+    //     any filter is emitted here, now or ever: the admitted keys and their
+    //     bounded schemas stay owned by Prism's closed whitelist (ADR 023 §3.3,
+    //     under its own Bastion clearance). Deriving a bound from this list
+    //     would void that control, which is precisely what §3.1 forbids.
+    //   * source_kinds / destination_kinds -- WHICH kinds can be instantiated.
+    //     The discriminated union and strict dispatch of ADR 010 are untouched:
+    //     a kind the consumer does not know stays ignorable, it is never
+    //     something Pulsar asks it to route.
+    //
+    // Regime is `live` for the three: a filter, a source and a destination of a
+    // declared kind can all be created on a running Pulsar. The inventory
+    // itself is fixed for the process lifetime, but the regime states when the
+    // capability APPLIES, not whether the list can be rewritten.
+    //
+    // An enumeration that yields nothing publishes no entry at all -- the
+    // consumer keeps its own static list rather than reading an empty array as
+    // "this binary has none".
+    {
+        OBSDataArrayAutoRelease filters = obs_data_array_create();
+        if (collect_ids(filters, obs_enum_filter_types) > 0) {
+            OBSDataAutoRelease entry = obs_data_create();
+            obs_data_set_string(entry, "applicability", kRegimeLive);
+            obs_data_set_array(entry, "values", filters);
+            obs_data_set_obj(caps, "filters", entry);
+        }
+    }
+
+    // Inputs, not obs_enum_source_types: the latter also yields filter and
+    // transition types, which are not things a consumer can create as a source.
+    {
+        OBSDataArrayAutoRelease sources = obs_data_array_create();
+        if (collect_ids(sources, obs_enum_input_types) > 0) {
+            OBSDataAutoRelease entry = obs_data_create();
+            obs_data_set_string(entry, "applicability", kRegimeLive);
+            obs_data_set_array(entry, "values", sources);
+            obs_data_set_obj(caps, "source_kinds", entry);
+        }
+    }
+
+    // Pulsar's own destination vocabulary, walked from the DestinationKind enum
+    // (kind_to_string is the single source of the strings) and gated on the obs
+    // output type that serves it being registered in THIS binary. A kind whose
+    // output type is missing could not be started, so it is not declared.
+    {
+        OBSDataArrayAutoRelease kinds = obs_data_array_create();
+        size_t n = 0;
+        for (int k = 0; k < Kind_Unknown; ++k) {
+            const DestinationKind kind = static_cast<DestinationKind>(k);
+            if (!output_type_registered(output_id_for_kind(kind))) continue;
+            OBSDataAutoRelease item = obs_data_create();
+            obs_data_set_string(item, "value", kind_to_string(kind));
+            obs_data_array_push_back(kinds, item);
+            ++n;
+        }
+        if (n > 0) {
+            OBSDataAutoRelease entry = obs_data_create();
+            obs_data_set_string(entry, "applicability", kRegimeLive);
+            obs_data_set_array(entry, "values", kinds);
+            obs_data_set_obj(caps, "destination_kinds", entry);
+        }
+    }
+
+    // ---- Video colorimetry (ADR 027 §3.3 block 4, issue #144) --------------
+    //
+    // Colourspace, range and pixel format are pinned once at obs_reset_video
+    // (pulsar-headless/main.cpp:161-163) and read back here from libobs. The
+    // regime is READ-ONLY, not boot-fixed: no env var and no request can select
+    // another one, so declaring `boot-fixed` would promise a respawn knob that
+    // does not exist. No set of "available" spaces is published for the same
+    // reason -- nothing can select one, and announcing a choice the binary
+    // cannot honour is exactly the decree §3.1 exists to prevent.
+    {
+        obs_video_info ovi = {};
+        const char *cs = nullptr;
+        if (obs_get_video_info(&ovi) && (cs = colorspace_token(ovi.colorspace)) != nullptr) {
+            OBSDataAutoRelease entry = obs_data_create();
+            obs_data_set_string(entry, "applicability", kRegimeReadOnly);
+            obs_data_set_string(entry, "value", cs);
+            // resolve_video_range / get_video_*_name are libobs' own helpers:
+            // VIDEO_RANGE_DEFAULT is resolved the way libobs resolves it, not
+            // the way we would guess it.
+            obs_data_set_string(entry, "range",
+                                get_video_range_name(ovi.output_format, ovi.range));
+            obs_data_set_string(entry, "format", get_video_format_name(ovi.output_format));
+            obs_data_set_obj(caps, "video_colorimetry", entry);
         }
     }
 

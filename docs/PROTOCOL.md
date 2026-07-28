@@ -231,7 +231,7 @@ clients see snake_case on the wire.
 | `StopAllDestinations` | Mirror of the above. | — | `ok: bool`, `error?` |
 | `GetVideoSettings` | Snapshot the encoder + reset_video state. Includes the boot-fixed encoder identity (`video_encoder` / `video_preset` / `video_profile`). | — | `fps`, `width`, `height`, `video_bitrate`, `video_rate_control`, `video_keyint_sec`, `audio_bitrate`, `video_encoder`, `video_preset`, `video_profile`, `error?` |
 | `SetVideoSettings` | Mutate encoder bitrates **live**. Setting `fps` / `width` / `height` is rejected — those require boot-time env vars (`PULSAR_FPS`, `PULSAR_RESOLUTION`). `video_encoder` / `video_preset` / `video_profile` are likewise rejected: encoder identity is boot-fixed via `PULSAR_VIDEO_ENCODER` (no live swap — see ADR 004 §3.4). Audio bitrate is only applied while the audio encoder is idle. | `video_bitrate?`, `audio_bitrate?` | `changed: bool`, `video_bitrate?`, `audio_bitrate?`, `error?` |
-| `GetCapabilities` | **Capability manifest** — the authoritative statement of what this Pulsar can do (Prism ADR 027 §3.1/§3.2). Enumerates the encoder families this build exposes (via `obs_enum_encoder_types()`, mapped to Pulsar short names) plus the bitrate windows, each with its application regime. Off-air detection; `active_encoder` is the family bound to the streaming output. See the manifest and list-encoding notes below. | — | `version: number`, `capabilities: { [name]: CapabilityEntry }`, `encoders: {value: string}[]`, `active_encoder: string`, `video_bitrate?: {min, max}`, `audio_bitrate?: {value: number}[]`, `error?` |
+| `GetCapabilities` | **Capability manifest** — the authoritative statement of what this Pulsar can do (Prism ADR 027 §3.1/§3.2). Enumerates the encoder families this build exposes (via `obs_enum_encoder_types()`, mapped to Pulsar short names), the bitrate windows, the presence-only inventories (registered filters, source kinds, destination kinds) and the effective video colorimetry — each with its application regime. Off-air detection; `active_encoder` is the family bound to the streaming output. See the manifest and list-encoding notes below. | — | `version: number`, `capabilities: { [name]: CapabilityEntry }`, `encoders: {value: string}[]`, `active_encoder: string`, `video_bitrate?: {min, max}`, `audio_bitrate?: {value: number}[]`, `error?` |
 | `GetAdaptiveState` | Snapshot the bitrate adaptation worker. | — | `enabled`, `target_kbps`, `current_kbps`, `floor_kbps`, `stable_ticks`, `adjustments_total`, `last_delta_total`, `last_delta_dropped`, `last_drop_ratio`, `error?` |
 | `SetAdaptiveEnabled` | Toggle the worker. Disabling pauses sampling; the encoder bitrate is left at whatever value the worker last applied. Re-enabling resets `stable_ticks` to 0 so the loop re-warms before any climb attempt. | `enabled` | `enabled: bool`, `error?` |
 
@@ -268,7 +268,17 @@ encoder / audio / inventory / video blocks that land later:
     "active_encoder": { "applicability": "boot-fixed", "value": "x264" },
     "video_bitrate":  { "applicability": "live", "min": 200, "max": 50000, "step": 50 },
     "audio_bitrate":  { "applicability": "live", "min": 64, "max": 512, "step": 32,
-                        "values": [{ "value": 64 }] }
+                        "values": [{ "value": 64 }] },
+    // Inventories -- presence only, no bound, ever (see below).
+    "filters":           { "applicability": "live",
+                           "values": [{ "value": "color_filter_v2" }] },
+    "source_kinds":      { "applicability": "live",
+                           "values": [{ "value": "window_capture" }] },
+    "destination_kinds": { "applicability": "live",
+                           "values": [{ "value": "rtmp_custom" }, { "value": "twitch" }] },
+    // Effective video colorimetry -- observable, never settable.
+    "video_colorimetry": { "applicability": "read-only", "value": "709",
+                           "range": "Partial", "format": "NV12" }
   }
 }
 ```
@@ -286,6 +296,43 @@ Compatibility contract, in both directions:
   advertises and what Pulsar's own setter accepts (`SetVideoSettings`:
   `200..50000` kbps video, `32..512` kbps audio). The manifest therefore can
   never announce a value the setter would reject — it may only narrow.
+
+##### Inventories — presence, never permission (ADR 027 §3.3 block 3)
+
+`filters`, `source_kinds` and `destination_kinds` answer **what exists in this
+binary**, and nothing else. All three are enumerated from the running process —
+`obs_enum_filter_types()`, `obs_enum_input_types()`, and Pulsar's own
+`DestinationKind` walked through `kind_to_string()` and gated on the obs output
+type that serves it (`rtmp_output` / `ffmpeg_muxer`) being registered. There is
+no hard-coded list behind any of them.
+
+- **No filter property bound is ever emitted here.** Which filter settings may
+  be written, and between which values, stays owned by the consumer's closed
+  whitelist (Prism ADR 023 §3.3, under its own security clearance). Deriving a
+  bound from this inventory would void that control — it is the one thing
+  ADR 027 §3.1 forbids outright.
+- **Destination kinds do not alter anyone's dispatch.** The list is informative;
+  a `kind` the consumer does not know stays ignorable and is never routed.
+- `source_kinds` enumerates **inputs**, not `obs_enum_source_types()` (which
+  also yields filter and transition types — not things one creates as a source).
+- The regime is `live`: a filter, a source or a destination of a declared kind
+  can be created on a running Pulsar.
+- An enumeration that yields nothing publishes **no entry at all**, so the
+  consumer keeps its own static list instead of reading an empty array as
+  "this binary registers none".
+
+##### Video colorimetry (ADR 027 §3.3 block 4)
+
+`video_colorimetry` reports the colourspace (`value`), range and pixel format
+actually in force, read back from `obs_get_video_info()`. They are pinned once
+at `obs_reset_video` (`plugins/pulsar-headless/main.cpp`) and the regime is
+**`read-only`, not `boot-fixed`**: no request *and no env var* selects another
+one, so promising a respawn knob would be a lie. For the same reason the entry
+publishes **no list of "available" spaces** — nothing can select one, and
+announcing a choice the binary cannot honour is exactly the decree §3.1 exists
+to prevent. `range` and `format` carry libobs' own names (`Partial`/`Full`,
+`NV12`, …), `value` the compact token `601` / `709` / `srgb` / `2100pq` /
+`2100hlg`. A colourspace enum this build cannot name is declared absent.
 
 > **List encoding on the wire.** libobs vendor handlers can only serialise
 > arrays as arrays of *objects* (`Utils::Json::ObsDataToJson` walks each
