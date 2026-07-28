@@ -89,7 +89,15 @@ if (-not (Test-Path (Join-Path $binSrc 'pulsar.exe'))) {
 #   obs-vst            -- VST audio host, niche + arbitrary DLL load
 #                         attack surface. obs-filters covers the standard
 #                         compressor/EQ/gate/limiter natively.
-#   obs-webrtc         -- WHIP/WHEP outputs; Pulsar pushes RTMP.
+#   nv-filters         -- NVIDIA Audio/Video Effects filters. Same motive as
+#                         obs-vst: at module load it LoadLibrary()s the two
+#                         NVIDIA SDKs by bare name (NVAudioEffects.dll,
+#                         NVVideoEffects.dll, nvcuda.dll, NVCVImage.dll --
+#                         upstream/plugins/nv-filters/nvafx-load.h:305,
+#                         nvvfx-load.h:689) off a path read from the inherited
+#                         environment, i.e. arbitrary code execution in the
+#                         process that holds the Twitch stream key. Optional
+#                         effects, no consumer in Pulsar. (NS1)
 #   decklink-*         -- Blackmagic Design hardware, n/a.
 #   frontend-tools     -- Lua/Python scripting + auto-remux; redundant
 #                         with the embedder's TS host, plus most code
@@ -98,6 +106,7 @@ if (-not (Test-Path (Join-Path $binSrc 'pulsar.exe'))) {
 $baseStrippedPlugins = @(
     'coreaudio-encoder',
     'obs-vst',
+    'nv-filters',
     'obs-webrtc',
     'decklink-captions',
     'decklink-output-ui',

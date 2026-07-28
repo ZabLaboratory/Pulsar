@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔒 Security
+
+- **`nv-filters` dropped from both bundles (NS1).** The NVIDIA Audio/Video
+  Effects plugin resolves its two SDKs by bare name at module load —
+  `LoadLibrary(L"NVAudioEffects.dll")` / `nvcuda.dll`
+  (`upstream/plugins/nv-filters/nvafx-load.h:305,307`) and
+  `LoadLibrary(L"NVVideoEffects.dll")` / `NVCVImage.dll`
+  (`nvvfx-load.h:689,690`), the directory coming from the environment Pulsar
+  inherits from its embedder. Anything that can poison that environment gets
+  code execution inside the process that holds the Twitch stream key, on every
+  boot, whether or not the operator ever uses an NVIDIA effect. Same motive as
+  the `obs-vst` strip, so the same remedy: `'nv-filters'` joins
+  `$baseStrippedPlugins` in `scripts/package-win.ps1`, removing both the DLL
+  and `data/obs-plugins/nv-filters/` from the light and full zips.
+
+  No functional loss: the module is a self-contained set of optional filters,
+  referenced nowhere else in the tree (`obs-filters`' NVAFX noise-suppression
+  branch is behind `LIBNVAFX_ENABLED`, a define applied to the `nv-filters`
+  target alone — `upstream/plugins/nv-filters/CMakeLists.txt:10,17` — so it is
+  not compiled into the plugin we keep). `obs-nvenc` is untouched: NVENC ships
+  as before.
+
 ### 🐛 Fixed
 
 - **`PULSAR_VIDEO_PRESET` was a no-op on QSV, and unreadable there too.** The
