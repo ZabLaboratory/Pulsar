@@ -655,6 +655,12 @@ $probes = @(
     # bounds are ADR 023 §3.3's, under its own clearance). Read-only probe:
     # it calls GetCapabilities and touches nothing.
     'probe-manifest-inventories.py',
+    # #159 / ADR Prism 027 Amendment 1 -- the manifest's fifth block must carry
+    # adapters READ from libobs (name + index, read-only) and output scales
+    # DERIVED from what the binary can establish (boot-fixed, never exceeding
+    # the canvas), and both must agree with GetVideoSettings on the same
+    # instance. Read-only probe: two vendor reads, touches nothing.
+    'probe-manifest-adapters-scales.py',
     # #157 / ADR Prism 028 §3.2 -- SetInputAudioTracks must be judged by the
     # OUTPUT (the encoder slots actually bound), never by the input, whose
     # mixer bit is written whatever the output carries. Creates and removes

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Added
+
+- **`GetCapabilities` declares the graphics adapters and the admitted output
+  scales (#159, ADR Prism 027 Amendment 1).** Fifth manifest block, additive
+  like the four before it: `capabilities.graphics_adapters` (`read-only`) lists
+  every adapter `gs_enum_adapters()` reports with the **index**
+  `obs_video_info.adapter` is expressed in, plus the active one;
+  `capabilities.output_scales` (`boot-fixed`) publishes the canvas and the
+  output resolutions this binary can actually establish. Both close a decree on
+  the consumer side — Prism pinned adapter `0` without ever asking which exist,
+  and assumed the canvas was always the output.
+
+  Neither is a table held in Pulsar: the adapters come from libobs' own
+  enumeration, and the scale set is **derived** from what the binary can
+  establish (`reset_video()` sets base and output from one `PULSAR_RESOLUTION`,
+  `SetVideoSettings` refuses `width`/`height` hot, nothing calls
+  `obs_encoder_set_scaled_size()`), so it grows by itself the day a downscale
+  path lands rather than being widened by hand. A value that cannot be read is
+  omitted, never replaced. A client that ignores the block is unaffected.
+  Documented in `docs/PROTOCOL.md`, *Adapters and output scales*; gated on the
+  emitter's side by `scripts/probe-manifest-adapters-scales.py` (offline probe
+  suite), which also cross-checks the block against `GetVideoSettings` on the
+  same running instance.
+
 ### 🐛 Fixed
 
 - **`SetInputAudioTracks` no longer reports an effect it does not have

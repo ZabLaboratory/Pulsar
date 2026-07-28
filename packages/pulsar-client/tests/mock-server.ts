@@ -442,6 +442,24 @@ export class MockObsWebSocket {
               layout: "stereo",
               channels: 2,
             },
+            // ADR 027 Amendment 1 (#159). Adapters are read-only (nothing
+            // selects one), scales boot-fixed (PULSAR_RESOLUTION selects the
+            // resolution at spawn, SetVideoSettings refuses it hot). The
+            // single admitted scale mirrors a real headless Pulsar, whose
+            // canvas IS its output -- no downscale path exists.
+            graphics_adapters: {
+              applicability: "read-only",
+              active_index: 0,
+              values: [
+                { value: "NVIDIA GeForce RTX 4070", index: 0 },
+                { value: "Intel(R) UHD Graphics 770", index: 1 },
+              ],
+            },
+            output_scales: {
+              applicability: "boot-fixed",
+              canvas: { width: 1920, height: 1080 },
+              values: [{ value: "1920x1080", width: 1920, height: 1080, scale: 1 }],
+            },
           },
         };
       }

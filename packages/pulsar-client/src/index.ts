@@ -21,7 +21,11 @@ export type {
   Destination,
   DestinationKind,
   EncoderFamily,
+  // Exported alongside the adapters/scales block (#159): both are reachable
+  // from PulsarCapabilities, so a consumer must be able to name them.
+  GraphicsAdapter,
   InputMuteStateChangedEvent,
+  OutputScale,
   OutputState,
   PulsarCapabilities,
   PulsarEventMap,

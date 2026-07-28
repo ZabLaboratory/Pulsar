@@ -131,6 +131,35 @@ export interface AudioCapabilities {
   channels?: number;
 }
 
+/**
+ * One graphics adapter the running libobs enumerates (ADR 027 Amendment 1).
+ *
+ * `index` is the number `obs_video_info.adapter` is expressed in, so
+ * `activeGraphicsAdapter` can be matched against this list instead of being
+ * assumed to be `0` — which is the decree this block exists to remove.
+ */
+export interface GraphicsAdapter {
+  /** Adapter name as the graphics subsystem reports it. */
+  name: string;
+  /** Adapter index, in `obs_video_info.adapter` numbering. */
+  index: number;
+}
+
+/**
+ * One output resolution this Pulsar admits for its current canvas
+ * (ADR 027 Amendment 1).
+ *
+ * The list is what the binary can actually establish, not a ladder of
+ * downscale factors: a Pulsar with no downscale path admits exactly its canvas
+ * resolution, and says so rather than letting the consumer guess.
+ */
+export interface OutputScale {
+  width: number;
+  height: number;
+  /** Ratio to the canvas. Absent when the two axes do not share one ratio. */
+  scale?: number;
+}
+
 /** Capabilities snapshot returned by GetCapabilities (ADR 004 §3.3, ADR 027 §3.2). */
 export interface PulsarCapabilities {
   /** Manifest schema version. `0` when talking to a pre-#141 Pulsar. */
@@ -178,6 +207,19 @@ export interface PulsarCapabilities {
    *  it — its fields are then all absent, so no consumer reads a "no" that was
    *  never said. */
   audio: AudioCapabilities;
+  /** Graphics adapters libobs enumerates (ADR 027 Am.1). Empty when the
+   *  manifest declares none — the consumer keeps its own assumption rather
+   *  than reading "this machine has no GPU". */
+  graphicsAdapters: GraphicsAdapter[];
+  /** Index of the adapter actually in use. `undefined` when not declared —
+   *  never defaulted to 0. */
+  activeGraphicsAdapter?: number;
+  /** Canvas resolution the admitted output scales are relative to.
+   *  `undefined` when the manifest declares no scale block. */
+  canvas?: { width: number; height: number };
+  /** Output resolutions admitted for that canvas (ADR 027 Am.1). Empty when
+   *  the manifest declares none. */
+  outputScales: OutputScale[];
   /** Regime per entry. A key is present only if the manifest declared it, so
    *  `undefined` means "not declared", never "live". */
   regimes: {
@@ -194,6 +236,8 @@ export interface PulsarCapabilities {
     audioTracks?: CapabilityRegime;
     audioSampleRate?: CapabilityRegime;
     audioSpeakerLayout?: CapabilityRegime;
+    graphicsAdapters?: CapabilityRegime;
+    outputScales?: CapabilityRegime;
   };
 }
 
