@@ -33,9 +33,12 @@ What we do NOT validate:
   - HOW MANY scales are admitted -- one today, more the day a downscale path
     lands. The probe checks the shape and the agreement, not the cardinality.
 
-A block the manifest does not declare at all is NOT a failure: absence is a
-positive answer under §3.2 and the consumer keeps its own assumption. Only a
-declared-but-malformed, or a declared-but-drifted, block fails here.
+An absent `graphics_adapters` is NOT a failure: absence is a positive answer
+under §3.2 and the consumer keeps its own assumption. An absent `output_scales`
+IS one *when GetVideoSettings answered a resolution*, because both come from the
+same `obs_get_video_info()` read on the same instance -- a binary that can read
+it and does not declare it has silently lost the block, and a probe that let
+that pass would be measuring nothing.
 
 Usage (from the repo root with pulsar.exe already running):
     pip install websockets
@@ -298,7 +301,20 @@ async def probe(url: str, password: str) -> int:
 
         scales = block.get("output_scales")
         if scales is None:
-            print("  output_scales: not declared (absent -- consumer keeps its assumption)")
+            # Absence is a positive answer in general -- but not against THIS
+            # binary. The block is built from obs_get_video_info(), the same
+            # read that just answered GetVideoSettings: if that request
+            # reported a resolution and the block is missing, the emitter did
+            # not declare something it demonstrably can read. Without this, a
+            # silent regression to "no block at all" would pass the probe.
+            if isinstance(video.get("width"), int) and video["width"] > 0:
+                problems.append(
+                    f"output_scales: not declared, yet GetVideoSettings reports "
+                    f"{video.get('width')}x{video.get('height')} on the same instance -- the "
+                    f"block reads obs_get_video_info(), so it cannot be absent here"
+                )
+            else:
+                print("  output_scales: not declared (absent -- consumer keeps its assumption)")
         elif not isinstance(scales, dict):
             problems.append(f"output_scales: entry is {type(scales).__name__}")
         else:
