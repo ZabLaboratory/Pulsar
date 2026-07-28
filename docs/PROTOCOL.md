@@ -331,7 +331,8 @@ fact, not a limitation waiting to be lifted (ADR 027 §3.5).
 
 - **Every value is read from that family's libobs properties**, never listed in
   Pulsar's source: presets come from the family's own preset knob (`preset` for
-  x264/AMF/NVENC, `preset2` on the ffmpeg NVENC path, `target_usage` for QSV),
+  x264/AMF and the 31.0+ NVENC encoder, `preset2` on the pre-31.0 NVENC compat
+  ids `jim_nvenc` / `ffmpeg_nvenc`, `target_usage` for QSV),
   profiles from `profile`, rate-controls from `rate_control`, and the two
   windows from the `keyint_sec` / `bitrate` int properties.
 - **A family the binary does not register is absent from the list.** No entry is
@@ -543,7 +544,7 @@ value — operator/env-controlled only.
 | `PULSAR_VIDEO_RATE_CONTROL` | `pulsar-frontend-stub` | `CBR` | `CBR`\|`VBR`\|`CQP`, only applied when a non-fallback encoder binds. |
 | `PULSAR_VIDEO_PROFILE` | `pulsar-frontend-stub` | `high` | `baseline`\|`main`\|`high`. |
 | `PULSAR_VIDEO_KEYINT_SEC` | `pulsar-frontend-stub` | `2` | Keyframe interval, `0..20` seconds. |
-| `PULSAR_VIDEO_PRESET` | `pulsar-frontend-stub` | family-specific | Validated against the preset set of the resolved encoder family — x264 `ultrafast..veryslow` (default `veryfast`), NVENC `p1..p7` (`p5`), **QSV `TU1..TU7` (`TU4`, written to the `target_usage` property, not `preset`)**, AMF `speed`/`balanced`/`quality` (`balanced`). Matched case-insensitively, applied in the canonical spelling `capabilities.encoder_families` publishes; unknown value ⇒ family default (logged). |
+| `PULSAR_VIDEO_PRESET` | `pulsar-frontend-stub` | family-specific | Validated against the preset set of the resolved encoder family — x264 `ultrafast..veryslow` (default `veryfast`), NVENC `p1..p7` (`p5`, written to `preset` on `obs_nvenc_h264_tex` but to **`preset2` on the compat ids `jim_nvenc` / `ffmpeg_nvenc`** — the property name is resolved per encoder id, not per family), **QSV `TU1..TU7` (`TU4`, written to the `target_usage` property, not `preset`)**, AMF `speed`/`balanced`/`quality` (`balanced`). Matched case-insensitively, applied in the canonical spelling `capabilities.encoder_families` publishes; unknown value ⇒ family default (logged). |
 | `PULSAR_AUDIO_BITRATE` | `pulsar-frontend-stub` | `160` (kbps) | `ffmpeg_aac` bitrate, `32..512`. Mutable live via `pulsar:SetVideoSettings` while the audio encoder is idle. |
 | `PULSAR_DESKTOP_AUDIO_DEVICE_ID` | `pulsar-frontend-stub` | `"default"` | `wasapi_output_capture` device id (mixer channel 1). |
 | `PULSAR_MIC_DEVICE_ID` | `pulsar-frontend-stub` | unset (source not created) | `wasapi_input_capture` device id (mixer channel 3) — opt-in, since mic devices are absent on CI/servers. |

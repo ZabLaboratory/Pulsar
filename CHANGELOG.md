@@ -38,6 +38,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name, the seven values and the default against `obs-qsv11`'s own source, and
   fails the day either side drifts.
 
+- **`PULSAR_VIDEO_PRESET` was a no-op on NVENC too — including `jim_nvenc`, the
+  id tried *first*.** Same class of bug as the QSV one above, found while fixing
+  it, but the split is *inside* a family rather than between families: the knob
+  is `"preset"` on the 31.0+ encoder (`obs_nvenc_h264_tex`,
+  `upstream/plugins/obs-nvenc/nvenc-properties.c:142`) and `"preset2"` on the
+  pre-31.0 compat shims (`jim_nvenc`, and `ffmpeg_nvenc` — the same compat
+  object re-registered under the old id, `nvenc-compat.c:183`/`:397`). A single
+  per-family name could not be right for all three.
+
+  On the compat path, writing `"preset"` was worse than inert:
+  `migrate_settings()` (`nvenc-compat.c:20`) copies `"preset2"` **over**
+  `"preset"` before rerouting, so the encoder ran at `preset2`'s own default
+  `p5` whatever the env var said. Since `resolveEncoderId` prefers `jim_nvenc`
+  ahead of `obs_nvenc_h264_tex`, this was the *live* path on any build carrying
+  the compat shims — not a corner case. The values (`p1..p7`) and default (`p5`)
+  are identical on both sides, so only the name differed, which is why it was
+  silent from the wire as well.
+
+  The boot setter now resolves the preset property name **per encoder id**
+  (`presetPropForId`) instead of per family. The read side needed no change:
+  `kPresetPropNames` already carried `preset2`.
+
+  Proof: `scripts/check-nvenc-preset-contract.py`, wired into `lint` and
+  hardware-free (**no NVIDIA GPU required or used**). It reads the two property
+  names, the value set and the default out of `obs-nvenc`'s own source, then
+  asserts that *every* id `resolveEncoderId` can select would be written the
+  name its own plugin reads. It fails on the pre-fix tree naming `jim_nvenc` and
+  `ffmpeg_nvenc`, and on a partial fix that covers only `ffmpeg_nvenc`.
+
 ## [1.3.0] - 2026-07-28
 
 Minor: the release is **additive** — no `pulsar:*` request was removed or

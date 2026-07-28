@@ -744,6 +744,10 @@ const char *encoderFamilyForId(const char *id)
 // seven levels, so it is exactly what capabilities.encoder_families publishes
 // from that same property list (#148) -- the boot whitelist and the manifest
 // cannot disagree.
+//
+// NVENC makes the same point one level down: the property name is not even
+// uniform WITHIN a family, so a per-family name is not enough (see
+// presetPropForId below).
 struct PresetSet {
     const char *const *values;
     const char *dflt;
@@ -763,6 +767,37 @@ PresetSet presetsForFamily(const std::string &family)
     if (family == "qsv")   return {kQsvPresets, "TU4", "target_usage"};
     if (family == "amf")   return {kAmf, "balanced", "preset"};
     return {kX264, "veryfast", "preset"};
+}
+
+// The preset property name of a CONCRETE encoder id, which for NVENC is not the
+// family's name. resolveEncoderId's nvenc preference list spans two different
+// spellings of the same knob:
+//
+//   obs_nvenc_h264_tex  -- the 31.0+ encoder, knob "preset"
+//                          (upstream/plugins/obs-nvenc/nvenc-properties.c:142,
+//                          default "p5" at :50)
+//   jim_nvenc,          -- pre-31.0 COMPAT shims, knob "preset2"
+//   ffmpeg_nvenc           (upstream/plugins/obs-nvenc/nvenc-compat.c:183,
+//                          default "p5" at :111; ffmpeg_nvenc is the same
+//                          compat object re-registered under the old id at
+//                          nvenc-compat.c:397)
+//
+// The values (p1..p7) and the default (p5) are identical on both sides, so only
+// the NAME differs -- which is exactly what made this silent. Writing "preset"
+// to a compat shim is worse than a no-op: migrate_settings() (nvenc-compat.c:20)
+// OVERWRITES "preset" with the value of "preset2" before rerouting, so the
+// encoder ran at preset2's own default p5 whatever PULSAR_VIDEO_PRESET said --
+// the QSV bug (#150) a second time, on the path resolveEncoderId tries FIRST.
+//
+// This is deliberately keyed on the id rather than writing both names: only one
+// of the two is real for a given encoder, and writing both would put two preset
+// keys in one settings object, which is precisely the assumption the read side
+// relies on to pick a name (plugin-main.cpp:kPresetPropNames, "first match wins").
+const char *presetPropForId(const char *id, const char *familyProp)
+{
+    if (std::strcmp(id, "jim_nvenc") == 0 || std::strcmp(id, "ffmpeg_nvenc") == 0)
+        return "preset2";
+    return familyProp;
 }
 
 std::string toLower(const char *s)
@@ -1027,7 +1062,7 @@ bool PulsarFrontendAPI::setup()
         obs_data_set_int(vEncSettings, "bitrate", videoBitrate);
         obs_data_set_string(vEncSettings, "rate_control", rateControl.c_str());
         obs_data_set_int(vEncSettings, "keyint_sec", keyintSec);
-        obs_data_set_string(vEncSettings, presets.prop, preset.c_str());
+        obs_data_set_string(vEncSettings, presetPropForId(encoderId, presets.prop), preset.c_str());
         obs_data_set_string(vEncSettings, "profile", profile.c_str());
         if (std::strcmp(encoderId, "obs_x264") == 0)
             obs_data_set_string(vEncSettings, "tune", "zerolatency"); // x264-only knob
