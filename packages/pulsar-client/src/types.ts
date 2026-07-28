@@ -66,6 +66,30 @@ export interface VideoSettings {
 export type CapabilityRegime = "live" | "boot-fixed" | "read-only";
 
 /**
+ * What one encoder family this build exposes actually offers (ADR 027 §3.3
+ * bloc 1). Read from that family's libobs properties, narrowed by Pulsar's own
+ * boot policy — never a list this package or Pulsar holds as a literal.
+ *
+ * Every field but `family` is optional and stays *undefined* when Pulsar
+ * declared it absent (the encoder advertises no such property). A family the
+ * binary does not register is not in the array at all.
+ */
+export interface EncoderFamilyCapability {
+  /** Whitelisted family short name: "x264" | "nvenc" | "qsv" | "amf". */
+  family: string;
+  /** Preset values the family's preset knob offers, in libobs' own order. */
+  presets?: string[];
+  /** H.264 profiles, intersected with what PULSAR_VIDEO_PROFILE accepts. */
+  profiles?: string[];
+  /** Rate controls, intersected with what PULSAR_VIDEO_RATE_CONTROL accepts. */
+  rateControls?: string[];
+  /** Keyframe interval window in seconds. */
+  keyintSec?: { min: number; max: number; step: number };
+  /** This family's own bitrate window in kbps (may differ per family). */
+  bitrateKbps?: { min: number; max: number; step: number };
+}
+
+/**
  * Headphone-monitoring capability (ADR 027 §3.3 bloc 2).
  *
  * `deviceBound` is the load-bearing field: a Pulsar that exposes no way to bind
@@ -120,6 +144,10 @@ export interface PulsarCapabilities {
   videoBitrateKbps: { min: number; max: number };
   /** Discrete audio bitrate ladder, in kbps. Empty when declared absent. */
   audioBitrateKbps: number[];
+  /** Per-family encoder detail (ADR 027 §3.3 bloc 1). Empty when the manifest
+   *  carries no encoder block — a pre-#142 Pulsar, whose absence leaves the
+   *  consumer's static assumptions intact. */
+  encoderFamilies: EncoderFamilyCapability[];
   /** Audio block (ADR 027 §3.3 bloc 2). Empty object on a Pulsar that predates
    *  it — its fields are then all absent, so no consumer reads a "no" that was
    *  never said. */
@@ -131,6 +159,7 @@ export interface PulsarCapabilities {
     activeEncoder?: CapabilityRegime;
     videoBitrateKbps?: CapabilityRegime;
     audioBitrateKbps?: CapabilityRegime;
+    encoderFamilies?: CapabilityRegime;
     audioMonitoring?: CapabilityRegime;
     audioTracks?: CapabilityRegime;
     audioSampleRate?: CapabilityRegime;

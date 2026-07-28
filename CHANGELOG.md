@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Added
 
+- **The capability manifest declares what each encoder family offers** (#142,
+  ADR Prism 027 §3.3 bloc 1). `capabilities.encoder_families` lists, for every
+  family this build actually enumerates, its presets, H.264 profiles,
+  rate-controls, keyint window and its own bitrate window. Prism decreed those
+  presets from a table marked "hardcoded until the Pulsar C++ work lands" while
+  `PULSAR_VIDEO_PRESET` had been read at boot all along — the capability was
+  paid for and invisible.
+
+  Every value is **read from that family's libobs properties** (the bound
+  encoder's own properties for the active family, the registered id's for the
+  others). Nothing here is a list of encoder values held in Pulsar's source: the
+  only literals are the libobs property names the same knob goes by across
+  plugins (`preset` / `preset2` / `target_usage`). A field the encoder does not
+  advertise is omitted, and **a family the binary does not register produces no
+  entry at all** — no fabricated block for an encoder that was not compiled in.
+
+  The whole block is **`boot-fixed`**: that is the fact, not a limitation to fix
+  later. Making the preset hot-settable is explicitly out of scope (§3.5).
+  Profiles, rate-controls and both windows are intersected with what the boot
+  setter accepts, so the manifest can only narrow. Presets are deliberately not
+  intersected — the boot whitelist is a per-family table this block exists to
+  stop duplicating, and it is wrong for QSV (whose knob is `target_usage` with
+  values `TU1..TU7`), so narrowing by it would publish an empty set for a family
+  that has seven presets. That mismatch is Pulsar's, not the manifest's, and is
+  tracked separately.
+
 - **The capability manifest declares the audio block** (#143, ADR Prism 027 §3.3
   bloc 2). Four new entries — `audio_monitoring`, `audio_tracks`,
   `audio_sample_rate`, `audio_speaker_layout` — each with its own regime.

@@ -231,7 +231,7 @@ clients see snake_case on the wire.
 | `StopAllDestinations` | Mirror of the above. | — | `ok: bool`, `error?` |
 | `GetVideoSettings` | Snapshot the encoder + reset_video state. Includes the boot-fixed encoder identity (`video_encoder` / `video_preset` / `video_profile`). | — | `fps`, `width`, `height`, `video_bitrate`, `video_rate_control`, `video_keyint_sec`, `audio_bitrate`, `video_encoder`, `video_preset`, `video_profile`, `error?` |
 | `SetVideoSettings` | Mutate encoder bitrates **live**. Setting `fps` / `width` / `height` is rejected — those require boot-time env vars (`PULSAR_FPS`, `PULSAR_RESOLUTION`). `video_encoder` / `video_preset` / `video_profile` are likewise rejected: encoder identity is boot-fixed via `PULSAR_VIDEO_ENCODER` (no live swap — see ADR 004 §3.4). Audio bitrate is only applied while the audio encoder is idle. | `video_bitrate?`, `audio_bitrate?` | `changed: bool`, `video_bitrate?`, `audio_bitrate?`, `error?` |
-| `GetCapabilities` | **Capability manifest** — the authoritative statement of what this Pulsar can do (Prism ADR 027 §3.1/§3.2). Enumerates the encoder families this build exposes (via `obs_enum_encoder_types()`, mapped to Pulsar short names) plus the bitrate windows, each with its application regime. Off-air detection; `active_encoder` is the family bound to the streaming output. See the manifest and list-encoding notes below. | — | `version: number`, `capabilities: { [name]: CapabilityEntry }`, `encoders: {value: string}[]`, `active_encoder: string`, `video_bitrate?: {min, max}`, `audio_bitrate?: {value: number}[]`, `error?` |
+| `GetCapabilities` | **Capability manifest** — the authoritative statement of what this Pulsar can do (Prism ADR 027 §3.1/§3.2). Enumerates the encoder families this build exposes (via `obs_enum_encoder_types()`, mapped to Pulsar short names) plus the bitrate windows, each with its application regime. Off-air detection; `active_encoder` is the family bound to the streaming output. Also declares, per enumerated family, its presets / profiles / rate-controls / keyint and bitrate windows (`capabilities.encoder_families`, all `boot-fixed`). See the manifest, encoder-block and list-encoding notes below. | — | `version: number`, `capabilities: { [name]: CapabilityEntry }`, `encoders: {value: string}[]`, `active_encoder: string`, `video_bitrate?: {min, max}`, `audio_bitrate?: {value: number}[]`, `error?` |
 | `GetAdaptiveState` | Snapshot the bitrate adaptation worker. | — | `enabled`, `target_kbps`, `current_kbps`, `floor_kbps`, `stable_ticks`, `adjustments_total`, `last_delta_total`, `last_delta_dropped`, `last_drop_ratio`, `error?` |
 | `SetAdaptiveEnabled` | Toggle the worker. Disabling pauses sampling; the encoder bitrate is left at whatever value the worker last applied. Re-enabling resets `stable_ticks` to 0 so the loop re-warms before any climb attempt. | `enabled` | `enabled: bool`, `error?` |
 
@@ -269,6 +269,8 @@ encoder / audio / inventory / video blocks that land later:
     "video_bitrate":  { "applicability": "live", "min": 200, "max": 50000, "step": 50 },
     "audio_bitrate":  { "applicability": "live", "min": 64, "max": 512, "step": 32,
                         "values": [{ "value": 64 }] },
+    // Per-family encoder detail (ADR 027 §3.3 bloc 1) — see below.
+    "encoder_families": { "applicability": "boot-fixed", "values": [ /* … */ ] },
     // Audio block (ADR 027 §3.3 bloc 2).
     "audio_monitoring":    { "applicability": "read-only", "available": true,
                              "device_bound": false },
@@ -293,6 +295,47 @@ Compatibility contract, in both directions:
   advertises and what Pulsar's own setter accepts (`SetVideoSettings`:
   `200..50000` kbps video, `32..512` kbps audio). The manifest therefore can
   never announce a value the setter would reject — it may only narrow.
+
+##### Encoder entries (ADR 027 §3.3 bloc 1) — `capabilities.encoder_families`
+
+What each encoder family this build enumerates actually offers. The **whole
+block is `boot-fixed`**: preset, profile, rate-control and keyint are chosen by
+`PULSAR_VIDEO_*` at spawn and `SetVideoSettings` refuses them hot. That is the
+fact, not a limitation waiting to be lifted (ADR 027 §3.5).
+
+```jsonc
+"encoder_families": {
+  "applicability": "boot-fixed",
+  "values": [
+    {
+      "value": "x264",                                  // whitelisted family short name
+      "presets":       [{ "value": "veryfast" }],       // the family's preset knob
+      "profiles":      [{ "value": "high" }],           // H.264 profiles
+      "rate_controls": [{ "value": "CBR" }],
+      "keyint_sec":    { "min": 0, "max": 20, "step": 1 },
+      "bitrate":       { "min": 200, "max": 50000, "step": 50 }
+    }
+  ]
+}
+```
+
+- **Every value is read from that family's libobs properties**, never listed in
+  Pulsar's source: presets come from the family's own preset knob (`preset` for
+  x264/AMF/NVENC, `preset2` on the ffmpeg NVENC path, `target_usage` for QSV),
+  profiles from `profile`, rate-controls from `rate_control`, and the two
+  windows from the `keyint_sec` / `bitrate` int properties.
+- **A family the binary does not register is absent from the list.** No entry is
+  fabricated for an encoder this build was not compiled with, and a field the
+  encoder does not advertise is omitted rather than defaulted.
+- `profiles`, `rate_controls` and the two windows are **intersected** with what
+  Pulsar's boot setter accepts (`PULSAR_VIDEO_PROFILE` ∈ {baseline, main,
+  high}, `PULSAR_VIDEO_RATE_CONTROL` ∈ {CBR, VBR, CQP}, `PULSAR_VIDEO_KEYINT_SEC`
+  0..20) — the manifest may only narrow. `presets` are **not** narrowed: the
+  boot whitelist is a per-family table that the manifest deliberately does not
+  mirror, so a preset listed here may still be normalised to the family default
+  at spawn.
+- The family bound to the streaming output is read from the **live encoder**;
+  the others from their registered encoder id.
 
 ##### Audio entries (ADR 027 §3.3 bloc 2)
 
@@ -328,8 +371,9 @@ Two points carry the whole block:
 > **List encoding on the wire.** libobs vendor handlers can only serialise
 > arrays as arrays of *objects* (`Utils::Json::ObsDataToJson` walks each
 > `obs_data_array` item as an `obs_data`), never bare JSON scalar arrays. So
-> `GetCapabilities` wraps each `encoders` / `audio_bitrate` element in a
-> one-field `{ "value": … }` object. `@clodocapeo/pulsar-client`'s
+> `GetCapabilities` wraps each `encoders` / `audio_bitrate` /
+> `encoder_families.*` element in a one-field `{ "value": … }` object (encoder
+> family items carry their detail beside that `value`). `@clodocapeo/pulsar-client`'s
 > `CapabilitiesNamespace.get()` unwraps these back into flat `string[]` /
 > `number[]` before handing the typed `PulsarCapabilities` to callers.
 
