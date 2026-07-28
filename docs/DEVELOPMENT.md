@@ -85,6 +85,7 @@ and is the source of truth for what it asserts.
 | `probe-source-kinds.py` | `GetInputKindList` against the expected V1 source matrix. |
 | `probe-events.py` | scene/input/source CRUD + the matching v5 events. |
 | `probe-scene-list-truth.py` | `CreateScene` → `GetSceneList` → `RemoveScene`: the scene list must be libobs's live truth, never a stub-side snapshot (#119, ADR Prism 026 §3.1). |
+| `probe-manifest-inventories.py` | `pulsar:GetCapabilities` — the manifest's inventories stay **presence-only**: every item carries exactly `value`, no filter property bound rides along, and `video_colorimetry` publishes no selectable list (#144, ADR Prism 027 §3.3 blocs 3-4 / ADR 023 §3.3). |
 | `probe-record.py` | `StartRecord` / `StopRecord` lifecycle, ffprobes the resulting MP4 (codec=h264, audio=aac, fps, bitrate). |
 | `probe-adaptive.py` | adaptive bitrate worker — drives a destination, induces drops by stress, checks `pulsar:BitrateAdjusted` event ordering. |
 | `probe-multi-stream.py` | multi-destination CRUD + start/stop. **Excluded** from `run-probes.ps1` because of upstream-obs races; covered by the live broadcast probe instead. |

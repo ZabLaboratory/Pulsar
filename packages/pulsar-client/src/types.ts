@@ -65,6 +65,48 @@ export interface VideoSettings {
  */
 export type CapabilityRegime = "live" | "boot-fixed" | "read-only";
 
+/**
+ * Headphone-monitoring capability (ADR 027 §3.3 bloc 2).
+ *
+ * `deviceBound` is the load-bearing field: a Pulsar that exposes no way to bind
+ * a monitoring device answers `false` — an explicit, readable "no" rather than
+ * a silence a consumer could mistake for "probably fine". It is `false` even
+ * when libobs reports its own seeded `"default"` placeholder, because that seed
+ * is not a choice anyone made.
+ *
+ * The regime tells the consumer whether it may offer the setting at all: it is
+ * `read-only` on today's Pulsar, which has no monitoring write path.
+ */
+export interface AudioMonitoringCapability {
+  /** Whether this build/platform supports audio monitoring at all. */
+  available: boolean;
+  /** Whether a monitoring device is genuinely bound. */
+  deviceBound: boolean;
+  /** libobs device id — present only when `deviceBound`. */
+  deviceId?: string;
+  /** Human-readable device name — present only when `deviceBound`. */
+  deviceName?: string;
+}
+
+/**
+ * Audio block of the manifest (ADR 027 §3.3 bloc 2). Every field is read from
+ * libobs; a field the server could not read is `undefined` (declared absent),
+ * never a fallback constant.
+ */
+export interface AudioCapabilities {
+  monitoring?: AudioMonitoringCapability;
+  /** Audio tracks (mixer slots) the running libobs supports. */
+  trackCount?: number;
+  /** Tracks actually bound to the streaming output. Absent off-air. */
+  boundTrackCount?: number;
+  /** Output sample rate, in Hz. */
+  sampleRateHz?: number;
+  /** Speaker layout: "mono" | "stereo" | "2.1" | "4.0" | "4.1" | "5.1" | "7.1". */
+  speakerLayout?: string;
+  /** Channel count implied by the layout. */
+  channels?: number;
+}
+
 /** Capabilities snapshot returned by GetCapabilities (ADR 004 §3.3, ADR 027 §3.2). */
 export interface PulsarCapabilities {
   /** Manifest schema version. `0` when talking to a pre-#141 Pulsar. */
@@ -104,6 +146,10 @@ export interface PulsarCapabilities {
     /** libobs pixel format name, e.g. `"NV12"`. */
     format: string;
   };
+  /** Audio block (ADR 027 §3.3 bloc 2). Empty object on a Pulsar that predates
+   *  it — its fields are then all absent, so no consumer reads a "no" that was
+   *  never said. */
+  audio: AudioCapabilities;
   /** Regime per entry. A key is present only if the manifest declared it, so
    *  `undefined` means "not declared", never "live". */
   regimes: {
@@ -115,6 +161,10 @@ export interface PulsarCapabilities {
     sourceKinds?: CapabilityRegime;
     destinationKinds?: CapabilityRegime;
     colorimetry?: CapabilityRegime;
+    audioMonitoring?: CapabilityRegime;
+    audioTracks?: CapabilityRegime;
+    audioSampleRate?: CapabilityRegime;
+    audioSpeakerLayout?: CapabilityRegime;
   };
 }
 
