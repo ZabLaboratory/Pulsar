@@ -137,6 +137,13 @@ jobs:
       - name: QSV preset property contract (source consistency)
         run: python3 scripts/check-qsv-preset-contract.py
 
+      # Same proof for NVENC, where the knob name splits INSIDE the family:
+      # "preset" for the 31.0+ encoder, "preset2" for the jim_nvenc /
+      # ffmpeg_nvenc compat shims that resolveEncoderId can also select. Also
+      # hardware-free -- no NVIDIA GPU is required or used.
+      - name: NVENC preset property contract (source consistency)
+        run: python3 scripts/check-nvenc-preset-contract.py
+
       - name: Patch lint (apply against pinned upstream SHA)
         run: |
           set -e
