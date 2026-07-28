@@ -1228,6 +1228,35 @@ static bool read_string_list(obs_properties_t *props, const char *const *names, 
     return false;
 }
 
+// ---- Adapters and scales (Prism ADR 027 Amendment 1, issue #159) -----------
+//
+// Two facts of the machine that the manifest did not cover, and that a
+// consumer therefore had to decree: WHICH graphics adapters exist, and WHICH
+// output resolutions this Pulsar admits for the canvas it is running. Both are
+// read here; neither is a table held in this file.
+
+// Sink for gs_enum_adapters(). libobs hands back the adapter name and the
+// index obs_video_info.adapter is expressed in, so the pair travels together:
+// a name without its index would be unusable, an index without its name
+// unverifiable.
+struct AdapterSink {
+    obs_data_array_t *out;
+    size_t count;
+};
+
+static bool push_adapter(void *param, const char *name, uint32_t index)
+{
+    auto *sink = static_cast<AdapterSink *>(param);
+    if (name && *name) {
+        OBSDataAutoRelease item = obs_data_create();
+        obs_data_set_string(item, "value", name);
+        obs_data_set_int(item, "index", static_cast<long long>(index));
+        obs_data_array_push_back(sink->out, item);
+        ++sink->count;
+    }
+    return true; // keep walking; we want the whole list, not the first hit
+}
+
 // Compact token for a libobs colourspace. Transcribes the switch of
 // get_video_colorspace_name() (libobs/media-io/video-io.h) -- including its
 // treatment of VIDEO_CS_DEFAULT as Rec. 709 -- into the vocabulary the
@@ -1741,6 +1770,97 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
                                  static_cast<long long>(get_audio_channels(oai.speakers)));
                 obs_data_set_obj(caps, "audio_speaker_layout", entry);
             }
+        }
+    }
+
+    // ---- Adapters and scales (ADR 027 Amendment 1, #159) -------------------
+    //
+    // Graphics adapters: enumerated by libobs itself (gs_enum_adapters, which
+    // dispatches to the graphics subsystem's device_enum_adapters -- d3d11 on
+    // Windows). Nothing about this list is written here; the names and the
+    // indices are the ones the subsystem reports, and the index is the number
+    // obs_video_info.adapter is expressed in, so the consumer can match the
+    // active one against the list instead of assuming 0.
+    //
+    // Regime is READ-ONLY, for the same reason as the colorimetry entry:
+    // pulsar-headless pins ovi.adapter at obs_reset_video
+    // (plugins/pulsar-headless/main.cpp) and exposes NO env var and no request
+    // to select another. `boot-fixed` would advertise a respawn knob that does
+    // not exist. If such an env var ever lands, this entry moves; declaring it
+    // today would be the decree §3.1 forbids.
+    //
+    // Enumeration is only valid inside the graphics context; outside it,
+    // gs_enum_adapters returns without calling back at all -- and an empty walk
+    // publishes NO entry, so the consumer keeps its own assumption rather than
+    // reading "this machine has no GPU".
+    {
+        OBSDataArrayAutoRelease adapters = obs_data_array_create();
+        AdapterSink sink{adapters, 0};
+        obs_enter_graphics();
+        gs_enum_adapters(push_adapter, &sink);
+        obs_leave_graphics();
+
+        if (sink.count > 0) {
+            OBSDataAutoRelease entry = obs_data_create();
+            obs_data_set_string(entry, "applicability", kRegimeReadOnly);
+            obs_data_set_array(entry, "values", adapters);
+            obs_video_info ovi = {};
+            // The active index is a separate read: when it fails, the list
+            // still stands and only the "which one" is declared absent.
+            if (obs_get_video_info(&ovi))
+                obs_data_set_int(entry, "active_index", static_cast<long long>(ovi.adapter));
+            obs_data_set_obj(caps, "graphics_adapters", entry);
+        }
+    }
+
+    // Output scales: which output resolutions are admissible for the canvas
+    // this Pulsar is actually running.
+    //
+    // The admitted set is DERIVED from what this binary can establish, not from
+    // a ladder of downscale factors held here -- publishing one would announce
+    // resolutions Pulsar cannot honour, which is exactly §3.1's prohibition.
+    // What it can establish, today, is one thing: reset_video() sets base AND
+    // output from the single PULSAR_RESOLUTION value
+    // (plugins/pulsar-headless/main.cpp), on_set_video_settings refuses
+    // width/height hot, and nothing in this tree ever calls
+    // obs_encoder_set_scaled_size(), so no pre-encode downscale exists either.
+    // The admitted set is therefore exactly the output resolution libobs
+    // reports -- read, not assumed, and it will grow by itself the day a
+    // downscale path lands.
+    //
+    // Regime is `boot-fixed`: PULSAR_RESOLUTION genuinely selects it at spawn,
+    // and SetVideoSettings genuinely refuses it hot.
+    {
+        obs_video_info ovi = {};
+        if (obs_get_video_info(&ovi) && ovi.base_width > 0 && ovi.base_height > 0 &&
+            ovi.output_width > 0 && ovi.output_height > 0) {
+            OBSDataAutoRelease entry = obs_data_create();
+            obs_data_set_string(entry, "applicability", kRegimeBootFixed);
+
+            OBSDataAutoRelease canvas = obs_data_create();
+            obs_data_set_int(canvas, "width", static_cast<long long>(ovi.base_width));
+            obs_data_set_int(canvas, "height", static_cast<long long>(ovi.base_height));
+            obs_data_set_obj(entry, "canvas", canvas);
+
+            OBSDataArrayAutoRelease values = obs_data_array_create();
+            OBSDataAutoRelease item = obs_data_create();
+            const std::string token =
+                std::to_string(ovi.output_width) + "x" + std::to_string(ovi.output_height);
+            obs_data_set_string(item, "value", token.c_str());
+            obs_data_set_int(item, "width", static_cast<long long>(ovi.output_width));
+            obs_data_set_int(item, "height", static_cast<long long>(ovi.output_height));
+            // A single ratio is only meaningful when both axes share it. Cross
+            // multiplication keeps the test exact; a non-uniform pair publishes
+            // the two resolutions and omits `scale` rather than picking an axis.
+            if (static_cast<unsigned long long>(ovi.output_width) * ovi.base_height ==
+                static_cast<unsigned long long>(ovi.output_height) * ovi.base_width)
+                obs_data_set_double(item, "scale",
+                                    static_cast<double>(ovi.output_width) /
+                                        static_cast<double>(ovi.base_width));
+            obs_data_array_push_back(values, item);
+
+            obs_data_set_array(entry, "values", values);
+            obs_data_set_obj(caps, "output_scales", entry);
         }
     }
 

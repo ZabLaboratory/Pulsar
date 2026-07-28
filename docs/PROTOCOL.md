@@ -254,7 +254,7 @@ clients see snake_case on the wire.
 | `StopAllDestinations` | Mirror of the above. | — | `ok: bool`, `error?` |
 | `GetVideoSettings` | Snapshot the encoder + reset_video state. Includes the boot-fixed encoder identity (`video_encoder` / `video_preset` / `video_profile`). | — | `fps`, `width`, `height`, `video_bitrate`, `video_rate_control`, `video_keyint_sec`, `audio_bitrate`, `video_encoder`, `video_preset`, `video_profile`, `error?` |
 | `SetVideoSettings` | Mutate encoder bitrates **live**. Setting `fps` / `width` / `height` is rejected — those require boot-time env vars (`PULSAR_FPS`, `PULSAR_RESOLUTION`). `video_encoder` / `video_preset` / `video_profile` are likewise rejected: encoder identity is boot-fixed via `PULSAR_VIDEO_ENCODER` (no live swap — see ADR 004 §3.4). Audio bitrate is only applied while the audio encoder is idle. | `video_bitrate?`, `audio_bitrate?` | `changed: bool`, `video_bitrate?`, `audio_bitrate?`, `error?` |
-| `GetCapabilities` | **Capability manifest** — the authoritative statement of what this Pulsar can do (Prism ADR 027 §3.1/§3.2). Enumerates the encoder families this build exposes (via `obs_enum_encoder_types()`, mapped to Pulsar short names) plus the bitrate windows, each with its application regime. Declares, per enumerated family, its presets / profiles / rate-controls / keyint and bitrate windows (`capabilities.encoder_families`, all `boot-fixed`), the audio block (monitoring, tracks, sample rate, speaker layout), the presence-only inventories (registered filters, source kinds, destination kinds) and the effective video colorimetry. Off-air detection; `active_encoder` is the family bound to the streaming output. See the manifest, encoder-block and list-encoding notes below. | — | `version: number`, `capabilities: { [name]: CapabilityEntry }`, `encoders: {value: string}[]`, `active_encoder: string`, `video_bitrate?: {min, max}`, `audio_bitrate?: {value: number}[]`, `error?` |
+| `GetCapabilities` | **Capability manifest** — the authoritative statement of what this Pulsar can do (Prism ADR 027 §3.1/§3.2). Enumerates the encoder families this build exposes (via `obs_enum_encoder_types()`, mapped to Pulsar short names) plus the bitrate windows, each with its application regime. Declares, per enumerated family, its presets / profiles / rate-controls / keyint and bitrate windows (`capabilities.encoder_families`, all `boot-fixed`), the audio block (monitoring, tracks, sample rate, speaker layout), the presence-only inventories (registered filters, source kinds, destination kinds), the effective video colorimetry, and the graphics adapters + admitted output scales (`capabilities.graphics_adapters` / `output_scales`, ADR 027 Amendment 1). Off-air detection; `active_encoder` is the family bound to the streaming output. See the manifest, encoder-block and list-encoding notes below. | — | `version: number`, `capabilities: { [name]: CapabilityEntry }`, `encoders: {value: string}[]`, `active_encoder: string`, `video_bitrate?: {min, max}`, `audio_bitrate?: {value: number}[]`, `error?` |
 | `GetAdaptiveState` | Snapshot the bitrate adaptation worker. | — | `enabled`, `target_kbps`, `current_kbps`, `floor_kbps`, `stable_ticks`, `adjustments_total`, `last_delta_total`, `last_delta_dropped`, `last_drop_ratio`, `error?` |
 | `SetAdaptiveEnabled` | Toggle the worker. Disabling pauses sampling; the encoder bitrate is left at whatever value the worker last applied. Re-enabling resets `stable_ticks` to 0 so the loop re-warms before any climb attempt. | `enabled` | `enabled: bool`, `error?` |
 
@@ -310,7 +310,14 @@ encoder / audio / inventory / video blocks that land later:
     "audio_tracks":        { "applicability": "read-only", "count": 6, "bound": 1 },
     "audio_sample_rate":   { "applicability": "read-only", "hz": 48000 },
     "audio_speaker_layout":{ "applicability": "read-only", "layout": "stereo",
-                             "channels": 2 }
+                             "channels": 2 },
+    // Adapters and scales (ADR 027 Amendment 1) -- see below.
+    "graphics_adapters": { "applicability": "read-only", "active_index": 0,
+                           "values": [{ "value": "NVIDIA GeForce RTX 4070", "index": 0 }] },
+    "output_scales":     { "applicability": "boot-fixed",
+                           "canvas": { "width": 1920, "height": 1080 },
+                           "values": [{ "value": "1920x1080", "width": 1920,
+                                        "height": 1080, "scale": 1.0 }] }
   }
 }
 ```
@@ -438,6 +445,40 @@ announcing a choice the binary cannot honour is exactly the decree §3.1 exists
 to prevent. `range` and `format` carry libobs' own names (`Partial`/`Full`,
 `NV12`, …), `value` the compact token `601` / `709` / `srgb` / `2100pq` /
 `2100hlg`. A colourspace enum this build cannot name is declared absent.
+
+##### Adapters and output scales (ADR 027 Amendment 1)
+
+Two facts of the machine that a consumer used to decree: which graphics
+adapters exist, and which output resolutions are admissible for the canvas this
+Pulsar is running.
+
+| Entry | Fields | Regime | Source |
+|---|---|---|---|
+| `graphics_adapters` | `values: {value: string, index: number}[]`, `active_index?` | `read-only` | `gs_enum_adapters()` inside `obs_enter_graphics()`; `active_index` from `obs_video_info.adapter` |
+| `output_scales` | `canvas: {width, height}`, `values: {value: "<W>x<H>", width, height, scale?}[]` | `boot-fixed` | `obs_get_video_info()` — `base_*` for the canvas, `output_*` for the admitted resolution |
+
+- **Adapters are enumerated by libobs**, never listed here: `gs_enum_adapters()`
+  dispatches to the graphics subsystem's own enumeration (d3d11 on Windows).
+  Each item carries the **index** `obs_video_info.adapter` is expressed in — a
+  name without it could not be matched against `active_index`, which is the
+  whole point of the entry (Prism pinned adapter `0` without ever asking).
+  The regime is **`read-only`, not `boot-fixed`**, for the same reason as
+  colorimetry: `pulsar-headless` pins `ovi.adapter` at `obs_reset_video` and
+  exposes no env var, so `boot-fixed` would advertise a knob that does not
+  exist. A walk that yields nothing publishes **no entry at all**.
+- **Scales are derived from what this binary can establish**, not from a ladder
+  of downscale factors. `reset_video()` sets base *and* output from the single
+  `PULSAR_RESOLUTION` value, `SetVideoSettings` refuses `width`/`height` hot,
+  and nothing calls `obs_encoder_set_scaled_size()` — so today the admitted set
+  is exactly the one resolution libobs reports, and it will grow by itself the
+  day a downscale path lands. Publishing a factor ladder would announce
+  resolutions Pulsar cannot honour, which is what §3.1 forbids. The regime is
+  `boot-fixed` because `PULSAR_RESOLUTION` genuinely selects it at spawn.
+- `scale` is the ratio to the canvas, and is **omitted** when the two axes do
+  not share one — a single ratio that holds on one axis only is not a scale.
+  `value` is the `"<W>x<H>"` label; `width`/`height` are the load-bearing pair.
+- **Restrictive, as everywhere else**: an adapter or a scale the consumer's own
+  registry does not know stays non-selectable. The manifest may only narrow.
 
 > **List encoding on the wire.** libobs vendor handlers can only serialise
 > arrays as arrays of *objects* (`Utils::Json::ObsDataToJson` walks each

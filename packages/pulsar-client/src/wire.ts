@@ -15,6 +15,8 @@ import type {
   Destination,
   DestinationKind,
   EncoderFamilyCapability,
+  GraphicsAdapter,
+  OutputScale,
   PulsarCapabilities,
   VideoSettings,
   VideoSettingsPatch,
@@ -110,6 +112,23 @@ export interface WireEncoderFamily {
   rate_controls?: WireValueItem<string>[];
   keyint_sec?: { min?: number; max?: number; step?: number };
   bitrate?: { min?: number; max?: number; step?: number };
+}
+
+/** One entry of `capabilities.graphics_adapters.values` (ADR 027 Am.1, #159).
+ *  `value` is the adapter name, `index` the `obs_video_info.adapter` number. */
+export interface WireGraphicsAdapter {
+  value: string;
+  index?: number;
+}
+
+/** One entry of `capabilities.output_scales.values` (ADR 027 Am.1, #159).
+ *  `value` is the `"<W>x<H>"` token; `scale` is omitted when the two axes do
+ *  not share one ratio. */
+export interface WireOutputScale {
+  value: string;
+  width?: number;
+  height?: number;
+  scale?: number;
 }
 
 export interface WireGetCapabilitiesResponse {
@@ -291,6 +310,60 @@ function audioFromWire(w: WireGetCapabilitiesResponse): AudioCapabilities {
   return audio;
 }
 
+/**
+ * Decodes `capabilities.graphics_adapters.values` (ADR 027 Am.1, #159).
+ *
+ * An item without a readable name *and* a numeric index is dropped rather than
+ * half-decoded: an adapter whose index the client had to invent could not be
+ * matched against `activeGraphicsAdapter`, which is the only thing this list is
+ * good for.
+ */
+function graphicsAdaptersFromWire(w: WireGetCapabilitiesResponse): GraphicsAdapter[] {
+  const raw = w.capabilities?.["graphics_adapters"]?.["values"];
+  if (!Array.isArray(raw)) return [];
+
+  const out: GraphicsAdapter[] = [];
+  for (const item of raw as WireGraphicsAdapter[]) {
+    if (!item || typeof item.value !== "string" || item.value === "") continue;
+    if (typeof item.index !== "number") continue;
+    out.push({ name: item.value, index: item.index });
+  }
+  return out;
+}
+
+/**
+ * Decodes `capabilities.output_scales.values` (ADR 027 Am.1, #159).
+ *
+ * `width`/`height` are the load-bearing pair; an item missing either is dropped
+ * rather than reconstructed from the `"<W>x<H>"` token, which is a label, not a
+ * second source of truth. `scale` stays absent when the server omitted it.
+ */
+function outputScalesFromWire(w: WireGetCapabilitiesResponse): OutputScale[] {
+  const raw = w.capabilities?.["output_scales"]?.["values"];
+  if (!Array.isArray(raw)) return [];
+
+  const out: OutputScale[] = [];
+  for (const item of raw as WireOutputScale[]) {
+    if (!item || typeof item.width !== "number" || typeof item.height !== "number") continue;
+    const scale: OutputScale = { width: item.width, height: item.height };
+    if (typeof item.scale === "number") scale.scale = item.scale;
+    out.push(scale);
+  }
+  return out;
+}
+
+/** Decodes `capabilities.output_scales.canvas`. Both dimensions or nothing —
+ *  a half-read canvas would silently rescale everything measured against it. */
+function canvasFromWire(
+  w: WireGetCapabilitiesResponse,
+): { width: number; height: number } | undefined {
+  const raw = w.capabilities?.["output_scales"]?.["canvas"] as
+    | { width?: unknown; height?: unknown }
+    | undefined;
+  if (!raw || typeof raw.width !== "number" || typeof raw.height !== "number") return undefined;
+  return { width: raw.width, height: raw.height };
+}
+
 export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapabilities {
   // Regimes are only populated for entries the manifest actually declares. A
   // pre-#141 Pulsar sends no `capabilities` block at all: every regime is then
@@ -323,6 +396,10 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
   if (sampleRateRegime) regimes.audioSampleRate = sampleRateRegime;
   const speakersRegime = regimeOf(w, "audio_speaker_layout");
   if (speakersRegime) regimes.audioSpeakerLayout = speakersRegime;
+  const adaptersRegime = regimeOf(w, "graphics_adapters");
+  if (adaptersRegime) regimes.graphicsAdapters = adaptersRegime;
+  const scalesRegime = regimeOf(w, "output_scales");
+  if (scalesRegime) regimes.outputScales = scalesRegime;
 
   // Colorimetry is reported only when the three fields are there; a partial
   // entry is treated as absent rather than half-read.
@@ -344,9 +421,15 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
     destinationKinds: inventoryOf(w, "destination_kinds"),
     encoderFamilies: encoderFamiliesFromWire(w),
     audio: audioFromWire(w),
+    graphicsAdapters: graphicsAdaptersFromWire(w),
+    outputScales: outputScalesFromWire(w),
     regimes,
   };
   if (colorSpace && range && format) caps.colorimetry = { colorSpace, range, format };
+  const activeAdapter = entryNumber(w, "graphics_adapters", "active_index");
+  if (activeAdapter !== undefined) caps.activeGraphicsAdapter = activeAdapter;
+  const canvas = canvasFromWire(w);
+  if (canvas) caps.canvas = canvas;
   return caps;
 }
 

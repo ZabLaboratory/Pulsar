@@ -193,6 +193,13 @@ describe("PulsarClient", () => {
           speakerLayout: "stereo",
           channels: 2,
         },
+        graphicsAdapters: [
+          { name: "NVIDIA GeForce RTX 4070", index: 0 },
+          { name: "Intel(R) UHD Graphics 770", index: 1 },
+        ],
+        activeGraphicsAdapter: 0,
+        canvas: { width: 1920, height: 1080 },
+        outputScales: [{ width: 1920, height: 1080, scale: 1 }],
         regimes: {
           encoders: "boot-fixed",
           activeEncoder: "boot-fixed",
@@ -207,6 +214,8 @@ describe("PulsarClient", () => {
           audioTracks: "read-only",
           audioSampleRate: "read-only",
           audioSpeakerLayout: "read-only",
+          graphicsAdapters: "read-only",
+          outputScales: "boot-fixed",
         },
       });
     });
@@ -232,6 +241,8 @@ describe("PulsarClient", () => {
         "encoderFamilies",
         "encoders",
         "filters",
+        "graphicsAdapters",
+        "outputScales",
         "sourceKinds",
         "videoBitrateKbps",
       ]);
@@ -572,6 +583,132 @@ describe("PulsarClient", () => {
       const caps = await client.capabilities.get();
       expect(caps.filters).toEqual(["color_filter_v2"]);
       expect(caps.sourceKinds).toEqual([]);
+    });
+
+    // ---- ADR 027 Amendment 1 / issue #159: adapters + output scales --------
+
+    it("carries every adapter with its index, and the active one", async () => {
+      // Criterion 1: the block exists and carries its regime. The index is what
+      // makes the list usable -- `activeGraphicsAdapter` is matched against it
+      // instead of being assumed to be 0, which is the decree this closes.
+      const caps = await client.capabilities.get();
+      expect(caps.graphicsAdapters).toEqual([
+        { name: "NVIDIA GeForce RTX 4070", index: 0 },
+        { name: "Intel(R) UHD Graphics 770", index: 1 },
+      ]);
+      expect(caps.activeGraphicsAdapter).toBe(0);
+      expect(caps.graphicsAdapters.map((a) => a.index)).toContain(caps.activeGraphicsAdapter);
+      expect(caps.regimes.graphicsAdapters).toBe("read-only");
+    });
+
+    it("does not declare adapters settable while nothing selects one", async () => {
+      // pulsar-headless pins ovi.adapter and exposes no env var: `boot-fixed`
+      // would advertise a respawn knob that does not exist.
+      const caps = await client.capabilities.get();
+      expect(caps.regimes.graphicsAdapters).not.toBe("live");
+      expect(caps.regimes.graphicsAdapters).not.toBe("boot-fixed");
+    });
+
+    it("declares the admitted output scales against the canvas they belong to", async () => {
+      const caps = await client.capabilities.get();
+      expect(caps.canvas).toEqual({ width: 1920, height: 1080 });
+      expect(caps.outputScales).toEqual([{ width: 1920, height: 1080, scale: 1 }]);
+      expect(caps.regimes.outputScales).toBe("boot-fixed");
+    });
+
+    it("admits no scale beyond what the manifest declares", async () => {
+      // Restrictive by construction (ADR 027 §3.1): a Pulsar that can only
+      // establish its canvas resolution says exactly that, and the consumer has
+      // nothing to widen it with -- no ladder of factors is implied anywhere.
+      const caps = await client.capabilities.get();
+      const canvas = caps.canvas;
+      expect(canvas).toBeDefined();
+      for (const s of caps.outputScales) {
+        expect(s.width).toBeLessThanOrEqual(canvas!.width);
+        expect(s.height).toBeLessThanOrEqual(canvas!.height);
+      }
+    });
+
+    it("omits the scale ratio when the two axes do not share one", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: {
+                output_scales: {
+                  applicability: "boot-fixed",
+                  canvas: { width: 1920, height: 1080 },
+                  values: [{ value: "1280x1080", width: 1280, height: 1080 }],
+                },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.outputScales).toEqual([{ width: 1280, height: 1080 }]);
+      expect(caps.outputScales[0]?.scale).toBeUndefined();
+    });
+
+    it("drops an adapter or a scale it cannot read whole", async () => {
+      // Criterion 2 mirrored client-side: half a value is not a value. An
+      // adapter without an index cannot be matched; a scale without dimensions
+      // cannot be compared to the canvas. Neither is reconstructed.
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: {
+                graphics_adapters: {
+                  applicability: "read-only",
+                  values: [{ value: "GPU 0", index: 0 }, { value: "GPU 1" }, { index: 2 }, null],
+                },
+                output_scales: {
+                  applicability: "boot-fixed",
+                  canvas: { width: 1920 },
+                  values: [
+                    { value: "1920x1080", width: 1920, height: 1080 },
+                    { value: "1280x720", width: 1280 },
+                  ],
+                },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.graphicsAdapters).toEqual([{ name: "GPU 0", index: 0 }]);
+      expect(caps.outputScales).toEqual([{ width: 1920, height: 1080 }]);
+      // A canvas missing a dimension is absent, not half-read.
+      expect(caps.canvas).toBeUndefined();
+      // Never declared -> never invented.
+      expect(caps.activeGraphicsAdapter).toBeUndefined();
+    });
+
+    it("stays backward compatible with a pre-#159 payload", async () => {
+      // Criterion 3: a Pulsar that predates the block says nothing about
+      // adapters or scales, and everything else still decodes. The consumer
+      // keeps its own assumption -- an absence is not an empty machine.
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              encoders: [{ value: "x264" }],
+              active_encoder: "x264",
+              video_bitrate: { min: 200, max: 50000 },
+              capabilities: {
+                encoders: { applicability: "boot-fixed", values: [{ value: "x264" }] },
+                video_bitrate: { applicability: "live", min: 200, max: 50000, step: 50 },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.graphicsAdapters).toEqual([]);
+      expect(caps.outputScales).toEqual([]);
+      expect(caps.canvas).toBeUndefined();
+      expect(caps.activeGraphicsAdapter).toBeUndefined();
+      expect(caps.regimes.graphicsAdapters).toBeUndefined();
+      expect(caps.regimes.outputScales).toBeUndefined();
+      // The blocks that predate #159 are untouched by its arrival.
+      expect(caps.encoders).toEqual(["x264"]);
+      expect(caps.videoBitrateKbps).toEqual({ min: 200, max: 50000 });
+      expect(caps.regimes.videoBitrateKbps).toBe("live");
     });
 
     it("always advertises at least x264", async () => {
