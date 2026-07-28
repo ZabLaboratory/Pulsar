@@ -7,7 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-28
+
+Minor: everything here is **additive on the wire** — a fourth destination kind,
+a fifth `GetCapabilities` block — with one deliberate behaviour change and one
+security pin that a consumer must know about.
+
+- **Consumers holding a captured manifest fixture must re-capture** (`npm run
+  manifest:capture` on Prism, ADR 027 RC 9): `capabilities` gains
+  `graphics_adapters` and `output_scales`, and `destination_kinds` gains
+  `youtube`. A red `manifest:check` after this bump is the inclusion guard
+  working, not a regression.
+- **`SetInputAudioTracks` now fails where it used to lie.** Enabling a track no
+  encoder of the streaming output consumes answers `InvalidResourceState` (604)
+  and applies nothing, instead of reporting a success that carried no audio.
+- **Consumers must upgrade for the browser pin.** `webpage_control_level` is
+  forced to `None` in the binary, so an operator on a ≤ 1.4.0 bundle keeps
+  handing `window.obsstudio` to every page loaded in a browser source — the
+  mitigation is installing this artefact, not merging #158.
+
 ### ✨ Added
+
+- **`youtube` is a first-class destination kind, server-pinned to RTMPS
+  (#162, ADR 010 §3.3 R1).** `CreateDestination` now accepts four kinds
+  instead of three; `youtube` follows the exact contract of `twitch` — an
+  `rtmp_output`, key required, and an ingest URL that is a **constant of this
+  binary** (`rtmps://a.rtmps.youtube.com:443/live2`, the primary server of the
+  `YouTube - RTMPS` entry in upstream's `rtmp-services/data/services.json`).
+  The caller's `url` is never read; `GetDestinations[i].url` reads back the
+  pinned value. `capabilities.destination_kinds` picks it up on its own — the
+  list is walked from the enum, not held in a table.
+
+  The pinned-vs-caller-supplied split now lives in one place,
+  `pinned_ingest_url()`, read by both `ensure_output()` and
+  `on_create_destination()` instead of being spelled inline twice: adding a
+  platform kind to the enum and forgetting it at the dispatch point — i.e.
+  letting a named-platform stream key flow to a client-supplied ingest — is
+  now structurally impossible. The anti-cleartext `static_assert` is factored
+  (`is_rtmps_literal`) and applied to both constants, because the same
+  `services.json` ships two cleartext YouTube hosts and a persistent YouTube
+  key is a long-lived bearer credential. **Kick is deliberately absent**: its
+  ingest is per-channel (`stream.url` returned alongside `stream.key`), no
+  fixed base is documented, so no constant is invented. `rtmp_custom` remains
+  the escape hatch for a caller who wants to choose its own server with its
+  own key. Documented in `docs/PROTOCOL.md`, *Destination kinds*; client
+  vocabulary updated in `@clodocapeo/pulsar-client` (`DestinationKind`).
 
 - **`GetCapabilities` declares the graphics adapters and the admitted output
   scales (#159, ADR Prism 027 Amendment 1).** Fifth manifest block, additive
