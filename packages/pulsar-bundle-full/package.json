@@ -1,6 +1,6 @@
 {
   "name": "@clodocapeo/pulsar-bundle-full",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "description": "Full Pulsar bundle: pulsar.exe + DLLs + browser sources (CEF) + text + VLC. Same Node spawn() API as @clodocapeo/pulsar-bundle.",
   "license": "GPL-2.0-or-later",
   "repository": {
@@ -38,7 +38,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@clodocapeo/pulsar-client": "1.2.2"
+    "@clodocapeo/pulsar-client": "1.3.0"
   },
   "devDependencies": {
     "@msgpack/msgpack": "^3.0.0",
