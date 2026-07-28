@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-28
+
+Minor: no `pulsar:*` request changed shape and no env var was renamed, but the
+release **changes what the bundles contain and what `PULSAR_VIDEO_PRESET`
+accepts on QSV**, so it is not a silent patch. `nv-filters` is gone from both
+zips — `GetCapabilities.capabilities.filters` no longer lists its entries, so a
+consumer holding a captured manifest fixture must re-capture (`npm run
+manifest:capture` on Prism, ADR 027 RC 9). The QSV preset whitelist is now the
+encoder's own `TU1..TU7` instead of the three aliases that were written to a key
+`obs-qsv11` does not register.
+
+**Consumers must upgrade — the source merge is not the mitigation.** NS1 is a
+DLL-planting surface in the process that holds the Twitch stream key: it stays
+open on every operator still running a ≤ 1.3.0 bundle, because the DLL is
+removed at *packaging* time. Closing it means installing
+`@clodocapeo/pulsar-bundle-full@1.4.0` (or `-bundle`), not merging #153.
+
 ### 🔒 Security
 
 - **`nv-filters` dropped from both bundles (NS1).** The NVIDIA Audio/Video
