@@ -182,6 +182,29 @@ Three things to keep in mind when driving the baseline against Pulsar:
    prunes every scene, so `GetInputList` and `GetSceneItemList` both stop
    listing the source — including in scenes that are not the program scene
    (which is precisely where the defect used to hide).
+5. **`SetInputAudioTracks` is judged by the output** (`#157`). Enabling a
+   track that no encoder of the streaming output consumes now **fails**
+   with `InvalidResourceState` (604) and **applies nothing**; the
+   `comment` names the tracks requested and the tracks actually bound,
+   both read off libobs (`… Requested: 4. Bound to the output: 1 (read
+   from the streaming output's encoder slots). Nothing was changed.`).
+   It used to answer success.
+
+   Do not verify this one against the input. `GetInputAudioTracks` reads
+   the mixer bits of the source, which libobs writes whatever any output
+   carries — and it defaults every fresh source to *all six tracks
+   enabled*. So the input reports `true` for tracks that reach no
+   encoder; the oracle is `capabilities.audio_tracks.bound`, the same
+   walk of the output's encoder slots the request performs.
+
+   Only **enabling** is judged: `{"4": false}` succeeds — turning audio
+   off is honest whatever the output carries. And when no streaming
+   output exists at all nothing is refused, because nothing was read.
+
+   **This does not deliver multi-track output.** The streaming output
+   still binds a single audio encoder, at slot 0
+   (`audio_tracks.bound: 1`); what changed is that the server stopped
+   claiming otherwise.
 
 ## `pulsar:*` vendor namespace
 
