@@ -2,12 +2,14 @@
 
 **Owner**: Keeper. **First written**: 2026-07-26, during the v1.2.2 release
 (RTMPS Twitch ingest, #113 / PR #114 — the fix that motivated the runbook).
-**Last exercised**: 2026-07-28, v1.3.0 (ADR 027 capability manifest, PR #149) —
-release cut squash-merged by Keeper without review under the hotfix exception
-(`docs/rules/git.md`, Gate point 2): urgent (the merged manifest chain was
-dormant on both sides), infra-pure (VERSION / CHANGELOG / 3 × package.json /
-lockfile, zero code), documented here. Four new field traps below came out of
-that run. Consumer side: Prism PR #469.
+**Last exercised**: 2026-07-28, v1.4.0 (nv-filters strip / NS1 + NVENC preset,
+PR #155) — release cut squash-merged by Keeper without review under the hotfix
+exception (`docs/rules/git.md`, Gate point 2): urgent (a DLL-planting surface in
+the process holding the stream key stayed open on every operator until an
+artefact shipped), infra-pure (VERSION / CHANGELOG / 3 × package.json /
+lockfile, zero code), documented here. Consumer side: Prism PR #471.
+Previously: 2026-07-28, v1.3.0 (ADR 027 capability manifest, PR #149; consumer
+Prism PR #469) — the run that produced the first four field traps below.
 
 ## Why this runbook exists
 
@@ -133,6 +135,37 @@ the old binary — silently, because
   is the intended signal that dormant checks just switched on. Budget the
   re-capture and the guard update in the consumer bump; a red `manifest:check`
   there is the chain working, not a regression.
+- **A packaging-time strip is only real in the zip — assert it there** (v1.4.0,
+  NS1). `scripts/package-win.ps1` removes plugins *after* the build, so nothing
+  in the source tree, the build log or a local `binaries/` proves what shipped.
+  The two-command proof, run on the downloaded asset:
+  ```sh
+  gh release download vX.Y.Z -p 'pulsar-windows-x64-*.zip'
+  unzip -l pulsar-windows-x64-full-vX.Y.Z.zip | grep -ci nv-filters   # expect 0
+  unzip -l pulsar-windows-x64-v<previous>.zip | grep -ci nv-filters   # expect >0
+  ```
+  Run the **control on the previous release too**. A `grep -c` returning 0 on a
+  misspelt pattern also returns 0, and a strip that silently stopped matching
+  looks exactly like a strip that worked. At v1.4.0: 0 entries in both new zips,
+  50 in v1.3.0 (incl. `obs-plugins/64bit/nv-filters.dll`), `obs-nvenc` untouched
+  at 53 — NVENC is a *different* plugin, check it survived.
+- **Re-assert on the consumer's disk, not on its lockfile.** `npm warn
+  allow-scripts` lists `@clodocapeo/pulsar-bundle-full` as "not yet covered",
+  which reads like the postinstall was skipped and the binary is stale. Settle it
+  by fact, not by reading the warning: `binaries/README.txt` carries the version
+  line (`Pulsar v1.4.0`), and `find binaries -iname '*nv-filters*'` must be
+  empty. Both are one command and neither can be faked by a lockfile.
+- **Dropping a plugin need not move the manifest fixture.** At v1.4.0
+  `manifest:check` went red on `bundleVersion` / `libobsVersion` only: the filter
+  inventory comes from `obs_enum_filter_types`, and `nv-filters` never registers
+  on a machine without the NVIDIA SDKs, so it was already absent from the
+  capture. Do not infer from a green-after-recapture that the strip was inert —
+  the capture reflects the *capturing* machine, the zip reflects the ship.
+- **Prism's full `vitest run` fails 2 suites under parallel load on the dev
+  box** — `broadcast-engine.test.ts` and `scene-server.test.ts`, on 5 s timeouts.
+  Both are fully `vi.mock`-ed (they never spawn `pulsar.exe`), both pass in
+  isolation (200/200), and both fail identically on the unmodified tree. Confirm
+  that triple before spending time on it: it is machine load, not the bump.
 - **Vendor shims that overwrite `pulsar.exe`** silently defeat the whole
   chain (historically `scripts/vendor-pulsar-virtualcam.mjs` in Prism, now
   removed). If a consumer postinstall touches the binary, the npm version
