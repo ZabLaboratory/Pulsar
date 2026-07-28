@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -912,6 +913,9 @@ static constexpr long long kPolicyVideoBitrateMinKbps = 200;
 static constexpr long long kPolicyVideoBitrateMaxKbps = 50000;
 static constexpr long long kPolicyAudioBitrateMinKbps = 32;
 static constexpr long long kPolicyAudioBitrateMaxKbps = 512;
+// PULSAR_VIDEO_KEYINT_SEC accepts 0..20 (pulsar-frontend-stub.cpp:992-997).
+static constexpr long long kPolicyKeyintSecMin = 0;
+static constexpr long long kPolicyKeyintSecMax = 20;
 
 // ---- Audio block (Prism ADR 027 §3.3 bloc 2, issue #143) -------------------
 //
@@ -988,6 +992,27 @@ static obs_properties_t *encoder_properties_or_id(obs_encoder_t *enc, const char
     return nullptr;
 }
 
+// Reads the [min,max,step] an int property advertises. Returns false when the
+// property is missing or is not an int -- the caller then declares the
+// capability absent.
+static bool read_int_range(obs_properties_t *props, const char *name, long long &lo, long long &hi,
+                           long long &step)
+{
+    if (!props) return false;
+    obs_property_t *p = obs_properties_get(props, name);
+    if (!p || obs_property_get_type(p) != OBS_PROPERTY_INT) return false;
+
+    const long long a = obs_property_int_min(p);
+    const long long b = obs_property_int_max(p);
+    const long long s = obs_property_int_step(p);
+    if (b < a) return false;
+
+    lo = a;
+    hi = b;
+    step = s > 0 ? s : 1;
+    return true;
+}
+
 // Reads the [min,max] kbps window the encoder advertises for "bitrate".
 // Returns false when the property is missing or is not an int range -- the
 // caller then declares the capability absent.
@@ -995,14 +1020,9 @@ static bool read_bitrate_window(obs_encoder_t *enc, const char *fallbackId, long
                                 long long &maxKbps, long long &stepKbps)
 {
     PropsGuard props(encoder_properties_or_id(enc, fallbackId));
-    if (!props) return false;
-    obs_property_t *p = obs_properties_get(props.get(), "bitrate");
-    if (!p || obs_property_get_type(p) != OBS_PROPERTY_INT) return false;
-
-    const long long lo = obs_property_int_min(p);
-    const long long hi = obs_property_int_max(p);
-    const long long step = obs_property_int_step(p);
-    if (lo <= 0 || hi < lo) return false;
+    long long lo = 0, hi = 0, step = 0;
+    if (!read_int_range(props.get(), "bitrate", lo, hi, step)) return false;
+    if (lo <= 0) return false;
 
     minKbps = lo;
     maxKbps = hi;
@@ -1051,6 +1071,93 @@ static bool output_type_registered(const char *wantedId)
     return false;
 }
 
+// ---- Encoder block (Prism ADR 027 §3.3 bloc 1, issue #142) -----------------
+//
+// Per enumerated family: presets, H.264 profiles, rate-controls, keyint bounds
+// and the family's own bitrate window. Every value below is READ from that
+// family's libobs properties -- nothing here is a list of encoder values held
+// in this file. The only literals are (a) the libobs PROPERTY NAMES the same
+// concept goes by across plugins and (b) Pulsar's own boot policy, which can
+// only narrow what libobs advertises (§3.1). A family the binary does not
+// register produces no entry at all.
+
+// libobs property names, not values. The preset knob is "preset" for x264 /
+// AMF / obs-nvenc (nvenc-properties.c:142), "preset2" for the ffmpeg / compat
+// NVENC path (nvenc-compat.c:183), and "target_usage" for QSV
+// (obs-qsv11.c:390). No encoder exposes two of them, so first match wins.
+static const char *const kPresetPropNames[] = {"preset", "preset2", "target_usage"};
+static const char *const kProfilePropNames[] = {"profile"};
+static const char *const kRateControlPropNames[] = {"rate_control"};
+
+static bool iequals(const char *a, const char *b)
+{
+    if (!a || !b) return false;
+    for (; *a && *b; ++a, ++b) {
+        if (std::tolower(static_cast<unsigned char>(*a)) !=
+            std::tolower(static_cast<unsigned char>(*b)))
+            return false;
+    }
+    return *a == *b;
+}
+
+// Pulsar's own boot policy, mirrored from pulsar-frontend-stub.cpp:976-997 --
+// the values PULSAR_VIDEO_RATE_CONTROL / PULSAR_VIDEO_PROFILE /
+// PULSAR_VIDEO_KEYINT_SEC actually accept. Same rule as the bitrate window
+// above: the manifest publishes the INTERSECTION with what libobs advertises,
+// so it can never announce a value the boot setter would silently replace.
+static bool policy_admits_rate_control(const char *v)
+{
+    return iequals(v, "CBR") || iequals(v, "VBR") || iequals(v, "CQP");
+}
+
+static bool policy_admits_profile(const char *v)
+{
+    return iequals(v, "baseline") || iequals(v, "main") || iequals(v, "high");
+}
+
+// Presets are deliberately NOT narrowed. The boot whitelist is a per-family
+// table (pulsar-frontend-stub.cpp:741) and mirroring it here would recreate
+// the very decree this block removes; it is also demonstrably wrong for QSV,
+// whose knob is "target_usage" with values TU1..TU7 -- a narrowing would
+// publish an empty set for a family that has seven presets. The manifest
+// states what the binary offers; reconciling the boot whitelist with it is
+// tracked separately.
+static bool admits_any(const char *) { return true; }
+
+// Reads a libobs string-list property into an array of {value} items, keeping
+// only the entries the given Pulsar policy admits. Returns false when no such
+// property exists, when it is not a string list, or when nothing survives --
+// in every one of those cases the caller omits the key rather than publishing
+// an empty or invented list.
+template <typename Admits>
+static bool read_string_list(obs_properties_t *props, const char *const *names, size_t nameCount,
+                             Admits admits, obs_data_array_t *out)
+{
+    if (!props) return false;
+    for (size_t n = 0; n < nameCount; ++n) {
+        obs_property_t *p = obs_properties_get(props, names[n]);
+        if (!p || obs_property_get_type(p) != OBS_PROPERTY_LIST) continue;
+        if (obs_property_list_format(p) != OBS_COMBO_FORMAT_STRING) continue;
+
+        bool any = false;
+        const size_t count = obs_property_list_item_count(p);
+        for (size_t i = 0; i < count; ++i) {
+            if (obs_property_list_item_disabled(p, i)) continue;
+            const char *v = obs_property_list_item_string(p, i);
+            // libobs spells "no value" as an empty string (x264's <None>
+            // profile entry); it is not a selectable value.
+            if (!v || !*v) continue;
+            if (!admits(v)) continue;
+            OBSDataAutoRelease item = obs_data_create();
+            obs_data_set_string(item, "value", v);
+            obs_data_array_push_back(out, item);
+            any = true;
+        }
+        return any; // the property answered; its answer stands, empty included
+    }
+    return false;
+}
+
 // Compact token for a libobs colourspace. Transcribes the switch of
 // get_video_colorspace_name() (libobs/media-io/video-io.h) -- including its
 // treatment of VIDEO_CS_DEFAULT as Rec. 709 -- into the vocabulary the
@@ -1067,6 +1174,23 @@ static const char *colorspace_token(enum video_colorspace cs)
     case VIDEO_CS_2100_HLG: return "2100hlg";
     }
     return nullptr;
+}
+
+// Publishes an int window as {min,max,step} under `key`, narrowed by the
+// Pulsar policy window. Omits the key when the property is unreadable or the
+// intersection is empty.
+static void set_int_window(obs_data_t *dst, const char *key, obs_properties_t *props,
+                           const char *propName, long long policyLo, long long policyHi)
+{
+    long long lo = 0, hi = 0, step = 0;
+    if (!read_int_range(props, propName, lo, hi, step)) return;
+    if (!narrow_to_policy(lo, hi, policyLo, policyHi)) return;
+
+    OBSDataAutoRelease w = obs_data_create();
+    obs_data_set_int(w, "min", lo);
+    obs_data_set_int(w, "max", hi);
+    obs_data_set_int(w, "step", step);
+    obs_data_set_obj(dst, key, w);
 }
 
 void on_get_video_settings(obs_data_t * /*req*/, obs_data_t *res, void *)
@@ -1226,6 +1350,11 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
         return 4;
     };
 
+    // First registered obs id per family, kept to read that family's libobs
+    // properties below. Both arrays hold libobs-owned static strings.
+    const char *familyId[4] = {nullptr, nullptr, nullptr, nullptr};
+    const char *familyName[4] = {nullptr, nullptr, nullptr, nullptr};
+
     const char *encId = nullptr;
     for (size_t i = 0; obs_enum_encoder_types(i, &encId); ++i) {
         const char *fam = encoder_family_for_id(encId);
@@ -1233,6 +1362,10 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
         int idx = family_index(fam);
         if (seen[idx]) continue;
         seen[idx] = true;
+        if (idx < 4) {
+            familyId[idx] = encId;
+            familyName[idx] = fam;
+        }
         OBSDataAutoRelease item = obs_data_create();
         obs_data_set_string(item, "value", fam);
         obs_data_array_push_back(encoders, item);
@@ -1257,6 +1390,60 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
         obs_data_set_string(entry, "applicability", kRegimeBootFixed);
         obs_data_set_string(entry, "value", activeFamily);
         obs_data_set_obj(caps, "active_encoder", entry);
+    }
+
+    // ADR 027 §3.3 bloc 1 (#142): what each enumerated family actually offers.
+    // The whole block is boot-fixed -- preset / profile / rate-control /
+    // keyint are chosen by PULSAR_VIDEO_* at spawn and SetVideoSettings
+    // refuses them hot (see on_set_video_settings above). Every value is read
+    // from that family's libobs properties; an unreadable one is omitted, and
+    // a family the binary does not register is simply not in the list.
+    {
+        OBSDataArrayAutoRelease families = obs_data_array_create();
+        for (int idx = 0; idx < 4; ++idx) {
+            if (!familyId[idx]) continue; // family not compiled into this build
+
+            // For the family that is actually bound, read the live encoder's
+            // own properties; for the others, the registered id's.
+            const bool isActive = vEnc && std::strcmp(familyName[idx], activeFamily) == 0;
+            PropsGuard props(encoder_properties_or_id(isActive ? vEnc : nullptr, familyId[idx]));
+
+            OBSDataAutoRelease fam = obs_data_create();
+            obs_data_set_string(fam, "value", familyName[idx]);
+
+            OBSDataArrayAutoRelease presets = obs_data_array_create();
+            if (read_string_list(props.get(), kPresetPropNames,
+                                 sizeof(kPresetPropNames) / sizeof(*kPresetPropNames),
+                                 admits_any, presets))
+                obs_data_set_array(fam, "presets", presets);
+
+            OBSDataArrayAutoRelease profiles = obs_data_array_create();
+            if (read_string_list(props.get(), kProfilePropNames,
+                                 sizeof(kProfilePropNames) / sizeof(*kProfilePropNames),
+                                 policy_admits_profile, profiles))
+                obs_data_set_array(fam, "profiles", profiles);
+
+            OBSDataArrayAutoRelease rateControls = obs_data_array_create();
+            if (read_string_list(props.get(), kRateControlPropNames,
+                                 sizeof(kRateControlPropNames) / sizeof(*kRateControlPropNames),
+                                 policy_admits_rate_control, rateControls))
+                obs_data_set_array(fam, "rate_controls", rateControls);
+
+            set_int_window(fam, "keyint_sec", props.get(), "keyint_sec", kPolicyKeyintSecMin,
+                           kPolicyKeyintSecMax);
+            set_int_window(fam, "bitrate", props.get(), "bitrate", kPolicyVideoBitrateMinKbps,
+                           kPolicyVideoBitrateMaxKbps);
+
+            obs_data_array_push_back(families, fam);
+        }
+        // No whitelisted family at all would mean no streaming encoder: declare
+        // the block absent rather than publishing an empty list.
+        if (obs_data_array_count(families) > 0) {
+            OBSDataAutoRelease entry = obs_data_create();
+            obs_data_set_string(entry, "applicability", kRegimeBootFixed);
+            obs_data_set_array(entry, "values", families);
+            obs_data_set_obj(caps, "encoder_families", entry);
+        }
     }
 
     // Video bitrate: read the window the active (or, off-air, the registered)

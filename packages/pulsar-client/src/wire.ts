@@ -14,6 +14,7 @@ import type {
   CreateDestinationInput,
   Destination,
   DestinationKind,
+  EncoderFamilyCapability,
   PulsarCapabilities,
   VideoSettings,
   VideoSettingsPatch,
@@ -97,6 +98,18 @@ export interface WireValueItem<T> {
 export interface WireCapabilityEntry {
   applicability?: string;
   [k: string]: unknown;
+}
+
+/** One entry of `capabilities.encoder_families.values` (ADR 027 §3.3 bloc 1,
+ *  #142). Every field but `value` is optional: Pulsar omits what that family's
+ *  libobs properties do not advertise, and an omission is a positive answer. */
+export interface WireEncoderFamily {
+  value: string;
+  presets?: WireValueItem<string>[];
+  profiles?: WireValueItem<string>[];
+  rate_controls?: WireValueItem<string>[];
+  keyint_sec?: { min?: number; max?: number; step?: number };
+  bitrate?: { min?: number; max?: number; step?: number };
 }
 
 export interface WireGetCapabilitiesResponse {
@@ -300,6 +313,8 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
   if (destinationKindsRegime) regimes.destinationKinds = destinationKindsRegime;
   const colorimetryRegime = regimeOf(w, "video_colorimetry");
   if (colorimetryRegime) regimes.colorimetry = colorimetryRegime;
+  const familiesRegime = regimeOf(w, "encoder_families");
+  if (familiesRegime) regimes.encoderFamilies = familiesRegime;
   const monitoringRegime = regimeOf(w, "audio_monitoring");
   if (monitoringRegime) regimes.audioMonitoring = monitoringRegime;
   const tracksRegime = regimeOf(w, "audio_tracks");
@@ -327,11 +342,42 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
     filters: inventoryOf(w, "filters"),
     sourceKinds: inventoryOf(w, "source_kinds"),
     destinationKinds: inventoryOf(w, "destination_kinds"),
+    encoderFamilies: encoderFamiliesFromWire(w),
     audio: audioFromWire(w),
     regimes,
   };
   if (colorSpace && range && format) caps.colorimetry = { colorSpace, range, format };
   return caps;
+}
+
+/** Unwraps `capabilities.encoder_families.values`. A field Pulsar omitted stays
+ *  omitted here -- it is never defaulted to a plausible value, so the consumer
+ *  can tell "this family has no readable window" from "the window is 0". */
+function encoderFamiliesFromWire(w: WireGetCapabilitiesResponse): EncoderFamilyCapability[] {
+  const raw = w.capabilities?.["encoder_families"]?.["values"];
+  if (!Array.isArray(raw)) return [];
+
+  const out: EncoderFamilyCapability[] = [];
+  for (const item of raw as WireEncoderFamily[]) {
+    if (!item || typeof item.value !== "string") continue;
+    const fam: EncoderFamilyCapability = { family: item.value };
+    if (Array.isArray(item.presets)) fam.presets = item.presets.map((e) => e.value);
+    if (Array.isArray(item.profiles)) fam.profiles = item.profiles.map((e) => e.value);
+    if (Array.isArray(item.rate_controls))
+      fam.rateControls = item.rate_controls.map((e) => e.value);
+    if (item.keyint_sec) fam.keyintSec = windowFromWire(item.keyint_sec);
+    if (item.bitrate) fam.bitrateKbps = windowFromWire(item.bitrate);
+    out.push(fam);
+  }
+  return out;
+}
+
+function windowFromWire(w: { min?: number; max?: number; step?: number }): {
+  min: number;
+  max: number;
+  step: number;
+} {
+  return { min: w.min ?? 0, max: w.max ?? 0, step: w.step ?? 1 };
 }
 
 export function videoPatchToWire(p: VideoSettingsPatch): WireSetVideoSettingsRequest {

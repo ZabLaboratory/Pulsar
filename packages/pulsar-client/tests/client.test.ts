@@ -138,6 +138,23 @@ describe("PulsarClient", () => {
         sourceKinds: ["dshow_input", "window_capture"],
         destinationKinds: ["rtmp_custom", "vod_local", "twitch"],
         colorimetry: { colorSpace: "709", range: "Partial", format: "NV12" },
+        encoderFamilies: [
+          {
+            family: "x264",
+            presets: ["ultrafast", "veryfast", "medium"],
+            profiles: ["baseline", "main", "high"],
+            rateControls: ["CBR", "VBR"],
+            keyintSec: { min: 0, max: 20, step: 1 },
+            bitrateKbps: { min: 200, max: 50000, step: 50 },
+          },
+          {
+            family: "nvenc",
+            presets: ["p1", "p5", "p7"],
+            profiles: ["main", "high"],
+            rateControls: ["CBR", "CQP", "VBR"],
+            bitrateKbps: { min: 200, max: 50000, step: 50 },
+          },
+        ],
         audio: {
           monitoring: { available: true, deviceBound: false },
           trackCount: 6,
@@ -155,6 +172,7 @@ describe("PulsarClient", () => {
           sourceKinds: "live",
           destinationKinds: "live",
           colorimetry: "read-only",
+          encoderFamilies: "boot-fixed",
           audioMonitoring: "read-only",
           audioTracks: "read-only",
           audioSampleRate: "read-only",
@@ -181,6 +199,7 @@ describe("PulsarClient", () => {
         "audioTracks",
         "colorimetry",
         "destinationKinds",
+        "encoderFamilies",
         "encoders",
         "filters",
         "sourceKinds",
@@ -381,7 +400,47 @@ describe("PulsarClient", () => {
       expect(caps.regimes.videoBitrateKbps).toBeUndefined();
     });
 
-    // ---- ADR 027 §3.3 blocks 3 + 4 / issue #144: inventories + colorimetry --
+    // ---- ADR 027 §3.3 bloc 1 / issue #142: encoder block ------------------
+
+    it("carries the whole encoder block as boot-fixed", async () => {
+      const caps = await client.capabilities.get();
+      expect(caps.regimes.encoderFamilies).toBe("boot-fixed");
+    });
+
+    it("declares no family the build does not enumerate", async () => {
+      server.capabilityEncoders = ["x264"];
+      const caps = await client.capabilities.get();
+      expect(caps.encoderFamilies.map((f) => f.family)).toEqual(["x264"]);
+      expect(caps.encoders).toEqual(["x264"]);
+    });
+
+    it("leaves a field the family did not advertise undefined", async () => {
+      // nvenc omits keyint_sec in the mock: absence is a positive answer, so
+      // the consumer keeps its own bound instead of reading a fabricated 0..0.
+      const caps = await client.capabilities.get();
+      const nvenc = caps.encoderFamilies.find((f) => f.family === "nvenc");
+      expect(nvenc?.keyintSec).toBeUndefined();
+      expect(nvenc?.presets).toEqual(["p1", "p5", "p7"]);
+    });
+
+    it("keeps the encoder block empty on a pre-#142 payload", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              encoders: [{ value: "x264" }],
+              active_encoder: "x264",
+              capabilities: {
+                encoders: { applicability: "boot-fixed", values: [{ value: "x264" }] },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.encoderFamilies).toEqual([]);
+      expect(caps.regimes.encoderFamilies).toBeUndefined();
+    });
+
+    // ---- ADR 027 §3.3 blocs 3 + 4 / issue #144: inventories + colorimetry --
 
     it("unwraps the presence-only inventories with their regime", async () => {
       const caps = await client.capabilities.get();
