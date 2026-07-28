@@ -63,6 +63,36 @@ describe("PulsarClient", () => {
       expect(dest.url.startsWith("rtmp://")).toBe(false);
     });
 
+    it("youtube kind pins server url", async () => {
+      const dest = await client.destinations.create({
+        kind: "youtube",
+        key: "abcd-efgh-ijkl-mnop-qrst",
+      });
+      expect(dest.url).toBe("rtmps://a.rtmps.youtube.com:443/live2");
+      expect(dest.kind).toBe("youtube");
+    });
+
+    it("youtube pinned url is TLS, never cleartext rtmp", async () => {
+      const dest = await client.destinations.create({
+        kind: "youtube",
+        key: "abcd-efgh-ijkl-mnop-qrst",
+      });
+      expect(dest.url.startsWith("rtmps://")).toBe(true);
+      expect(dest.url.startsWith("rtmp://")).toBe(false);
+    });
+
+    // ADR 010 §3.3 R1: the caller's url is not "overridden" for a named
+    // platform, it is never read. A key handed to `youtube` can therefore
+    // not be routed to an attacker-chosen ingest.
+    it("youtube ignores a caller-supplied url entirely", async () => {
+      const dest = await client.destinations.create({
+        kind: "youtube",
+        url: "rtmp://attacker.example/app",
+        key: "abcd-efgh-ijkl-mnop-qrst",
+      });
+      expect(dest.url).toBe("rtmps://a.rtmps.youtube.com:443/live2");
+    });
+
     it("propagates server validation errors as PulsarVendorError", async () => {
       // Force the mock to reject any kind we send via override.
       server.vendorOverride = (req) => {
@@ -136,7 +166,7 @@ describe("PulsarClient", () => {
         audioBitrateKbps: [64, 96, 128, 160, 192, 224, 256, 320],
         filters: ["color_filter_v2", "noise_suppress_filter_v2"],
         sourceKinds: ["dshow_input", "window_capture"],
-        destinationKinds: ["rtmp_custom", "vod_local", "twitch"],
+        destinationKinds: ["rtmp_custom", "vod_local", "twitch", "youtube"],
         colorimetry: { colorSpace: "709", range: "Partial", format: "NV12" },
         encoderFamilies: [
           {
@@ -446,7 +476,7 @@ describe("PulsarClient", () => {
       const caps = await client.capabilities.get();
       expect(caps.filters).toEqual(["color_filter_v2", "noise_suppress_filter_v2"]);
       expect(caps.sourceKinds).toEqual(["dshow_input", "window_capture"]);
-      expect(caps.destinationKinds).toEqual(["rtmp_custom", "vod_local", "twitch"]);
+      expect(caps.destinationKinds).toEqual(["rtmp_custom", "vod_local", "twitch", "youtube"]);
       expect(caps.regimes.filters).toBe("live");
       expect(caps.regimes.sourceKinds).toBe("live");
       expect(caps.regimes.destinationKinds).toBe("live");
@@ -505,7 +535,7 @@ describe("PulsarClient", () => {
           : undefined;
       const caps = await client.capabilities.get();
       expect(caps.destinationKinds).toContain("srt_relay_from_the_future");
-      const known = ["rtmp_custom", "vod_local", "twitch"];
+      const known = ["rtmp_custom", "vod_local", "twitch", "youtube"];
       expect(caps.destinationKinds.filter((k) => known.includes(k))).toEqual(["twitch"]);
     });
 
