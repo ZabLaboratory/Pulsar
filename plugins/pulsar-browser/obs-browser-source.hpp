@@ -35,7 +35,23 @@ enum class ControlLevel : int {
 	Advanced,
 	All,
 };
-inline constexpr ControlLevel DEFAULT_CONTROL_LEVEL = ControlLevel::ReadObs;
+
+// Pulsar #158 / ADR Prism 028 §3.2 -- upstream obs-browser ships ReadObs here,
+// which hands EVERY page loaded in a browser source `window.obsstudio.
+// getStatus()` (streaming / recording / replay-buffer / virtual-cam state) for
+// free, from inside our broadcast process. Pulsar loads third-party pages by
+// design (partner overlays, sponsor widgets, Solar compositions built from
+// authored scenes), and NOTHING in Zab reads `window.obsstudio` -- so the
+// minimum useful level is None, and None is what an unpinned path must
+// inherit. `None` still answers `getControlLevel` (browser-client.cpp), which
+// is how a page discovers it is sandboxed instead of hanging on a callback.
+//
+// This default is the FLOOR, not the mechanism: every creation path Pulsar
+// owns pins the key EXPLICITLY (scripts/check-webpage-control-level.py gates
+// that). The default only covers paths with no creation call at all -- a scene
+// collection loaded from disk carrying a browser source whose settings predate
+// this change.
+inline constexpr ControlLevel DEFAULT_CONTROL_LEVEL = ControlLevel::None;
 
 extern bool hwaccel;
 

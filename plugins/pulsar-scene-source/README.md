@@ -26,7 +26,20 @@ broadcast canvas size.
 Replace the active capture source with a fresh `browser_source` on the
 current frontend scene. Removes any previously-installed Pulsar-managed
 capture items (named `PulsarCapture` from `pulsar-frontend-stub` or
-`PulsarSceneSource` from a previous call) before adding the new one.
+`PulsarSceneSource` from a previous call) from **every scene libobs
+knows** before adding the new one.
+
+> **Security + lifecycle (#158 / ADR Prism 028 §3.2).** The created source
+> pins `webpage_control_level = 0` (`ControlLevel::None`): the page loaded
+> here is third-party content running in the broadcast process, and nothing
+> in Zab reads `window.obsstudio`. The all-scene sweep is the other half:
+> a managed source stranded on a scene the operator has left would keep its
+> CEF browser and its JS state alive for the rest of the session. A Pulsar-
+> managed browser source is either the active capture source, or destroyed.
+> It is *not* torn down on a program-scene change (`shutdown = false`) —
+> Pulsar composes cuts inside the page, so tearing it down would blank the
+> antenna. Normative statement: `docs/PROTOCOL.md`, *Browser sources —
+> control level and lifecycle*.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|

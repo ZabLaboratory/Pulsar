@@ -496,7 +496,7 @@ own namespace.
 
 | Request | Purpose | Request fields | Response fields |
 |---|---|---|---|
-| `SetCaptureSource` | Replace the active capture source with a fresh `browser_source` on the current frontend scene, removing any previously-installed Pulsar-managed capture item (`PulsarCapture` from `pulsar-frontend-stub`, or a prior `PulsarSceneSource`). | `kind` (only `"browser_source"` supported), `url`, `width?` (default `1920`), `height?` (default `1080`), `fps?` (default `60`), `reroute_audio?` (default `false`), `css?` | `kind`, `url`, `width`, `height`, `fps`, `reroute_audio`, `removed_prior: int`, `error?` |
+| `SetCaptureSource` | Replace the active capture source with a fresh `browser_source` on the current frontend scene, removing any previously-installed Pulsar-managed capture item (`PulsarCapture` from `pulsar-frontend-stub`, or a prior `PulsarSceneSource`) **from every scene**, not only the current one. See *Browser sources — control level and lifecycle* below. | `kind` (only `"browser_source"` supported), `url`, `width?` (default `1920`), `height?` (default `1080`), `fps?` (default `60`), `reroute_audio?` (default `false`), `css?` | `kind`, `url`, `width`, `height`, `fps`, `reroute_audio`, `removed_prior: int`, `error?` |
 | `GetCaptureSource` | Return the active capture source state. | — | `kind` (`"browser_source"` after a successful `Set`, else `"window_capture"` — `pulsar-frontend-stub`'s boot default), `url?`, `width?`, `height?`, `fps?`, `reroute_audio?`, `last_change_unix: int` (`0` if never set), `error?` |
 
 **Errors** (`SetCaptureSource`) :
@@ -511,6 +511,91 @@ own namespace.
 | `"scene_add_failed"` | `obs_scene_add` returned null. |
 
 Full detail: `plugins/pulsar-scene-source/README.md`.
+
+## Browser sources — control level and lifecycle
+
+Normative. Issue #158 / ADR Prism 028 §3.2. Applies to **every** browser
+source Pulsar creates, whichever path created it.
+
+### Control level — pinned to `None`, always
+
+A page loaded in a browser source runs **inside the broadcast process**. Left
+alone, obs-browser hands it a `window.obsstudio` object whose reach is set by
+`webpage_control_level`, and upstream's default (`ReadObs`) is already enough
+for that page to read this process's **streaming / recording / replay-buffer /
+virtual-cam status**. One level up (`ReadUser`) it reads the **scene list** and
+the **current scene**; at `Advanced` it **switches the program scene**.
+
+Pulsar loads third-party pages by design — partner overlays, sponsor widgets,
+Solar compositions built from authored scenes. So:
+
+- **`webpage_control_level` is pinned to `0` (`ControlLevel::None`) on every
+  path that can hand obs-browser a settings object**, explicitly, never
+  inherited:
+  - `pulsar-scene:SetCaptureSource` (`pulsar-scene-source/src/plugin-main.cpp`),
+  - the v5 `CreateInput` request (`pulsar-websocket`, `Obs_ActionHelper.cpp`),
+  - the v5 `SetInputSettings` request, **both** `overlay=true`
+    (`obs_source_update`) and `overlay=false` (`obs_source_reset_settings`).
+    Creation is not the whole surface: this request re-writes the very key the
+    creation pin set, on a source that is already live, and the `overlay=false`
+    branch clears the user settings before applying. Pinning only at creation
+    would be self-cancelling.
+- All three go through one function,
+  `Utils::Obs::ActionHelper::PinBrowserControlLevel` — one policy, one
+  implementation.
+- On the v5 paths the pin **overrides the request**. A request carrying
+  `webpage_control_level` is logged and pinned back to `None` anyway. Nothing
+  in Zab reads `window.obsstudio`, so there is no named need to honour; raising
+  the level for one would be a reviewed code change here, not a wire field.
+  The threat this answers is not a hostile client — a client on that socket
+  already starts streams — but a **settings blob nobody chose**: a scene
+  collection imported into Prism, an overlay template copied from an OBS
+  profile. That blob reaches `SetInputSettings` as easily as `CreateInput`.
+- `DEFAULT_CONTROL_LEVEL` in `pulsar-browser` is `ControlLevel::None` too. That
+  default is a **floor**, not the mechanism: it covers the one case with no
+  creation call at all — a scene collection loaded from disk whose stored
+  settings predate this rule.
+- `None` still answers `getControlLevel()`, which returns `0`. A page can
+  therefore *discover* it is sandboxed instead of hanging on a callback that
+  never fires. Every other `window.obsstudio` getter answers `null`.
+
+Gates: `scripts/check-webpage-control-level.py` (lint job — fails on any
+creation *or* settings-update path that does not pin) and
+`scripts/probe-webpage-control-level.py`
+(offline probe suite — asserts, from inside a real CEF page, that the level is
+`None` and that `getStatus` / `getCurrentScene` / `getScenes` return nothing).
+
+### Lifecycle — kept while active, destroyed on swap
+
+A browser source that survives keeps its **JS state**: timers, WebSocket
+connections, accumulated DOM, anything the page chose to hold. The rule is
+therefore stated in both directions.
+
+**Kept alive while it is the active capture source, across program-scene
+changes.** The managed source is created with `shutdown = false` and
+`restart_when_active = false`. This is deliberate: Pulsar is scene-agnostic and
+composes scene changes *inside* the page (Solar), so a program-scene change
+must not tear CEF down — doing so would blank the antenna on every cut and
+restart the page's animations. A page that is on air stays loaded.
+
+**Destroyed, never parked, when the capture source is swapped.** Every
+`SetCaptureSource` sweeps the Pulsar-managed capture items (`PulsarSceneSource`,
+`PulsarCapture`, and libobs's de-dup variants of those names) out of **every
+scene libobs knows** — not just the current frontend scene — renaming each out
+of the canonical name synchronously before removing its scene item. Once no
+scene references it, the source's refcount reaches zero, libobs frees it and
+the CEF browser goes with it.
+
+The "every scene" part is the point. Sweeping only the current scene left a
+page stranded on a scene the operator had since left: invisible in the program
+mix, absent from `GetCaptureSource`, and still running — with its JS state,
+its timers and its network access — for the rest of the session. Scenes beyond
+the boot one are reachable over the v5 wire (`CreateScene`), so that was a
+reachable state, not a hypothetical one.
+
+There is no third regime: a Pulsar-managed browser source is either the active
+capture source, or gone. `removed_prior` in the `SetCaptureSource` response is
+how many items that swap retired.
 
 ## Replay buffer
 

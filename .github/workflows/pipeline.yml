@@ -144,6 +144,16 @@ jobs:
       - name: NVENC preset property contract (source consistency)
         run: python3 scripts/check-nvenc-preset-contract.py
 
+      # #158 / ADR Prism 028 §3.2 -- resolution criterion 1, in executable
+      # form: NO browser-source creation path may inherit obs-browser's
+      # default webpage_control_level. Build-free on purpose, so an unpinned
+      # path fails here in seconds instead of surviving to a -Full build the
+      # light variant would not even exercise. The RUNTIME half (what the page
+      # actually sees, plus the source lifecycle) is
+      # scripts/probe-webpage-control-level.py in the offline suite.
+      - name: Browser-source control-level pinning (source consistency)
+        run: python3 scripts/check-webpage-control-level.py
+
       - name: Patch lint (apply against pinned upstream SHA)
         run: |
           set -e
