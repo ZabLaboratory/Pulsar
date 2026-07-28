@@ -387,6 +387,22 @@ export class MockObsWebSocket {
                     },
               ),
             },
+            // ADR 027 §3.3 bloc 2 (#143). Mirrors what a real headless Pulsar
+            // answers: monitoring available on the platform, but NO device
+            // bound -- nothing in Pulsar ever calls
+            // obs_set_audio_monitoring_device -- hence read-only, not live.
+            audio_monitoring: {
+              applicability: "read-only",
+              available: true,
+              device_bound: false,
+            },
+            audio_tracks: { applicability: "read-only", count: 6, bound: 1 },
+            audio_sample_rate: { applicability: "read-only", hz: 48000 },
+            audio_speaker_layout: {
+              applicability: "read-only",
+              layout: "stereo",
+              channels: 2,
+            },
           },
         };
       }

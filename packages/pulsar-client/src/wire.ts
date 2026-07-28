@@ -7,6 +7,8 @@
 
 import type {
   AdaptiveState,
+  AudioCapabilities,
+  AudioMonitoringCapability,
   BitrateAdjustedEvent,
   CapabilityRegime,
   CreateDestinationInput,
@@ -212,6 +214,68 @@ function regimeOf(
   return CAPABILITY_REGIMES.includes(a as CapabilityRegime) ? (a as CapabilityRegime) : undefined;
 }
 
+/** Reads a numeric field of a manifest entry, or `undefined` when the entry or
+ *  the field is absent / not a number. An unreadable field stays absent -- the
+ *  client never substitutes a default for a value the server declined to state. */
+function entryNumber(
+  w: WireGetCapabilitiesResponse,
+  key: string,
+  field: string,
+): number | undefined {
+  const v = w.capabilities?.[key]?.[field];
+  return typeof v === "number" ? v : undefined;
+}
+
+function entryString(
+  w: WireGetCapabilitiesResponse,
+  key: string,
+  field: string,
+): string | undefined {
+  const v = w.capabilities?.[key]?.[field];
+  return typeof v === "string" && v !== "" ? v : undefined;
+}
+
+/**
+ * Decodes the audio block (ADR 027 §3.3 bloc 2, #143).
+ *
+ * The monitoring sub-entry is only produced when the server actually declared
+ * it: `available`/`deviceBound` are booleans the server states explicitly, so
+ * synthesising `{available:false, deviceBound:false}` for a server that said
+ * nothing would turn a silence into an answer -- the exact confusion this block
+ * exists to remove. Absent stays absent.
+ */
+function audioFromWire(w: WireGetCapabilitiesResponse): AudioCapabilities {
+  const audio: AudioCapabilities = {};
+
+  const mon = w.capabilities?.audio_monitoring;
+  if (mon && typeof mon.available === "boolean" && typeof mon.device_bound === "boolean") {
+    const monitoring: AudioMonitoringCapability = {
+      available: mon.available,
+      deviceBound: mon.device_bound,
+    };
+    const id = entryString(w, "audio_monitoring", "device_id");
+    const name = entryString(w, "audio_monitoring", "device_name");
+    if (id) monitoring.deviceId = id;
+    if (name) monitoring.deviceName = name;
+    audio.monitoring = monitoring;
+  }
+
+  const count = entryNumber(w, "audio_tracks", "count");
+  if (count !== undefined) audio.trackCount = count;
+  const bound = entryNumber(w, "audio_tracks", "bound");
+  if (bound !== undefined) audio.boundTrackCount = bound;
+
+  const hz = entryNumber(w, "audio_sample_rate", "hz");
+  if (hz !== undefined) audio.sampleRateHz = hz;
+
+  const layout = entryString(w, "audio_speaker_layout", "layout");
+  if (layout !== undefined) audio.speakerLayout = layout;
+  const channels = entryNumber(w, "audio_speaker_layout", "channels");
+  if (channels !== undefined) audio.channels = channels;
+
+  return audio;
+}
+
 export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapabilities {
   // Regimes are only populated for entries the manifest actually declares. A
   // pre-#141 Pulsar sends no `capabilities` block at all: every regime is then
@@ -228,6 +292,14 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
   if (audioRegime) regimes.audioBitrateKbps = audioRegime;
   const familiesRegime = regimeOf(w, "encoder_families");
   if (familiesRegime) regimes.encoderFamilies = familiesRegime;
+  const monitoringRegime = regimeOf(w, "audio_monitoring");
+  if (monitoringRegime) regimes.audioMonitoring = monitoringRegime;
+  const tracksRegime = regimeOf(w, "audio_tracks");
+  if (tracksRegime) regimes.audioTracks = tracksRegime;
+  const sampleRateRegime = regimeOf(w, "audio_sample_rate");
+  if (sampleRateRegime) regimes.audioSampleRate = sampleRateRegime;
+  const speakersRegime = regimeOf(w, "audio_speaker_layout");
+  if (speakersRegime) regimes.audioSpeakerLayout = speakersRegime;
 
   return {
     version: w.version ?? 0,
@@ -239,6 +311,7 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
     },
     audioBitrateKbps: (w.audio_bitrate ?? []).map((e) => e.value),
     encoderFamilies: encoderFamiliesFromWire(w),
+    audio: audioFromWire(w),
     regimes,
   };
 }

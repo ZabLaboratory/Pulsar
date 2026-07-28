@@ -151,12 +151,24 @@ describe("PulsarClient", () => {
             bitrateKbps: { min: 200, max: 50000, step: 50 },
           },
         ],
+        audio: {
+          monitoring: { available: true, deviceBound: false },
+          trackCount: 6,
+          boundTrackCount: 1,
+          sampleRateHz: 48000,
+          speakerLayout: "stereo",
+          channels: 2,
+        },
         regimes: {
           encoders: "boot-fixed",
           activeEncoder: "boot-fixed",
           videoBitrateKbps: "live",
           audioBitrateKbps: "live",
           encoderFamilies: "boot-fixed",
+          audioMonitoring: "read-only",
+          audioTracks: "read-only",
+          audioSampleRate: "read-only",
+          audioSpeakerLayout: "read-only",
         },
       });
     });
@@ -173,10 +185,131 @@ describe("PulsarClient", () => {
       expect(Object.keys(caps.regimes).sort()).toEqual([
         "activeEncoder",
         "audioBitrateKbps",
+        "audioMonitoring",
+        "audioSampleRate",
+        "audioSpeakerLayout",
+        "audioTracks",
         "encoderFamilies",
         "encoders",
         "videoBitrateKbps",
       ]);
+    });
+
+    // ---- ADR 027 §3.3 bloc 2 / issue #143: audio block --------------------
+
+    it("declares monitoring availability and an unbound device as an explicit no", async () => {
+      // Criteria 1 & 2: the "no" must be readable, not inferred from a silence.
+      const caps = await client.capabilities.get();
+      expect(caps.audio.monitoring).toEqual({ available: true, deviceBound: false });
+      expect(caps.audio.monitoring?.deviceId).toBeUndefined();
+      expect(caps.audio.monitoring?.deviceName).toBeUndefined();
+    });
+
+    it("does not declare monitoring live while Pulsar has no write path", async () => {
+      // Criterion 4: `live` requires the write AND the read-back to be really
+      // supported hot. Nothing in Pulsar calls obs_set_audio_monitoring_device.
+      const caps = await client.capabilities.get();
+      expect(caps.regimes.audioMonitoring).toBe("read-only");
+      expect(caps.regimes.audioMonitoring).not.toBe("live");
+    });
+
+    it("surfaces the bound monitoring device when there is one", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: {
+                audio_monitoring: {
+                  applicability: "read-only",
+                  available: true,
+                  device_bound: true,
+                  device_id: "{0.0.0.0}.{abcd}",
+                  device_name: "Headphones (Realtek)",
+                },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.audio.monitoring).toEqual({
+        available: true,
+        deviceBound: true,
+        deviceId: "{0.0.0.0}.{abcd}",
+        deviceName: "Headphones (Realtek)",
+      });
+    });
+
+    it("reports monitoring unavailable without inventing a device", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: {
+                audio_monitoring: {
+                  applicability: "read-only",
+                  available: false,
+                  device_bound: false,
+                },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.audio.monitoring).toEqual({ available: false, deviceBound: false });
+    });
+
+    it("leaves the audio block absent rather than answering for a silent server", async () => {
+      // A pre-#143 Pulsar says nothing about audio. `undefined` must NOT be
+      // decoded as "monitoring unavailable" -- an absence is not a "no".
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              encoders: [{ value: "x264" }],
+              active_encoder: "x264",
+              capabilities: { active_encoder: { applicability: "boot-fixed", value: "x264" } },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.audio).toEqual({});
+      expect(caps.audio.monitoring).toBeUndefined();
+      expect(caps.regimes.audioMonitoring).toBeUndefined();
+    });
+
+    it("omits audio fields the server declared absent, never defaulting them", async () => {
+      // Criterion 3: read from libobs or absent. Off-air there is no bound
+      // track count, and an unknown speaker layout is omitted outright.
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: {
+                audio_tracks: { applicability: "read-only", count: 6 },
+                audio_sample_rate: { applicability: "read-only", hz: 44100 },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.audio.trackCount).toBe(6);
+      expect(caps.audio.boundTrackCount).toBeUndefined();
+      expect(caps.audio.sampleRateHz).toBe(44100);
+      expect(caps.audio.speakerLayout).toBeUndefined();
+      expect(caps.audio.channels).toBeUndefined();
+    });
+
+    it("ignores a malformed monitoring entry instead of half-decoding it", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: {
+                // `available` is not a boolean: the entry states nothing usable.
+                audio_monitoring: { applicability: "read-only", available: "yes" },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.audio.monitoring).toBeUndefined();
+      // The regime was still declared and is still reported.
+      expect(caps.regimes.audioMonitoring).toBe("read-only");
     });
 
     it("ignores an unknown block and an unknown entry without erroring", async () => {
