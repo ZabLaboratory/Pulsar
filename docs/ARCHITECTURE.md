@@ -136,8 +136,8 @@ rundir into the distributable zip:
 | **light** (`pulsar-windows-x64-v<version>.zip`) | ~40 MB compressed, ~100 MB extracted | encoders, capture (window/monitor/game/dshow), WASAPI, ffmpeg muxer, multi-stream, websocket |
 | **full** (`pulsar-windows-x64-full-v<version>.zip`) | ~150 MB compressed, ~370 MB extracted | the above + obs-browser + CEF + obs-text + text-freetype2 + vlc-video |
 
-Both variants share an always-stripped list (obs-vst, obs-webrtc,
-decklink, frontend-tools, obs-libfdk) — those are deliberate
+Both variants share an always-stripped list (obs-vst, nv-filters,
+obs-webrtc, decklink, frontend-tools, obs-libfdk) — those are deliberate
 omissions documented in `scripts/package-win.ps1`.
 
 ## Boot sequence
