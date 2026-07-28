@@ -2,6 +2,12 @@
 
 **Owner**: Keeper. **First written**: 2026-07-26, during the v1.2.2 release
 (RTMPS Twitch ingest, #113 / PR #114 — the fix that motivated the runbook).
+**Last exercised**: 2026-07-28, v1.3.0 (ADR 027 capability manifest, PR #149) —
+release cut squash-merged by Keeper without review under the hotfix exception
+(`docs/rules/git.md`, Gate point 2): urgent (the merged manifest chain was
+dormant on both sides), infra-pure (VERSION / CHANGELOG / 3 × package.json /
+lockfile, zero code), documented here. Four new field traps below came out of
+that run. Consumer side: Prism PR #469.
 
 ## Why this runbook exists
 
@@ -106,6 +112,27 @@ the old binary — silently, because
 - **`paths-ignore` covers `CHANGELOG.md` and `docs/**`** — a docs-only
   release commit would not trigger the pipeline at all. The version bump is
   what makes it fire.
+- **`gh pr merge --merge` and `--rebase` both fail on this repo** — only
+  squash is allowed (`GraphQL: Merge commits are not allowed on this
+  repository`). Cost at v1.3.0: two failed attempts, and each one leaves the
+  local checkout switched back to a `main` that does not yet carry the bump, so
+  `cat VERSION` reads the OLD number and looks like the merge silently did
+  nothing. Use `gh pr merge <n> --squash --admin` and re-check `VERSION` after
+  the `git pull`.
+- **A stale local checkout hides the very code you are releasing.** At v1.3.0
+  the working copy was 5 commits behind `origin/main`: `wire.ts` showed no
+  `version` / `capabilities` / `regimes` and the release looked pointless.
+  `git fetch` first, and read `git show origin/main:<path>` — never the local
+  file — before deciding a bump is empty.
+- **The consumer's fixture is part of the release, not a follow-up.** Prism
+  captures the manifest from the bundled binary
+  (`npm run manifest:capture`, ADR 027 RC 9) and an inclusion guard compares its
+  registry against it. A release that changes what `GetCapabilities` answers
+  makes `npm run manifest:check` go red on the consumer *by design* — and at
+  v1.3.0 it also fired `EXPECTED_UNDECLARED`, the guard's dead-man switch, which
+  is the intended signal that dormant checks just switched on. Budget the
+  re-capture and the guard update in the consumer bump; a red `manifest:check`
+  there is the chain working, not a regression.
 - **Vendor shims that overwrite `pulsar.exe`** silently defeat the whole
   chain (historically `scripts/vendor-pulsar-virtualcam.mjs` in Prism, now
   removed). If a consumer postinstall touches the binary, the npm version
