@@ -280,16 +280,29 @@ export class MockObsWebSocket {
 
       case "CreateDestination": {
         const kind = data["kind"] as string | undefined;
-        if (kind !== "rtmp_custom" && kind !== "vod_local" && kind !== "twitch") {
-          return { error: "kind must be 'rtmp_custom', 'vod_local', or 'twitch'" };
+        if (
+          kind !== "rtmp_custom" &&
+          kind !== "vod_local" &&
+          kind !== "twitch" &&
+          kind !== "youtube"
+        ) {
+          return {
+            error: "kind must be 'rtmp_custom', 'vod_local', 'twitch', or 'youtube'",
+          };
         }
         const id = `mock-${this.nextId++}`;
         const url = (data["url"] as string | undefined) ?? "";
+        // Mirrors pinned_ingest_url() in plugin-main.cpp: for a named platform
+        // the caller's url is never read, the server's own ingest is stored.
+        const pinned: Record<string, string> = {
+          twitch: "rtmps://ingest.global-contribute.live-video.net/app/",
+          youtube: "rtmps://a.rtmps.youtube.com:443/live2",
+        };
         const dest: VendorDest = {
           id,
           name: (data["name"] as string | undefined) ?? id,
           kind,
-          url: kind === "twitch" ? "rtmps://ingest.global-contribute.live-video.net/app/" : url,
+          url: pinned[kind] ?? url,
           enabled: false,
           active: false,
         };
@@ -376,7 +389,12 @@ export class MockObsWebSocket {
             },
             destination_kinds: {
               applicability: "live",
-              values: [{ value: "rtmp_custom" }, { value: "vod_local" }, { value: "twitch" }],
+              values: [
+                { value: "rtmp_custom" },
+                { value: "vod_local" },
+                { value: "twitch" },
+                { value: "youtube" },
+              ],
             },
             video_colorimetry: {
               applicability: "read-only",

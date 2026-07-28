@@ -70,8 +70,19 @@ enum DestinationKind {
     Kind_RtmpCustom,
     Kind_VodLocal,
     Kind_Twitch,
+    Kind_YouTube,
     Kind_Unknown,
 };
+
+// Fail closed at compile time: no future edit may point a pinned, named
+// platform destination at a cleartext ingest. Every named-platform kind
+// carries a bearer stream key in the RTMP connect handshake, so the scheme is
+// the only thing standing between that key and the wire.
+constexpr bool is_rtmps_literal(const char *s)
+{
+    return s[0] == 'r' && s[1] == 't' && s[2] == 'm' && s[3] == 'p' && s[4] == 's' && s[5] == ':' && s[6] == '/' &&
+           s[7] == '/';
+}
 
 // Twitch's global ingest, TLS-terminated. This is the `url_template_secure`
 // of the "Default" entry of https://ingest.twitch.tv/ingests -- the global
@@ -87,13 +98,24 @@ enum DestinationKind {
 // connection outright if the TLS handshake or certificate verification fails
 // (rtmp.c RTMP_Connect1) -- there is no downgrade path to cleartext.
 constexpr const char *TWITCH_INGEST_URL = "rtmps://ingest.global-contribute.live-video.net/app/";
-
-// Fail closed at compile time: no future edit may point the pinned Twitch
-// destination at a cleartext ingest.
-static_assert(TWITCH_INGEST_URL[0] == 'r' && TWITCH_INGEST_URL[1] == 't' && TWITCH_INGEST_URL[2] == 'm' &&
-                      TWITCH_INGEST_URL[3] == 'p' && TWITCH_INGEST_URL[4] == 's' && TWITCH_INGEST_URL[5] == ':' &&
-                      TWITCH_INGEST_URL[6] == '/' && TWITCH_INGEST_URL[7] == '/',
+static_assert(is_rtmps_literal(TWITCH_INGEST_URL),
               "TWITCH_INGEST_URL must use the rtmps:// scheme -- the stream key must never travel in cleartext");
+
+// YouTube's primary RTMPS ingest. Source, checked into this tree rather than
+// taken on trust: the "Primary YouTube ingest server" of the "YouTube - RTMPS"
+// entry of upstream/plugins/rtmp-services/data/services.json (the service list
+// OBS itself ships and keeps current). YouTube's stream key is per-channel and
+// persistent across broadcasts unless the streamer resets it.
+//
+// The same rtmps:// requirement as Twitch, and here it is a live choice rather
+// than a formality: that same services.json entry ALSO lists two legacy
+// cleartext hosts (rtmp://a.rtmp.youtube.com/live2 and its backup). Pointing
+// the pinned destination at one of them would put a persistent bearer key on
+// the wire in the clear at every go-live -- the static_assert below exists to
+// make that edit fail the build rather than ship.
+constexpr const char *YOUTUBE_INGEST_URL = "rtmps://a.rtmps.youtube.com:443/live2";
+static_assert(is_rtmps_literal(YOUTUBE_INGEST_URL),
+              "YOUTUBE_INGEST_URL must use the rtmps:// scheme -- the stream key must never travel in cleartext");
 
 const char *kind_to_string(DestinationKind k)
 {
@@ -101,7 +123,25 @@ const char *kind_to_string(DestinationKind k)
     case Kind_RtmpCustom: return "rtmp_custom";
     case Kind_VodLocal:   return "vod_local";
     case Kind_Twitch:     return "twitch";
+    case Kind_YouTube:    return "youtube";
     default:              return "unknown";
+    }
+}
+
+// The ingest URL Pulsar pins for a named-platform kind, or nullptr for a kind
+// whose server the client legitimately chooses. Single source of the
+// pinned-vs-client-supplied split, read by ensure_output (which configures the
+// service) and by CreateDestination (which stores the URL the caller will see
+// back). ADR 010 §3.3 R1: a named-platform stream key is a bearer credential
+// for an account we do not own, so it may only ever be handed to an ingest
+// this binary pins -- never to a URL that arrived over the wire. Adding a
+// platform kind here, and nowhere else, is what keeps that true.
+const char *pinned_ingest_url(DestinationKind k)
+{
+    switch (k) {
+    case Kind_Twitch:  return TWITCH_INGEST_URL;
+    case Kind_YouTube: return YOUTUBE_INGEST_URL;
+    default:           return nullptr;
     }
 }
 
@@ -113,7 +153,8 @@ const char *output_id_for_kind(DestinationKind k)
 {
     switch (k) {
     case Kind_RtmpCustom:
-    case Kind_Twitch:     return "rtmp_output";
+    case Kind_Twitch:
+    case Kind_YouTube:    return "rtmp_output";
     case Kind_VodLocal:   return "ffmpeg_muxer";
     default:              return nullptr;
     }
@@ -126,6 +167,7 @@ DestinationKind kind_from_string(const char *s)
     if (str == "rtmp_custom") return Kind_RtmpCustom;
     if (str == "vod_local")   return Kind_VodLocal;
     if (str == "twitch")      return Kind_Twitch;
+    if (str == "youtube")     return Kind_YouTube;
     return Kind_Unknown;
 }
 
@@ -141,6 +183,7 @@ bool is_rtmp_scheme(const char *url)
 //   rtmp_custom -> url must be rtmp[s]://, key must be non-empty
 //   vod_local   -> url is a path; parent directory must exist or be creatable
 //   twitch      -> key non-empty (url ignored, server is pinned)
+//   youtube     -> key non-empty (url ignored, server is pinned)
 bool validate_destination_input(DestinationKind kind, const char *url, const char *key, std::string &errOut)
 {
     switch (kind) {
@@ -177,6 +220,13 @@ bool validate_destination_input(DestinationKind kind, const char *url, const cha
     case Kind_Twitch:
         if (!key || !*key) {
             errOut = "twitch: key required (Twitch stream key)";
+            return false;
+        }
+        return true;
+
+    case Kind_YouTube:
+        if (!key || !*key) {
+            errOut = "youtube: key required (YouTube stream key)";
             return false;
         }
         return true;
@@ -275,8 +325,13 @@ bool DestinationRegistry::ensure_output(Destination &d, std::string &errOut)
     obs_output_set_video_encoder(d.output, vEnc);
     obs_output_set_audio_encoder(d.output, aEnc, 0);
 
-    if (d.kind == Kind_RtmpCustom || d.kind == Kind_Twitch) {
-        const char *server = (d.kind == Kind_Twitch) ? TWITCH_INGEST_URL : d.url.c_str();
+    // rtmp_custom is the one kind that streams to a server the caller chose;
+    // every other RTMP kind is a named platform whose ingest we pin here. The
+    // client's url never reaches the service settings for those (ADR 010
+    // §3.3 R1) -- it is not merely overridden, it is not read.
+    const char *pinned = pinned_ingest_url(d.kind);
+    if (d.kind == Kind_RtmpCustom || pinned) {
+        const char *server = pinned ? pinned : d.url.c_str();
         OBSDataAutoRelease svcSettings = obs_data_create();
         obs_data_set_string(svcSettings, "server", server);
         obs_data_set_string(svcSettings, "key", d.key.c_str());
@@ -755,7 +810,8 @@ void on_create_destination(obs_data_t *req, obs_data_t *res, void *)
 
     DestinationKind kind = kind_from_string(kindS);
     if (kind == Kind_Unknown) {
-        obs_data_set_string(res, "error", "kind must be 'rtmp_custom', 'vod_local', or 'twitch'");
+        obs_data_set_string(res, "error",
+                            "kind must be 'rtmp_custom', 'vod_local', 'twitch', or 'youtube'");
         return;
     }
 
@@ -765,10 +821,11 @@ void on_create_destination(obs_data_t *req, obs_data_t *res, void *)
         return;
     }
 
-    // For Twitch the server URL is fixed; the user-supplied url field is
-    // ignored. Stash the pinned URL so GetDestinations + diagnostics
+    // For a named platform the server URL is fixed; the user-supplied url
+    // field is ignored. Stash the pinned URL so GetDestinations + diagnostics
     // surface it consistently.
-    const char *storeUrl = (kind == Kind_Twitch) ? TWITCH_INGEST_URL : url;
+    const char *pinned = pinned_ingest_url(kind);
+    const char *storeUrl = pinned ? pinned : url;
 
     auto id = g_registry->create(name ? name : "", kind, storeUrl, key ? key : "");
     obs_data_set_string(res, "id", id.c_str());

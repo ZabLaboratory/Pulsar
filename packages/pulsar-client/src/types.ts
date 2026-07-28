@@ -5,14 +5,14 @@
 // translation layer lives in wire.ts.
 
 /** A streaming destination kind supported by pulsar-multi-stream. */
-export type DestinationKind = "rtmp_custom" | "vod_local" | "twitch";
+export type DestinationKind = "rtmp_custom" | "vod_local" | "twitch" | "youtube";
 
 /** A single destination as surfaced by GetDestinations. */
 export interface Destination {
   id: string;
   name: string;
   kind: DestinationKind;
-  /** RTMP server URL (rtmp_custom / twitch) or file path (vod_local). */
+  /** RTMP server URL (rtmp_custom / twitch / youtube) or file path (vod_local). */
   url: string;
   /** Last user intent (Start/Stop request). */
   enabled: boolean;
@@ -25,10 +25,10 @@ export interface CreateDestinationInput {
   /** Display name. Defaults to the generated id when omitted. */
   name?: string;
   kind: DestinationKind;
-  /** RTMP URL (rtmp_custom) or file path (vod_local). Ignored for twitch
-   *  -- the server pins its own ingest URL. */
+  /** RTMP URL (rtmp_custom) or file path (vod_local). Ignored for the named
+   *  platform kinds (twitch, youtube) -- the server pins its own ingest URL. */
   url?: string;
-  /** Required for rtmp_custom + twitch. Unused for vod_local. */
+  /** Required for rtmp_custom + twitch + youtube. Unused for vod_local. */
   key?: string;
 }
 

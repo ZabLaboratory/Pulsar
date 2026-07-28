@@ -450,7 +450,7 @@ to prevent. `range` and `format` carry libobs' own names (`Partial`/`Full`,
 
 ### Destination kinds
 
-`CreateDestination` accepts one of three kinds. Each has its own
+`CreateDestination` accepts one of four kinds. Each has its own
 validation and lifecycle.
 
 | Kind | URL | Key | Output type | Notes |
@@ -458,6 +458,15 @@ validation and lifecycle.
 | `rtmp_custom` | required, `rtmp://` or `rtmps://` | required | `rtmp_output` | Generic RTMP — your private ingest, a co-host's RTMP, an OBS-compatible CDN. |
 | `vod_local` | required, file path with `.mp4` extension | unused | `ffmpeg_muxer` | Local MP4 archive. Path is created if missing; existing file is overwritten. |
 | `twitch` | **server-pinned** (Pulsar picks the closest Twitch ingest) | required | `rtmp_output` | The client's `url` field, if provided, is ignored. The server resolves and pins a Twitch ingest URL on `CreateDestination`; the resulting URL is what `GetDestinations[i].url` shows. |
+| `youtube` | **server-pinned** (YouTube's primary RTMPS ingest) | required | `rtmp_output` | Same contract as `twitch`: the client's `url` is never read, the server pins its own ingest. |
+
+Named-platform kinds (`twitch`, `youtube`) are pinned, not merely
+defaulted: the stream key is a bearer credential for an account Pulsar
+does not own, so it may only ever be handed to an ingest this binary
+holds as a constant — never to a URL that arrived over the wire (ADR 010
+§3.3 R1). Both pinned URLs are `rtmps://`, enforced at compile time.
+A caller that wants to choose its own server uses `rtmp_custom`, whose
+key is theirs to give away.
 
 ### Events
 
