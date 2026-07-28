@@ -363,6 +363,30 @@ export class MockObsWebSocket {
               step: 32,
               values: audioLadder.map((value) => ({ value })),
             },
+            // ADR 027 §3.3 bloc 1 (#142): per-family detail, boot-fixed. Only
+            // the families this "build" enumerates appear, and nvenc omits the
+            // keyint window to stand for a value libobs did not advertise.
+            encoder_families: {
+              applicability: "boot-fixed",
+              values: this.capabilityEncoders.map((family) =>
+                family === "x264"
+                  ? {
+                      value: "x264",
+                      presets: ["ultrafast", "veryfast", "medium"].map((value) => ({ value })),
+                      profiles: ["baseline", "main", "high"].map((value) => ({ value })),
+                      rate_controls: ["CBR", "VBR"].map((value) => ({ value })),
+                      keyint_sec: { min: 0, max: 20, step: 1 },
+                      bitrate: { min: 200, max: 50000, step: 50 },
+                    }
+                  : {
+                      value: family,
+                      presets: ["p1", "p5", "p7"].map((value) => ({ value })),
+                      profiles: ["main", "high"].map((value) => ({ value })),
+                      rate_controls: ["CBR", "CQP", "VBR"].map((value) => ({ value })),
+                      bitrate: { min: 200, max: 50000, step: 50 },
+                    },
+              ),
+            },
           },
         };
       }
