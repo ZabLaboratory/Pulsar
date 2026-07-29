@@ -392,9 +392,36 @@ static void test_dir_validation(void)
 	check(!pulsar_nv_validate_dir("C:\\Windows\\.\\System32", out, MAX_PATH), "a '.' segment is rejected");
 	check(!pulsar_nv_validate_dir("C:\\pulsar-nv-does-not-exist-167", out, MAX_PATH),
 	      "a non-existent directory is rejected");
-	check(pulsar_nv_validate_dir("C:\\Windows\\System32", out, MAX_PATH) &&
-		      _stricmp(out, "C:\\Windows\\System32") == 0,
-	      "a well-formed system directory is accepted unchanged");
+	/* A well-formed system directory. Whether it is ACCEPTED is not a
+	 * property of the path -- it depends on what this account may write,
+	 * and the two answers are both correct:
+	 *
+	 *   ordinary account   System32 is not writable  -> accepted
+	 *   elevated process   System32 IS writable      -> refused
+	 *
+	 * The CI runner is in Administrators, so it takes the second branch;
+	 * a developer box takes the first. Asserting "accepted" flatly would
+	 * be asserting the privileges of whoever runs the suite. What is
+	 * invariant is the SHAPE, and the equivalence between the verdict and
+	 * the writability -- so that is what is checked.
+	 *
+	 * (An elevated Pulsar is outside this control's threat model anyway:
+	 * an attacker already holding administrator owns the machine, not
+	 * merely the SDK directory.) */
+	{
+		bool writable = pulsar_nv_dir_is_writable_by_us("C:\\Windows\\System32");
+		bool accepted = pulsar_nv_validate_dir("C:\\Windows\\System32", out, MAX_PATH);
+
+		check(pulsar_nv_dir_shape_ok("C:\\Windows\\System32"),
+		      "a well-formed system directory passes every shape check");
+		check(accepted == !writable,
+		      "...and is accepted exactly when this account cannot write to it, never otherwise");
+		if (accepted)
+			check(_stricmp(out, "C:\\Windows\\System32") == 0, "...and comes back unchanged");
+		else
+			printf("  note this account CAN write to System32 (elevated); the accept branch is\n"
+			       "       not exercised here, by design rather than by omission.\n");
+	}
 }
 
 /* The control Bastion asked for: authority, not spelling. */
