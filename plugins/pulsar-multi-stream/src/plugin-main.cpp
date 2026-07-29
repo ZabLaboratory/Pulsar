@@ -38,6 +38,14 @@
 #include <obs.hpp>
 #include <obs-frontend-api.h>
 #include <util/util.hpp>
+// #167 -- the SAME probe the nv-filters module gates itself on, so the
+// manifest publishes the load decision rather than a guess at it. It is the
+// first thing here that pulls in <windows.h>, hence NOMINMAX: this file uses
+// std::min / std::max, which the Win32 min/max MACROS would eat.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <pulsar-nv-secure-load.h>
 
 #include <obs-websocket-api.h>
 
@@ -1832,6 +1840,77 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
             obs_data_set_array(entry, "values", filters);
             obs_data_set_obj(caps, "filters", entry);
         }
+    }
+
+    // ---- nv_filters : the capability probe behind the inventory (#167) -----
+    //
+    // The `filters` inventory above answers "is nvidia_audiofx_filter here",
+    // and nothing else. When it is NOT there, the consumer is left guessing
+    // between "this build has no nv-filters", "the SDK is missing", "the SDK
+    // is too old" and "the models are missing" -- four states with four
+    // different answers for an operator. This entry is what distinguishes
+    // them, without anyone having to read a log.
+    //
+    // It is also the manifest half of Prism ADR 023 Amendment 3 §A3.4: the
+    // module now REFUSES TO LOAD unless this same probe is positive
+    // (plugins/pulsar-nv-secure-load/, shared verbatim with the loader), so
+    // publishing it is publishing the actual load decision, not a
+    // reconstruction of it.
+    //
+    // Regime read-only: nothing over the wire can install an SDK or move the
+    // directory, and the module load decision was taken at boot. Absence is an
+    // answer throughout -- `version` is OMITTED, not zeroed, when the version
+    // resource cannot be read, exactly as ADR 027 §3.3 §1 requires. That is
+    // also why an unreadable version can never satisfy `usable`.
+    {
+        struct pulsar_nv_probe_result probe;
+        pulsar_nv_probe(&probe);
+
+        auto version_text = [](unsigned int v, char *out, size_t len) {
+            snprintf(out, len, "%u.%u.%u.%u", (v >> 24) & 0xffu, (v >> 16) & 0xffu, (v >> 8) & 0xffu, v & 0xffu);
+        };
+
+        auto sdk_entry = [&](const struct pulsar_nv_sdk_probe &p) {
+            obs_data_t *e = obs_data_create();
+            char buf[32];
+            // `dir` itself is deliberately NOT published: the consumer has no
+            // use for it, and a filesystem path is not something a manifest
+            // should hand out. What it needs is whether one was accepted.
+            obs_data_set_bool(e, "directory_designated", p.dir_valid);
+            obs_data_set_bool(e, "dlls_present", p.dlls_present);
+            obs_data_set_bool(e, "models_present", p.models_present);
+            if (p.version_readable) {
+                version_text(p.version, buf, sizeof(buf));
+                obs_data_set_string(e, "version", buf);
+            }
+            version_text(p.min_version, buf, sizeof(buf));
+            obs_data_set_string(e, "min_version", buf);
+            obs_data_set_bool(e, "usable", p.usable);
+            return e;
+        };
+
+        // Read back what actually happened, rather than re-deriving it: if a
+        // filter type is registered, the module loaded. The two agreeing is
+        // the point -- a positive probe with nothing registered would mean the
+        // gate and the loader had drifted apart.
+        bool registered = false;
+        const char *kind = nullptr;
+        for (size_t idx = 0; obs_enum_filter_types(idx, &kind); idx++) {
+            if (kind && (strcmp(kind, "nvidia_audiofx_filter") == 0 || strcmp(kind, "nv_greenscreen_filter") == 0 ||
+                         strcmp(kind, "nv_blur_filter") == 0 || strcmp(kind, "nv_background_blur_filter") == 0)) {
+                registered = true;
+                break;
+            }
+        }
+
+        OBSDataAutoRelease entry = obs_data_create();
+        obs_data_set_string(entry, "applicability", kRegimeReadOnly);
+        obs_data_set_bool(entry, "module_loaded", registered);
+        OBSDataAutoRelease afx = sdk_entry(probe.afx);
+        OBSDataAutoRelease vfx = sdk_entry(probe.vfx);
+        obs_data_set_obj(entry, "afx", afx);
+        obs_data_set_obj(entry, "vfx", vfx);
+        obs_data_set_obj(caps, "nv_filters", entry);
     }
 
     // Inputs, not obs_enum_source_types: the latter also yields filter and

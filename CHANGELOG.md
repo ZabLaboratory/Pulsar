@@ -31,6 +31,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tells *routed* from *consumed*; the input's mixer bits cannot (`#157`).
 - `capabilities.audio_tracks.tracks` — which tracks the streaming output carries,
   not merely how many.
+- **`nv-filters` is back in the `full` bundle, behind a capability gate**
+  (#167, Prism ADR 023 Amendment 3). The NVIDIA Audio/Video Effects filters
+  ship again in the `full` variant — the one Prism embeds; `light` keeps
+  them stripped. **No NVIDIA SDK or model file is redistributed** — the SDK
+  stays a dependency of the host machine.
+  - The module **refuses to load** unless a probe finds a validated SDK
+    directory, the DLLs, the version minima (VFX ≥ 0.7.6, AFX ≥ 1.6.1.2) and
+    the three `.trtpkg` models. With no SDK — the ordinary case — neither of
+    its loaders ever executes.
+  - A directory is validated only if it is **not writable by the account
+    Pulsar runs as** — tested against the kernel, not asserted — and the
+    VFX default-install root comes from `SHGetKnownFolderPath`, never from
+    `%ProgramFiles%`, which the parent process chooses.
+  - Every SDK load is now `LoadLibraryExW(<absolute path>, NULL,
+    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)`,
+    replacing three bare-name `LoadLibrary()` calls that Windows answered
+    from `pulsar.exe`'s own directory first. The CUDA driver library comes
+    from System32.
+  - New manifest entry `capabilities.nv_filters` (`read-only`, additive — no
+    `version` bump) publishing that probe: presence, versions read off the
+    files, models, and whether the module actually loaded. An unreadable
+    version is reported **absent**, never assumed sufficient.
+  - New CTest gate `pulsar-nv-probe`: proves with fixture DLLs, **no GPU and
+    no SDK**, that a homonym dropped in the application directory is not
+    loaded — first level *and* transitive import.
+  - Rollback is written down: `docs/runbooks/nv-filters-rollback.md`.
 
 ### 🔧 Changed
 

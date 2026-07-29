@@ -89,24 +89,45 @@ if (-not (Test-Path (Join-Path $binSrc 'pulsar.exe'))) {
 #   obs-vst            -- VST audio host, niche + arbitrary DLL load
 #                         attack surface. obs-filters covers the standard
 #                         compressor/EQ/gate/limiter natively.
-#   nv-filters         -- NVIDIA Audio/Video Effects filters. Same motive as
-#                         obs-vst: at module load it LoadLibrary()s the two
-#                         NVIDIA SDKs by bare name (NVAudioEffects.dll,
-#                         NVVideoEffects.dll, nvcuda.dll, NVCVImage.dll --
-#                         upstream/plugins/nv-filters/nvafx-load.h:305,
-#                         nvvfx-load.h:689) off a path read from the inherited
-#                         environment, i.e. arbitrary code execution in the
-#                         process that holds the Twitch stream key. Optional
-#                         effects, no consumer in Pulsar. (NS1)
 #   decklink-*         -- Blackmagic Design hardware, n/a.
 #   frontend-tools     -- Lua/Python scripting + auto-remux; redundant
 #                         with the embedder's TS host, plus most code
 #                         paths null-deref in headless mode.
 #   obs-libfdk         -- FDK-AAC, commercial license, off upstream.
+#
+# Moved to the light-only list -- nv-filters (#167, Prism ADR 023 Amendment 3).
+#   It was stripped under NS1 because both of its loaders resolved an
+#   NVIDIA SDK DLL by BARE NAME off a path read from the inherited
+#   environment, which Windows answers from the application directory
+#   first: arbitrary code execution in the process holding the Twitch
+#   stream key. §A3.1 overrides that strip; §A3.4 requires the invariant to
+#   survive the reinstatement, and stripping is no longer what carries it.
+#   What carries it now, in this order:
+#     (i)  the module refuses to load at all unless a capability probe
+#          finds a validated SDK directory, the DLLs, the version minima
+#          and the three .trtpkg models -- so with no SDK, which is the
+#          normal state, neither loader ever runs;
+#     (ii) every load is LoadLibraryExW(<absolute path>, NULL,
+#          LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32),
+#          so neither the DLL nor its own imports can come from beside
+#          pulsar.exe; the CUDA driver library is taken from System32,
+#          where the display driver installs it;
+#     (iii) the embedder pins the SDK directory (Prism's twin issue).
+#   Rules: plugins/pulsar-nv-secure-load/. Gate: tests/nv-probe/ (CTest,
+#   no GPU, no SDK). Putting it back: docs/runbooks/nv-filters-rollback.md.
+#
+#   §A3.1 lifts the strip for the `full` variant, which is the one Prism
+#   embeds. `light` keeps it stripped: nothing names a need for NVIDIA
+#   effects there, and `light` exists precisely to carry only what is
+#   named. That is a sobriety call, not a second security control -- the
+#   two layers above are what make the module safe, in either variant.
+#
+#   No NVIDIA DLL and no model file is bundled by this script -- the SDK
+#   stays a dependency of the host machine. scripts/check-nv-filters-packaging.py
+#   enforces both halves of that sentence in CI.
 $baseStrippedPlugins = @(
     'coreaudio-encoder',
     'obs-vst',
-    'nv-filters',
     'obs-webrtc',
     'decklink-captions',
     'decklink-output-ui',
@@ -122,7 +143,8 @@ $lightOnlyStrippedPlugins = @(
     'obs-browser',     # CEF runtime, ~200 MB
     'obs-text',        # GDI+ text source
     'text-freetype2',  # freetype-backed text source (companion to obs-text)
-    'vlc-video'        # VLC media source
+    'vlc-video',       # VLC media source
+    'nv-filters'       # NVIDIA Audio/Video Effects -- see the note above
 )
 
 # Always-stripped hardware capture plugins -- we don't bundle them
