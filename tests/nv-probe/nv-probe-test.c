@@ -34,6 +34,7 @@
  */
 
 #include <windows.h>
+#include <sddl.h> /* ConvertSidToStringSidA -- naming the deny principal */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,6 +77,93 @@ static void die(const char *msg)
 {
 	fprintf(stderr, "nv-probe-test: fixture error: %s (GetLastError=%lu)\n", msg, GetLastError());
 	exit(2);
+}
+
+/* ---- making a directory genuinely non-writable -------------------------
+ *
+ * The probe now REFUSES a directory this process can write to, so a fixture
+ * under %TEMP% is rejected on sight -- correctly. Testing the control
+ * therefore needs a directory the running account really cannot write to,
+ * and there is no honest way to fake that: the check asks the kernel.
+ *
+ * So the fixture asks the kernel too. `icacls /deny` puts an explicit deny
+ * ACE for the current user on the directory object itself (no (OI)(CI) --
+ * children are locked separately when a test needs it). A deny ACE beats
+ * any grant the token also matches, including membership of Administrators,
+ * which is what the CI runner happens to be.
+ *
+ * Locking is reversible on purpose: several tests have to add or remove a
+ * model file, and the alternative -- rebuilding the whole fixture tree per
+ * case -- would hide what is being varied. */
+/* The principal is named by SID, not by account name: `icacls` resolves a
+ * bare name through the local/domain namespace, which fails with
+ * ERROR_NONE_MAPPED on some hosts (and would pick the wrong principal on
+ * others). The token's own user SID is the account the writability control
+ * is about, exactly. */
+static const char *current_user_sid(void)
+{
+	static char sid_text[256];
+	HANDLE token = NULL;
+	char buf[SECURITY_MAX_SID_SIZE + sizeof(TOKEN_USER)];
+	DWORD len = 0;
+	LPSTR sid_str = NULL;
+
+	if (sid_text[0])
+		return sid_text;
+
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+		die("OpenProcessToken");
+	if (!GetTokenInformation(token, TokenUser, buf, sizeof(buf), &len)) {
+		CloseHandle(token);
+		die("GetTokenInformation(TokenUser)");
+	}
+	CloseHandle(token);
+
+	if (!ConvertSidToStringSidA(((TOKEN_USER *)buf)->User.Sid, &sid_str))
+		die("ConvertSidToStringSidA");
+
+	if (snprintf(sid_text, sizeof(sid_text), "*%s", sid_str) >= (int)sizeof(sid_text)) {
+		LocalFree(sid_str);
+		die("SID string too long");
+	}
+	LocalFree(sid_str);
+	return sid_text;
+}
+
+/* `perms` is the ":(W)" suffix for /deny and empty for /remove:d -- the
+ * latter takes a bare principal and answers ERROR_INVALID_SID if given a
+ * permission mask. */
+static void run_icacls(const char *dir, const char *verb, const char *perms)
+{
+	char cmd[MAX_PATH * 2];
+	int rc;
+
+	if (snprintf(cmd, sizeof(cmd), "icacls \"%s\" %s \"%s\"%s >nul 2>&1", dir, verb, current_user_sid(), perms) >=
+	    (int)sizeof(cmd))
+		die("icacls command too long");
+
+	rc = system(cmd);
+	if (rc != 0) {
+		fprintf(stderr, "nv-probe-test: fixture error: `icacls %s %s` returned %d\n", dir, verb, rc);
+		fprintf(stderr, "               the writability control cannot be exercised without it.\n");
+		exit(2);
+	}
+}
+
+static void lock_dir(const char *dir)
+{
+	run_icacls(dir, "/deny", ":(W)");
+	/* Never trust the fixture either: if the deny did not take, every
+	 * check below would pass for the wrong reason. */
+	if (pulsar_nv_dir_is_writable_by_us(dir)) {
+		fprintf(stderr, "nv-probe-test: fixture error: %s is still writable after /deny\n", dir);
+		exit(2);
+	}
+}
+
+static void unlock_dir(const char *dir)
+{
+	run_icacls(dir, "/remove:d", "");
 }
 
 static void join(char *out, const char *a, const char *b)
@@ -146,6 +234,27 @@ static void seed_vfx(const char *dir, const char *dll_src)
 	make_dir(models);
 }
 
+static void models_path(char *out, const char *dir)
+{
+	join(out, dir, PULSAR_NV_MODEL_SUBDIR);
+}
+
+static void lock_tree(const char *dir)
+{
+	char models[MAX_PATH];
+	models_path(models, dir);
+	lock_dir(models);
+	lock_dir(dir);
+}
+
+static void unlock_tree(const char *dir)
+{
+	char models[MAX_PATH];
+	models_path(models, dir);
+	unlock_dir(dir);
+	unlock_dir(models);
+}
+
 static void build_fixtures(void)
 {
 	char *sep;
@@ -192,9 +301,17 @@ static void build_fixtures(void)
 
 	/* THE ATTACKER'S DROP: homonyms in the application directory. Both
 	 * the first-level DLL and the transitive dependency, because the
-	 * search order gives that directory priority for both. */
+	 * search order gives that directory priority for both. Left WRITABLE
+	 * -- it is the attacker's directory, and nothing validates it. */
 	copy_to(g_evil_dll, g_exe_dir, PULSAR_NV_VFX_DLL);
 	copy_to(g_evil_dep, g_exe_dir, "PulsarNvFakeDep.dll");
+
+	/* Seeding is done; make the three SDK roots what a real install is --
+	 * not writable by the account running this process. Until this line
+	 * the probe would reject all of them, which is the point. */
+	lock_tree(g_sdk_dir);
+	lock_tree(g_old_dir);
+	lock_tree(g_junk_dir);
 }
 
 static void remove_tree(const char *dir)
@@ -228,6 +345,10 @@ static void drop_fixtures(void)
 	 * thing to hand to the next run. */
 	remove_file(g_exe_dir, PULSAR_NV_VFX_DLL);
 	remove_file(g_exe_dir, "PulsarNvFakeDep.dll");
+	/* The deny ACEs have to come off before anything can be deleted. */
+	unlock_tree(g_sdk_dir);
+	unlock_tree(g_old_dir);
+	unlock_tree(g_junk_dir);
 	remove_tree(g_tmp_root);
 }
 
@@ -274,6 +395,96 @@ static void test_dir_validation(void)
 	check(pulsar_nv_validate_dir("C:\\Windows\\System32", out, MAX_PATH) &&
 		      _stricmp(out, "C:\\Windows\\System32") == 0,
 	      "a well-formed system directory is accepted unchanged");
+}
+
+/* The control Bastion asked for: authority, not spelling. */
+static void test_writability_control(void)
+{
+	char out[MAX_PATH];
+	char writable[MAX_PATH];
+	char models[MAX_PATH];
+	struct pulsar_nv_sdk_probe p;
+
+	section("writability -- an operator-writable directory is refused (ADR 023 Am.3 A3.4)");
+
+	/* A directory identical to the good fixture in every respect except
+	 * that this process can write to it. */
+	join(writable, g_tmp_root, "writable");
+	make_dir(writable);
+	seed_afx(writable, g_good_dll, true);
+
+	check(pulsar_nv_dir_is_writable_by_us(writable), "fixture: the control directory really is writable");
+	check(!pulsar_nv_validate_dir(writable, out, MAX_PATH),
+	      "a writable directory is REFUSED even though its shape, DLLs, version and models are all correct");
+
+	SetEnvironmentVariableA(PULSAR_NV_AFX_DIR_ENV, writable);
+	pulsar_nv_probe_afx(&p);
+	check(!p.dir_valid && !p.usable, "...and the probe over it is wholly negative");
+
+	check(!pulsar_nv_dir_is_writable_by_us(g_sdk_dir), "the locked fixture is NOT writable");
+	check(pulsar_nv_validate_dir(g_sdk_dir, out, MAX_PATH), "...and is therefore accepted");
+
+	/* A non-writable root with a writable models\ under it would leave
+	 * the .trtpkg files -- the part that gets deserialised -- as exposed
+	 * as before. The verdict is not inherited. */
+	models_path(models, g_sdk_dir);
+	unlock_dir(models);
+	SetEnvironmentVariableA(PULSAR_NV_AFX_DIR_ENV, g_sdk_dir);
+	pulsar_nv_probe_afx(&p);
+	check(p.dir_valid && !p.models_present && !p.usable,
+	      "a writable models\\ under a non-writable root is refused on its own account");
+	lock_dir(models);
+
+	pulsar_nv_probe_afx(&p);
+	check(p.usable, "re-locking models\\ restores the probe");
+
+	SetEnvironmentVariableA(PULSAR_NV_AFX_DIR_ENV, NULL);
+}
+
+/* The VFX fallback root must come from the system, not from a variable the
+ * parent process chose (ADR 023 Am.3 A3.4). */
+static void test_fallback_root_is_not_environment(void)
+{
+	char progfiles[MAX_PATH];
+	char poisoned[MAX_PATH];
+	struct pulsar_nv_sdk_probe p;
+
+	section("VFX fallback root -- SHGetKnownFolderPath, never %ProgramFiles%");
+
+	check(pulsar_nv_program_files(progfiles, sizeof(progfiles)) && progfiles[0] != '\0',
+	      "the known-folder API answers for FOLDERID_ProgramFiles");
+
+	/* Point %ProgramFiles% at a directory we control and fully stock,
+	 * exactly as a hostile parent process would. If the fallback still
+	 * read the environment, the probe would come back usable. */
+	join(poisoned, g_tmp_root, "poisoned-programfiles");
+	make_dir(poisoned);
+	{
+		char nvdir[MAX_PATH];
+		char corp[MAX_PATH];
+		join(corp, poisoned, "NVIDIA Corporation");
+		make_dir(corp);
+		join(nvdir, corp, "NVIDIA Video Effects");
+		make_dir(nvdir);
+		seed_vfx(nvdir, g_good_dll);
+		lock_tree(nvdir);
+
+		SetEnvironmentVariableA("ProgramFiles", poisoned);
+		SetEnvironmentVariableA(PULSAR_NV_VFX_DIR_ENV, NULL);
+		pulsar_nv_probe_vfx(&p);
+		check(!p.dir_valid && !p.usable,
+		      "poisoning %ProgramFiles% with a complete, non-writable fake SDK changes nothing");
+
+		{
+			char resolved[MAX_PATH];
+			check(pulsar_nv_program_files(resolved, sizeof(resolved)) &&
+				      _strnicmp(resolved, poisoned, strlen(poisoned)) != 0,
+			      "the resolved root is the system's, not the one the environment names");
+		}
+
+		SetEnvironmentVariableA("ProgramFiles", progfiles);
+		unlock_tree(nvdir);
+	}
 }
 
 /* Criterion 3, first level. */
@@ -389,19 +600,28 @@ static void test_probe_models(void)
 
 	section("criterion 4 ter [CI] -- the three .trtpkg models are checked, all of them");
 
-	join(models, g_sdk_dir, PULSAR_NV_MODEL_SUBDIR);
+	models_path(models, g_sdk_dir);
 	SetEnvironmentVariableA(PULSAR_NV_AFX_DIR_ENV, g_sdk_dir);
 
 	pulsar_nv_probe_afx(&p);
 	check(p.models_present && p.usable, "all three models present: usable");
 
+	/* models\ is locked like a real install, so each mutation lifts the
+	 * deny, changes one file, and puts it straight back -- the probe only
+	 * ever sees the locked state, with exactly one model varying. */
 	for (i = 0; i < PULSAR_NV_AFX_MODEL_COUNT; i++) {
 		char what[256];
+		unlock_dir(models);
 		remove_file(models, pulsar_nv_afx_models[i]);
+		lock_dir(models);
+
 		pulsar_nv_probe_afx(&p);
 		snprintf(what, sizeof(what), "removing %s alone makes the probe negative", pulsar_nv_afx_models[i]);
 		check(!p.models_present && !p.usable, what);
+
+		unlock_dir(models);
 		write_file(models, pulsar_nv_afx_models[i], "not a real trtpkg");
+		lock_dir(models);
 	}
 
 	pulsar_nv_probe_afx(&p);
@@ -455,6 +675,8 @@ int main(int argc, char **argv)
 	build_fixtures();
 
 	test_dir_validation();
+	test_writability_control();
+	test_fallback_root_is_not_environment();
 	test_application_directory_is_not_searched();
 	test_probe_versions();
 	test_probe_models();

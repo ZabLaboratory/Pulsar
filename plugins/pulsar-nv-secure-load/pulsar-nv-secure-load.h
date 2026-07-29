@@ -67,6 +67,10 @@
 
 #include <windows.h>
 #include <winver.h>
+/* SHGetKnownFolderPath / CoTaskMemFree -- the known-folder API is how the
+ * VFX fallback root is obtained, in place of an environment read. */
+#include <shlobj.h>
+#include <objbase.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -165,7 +169,8 @@ struct pulsar_nv_probe_result {
  *     both DLLs and TensorRT models,
  *   - relative paths, which would resolve against the process CWD,
  *   - any "." or ".." segment: the pinned value must designate its target
- *     literally, so that what a reviewer reads is what gets loaded.
+ *     literally, so that what a reviewer reads is what gets loaded,
+ *   - **directories this process can write to** -- see below.
  *
  * Forward slashes are normalised to backslashes before the checks (Win32
  * accepts both, so refusing them would only push the difference out of
@@ -202,6 +207,53 @@ static bool pulsar_nv_dir_shape_ok(const char *p)
 		}
 	}
 	return true;
+}
+
+/* ---- writability: the control, not the assertion ----------------------
+ *
+ * Every other check above is about the SHAPE of a path. None of them says
+ * anything about who may put a file there -- and that is the only question
+ * that matters, because the threat is an attacker running AS THE OPERATOR,
+ * i.e. with exactly this process's token. A directory this process can
+ * write to is a directory the attacker can stock with a DLL or a .trtpkg,
+ * whatever its name and whoever designated it.
+ *
+ * So it is TESTED, by trying. Reading the DACL and reasoning about it would
+ * mean re-implementing the access check (token groups, deny-ACE ordering,
+ * privileges, share mode) and getting the same answer at best; creating a
+ * file asks the kernel the question the attacker would ask. The probe file
+ * is CREATE_NEW + DELETE_ON_CLOSE, so it exists only inside this call and
+ * only if the answer was "yes".
+ *
+ * FAIL CLOSED: anything other than an explicit access denial counts as
+ * writable. An error we did not anticipate must not read as "safe".
+ *
+ * Known limit, stated rather than papered over: this answers for the
+ * CURRENT token at THIS instant. It does not survive an ACL changed later,
+ * and it says nothing about a directory an attacker can rename or replace
+ * from its parent. It is the control the threat model asks for -- an
+ * operator-writable SDK directory -- not a proof of immutability. */
+static bool pulsar_nv_dir_is_writable_by_us(const char *dir)
+{
+	char probe[MAX_PATH];
+	HANDLE h;
+	DWORD err;
+
+	if (!dir)
+		return true;
+	if (snprintf(probe, sizeof(probe), "%s\\pulsar-nv-write-probe-%lu.tmp", dir, GetCurrentProcessId()) >=
+	    (int)MAX_PATH)
+		return true;
+
+	h = CreateFileA(probe, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, CREATE_NEW,
+			FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+	if (h != INVALID_HANDLE_VALUE) {
+		CloseHandle(h); /* DELETE_ON_CLOSE removes it here */
+		return true;
+	}
+
+	err = GetLastError();
+	return !(err == ERROR_ACCESS_DENIED || err == ERROR_WRITE_PROTECT);
 }
 
 static bool pulsar_nv_validate_dir(const char *raw, char *out, size_t out_len)
@@ -251,6 +303,10 @@ static bool pulsar_nv_validate_dir(const char *raw, char *out, size_t out_len)
 	if (!(attrs & FILE_ATTRIBUTE_DIRECTORY))
 		return false;
 
+	/* The one check that is about authority rather than spelling. */
+	if (pulsar_nv_dir_is_writable_by_us(full))
+		return false;
+
 	memcpy(out, full, len + 1);
 	return true;
 }
@@ -291,15 +347,26 @@ static bool pulsar_nv_file_exists(const char *dir, const char *sub, const char *
 	return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-static bool pulsar_nv_subdir_exists(const char *dir, const char *sub)
+/* A subdirectory counts only if it exists AND is no more writable than its
+ * parent. A non-writable SDK root with a writable models\ under it would
+ * leave the .trtpkg files -- the part that actually gets deserialised --
+ * exactly as exposed as before; inheriting the parent's verdict is an
+ * assumption, so it is checked instead. */
+static bool pulsar_nv_subdir_ok(const char *dir, const char *sub)
 {
+	char joined[MAX_PATH];
 	wchar_t path[MAX_PATH];
 	DWORD attrs;
 
 	if (!pulsar_nv_join_w(dir, NULL, sub, path, MAX_PATH))
 		return false;
 	attrs = GetFileAttributesW(path);
-	return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY);
+	if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY))
+		return false;
+
+	if (snprintf(joined, sizeof(joined), "%s\\%s", dir, sub) >= (int)MAX_PATH)
+		return false;
+	return !pulsar_nv_dir_is_writable_by_us(joined);
 }
 
 /* ---- version, read off the file, never off a load ---------------------
@@ -381,6 +448,58 @@ static HMODULE pulsar_nv_load_from_system32(const char *leaf)
 	return pulsar_nv_load_from_dir(sysdir, leaf);
 }
 
+/* ---- the one root we resolve ourselves --------------------------------
+ *
+ * FOLDERID_ProgramFiles, from the system, for the VFX default-install
+ * fallback. NOT %ProgramFiles%: an environment variable is chosen by
+ * whoever spawned this process, which is precisely the input Amendment 3
+ * §A3.4 rules out of path resolution.
+ *
+ * The GUID is written out rather than taken from <knownfolders.h> so this
+ * header keeps its "Win32 + version.lib and nothing else" property -- the
+ * symbol otherwise lives in uuid.lib and would follow us into three
+ * different builds. Value per the Windows SDK:
+ *   FOLDERID_ProgramFiles {905E63B6-C1BF-494E-B29C-65B732D3D21A}
+ * For a 64-bit process this resolves to the 64-bit Program Files, which is
+ * where the Maxine redistributable installs. */
+
+/* REFKNOWNFOLDERID is `const GUID *` in C and `const GUID &` in C++, and
+ * this header is included from both -- the loaders are C, the manifest
+ * publisher is C++. */
+#ifdef __cplusplus
+#define PULSAR_NV_REFGUID(g) (g)
+#else
+#define PULSAR_NV_REFGUID(g) (&(g))
+#endif
+
+static bool pulsar_nv_program_files(char *out, size_t out_len)
+{
+	static const GUID pulsar_nv_folderid_program_files = {
+		0x905e63b6, 0xc1bf, 0x494e, {0xb2, 0x9c, 0x65, 0xb7, 0x32, 0xd3, 0xd2, 0x1a}};
+	PWSTR wide = NULL;
+	bool ok = false;
+
+	if (!out || out_len == 0)
+		return false;
+	out[0] = '\0';
+
+	if (SHGetKnownFolderPath(PULSAR_NV_REFGUID(pulsar_nv_folderid_program_files), KF_FLAG_DEFAULT, (HANDLE)NULL,
+				 &wide) != S_OK ||
+	    !wide) {
+		if (wide)
+			CoTaskMemFree(wide);
+		return false;
+	}
+
+	if (WideCharToMultiByte(CP_ACP, 0, wide, -1, out, (int)out_len, NULL, NULL) != 0)
+		ok = true;
+	else
+		out[0] = '\0';
+
+	CoTaskMemFree(wide);
+	return ok;
+}
+
 /* ---- the probe --------------------------------------------------------
  *
  * Reads only. Installs nothing, downloads nothing, loads nothing. */
@@ -402,7 +521,7 @@ static void pulsar_nv_probe_afx(struct pulsar_nv_sdk_probe *p)
 
 	p->dlls_present = pulsar_nv_file_exists(p->dir, NULL, PULSAR_NV_AFX_DLL);
 
-	p->models_present = true;
+	p->models_present = pulsar_nv_subdir_ok(p->dir, PULSAR_NV_MODEL_SUBDIR);
 	for (i = 0; i < PULSAR_NV_AFX_MODEL_COUNT; i++) {
 		if (!pulsar_nv_file_exists(p->dir, PULSAR_NV_MODEL_SUBDIR, pulsar_nv_afx_models[i]))
 			p->models_present = false;
@@ -426,13 +545,18 @@ static void pulsar_nv_probe_vfx(struct pulsar_nv_sdk_probe *p)
 
 	n = GetEnvironmentVariableA(PULSAR_NV_VFX_DIR_ENV, raw, MAX_PATH);
 	if (n == 0 || n >= MAX_PATH) {
-		/* Upstream's fallback, kept because dropping it would disable
-		 * a default install for no security gain: %ProgramFiles% is
-		 * not operator-writable, and the value still goes through the
-		 * same validation as a pinned one. */
+		/* Upstream's default-install fallback, kept -- but its ROOT is
+		 * resolved through the Win32 known-folder API, never through
+		 * %ProgramFiles%.
+		 *
+		 * Amendment 3 §A3.4 forbids an environment read anywhere in
+		 * the resolution of a candidate path, and this was one: a
+		 * parent process chooses what `ProgramFiles` says, so it could
+		 * hand us a root of its own and let the rest of the validation
+		 * bless a directory it controls. SHGetKnownFolderPath asks the
+		 * system, and no parent can answer for it. */
 		char progfiles[MAX_PATH];
-		DWORD pn = GetEnvironmentVariableA("ProgramFiles", progfiles, MAX_PATH);
-		if (pn == 0 || pn >= MAX_PATH)
+		if (!pulsar_nv_program_files(progfiles, sizeof(progfiles)))
 			return;
 		if (snprintf(fallback, sizeof(fallback), "%s\\NVIDIA Corporation\\NVIDIA Video Effects", progfiles) <=
 		    0)
@@ -451,7 +575,7 @@ static void pulsar_nv_probe_vfx(struct pulsar_nv_sdk_probe *p)
 	 * the checkable fact is that the directory exists inside the
 	 * validated root -- which is also what stops the SDK being handed a
 	 * path that resolves outside it. */
-	p->models_present = pulsar_nv_subdir_exists(p->dir, PULSAR_NV_MODEL_SUBDIR);
+	p->models_present = pulsar_nv_subdir_ok(p->dir, PULSAR_NV_MODEL_SUBDIR);
 
 	p->version_readable = pulsar_nv_read_version(p->dir, PULSAR_NV_VFX_DLL, &p->version);
 	p->version_ok = p->version_readable && p->version >= p->min_version;

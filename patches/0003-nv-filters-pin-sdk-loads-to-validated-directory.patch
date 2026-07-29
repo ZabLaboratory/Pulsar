@@ -1,8 +1,7 @@
-From 552cec4a39382368e44b3f482c612ee96068f305 Mon Sep 17 00:00:00 2001
+From dc012a823ba5709f25db689bc7676fdf43e0a10c Mon Sep 17 00:00:00 2001
 From: Pulsar maintainer <maintainer@zablab.tld>
 Date: Wed, 29 Jul 2026 02:17:41 +0200
-Subject: [PATCH 0003] nv-filters: pin every NVIDIA SDK load to a validated
- directory
+Subject: nv-filters: pin every NVIDIA SDK load to a validated directory
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -58,29 +57,32 @@ NOT upstream-eligible as written: the shared header is Pulsar-specific.
 The LoadLibraryEx hardening alone is, and should be offered to obs-studio
 separately -- it is a plain security fix with no Pulsar dependency.
 ---
- plugins/nv-filters/CMakeLists.txt          | 15 +++++-
+ plugins/nv-filters/CMakeLists.txt          | 19 +++++++-
  plugins/nv-filters/nv-filters.c            | 34 +++++++++++++
  plugins/nv-filters/nvafx-load.h            | 48 ++++++++++++++-----
  plugins/nv-filters/nvidia-audiofx-filter.c | 47 ++++++++++++++----
  plugins/nv-filters/nvidia-videofx-filter.c | 14 ++++--
  plugins/nv-filters/nvvfx-load.h            | 56 ++++++++++++++--------
- 6 files changed, 168 insertions(+), 46 deletions(-)
+ 6 files changed, 172 insertions(+), 46 deletions(-)
 
 diff --git a/plugins/nv-filters/CMakeLists.txt b/plugins/nv-filters/CMakeLists.txt
-index 0547963e1..7879e2de5 100644
+index 0547963e1..591e15a2a 100644
 --- a/plugins/nv-filters/CMakeLists.txt
 +++ b/plugins/nv-filters/CMakeLists.txt
-@@ -24,7 +24,20 @@ if(OS_WINDOWS)
+@@ -24,7 +24,24 @@ if(OS_WINDOWS)
    target_sources(nv-filters PRIVATE nv-filters.rc)
    target_sources(nv-filters PRIVATE nv-filters.c)
  
 -  target_link_libraries(nv-filters PRIVATE OBS::libobs $<$<PLATFORM_ID:Windows>:OBS::w32-pthreads>)
 +  # Pulsar #167 -- pulsar-nv-secure-load.h lives in the Pulsar repo, one
 +  # level above this vendored tree, so it stays reviewable as source in the
-+  # PR instead of being buried in a patch blob. version.lib is required by
-+  # its GetFileVersionInfo* probe (versions are read off the file, never off
-+  # a load). A move of that directory has to be mirrored here in the same
-+  # commit -- hence the fail-fast rather than an obscure #include error.
++  # PR instead of being buried in a patch blob. It needs version.lib for its
++  # GetFileVersionInfo* probe (versions read off the file, never off a load)
++  # and shell32/ole32 for SHGetKnownFolderPath, which resolves the VFX
++  # fallback root from the system instead of from %ProgramFiles% (ADR 023
++  # Am.3 §A3.4 rules an environment read out of path resolution). A move of
++  # that directory has to be mirrored here in the same commit -- hence the
++  # fail-fast rather than an obscure #include error.
 +  set(PULSAR_NV_SECURE_LOAD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../plugins/pulsar-nv-secure-load")
 +  get_filename_component(PULSAR_NV_SECURE_LOAD_DIR "${PULSAR_NV_SECURE_LOAD_DIR}" ABSOLUTE)
 +  if(NOT EXISTS "${PULSAR_NV_SECURE_LOAD_DIR}/pulsar-nv-secure-load.h")
@@ -88,7 +90,8 @@ index 0547963e1..7879e2de5 100644
 +  endif()
 +  target_include_directories(nv-filters PRIVATE "${PULSAR_NV_SECURE_LOAD_DIR}")
 +
-+  target_link_libraries(nv-filters PRIVATE OBS::libobs $<$<PLATFORM_ID:Windows>:OBS::w32-pthreads> version)
++  target_link_libraries(nv-filters PRIVATE OBS::libobs $<$<PLATFORM_ID:Windows>:OBS::w32-pthreads> version shell32
++                                           ole32)
  
    set_target_properties_obs(nv-filters PROPERTIES FOLDER plugins PREFIX "")
  endif()

@@ -95,7 +95,7 @@ if (-not (Test-Path (Join-Path $binSrc 'pulsar.exe'))) {
 #                         paths null-deref in headless mode.
 #   obs-libfdk         -- FDK-AAC, commercial license, off upstream.
 #
-# NOT stripped any more -- nv-filters (#167, Prism ADR 023 Amendment 3).
+# Moved to the light-only list -- nv-filters (#167, Prism ADR 023 Amendment 3).
 #   It was stripped under NS1 because both of its loaders resolved an
 #   NVIDIA SDK DLL by BARE NAME off a path read from the inherited
 #   environment, which Windows answers from the application directory
@@ -115,6 +115,12 @@ if (-not (Test-Path (Join-Path $binSrc 'pulsar.exe'))) {
 #     (iii) the embedder pins the SDK directory (Prism's twin issue).
 #   Rules: plugins/pulsar-nv-secure-load/. Gate: tests/nv-probe/ (CTest,
 #   no GPU, no SDK). Putting it back: docs/runbooks/nv-filters-rollback.md.
+#
+#   §A3.1 lifts the strip for the `full` variant, which is the one Prism
+#   embeds. `light` keeps it stripped: nothing names a need for NVIDIA
+#   effects there, and `light` exists precisely to carry only what is
+#   named. That is a sobriety call, not a second security control -- the
+#   two layers above are what make the module safe, in either variant.
 #
 #   No NVIDIA DLL and no model file is bundled by this script -- the SDK
 #   stays a dependency of the host machine. scripts/check-nv-filters-packaging.py
@@ -137,7 +143,8 @@ $lightOnlyStrippedPlugins = @(
     'obs-browser',     # CEF runtime, ~200 MB
     'obs-text',        # GDI+ text source
     'text-freetype2',  # freetype-backed text source (companion to obs-text)
-    'vlc-video'        # VLC media source
+    'vlc-video',       # VLC media source
+    'nv-filters'       # NVIDIA Audio/Video Effects -- see the note above
 )
 
 # Always-stripped hardware capture plugins -- we don't bundle them

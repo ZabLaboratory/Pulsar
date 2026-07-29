@@ -30,18 +30,22 @@ step below, and skipping it leaves the situation unchanged in production.
 
 ## Pulsar side
 
-1. `scripts/package-win.ps1` — put `'nv-filters'` back in
-   `$baseStrippedPlugins` (the array around line 106), and restore a strip
-   rationale in the comment block above it. Do not leave the Amendment 3
-   paragraph standing next to a strip: a rationale pointing at the opposite
-   decision is what #167 called the worst of the two states.
+1. `scripts/package-win.ps1` — move `'nv-filters'` from
+   `$lightOnlyStrippedPlugins` back into `$baseStrippedPlugins`, so it is
+   stripped from **both** variants again (today only `light` strips it),
+   and restore a strip rationale in the comment block above it. Do not
+   leave the Amendment 3 paragraph standing next to a strip: a rationale
+   pointing at the opposite decision is what #167 called the worst of the
+   two states.
 2. `scripts/check-nv-filters-packaging.py` — this gate asserts the module is
-   **not** stripped and will now fail. It has to be updated in the **same
-   commit**, not disabled: invert `check_strip_lists()` (assert presence in
-   the list, and that the comment carries a strip rationale) and keep
-   `check_no_sdk_in_sources()` / `check_dist()` exactly as they are — the
-   "no SDK payload" half holds either way. In `check_dist()`, the
-   `nv-filters.dll` presence assertion becomes an absence assertion.
+   absent from `$baseStrippedPlugins` **and** present in
+   `$lightOnlyStrippedPlugins`; both halves will now fail. They have to be
+   updated in the **same commit**, not disabled: invert
+   `check_strip_lists()` (assert presence in the base list, and that the
+   comment carries a strip rationale) and keep `check_no_sdk_in_sources()`
+   as it is — the "no SDK payload" half holds either way. In
+   `check_dist()`, the `full`-variant presence assertion becomes an absence
+   assertion, and the `light` absence assertion simply stays true.
 3. Keep `patches/0003-nv-filters-pin-sdk-loads-to-validated-directory.patch`
    and `tests/nv-probe/`. The module still **builds**; only the packaging
    changes. Dropping the hardening at the same time would leave a build in
@@ -81,8 +85,10 @@ The embedder pins `NVAFX_SDK_DIR` / `NV_VIDEO_EFFECTS_PATH` for the
   Pulsar — **and** `afx.directory_designated` / `vfx.directory_designated`
   are both `false`, which is what proves step 6 took, rather than step 1.
 - `capabilities.filters` no longer lists any `nv*` filter id.
-- The packaged tree has no `nv-filters.dll`:
-  `python scripts/check-nv-filters-packaging.py --dist dist/pulsar-windows-x64-full-v<VERSION>`.
+- Neither packaged tree has `nv-filters.dll` — run the check against both,
+  since they carry different expectations:
+  `python scripts/check-nv-filters-packaging.py --dist dist/pulsar-windows-x64-full-v<VERSION>`
+  and `--dist dist/pulsar-windows-x64-v<VERSION>`.
 - Pulsar's log carries `[NVIDIA filters]: not loaded -- no validated NVIDIA SDK`.
 
 ## What this does not undo

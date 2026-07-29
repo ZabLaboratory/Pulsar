@@ -479,9 +479,11 @@ the same code (`plugins/pulsar-nv-secure-load/`), not a reconstruction of it.
 - `version` is **omitted, never zeroed**, when the file's version resource
   cannot be read (§3.3 §1). An unreadable version is *absent*, and absence can
   never satisfy `min_version` — it is not "probably recent enough".
-- `directory_designated` says a directory passed validation. The **path itself
-  is deliberately not published**: the consumer has no use for it, and a
-  manifest is not a place to hand out filesystem layout.
+- `directory_designated` says a directory passed validation — which includes
+  **not being writable by the account Pulsar runs as** (an operator-writable
+  SDK directory is one an attacker under that account can stock). The **path
+  itself is deliberately not published**: the consumer has no use for it, and
+  a manifest is not a place to hand out filesystem layout.
 - `usable` is the conjunction — directory, DLLs, models, version. `module_loaded`
   is read back from `obs_enum_filter_types()`, so the two disagreeing means the
   gate and the loader have drifted apart, which is worth seeing.

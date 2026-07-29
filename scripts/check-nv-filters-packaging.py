@@ -4,9 +4,12 @@
 Hardware-free, build-free, seconds long. Two things are checked, and they
 pull in opposite directions on purpose:
 
-  criterion 1  the module IS in the bundle. `nv-filters` must be gone from
-               package-win.ps1's strip lists, and the header comment must
-               no longer read as a justification for stripping it -- a
+  criterion 1  the module IS in the `full` bundle -- the variant Prism
+               embeds. `nv-filters` must be gone from $baseStrippedPlugins
+               and present in $lightOnlyStrippedPlugins: `light` keeps it
+               stripped for sobriety, nothing having named a need for
+               NVIDIA effects there. The header comment must also no longer
+               read as a justification for stripping it outright -- a
                security rationale left pointing at the opposite decision is
                worse than no rationale at all, because the next reader
                trusts it.
@@ -64,27 +67,67 @@ def fail(msg: str) -> None:
     print(f"::error::{msg}")
 
 
+def _array_literals(text: str, var: str) -> list[str]:
+    """Every `$var = @(...)` / `$var += @(...)` body in `text`.
+
+    Paren-matched rather than regex-captured, with per-line comments
+    stripped first: a comment holding a `)` -- and one does, "(companion to
+    obs-text)" -- silently truncates a non-greedy regex, and a truncated
+    list reads as "the entry is absent". A check that can be defeated by a
+    parenthesis in a comment is not a check.
+    """
+    bodies: list[str] = []
+    for match in re.finditer(rf"\${re.escape(var)}\s*\+?=\s*@\(", text):
+        depth = 1
+        i = match.end()
+        start = i
+        while i < len(text) and depth:
+            ch = text[i]
+            if ch == "#":  # comment: skip to end of line
+                nl = text.find("\n", i)
+                i = len(text) if nl < 0 else nl
+                continue
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        if depth == 0:
+            bodies.append(text[start:i])
+    return bodies
+
+
 def check_strip_lists() -> list[str]:
-    """Criterion 1: nv-filters is bundled, and the comment says why."""
+    """Criterion 1: nv-filters ships in `full`, stays out of `light`."""
     errors: list[str] = []
     text = PACKAGE_SCRIPT.read_text(encoding="utf-8")
 
     # The strip lists are PowerShell array literals; read the assignments
     # rather than grepping the whole file, so the explanatory comment is
     # free to name the plugin (it must, in fact).
+    seen: dict[str, bool] = {}
     for var in ("baseStrippedPlugins", "lightOnlyStrippedPlugins"):
-        blocks = re.findall(rf"\${var}\s*(?:\+)?=\s*@\((.*?)\)", text, re.S)
+        blocks = _array_literals(text, var)
         if not blocks:
             errors.append(f"{PACKAGE_SCRIPT.name}: ${var} not found -- packaging script restructured?")
             continue
-        for block in blocks:
-            entries = re.findall(r"'([^']+)'", block)
-            if "nv-filters" in entries:
-                errors.append(
-                    f"{PACKAGE_SCRIPT.name}: 'nv-filters' is back in ${var}. "
-                    "ADR 023 Amendment 3 A3.1 says it ships; if that is being reverted "
-                    "on purpose, follow docs/runbooks/nv-filters-rollback.md and update this check."
-                )
+        seen[var] = any("nv-filters" in re.findall(r"'([^']+)'", block) for block in blocks)
+
+    if seen.get("baseStrippedPlugins"):
+        errors.append(
+            f"{PACKAGE_SCRIPT.name}: 'nv-filters' is back in $baseStrippedPlugins, which strips it "
+            "from BOTH variants including `full`. ADR 023 Amendment 3 A3.1 has it shipped in `full`; "
+            "if that is being reverted on purpose, follow docs/runbooks/nv-filters-rollback.md "
+            "and update this check."
+        )
+    if "lightOnlyStrippedPlugins" in seen and not seen["lightOnlyStrippedPlugins"]:
+        errors.append(
+            f"{PACKAGE_SCRIPT.name}: 'nv-filters' is missing from $lightOnlyStrippedPlugins, so the "
+            "`light` variant would now ship it. `light` carries only what something named a need for, "
+            "and nothing has named NVIDIA effects there (#167)."
+        )
 
     # The comment must have been rewritten, not merely left behind.
     if re.search(r"nv-filters\s+--\s+NVIDIA Audio/Video Effects filters\. Same motive", text):
@@ -135,11 +178,16 @@ def check_no_sdk_in_sources() -> list[str]:
 
 def check_dist(dist: Path) -> list[str]:
     """Criterion 5, artefact half: the packaged tree carries no SDK binary
-    and no TensorRT model."""
+    and no TensorRT model. Plus criterion 1, per variant: `full` ships the
+    module, `light` does not.
+
+    The variant is read from the directory name, which package-win.ps1
+    builds as pulsar-windows-x64[-full]-v<VERSION>."""
     errors: list[str] = []
     if not dist.is_dir():
         return [f"--dist {dist} is not a directory"]
 
+    is_full = "-full-" in dist.name
     banned = {name.lower() for name in NVIDIA_SDK_DLLS}
     found_plugin = False
     for path in dist.rglob("*"):
@@ -151,10 +199,15 @@ def check_dist(dist: Path) -> list[str]:
         if name == "nv-filters.dll":
             found_plugin = True
 
-    if not found_plugin:
+    if is_full and not found_plugin:
         errors.append(
-            f"{dist}: nv-filters.dll is absent from the package. "
-            "ADR 023 Amendment 3 A3.1 has it shipped (criterion 1)."
+            f"{dist.name}: nv-filters.dll is absent from the `full` package. "
+            "ADR 023 Amendment 3 A3.1 has it shipped there (criterion 1)."
+        )
+    if not is_full and found_plugin:
+        errors.append(
+            f"{dist.name}: nv-filters.dll is inside the `light` package. "
+            "`light` carries only what something named a need for (#167)."
         )
     return errors
 

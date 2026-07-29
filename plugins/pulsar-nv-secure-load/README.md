@@ -19,7 +19,7 @@ rule that will drift:
 | `plugins/pulsar-multi-stream/` | publishes the probe in the capability manifest (`capabilities.nv_filters`) |
 | `tests/nv-probe/` | the CTest gate that proves the confinement with no GPU and no SDK |
 
-## The two rules
+## The three rules
 
 **Nothing but the designated directory.** Every load is
 `LoadLibraryExW(<absolute path>, NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
@@ -39,6 +39,21 @@ installed — is inert by construction rather than by choice of directory.
 
 An unreadable version is reported **absent**, never assumed sufficient, and
 absence never satisfies the minimum.
+
+**Only a directory this process cannot write to.** The threat is an attacker
+running *as the operator*, i.e. with this process's own token, so an
+operator-writable directory is one they can stock — whatever its name and
+whoever designated it. `pulsar_nv_dir_is_writable_by_us()` settles it by
+asking the kernel the same question the attacker would (create a file,
+`CREATE_NEW` + `DELETE_ON_CLOSE`), and **fails closed** on any error that is
+not an explicit denial. It applies to the SDK root *and* to `models\`
+separately: a writable `models\` under a locked root would leave the
+deserialised `.trtpkg` files exactly as exposed as before.
+
+Related: the VFX default-install fallback resolves its root through
+`SHGetKnownFolderPath(FOLDERID_ProgramFiles)`, **never `%ProgramFiles%`** —
+Amendment 3 §A3.4 rules an environment read out of candidate-path
+resolution, and a parent process chooses what that variable says.
 
 ## Rolling this back
 

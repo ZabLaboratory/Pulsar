@@ -80,7 +80,10 @@ pulsar_nv_add_sdk(pulsar-nv-fake-sdk-good 1 "1,6,1,2" "1.6.1.2" pulsar-nv-fake-d
 pulsar_nv_add_sdk(pulsar-nv-fake-sdk-evil 2 "0,0,0,1" "0.0.0.1" pulsar-nv-fake-dep-evil fixtures-evil)
 
 add_executable(nv-probe-test nv-probe-test.c)
-target_link_libraries(nv-probe-test PRIVATE Pulsar::nv-secure-load)
+# advapi32: the fixture names its deny principal by the token's own user SID
+# (ConvertSidToStringSid) rather than by account name, which icacls cannot
+# always resolve.
+target_link_libraries(nv-probe-test PRIVATE Pulsar::nv-secure-load advapi32)
 add_dependencies(nv-probe-test
     pulsar-nv-fake-sdk-good pulsar-nv-fake-sdk-evil
     pulsar-nv-fake-dep-good pulsar-nv-fake-dep-evil
