@@ -284,7 +284,12 @@ via `opts.env`.
 | `PULSAR_FPS` | int | `60` | Output frame rate. Common: 24 / 30 / 48 / 60 / 120. |
 | `PULSAR_RESOLUTION` | `<W>x<H>` | `1920x1080` | Output canvas size. Up to 8K. |
 | `PULSAR_VIDEO_BITRATE` | kbps | `6000` | x264 / NVENC bitrate. Range 200..50000. |
-| `PULSAR_AUDIO_BITRATE` | kbps | `160` | AAC bitrate. Range 32..512. |
+| `PULSAR_AUDIO_BITRATE` | kbps | `160` | Default AAC bitrate for every track. Range 32..512. |
+| `PULSAR_AUDIO_TRACKS` | count | `1` | Number of AAC encoders created (1..6). Encoder *i* encodes libobs mixer index *i* (track *i+1*). |
+| `PULSAR_AUDIO_BITRATE_<n>` | kbps | inherits | Per-track bitrate override for track *n*. Range 32..512. |
+| `PULSAR_STREAM_AUDIO_TRACKS` | list | `1` | Tracks the streaming output carries, e.g. `1,3`. |
+| `PULSAR_RECORD_AUDIO_TRACKS` | list | `1` | Tracks the recording output carries. |
+| `PULSAR_REPLAY_AUDIO_TRACKS` | list | `1` | Tracks the replay buffer carries. |
 | `PULSAR_CAPTURE_WINDOW` | `<title>:<class>:<exe>` | unset (no window source) | Window descriptor for `window_capture`. Find it via `obs.call("GetSourceFilterList")` after a one-shot enumerate, or with [Spy++](https://learn.microsoft.com/en-us/visualstudio/debugger/introducing-spy-increment) for a manual lookup. |
 | `PULSAR_RECORD_DIR` | path | `<cwd>/recordings/` | Output dir for the singleton recorder + the auto-named MP4. |
 | `PULSAR_DESKTOP_AUDIO_DEVICE_ID` | device id | system default | Pin desktop loopback device. |

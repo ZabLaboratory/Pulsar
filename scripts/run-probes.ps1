@@ -538,6 +538,42 @@ if ($presetCode -ne 0) {
 }
 Write-Host "==> probe-qsv-preset.py OK"
 
+# --------------------------------------------------------------------
+# Phase 1j -- self-spawning MULTI-TRACK AUDIO probe
+# (probe-audio-multitrack.py, #168 / ADR Prism 028 section 3.5).
+#
+# #157 closed the LIE (a mixer bit written on an input that no encoder
+# consumed); this probe fences the FUNCTION that replaced it: N audio
+# encoders, one per libobs mixer index, and a per-output choice of the
+# tracks each output carries.
+#
+# The assertion that matters is NOT that the wiring reads back -- it is
+# that an input routed to track N is measurably CONSUMED by track N.
+# That is read on the audio mix the track's encoder is attached to
+# (pulsar:MeasureAudioTrackFlow), and DIFFERENTIALLY: the same input is
+# moved from track 3 to track 1 and the signal must move with it. An
+# input-side read (GetInputAudioTracks) answers "enabled" in both the
+# healthy and the broken case and would confirm the lie -- do not
+# "simplify" this probe in that direction.
+#
+# Self-spawns TWO pulsar.exe children of its own (multi-track, then a
+# bare one for the non-regression leg), each with a fresh ephemeral port
+# and an isolated PULSAR_RECORD_DIR, for the same config.json-reseed
+# reason as the other Phase-1 probes. No CEF, no capture target, no
+# network, no sound card: the tone is a WAV the probe writes and an
+# ffmpeg_source reads. ~25 s wall clock.
+# --------------------------------------------------------------------
+$multitrackProbe = Join-Path $repoRoot "scripts/probe-audio-multitrack.py"
+Write-Host "==> Running probe-audio-multitrack.py (self-spawn multi-track audio, #168)"
+& python $multitrackProbe --exe $pulsar
+$multitrackCode = $LASTEXITCODE
+if ($multitrackCode -ne 0) {
+    Write-Host "==> probe-audio-multitrack.py FAILED (exit $multitrackCode)"
+    Write-Host "==> Multi-track audio is wired but not carried, or the single-track default regressed -- aborting before the shared suite."
+    exit 1
+}
+Write-Host "==> probe-audio-multitrack.py OK"
+
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
 # Port 0 -> bind a random free port so back-to-back ctest runs don't
