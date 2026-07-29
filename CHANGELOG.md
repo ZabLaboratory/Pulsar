@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-29
+
+Minor: three merges since 1.5.0 — `split_file` delegated to the record output
+(#170), real multi-track audio (#171), and `nv-filters` reinstated behind a
+capability gate (#172). Additive on the wire, but the capability manifest
+changes shape again and one advertised request stops being a guaranteed
+failure.
+
+- **Consumers holding a captured manifest fixture must re-capture** (`npm run
+  manifest:capture` on Prism, ADR 027 RC 9): `capabilities.audio_tracks` gains
+  `tracks`, and a new `capabilities.nv_filters` block appears. Both are purely
+  additive; a red `manifest:check` after this bump is the inclusion guard
+  working, not a regression.
+- **`SplitRecordFile` now succeeds.** It was advertised and stubbed to an
+  unconditional `false` in the fork; a consumer that treated its refusal as
+  "recording never splits" will see a new file appear and a
+  `RecordFileChanged` event. Automatic split thresholds stay at `0` — the only
+  trigger is an explicit request. **`CreateRecordChapter` still always fails**
+  on this build (`ffmpeg_muxer` exposes no `add_chapter`), but now says why.
+- **Audio defaults are unchanged.** Every `PULSAR_AUDIO_*` default reproduces
+  the previous single-encoder wiring exactly (one encoder, track 1, slot 0, on
+  all three outputs); multi-track only exists for an operator who asks for it.
+- **The `full` bundle grows `nv-filters` again**; `light` keeps it stripped.
+  No NVIDIA SDK or model file is redistributed — with no SDK on the host, the
+  ordinary case, the module refuses to load and neither of its loaders ever
+  executes. The DLL-search hardening (absolute `LoadLibraryExW`, non-writable
+  SDK directory checked against the kernel) only reaches an operator once this
+  artefact is installed. Rollback: `docs/runbooks/nv-filters-rollback.md`.
+
 ### ✨ Added
 
 - **`SplitRecordFile` really splits the recording (#169, ADR Prism 028 §3.5).**
