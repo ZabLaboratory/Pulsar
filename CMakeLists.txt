@@ -29,6 +29,12 @@ option(PULSAR_BUILD_MULTISTREAM   "Build the pulsar-multi-stream plugin"        
 option(PULSAR_BUILD_SCENE_SOURCE  "Build the pulsar-scene-source plugin"            ON)
 option(PULSAR_BUILD_BROWSER       "Build the pulsar-browser plugin (forked CEF)"    ON)
 
+# Header-only, no build of its own, and needed by pulsar-multi-stream and
+# by tests/nv-probe -- so it is added before both. (upstream's nv-filters
+# consumes the same header by relative include path, from its own CMake
+# project; see patches/0003.)
+add_subdirectory(plugins/pulsar-nv-secure-load)
+
 # Order matters: pulsar-headless links pulsar-frontend-stub, so the
 # subdirectory exposing that target must be added first.
 if(PULSAR_BUILD_FRONTEND_STUB)
@@ -82,4 +88,10 @@ if(WIN32)
         TIMEOUT 600  # generous: 5 probes plus pulsar boot/teardown
         LABELS "integration"
     )
+
+    # #167 -- DLL search-order gate for the NVIDIA SDK loads. Unlike the
+    # probes above it needs no pulsar.exe, no GPU and no NVIDIA SDK: it
+    # tests a loader property with its own fixture DLLs, which is what
+    # lets criterion 3 (first level) gate the merge.
+    add_subdirectory(tests/nv-probe)
 endif()

@@ -154,6 +154,15 @@ jobs:
       - name: Browser-source control-level pinning (source consistency)
         run: python3 scripts/check-webpage-control-level.py
 
+      # #167 / Prism ADR 023 Amendment 3 -- criteria 1 and 5, in the two
+      # directions they pull: nv-filters IS in the bundle (and the header
+      # comment no longer justifies the strip it used to), and no NVIDIA SDK
+      # DLL or .trtpkg model IS. Build-free, so a packaging regression fails
+      # here in seconds instead of on a tag. The `package` job re-runs it
+      # with --dist against the real zip contents.
+      - name: nv-filters packaging (bundled module, no SDK payload)
+        run: python3 scripts/check-nv-filters-packaging.py
+
       - name: Patch lint (apply against pinned upstream SHA)
         run: |
           set -e
@@ -290,11 +299,19 @@ jobs:
           # The whole RelWithDebInfo rundir : pulsar.exe + all DLLs +
           # CEF runtime + the CMake build dir for ctest. Compressed
           # at level 1 (fast) since downstream jobs download once.
+          #
+          # build/tests/nv-probe/** is there for #167 : that gate is a
+          # self-contained executable plus its four fixture DLLs, none of
+          # which live in the rundir. Without it `ctest --test-dir build`
+          # finds the test registered and the binary missing, which reads
+          # as an infrastructure failure rather than as the security check
+          # it is.
           path: |
             upstream/build_x64/rundir/RelWithDebInfo
             build/CTestTestfile.cmake
             build/**/CTestTestfile.cmake
             build/**/*.vcxproj
+            build/tests/nv-probe/**
           retention-days: 1
           compression-level: 1
 
@@ -622,6 +639,20 @@ jobs:
       - name: Package full variant
         shell: pwsh
         run: ./scripts/package-win.ps1 -Variant full -Zip -SkipBuild
+
+      # #167 criteria 1 + 5 against the REAL packaged tree, not the script
+      # that produced it: nv-filters.dll present, and no NVIDIA SDK DLL or
+      # .trtpkg model anywhere inside. Control by absence -- what is being
+      # asserted is that Pulsar redistributes none of the SDK.
+      - name: nv-filters payload check on the packaged distros
+        shell: bash
+        run: |
+          set -e
+          for d in dist/pulsar-windows-x64-*/; do
+            echo "::group::$d"
+            python scripts/check-nv-filters-packaging.py --dist "$d"
+            echo "::endgroup::"
+          done
 
       - name: Upload distro zips artefact
         uses: actions/upload-artifact@v4

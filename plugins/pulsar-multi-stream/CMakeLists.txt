@@ -58,6 +58,10 @@ target_include_directories(pulsar-multi-stream PRIVATE
 target_link_libraries(pulsar-multi-stream PRIVATE
     "${PULSAR_LIBOBS_LIB}"
     "${PULSAR_FRONTEND_API_LIB}"
+    # #167 -- header-only + version.lib. Carries the NVIDIA SDK capability
+    # probe the manifest publishes, shared verbatim with the nv-filters
+    # loaders so the two cannot disagree.
+    Pulsar::nv-secure-load
 )
 
 set_target_properties(pulsar-multi-stream PROPERTIES

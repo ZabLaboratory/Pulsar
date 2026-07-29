@@ -1,0 +1,430 @@
+From 552cec4a39382368e44b3f482c612ee96068f305 Mon Sep 17 00:00:00 2001
+From: Pulsar maintainer <maintainer@zablab.tld>
+Date: Wed, 29 Jul 2026 02:17:41 +0200
+Subject: [PATCH 0003] nv-filters: pin every NVIDIA SDK load to a validated
+ directory
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Pulsar #167. Prism ADR 023 Amendment 3: §A3.1 overrides the NS1 strip that
+kept this module out of the bundle, §A3.4 requires that the load path stay
+beyond the reach of the inherited environment and of the operator once it
+is back in.
+
+Upstream resolves three DLLs by BARE NAME:
+
+  nvvfx-load.h    SetDllDirectoryA(<env>) then LoadLibrary(L"NVVideoEffects.dll")
+                  and LoadLibrary(L"NVCVImage.dll")
+  nvafx-load.h    SetDllDirectoryA(<env>) then LoadLibrary(L"NVAudioEffects.dll"),
+                  then SetDllDirectoryA(NULL) and LoadLibrary(L"nvcuda.dll")
+
+Windows searches the APPLICATION directory before the SetDllDirectory
+entry, so an attacker holding the operator account drops a homonym next to
+pulsar.exe -- writable in a per-user install -- and is loaded into the
+process that holds the Twitch stream key, whatever directory the embedder
+pinned. nvcuda.dll had no confinement at all. set_nv_model() likewise
+concatenated the environment-derived path with a fixed model name and
+handed the result to a SDK that deserialises TensorRT packages, without
+ever checking the file was there.
+
+This patch changes three things, and the first is the one that matters:
+
+1. CONDITIONAL LOAD. obs_module_load() runs the capability probe first and
+   returns false when it is negative. No valid SDK -- the ordinary case,
+   Pulsar ships none -- means neither loader is ever reached, rather than
+   being reached and failing. Amendment 3 §A3.4 layer (i); the embedder
+   cannot provide it, since it depends on no path.
+
+2. ABSOLUTE PATHS, CONFINED SEARCH. Every load becomes
+   LoadLibraryExW(<absolute>, NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+   LOAD_LIBRARY_SEARCH_SYSTEM32). The absolute path removes the first-level
+   hijack; the DLL_LOAD_DIR flag removes the transitive one (CUDA, TensorRT
+   resolved out of pulsar.exe's directory). nvcuda.dll comes from System32,
+   where the display driver puts it.
+
+3. VERIFIED MODELS. The three .trtpkg files the effect methods select
+   between are checked for presence under the validated directory, and the
+   path is built by a joiner that refuses a separator in the leaf.
+
+The rules themselves live in the Pulsar repo, at
+plugins/pulsar-nv-secure-load/pulsar-nv-secure-load.h, wired in here by
+include directory: they are shared verbatim with the capability manifest
+(pulsar-multi-stream) and the CTest gate (tests/nv-probe), and a rule kept
+in three copies drifts. A #error fires if the SDK version minima in
+nv_sdk_versions.h and in that header ever disagree.
+
+NOT upstream-eligible as written: the shared header is Pulsar-specific.
+The LoadLibraryEx hardening alone is, and should be offered to obs-studio
+separately -- it is a plain security fix with no Pulsar dependency.
+---
+ plugins/nv-filters/CMakeLists.txt          | 15 +++++-
+ plugins/nv-filters/nv-filters.c            | 34 +++++++++++++
+ plugins/nv-filters/nvafx-load.h            | 48 ++++++++++++++-----
+ plugins/nv-filters/nvidia-audiofx-filter.c | 47 ++++++++++++++----
+ plugins/nv-filters/nvidia-videofx-filter.c | 14 ++++--
+ plugins/nv-filters/nvvfx-load.h            | 56 ++++++++++++++--------
+ 6 files changed, 168 insertions(+), 46 deletions(-)
+
+diff --git a/plugins/nv-filters/CMakeLists.txt b/plugins/nv-filters/CMakeLists.txt
+index 0547963e1..7879e2de5 100644
+--- a/plugins/nv-filters/CMakeLists.txt
++++ b/plugins/nv-filters/CMakeLists.txt
+@@ -24,7 +24,20 @@ if(OS_WINDOWS)
+   target_sources(nv-filters PRIVATE nv-filters.rc)
+   target_sources(nv-filters PRIVATE nv-filters.c)
+ 
+-  target_link_libraries(nv-filters PRIVATE OBS::libobs $<$<PLATFORM_ID:Windows>:OBS::w32-pthreads>)
++  # Pulsar #167 -- pulsar-nv-secure-load.h lives in the Pulsar repo, one
++  # level above this vendored tree, so it stays reviewable as source in the
++  # PR instead of being buried in a patch blob. version.lib is required by
++  # its GetFileVersionInfo* probe (versions are read off the file, never off
++  # a load). A move of that directory has to be mirrored here in the same
++  # commit -- hence the fail-fast rather than an obscure #include error.
++  set(PULSAR_NV_SECURE_LOAD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../plugins/pulsar-nv-secure-load")
++  get_filename_component(PULSAR_NV_SECURE_LOAD_DIR "${PULSAR_NV_SECURE_LOAD_DIR}" ABSOLUTE)
++  if(NOT EXISTS "${PULSAR_NV_SECURE_LOAD_DIR}/pulsar-nv-secure-load.h")
++    message(FATAL_ERROR "Pulsar #167: pulsar-nv-secure-load.h not found at ${PULSAR_NV_SECURE_LOAD_DIR}")
++  endif()
++  target_include_directories(nv-filters PRIVATE "${PULSAR_NV_SECURE_LOAD_DIR}")
++
++  target_link_libraries(nv-filters PRIVATE OBS::libobs $<$<PLATFORM_ID:Windows>:OBS::w32-pthreads> version)
+ 
+   set_target_properties_obs(nv-filters PROPERTIES FOLDER plugins PREFIX "")
+ endif()
+diff --git a/plugins/nv-filters/nv-filters.c b/plugins/nv-filters/nv-filters.c
+index 0a5fb4451..57203c4cb 100644
+--- a/plugins/nv-filters/nv-filters.c
++++ b/plugins/nv-filters/nv-filters.c
+@@ -1,4 +1,7 @@
+ #include <obs-module.h>
++/* Pulsar #167 / Prism ADR 023 Amendment 3 §A3.4 layer (i) --
++ * plugins/pulsar-nv-secure-load/. */
++#include <pulsar-nv-secure-load.h>
+ 
+ OBS_DECLARE_MODULE()
+ OBS_MODULE_USE_DEFAULT_LOCALE("nv-filters", "en-US")
+@@ -20,8 +23,39 @@ extern bool load_nvidia_vfx(void);
+ extern void unload_nvidia_vfx(void);
+ #endif
+ 
++/* Pulsar #167 -- CONDITIONAL LOAD, and the first thing this module does.
++ *
++ * Upstream let the module load unconditionally and discover the absence of
++ * an SDK inside load_nvidia_afx() / load_nvidia_vfx(), i.e. AFTER the two
++ * environment-driven loaders had already run. That is the arrangement this
++ * gate removes: with no valid SDK -- the ordinary case, since Pulsar ships
++ * none -- obs_module_load() returns false here and neither loader is ever
++ * reached. Returning false, rather than returning true with nothing
++ * registered, is deliberate: libobs then leaves the module uninitialised
++ * and registers nothing, and the criterion is the ABSENCE of loading, not
++ * the presence of a warning (issue #167 criterion 4).
++ *
++ * The probe itself loads nothing: it reads directory validity, file
++ * presence and version resources off absolute paths. The full result is
++ * republished in the capability manifest by pulsar-multi-stream, so a
++ * consumer sees WHY this module is or is not there without parsing a log.
++ */
+ bool obs_module_load(void)
+ {
++	struct pulsar_nv_probe_result probe;
++	pulsar_nv_probe(&probe);
++
++	if (!pulsar_nv_module_should_load(&probe)) {
++		blog(LOG_INFO,
++		     "[NVIDIA filters]: not loaded -- no validated NVIDIA SDK "
++		     "(afx: dir=%d dll=%d models=%d version=%u/%u | "
++		     "vfx: dir=%d dll=%d models=%d version=%u/%u)",
++		     (int)probe.afx.dir_valid, (int)probe.afx.dlls_present, (int)probe.afx.models_present,
++		     probe.afx.version, probe.afx.min_version, (int)probe.vfx.dir_valid, (int)probe.vfx.dlls_present,
++		     (int)probe.vfx.models_present, probe.vfx.version, probe.vfx.min_version);
++		return false;
++	}
++
+ #ifdef LIBNVAFX_ENABLED
+ 	/* load nvidia audio fx dll */
+ 	if (load_nvidia_afx())
+diff --git a/plugins/nv-filters/nvafx-load.h b/plugins/nv-filters/nvafx-load.h
+index 2a5931ba1..aa35efe0a 100644
+--- a/plugins/nv-filters/nvafx-load.h
++++ b/plugins/nv-filters/nvafx-load.h
+@@ -7,6 +7,14 @@
+ #include <util/platform.h>
+ #include <util/windows/win-version.h>
+ #include "nv_sdk_versions.h"
++/* Pulsar #167 / Prism ADR 023 Am.3 §A3.4 -- plugins/pulsar-nv-secure-load/,
++ * wired in by this plugin's CMakeLists. Owns the directory validation, the
++ * capability probe and every LoadLibraryEx in this module. */
++#include <pulsar-nv-secure-load.h>
++
++#if MIN_AFX_SDK_VERSION != PULSAR_NV_MIN_AFX_VERSION
++#error "AFX minimum version drifted between nv_sdk_versions.h and pulsar-nv-secure-load.h"
++#endif
+ 
+ #define NVAFX_API
+ 
+@@ -285,26 +293,43 @@ void release_lib(void)
+ 	}
+ }
+ 
++/* Pulsar #167: the directory is no longer whatever the inherited
++ * environment happens to say -- it is what pulsar_nv_probe_afx() validated,
++ * or nothing at all. Returns false when the probe was negative, which is
++ * also the state in which obs_module_load() already refused to load us. */
+ static bool nvafx_get_sdk_path(char *buffer, const size_t len)
+ {
+-	DWORD ret = GetEnvironmentVariableA("NVAFX_SDK_DIR", buffer, (DWORD)len);
++	struct pulsar_nv_sdk_probe p;
++
++	if (!buffer || len < MAX_PATH)
++		return false;
+ 
+-	if (!ret || ret >= len - 1)
++	pulsar_nv_probe_afx(&p);
++	if (!p.usable)
+ 		return false;
+ 
++	memcpy(buffer, p.dir, strlen(p.dir) + 1);
+ 	return true;
+ }
+ 
++/* Pulsar #167 -- was:
++ *     SetDllDirectoryA(path);
++ *     nv_audiofx = LoadLibrary(L"NVAudioEffects.dll");
++ *     SetDllDirectoryA(NULL);
++ *     nv_cuda = LoadLibrary(L"nvcuda.dll");
++ * i.e. two bare-name loads, the second one under the plain standard search
++ * order, whose first entry is pulsar.exe's own directory. Both are now
++ * absolute-path loads confined by PULSAR_NV_LOAD_FLAGS, and nvcuda.dll is
++ * taken from System32 (where the display driver installs it) rather than
++ * from wherever the search happened to land. */
+ static bool load_lib(void)
+ {
+ 	char path[MAX_PATH];
+ 	if (!nvafx_get_sdk_path(path, sizeof(path)))
+ 		return false;
+ 
+-	SetDllDirectoryA(path);
+-	nv_audiofx = LoadLibrary(L"NVAudioEffects.dll");
+-	SetDllDirectoryA(NULL);
+-	nv_cuda = LoadLibrary(L"nvcuda.dll");
++	nv_audiofx = pulsar_nv_load_from_dir(path, PULSAR_NV_AFX_DLL);
++	nv_cuda = pulsar_nv_load_from_system32(PULSAR_NV_CUDA_DLL);
+ 	return !!nv_audiofx && !!nv_cuda;
+ }
+ 
+@@ -318,17 +343,14 @@ static unsigned int get_lib_version(void)
+ 
+ 	version_checked = true;
+ 
++	/* Pulsar #167: read off the validated directory by absolute path,
++	 * with no SetDllDirectory and no load. An unreadable resource leaves
++	 * `version` at 0 -- absent, never assumed sufficient. */
+ 	char path[MAX_PATH];
+ 	if (!nvafx_get_sdk_path(path, sizeof(path)))
+ 		return 0;
+ 
+-	SetDllDirectoryA(path);
+-
+-	struct win_version_info nto_ver = {0};
+-	if (get_dll_ver(L"NVAudioEffects.dll", &nto_ver))
+-		version = nto_ver.major << 24 | nto_ver.minor << 16 | nto_ver.build << 8 | nto_ver.revis << 0;
+-
+-	SetDllDirectoryA(NULL);
++	pulsar_nv_read_version(path, PULSAR_NV_AFX_DLL, &version);
+ 	return version;
+ }
+ 
+diff --git a/plugins/nv-filters/nvidia-audiofx-filter.c b/plugins/nv-filters/nvidia-audiofx-filter.c
+index fd98ca8e4..4382eb50c 100644
+--- a/plugins/nv-filters/nvidia-audiofx-filter.c
++++ b/plugins/nv-filters/nvidia-audiofx-filter.c
+@@ -409,6 +409,13 @@ static bool nvidia_audio_initialize_internal(void *data)
+ 			}
+ 
+ 			// Set AI models path
++			/* Pulsar #167: set_nv_model() leaves this NULL when the
++			 * .trtpkg is not where it must be. Stop here rather
++			 * than hand the SDK a null path. */
++			if (!ng->model) {
++				do_log(LOG_ERROR, "no verified model file; FX not initialized");
++				goto failure;
++			}
+ 			err = NvAFX_SetString(ng->handle[i], NVAFX_PARAM_MODEL_PATH, ng->model);
+ 			if (err != NVAFX_STATUS_SUCCESS) {
+ 				do_log(LOG_ERROR, "NvAFX_SetString() failed, error %i", err);
+@@ -514,23 +521,47 @@ static inline enum speaker_layout nv_convert_speaker_layout(uint8_t channels)
+ 	}
+ }
+ 
++/* Pulsar #167 -- the model path is a LOAD, not a string.
++ *
++ * NvAFX_SetString(NVAFX_PARAM_MODEL_PATH) hands this path to the SDK, which
++ * DESERIALISES it as a TensorRT package: a model of uncontrolled origin is
++ * an execution surface. Upstream concatenated ng->sdk_path (straight from
++ * the environment) with a fixed name and never checked the result existed.
++ *
++ * Now: ng->sdk_path can only be a directory pulsar_nv_validate_dir()
++ * admitted, the leaf is confined to <dir>\models\ by pulsar_nv_join_w()
++ * (which refuses a separator in the leaf), and the file must be there
++ * before the path is handed over. All three model files are covered, not
++ * just the denoiser default -- the effect method chooses among them at
++ * runtime, so checking one would leave the other two unverified.
++ *
++ * ng->model stays NULL when the file is absent; the caller's
++ * NvAFX_SetString then fails loudly instead of the SDK being pointed at
++ * something that is not there. */
+ static void set_nv_model(void *data, const char *method)
+ {
+ 	struct nvidia_audio_data *ng = data;
+-	const char *file;
++	const char *leaf;
+ 
+ 	if (strcmp(NVAFX_EFFECT_DEREVERB, method) == 0)
+-		file = NVAFX_EFFECT_DEREVERB_MODEL;
++		leaf = pulsar_nv_afx_models[1];
+ 	else if (strcmp(NVAFX_EFFECT_DEREVERB_DENOISER, method) == 0)
+-		file = NVAFX_EFFECT_DEREVERB_DENOISER_MODEL;
++		leaf = pulsar_nv_afx_models[2];
+ 	else
+-		file = NVAFX_EFFECT_DENOISER_MODEL;
++		leaf = pulsar_nv_afx_models[0];
+ 
+-	size_t size = strlen(ng->sdk_path) + strlen(file) + 1;
+-	char *buffer = (char *)bmalloc(size);
++	bfree(ng->model);
++	ng->model = NULL;
+ 
+-	strcpy(buffer, ng->sdk_path);
+-	strcat(buffer, file);
++	if (!ng->sdk_path || !pulsar_nv_file_exists(ng->sdk_path, PULSAR_NV_MODEL_SUBDIR, leaf)) {
++		do_log(LOG_ERROR, "model %s\\%s\\%s is absent; FX disabled", ng->sdk_path ? ng->sdk_path : "(none)",
++		       PULSAR_NV_MODEL_SUBDIR, leaf);
++		return;
++	}
++
++	size_t size = strlen(ng->sdk_path) + strlen(PULSAR_NV_MODEL_SUBDIR) + strlen(leaf) + 3;
++	char *buffer = (char *)bmalloc(size);
++	snprintf(buffer, size, "%s\\%s\\%s", ng->sdk_path, PULSAR_NV_MODEL_SUBDIR, leaf);
+ 	ng->model = buffer;
+ }
+ 
+diff --git a/plugins/nv-filters/nvidia-videofx-filter.c b/plugins/nv-filters/nvidia-videofx-filter.c
+index 15341927f..009083ebb 100644
+--- a/plugins/nv-filters/nvidia-videofx-filter.c
++++ b/plugins/nv-filters/nvidia-videofx-filter.c
+@@ -263,9 +263,17 @@ static bool nvvfx_filter_create_internal(struct nvvfx_data *filter)
+ 	if (id == S_FX_AIGS || id == S_FX_BG_BLUR) {
+ 		char buffer[MAX_PATH];
+ 		char modelDir[MAX_PATH];
+-		nvvfx_get_sdk_path(buffer, MAX_PATH);
+-		size_t max_len = sizeof(buffer) / sizeof(char);
+-		snprintf(modelDir, max_len, "%s\\models", buffer);
++		/* Pulsar #167: the model directory the SDK is pointed at is
++		 * derived from the VALIDATED SDK directory, never from a raw
++		 * environment read. Refuse rather than build a path under an
++		 * unvouched-for root -- NVVFX_MODEL_DIRECTORY is where the SDK
++		 * goes looking for TensorRT packages to deserialise. */
++		if (!nvvfx_get_sdk_path(buffer, MAX_PATH)) {
++			log_nverror_destroy(filter, NVCV_ERR_MODEL);
++			return false;
++		}
++		size_t max_len = sizeof(modelDir) / sizeof(char);
++		snprintf(modelDir, max_len, "%s\\%s", buffer, PULSAR_NV_MODEL_SUBDIR);
+ 		vfxErr = NvVFX_SetString(filter->handle, NVVFX_MODEL_DIRECTORY, modelDir);
+ 		vfxErr = NvVFX_SetCudaStream(filter->handle, NVVFX_CUDA_STREAM, filter->stream);
+ 		if (NVCV_SUCCESS != vfxErr)
+diff --git a/plugins/nv-filters/nvvfx-load.h b/plugins/nv-filters/nvvfx-load.h
+index cfff42d4a..21282fc08 100644
+--- a/plugins/nv-filters/nvvfx-load.h
++++ b/plugins/nv-filters/nvvfx-load.h
+@@ -8,6 +8,14 @@
+ #include <dxgitype.h>
+ #include <util/windows/win-version.h>
+ #include "nv_sdk_versions.h"
++/* Pulsar #167 / Prism ADR 023 Am.3 §A3.4 -- see nvafx-load.h. Included
++ * OUTSIDE the extern "C" block below: it is a C header and must not be
++ * given C++ linkage by a translation unit that happens to be C++. */
++#include <pulsar-nv-secure-load.h>
++
++#if MIN_VFX_SDK_VERSION != PULSAR_NV_MIN_VFX_VERSION
++#error "VFX minimum version drifted between nv_sdk_versions.h and pulsar-nv-secure-load.h"
++#endif
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -667,28 +675,39 @@ static inline void release_nv_vfx()
+ 	}
+ }
+ 
+-static inline void nvvfx_get_sdk_path(char *buffer, const size_t len)
++/* Pulsar #167: same change as nvafx-load.h. The environment variable (and
++ * its %ProgramFiles% fallback) is now a CANDIDATE that
++ * pulsar_nv_probe_vfx() validates, not a directory taken on trust. Returns
++ * false -- rather than the old void + unchecked buffer -- so no caller can
++ * carry on with a path nobody vouched for. */
++static inline bool nvvfx_get_sdk_path(char *buffer, const size_t len)
+ {
+-	DWORD ret = GetEnvironmentVariableA("NV_VIDEO_EFFECTS_PATH", buffer, (DWORD)len);
++	struct pulsar_nv_sdk_probe p;
+ 
+-	if (!ret || ret >= len - 1) {
+-		char path[MAX_PATH];
+-		GetEnvironmentVariableA("ProgramFiles", path, MAX_PATH);
++	if (!buffer || len < MAX_PATH)
++		return false;
+ 
+-		size_t max_len = sizeof(path) / sizeof(char);
+-		snprintf(buffer, max_len, "%s\\NVIDIA Corporation\\NVIDIA Video Effects", path);
+-	}
++	pulsar_nv_probe_vfx(&p);
++	if (!p.usable)
++		return false;
++
++	memcpy(buffer, p.dir, strlen(p.dir) + 1);
++	return true;
+ }
+ 
++/* Pulsar #167 -- was two bare-name LoadLibrary() calls under a
++ * SetDllDirectoryA() of an unvalidated path; pulsar.exe's directory beat
++ * that entry in the standard search order. Now: absolute path, confined by
++ * PULSAR_NV_LOAD_FLAGS for the DLL itself AND for its imports. */
+ static inline bool load_nv_vfx_libs()
+ {
+ 	char fullPath[MAX_PATH];
+-	nvvfx_get_sdk_path(fullPath, MAX_PATH);
+-	SetDllDirectoryA(fullPath);
+ 
+-	nv_videofx = LoadLibrary(L"NVVideoEffects.dll");
+-	nv_cvimage = LoadLibrary(L"NVCVImage.dll");
+-	SetDllDirectoryA(NULL);
++	if (!nvvfx_get_sdk_path(fullPath, MAX_PATH))
++		return false;
++
++	nv_videofx = pulsar_nv_load_from_dir(fullPath, PULSAR_NV_VFX_DLL);
++	nv_cvimage = pulsar_nv_load_from_dir(fullPath, PULSAR_NV_CVIMAGE_DLL);
+ 	return !!nv_videofx && !!nv_cvimage;
+ }
+ 
+@@ -703,15 +722,10 @@ static unsigned int get_lib_version(void)
+ 	version_checked = true;
+ 
+ 	char path[MAX_PATH];
+-	nvvfx_get_sdk_path(path, sizeof(path));
+-
+-	SetDllDirectoryA(path);
+-
+-	struct win_version_info nto_ver = {0};
+-	if (get_dll_ver(L"NVVideoEffects.dll", &nto_ver))
+-		version = nto_ver.major << 24 | nto_ver.minor << 16 | nto_ver.build << 8 | nto_ver.revis << 0;
++	if (!nvvfx_get_sdk_path(path, sizeof(path)))
++		return 0;
+ 
+-	SetDllDirectoryA(NULL);
++	pulsar_nv_read_version(path, PULSAR_NV_VFX_DLL, &version);
+ 	return version;
+ }
+ #endif
+-- 
+2.54.0.windows.1
+

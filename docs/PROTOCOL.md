@@ -312,6 +312,9 @@ encoder / audio / inventory / video blocks that land later:
                            "values": [{ "value": "window_capture" }] },
     "destination_kinds": { "applicability": "live",
                            "values": [{ "value": "rtmp_custom" }, { "value": "twitch" }] },
+    // Why the NVIDIA filters are (or are not) in `filters` above -- see below.
+    "nv_filters":        { "applicability": "read-only", "module_loaded": false,
+                           "afx": { "usable": false }, "vfx": { "usable": false } },
     // Effective video colorimetry -- observable, never settable.
     "video_colorimetry": { "applicability": "read-only", "value": "709",
                            "range": "Partial", "format": "NV12" },
@@ -444,6 +447,46 @@ no hard-coded list behind any of them.
 - An enumeration that yields nothing publishes **no entry at all**, so the
   consumer keeps its own static list instead of reading an empty array as
   "this binary registers none".
+
+##### NVIDIA filters capability (`nv_filters`, issue #167)
+
+The `filters` inventory above answers *is `nvidia_audiofx_filter` registered*.
+When it is not, four different situations look identical from the outside —
+this build has no `nv-filters`, no SDK is installed, the SDK is too old, the
+TensorRT models are missing — and they call for four different answers from an
+operator. `nv_filters` is what separates them.
+
+It is also the manifest half of Prism **ADR 023 Amendment 3 §A3.4**: the
+`nv-filters` module now **refuses to load at all** unless this same probe is
+positive, so what is published here is the *load decision itself*, read from
+the same code (`plugins/pulsar-nv-secure-load/`), not a reconstruction of it.
+
+```jsonc
+"nv_filters": {
+  "applicability": "read-only",
+  "module_loaded": false,          // a filter type of the module is registered
+  "afx": { "directory_designated": false, "dlls_present": false,
+           "models_present": false, "min_version": "1.6.1.2",
+           "usable": false },      // "version" OMITTED when unreadable
+  "vfx": { "directory_designated": true,  "dlls_present": true,
+           "models_present": true, "version": "0.7.6.0",
+           "min_version": "0.7.6.0", "usable": true }
+}
+```
+
+- Regime **`read-only`**: nothing over the wire installs an SDK, moves the
+  directory, or reopens the load decision — that was taken at boot.
+- `version` is **omitted, never zeroed**, when the file's version resource
+  cannot be read (§3.3 §1). An unreadable version is *absent*, and absence can
+  never satisfy `min_version` — it is not "probably recent enough".
+- `directory_designated` says a directory passed validation. The **path itself
+  is deliberately not published**: the consumer has no use for it, and a
+  manifest is not a place to hand out filesystem layout.
+- `usable` is the conjunction — directory, DLLs, models, version. `module_loaded`
+  is read back from `obs_enum_filter_types()`, so the two disagreeing means the
+  gate and the loader have drifted apart, which is worth seeing.
+- No filter property bound is published here either: which nv-filter settings
+  may be written stays the consumer's closed whitelist (Prism ADR 023 §3.3).
 
 ##### Video colorimetry (ADR 027 §3.3 block 4)
 
