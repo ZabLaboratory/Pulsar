@@ -859,10 +859,20 @@ static bool ReadOutputBoundAudioTrackMask(uint32_t &boundMask)
 	if (!output)
 		return false;
 
+	// The slot index is NOT the track number: OBS packs the selected tracks into
+	// consecutive slots, so an output carrying tracks 1 and 3 binds them at slots
+	// 0 and 1 (pulsar-frontend-stub, issue #168). The track an encoder pulls from
+	// is its own mixer index -- reading it off the slot would refuse track 3 and
+	// accept track 2 on exactly that output, which is #157's inference repeated
+	// one level down.
 	boundMask = 0;
 	for (size_t i = 0; i < (size_t)MAX_AUDIO_MIXES; i++) {
-		if (obs_output_get_audio_encoder(output, i))
-			boundMask |= (1u << i);
+		obs_encoder_t *encoder = obs_output_get_audio_encoder(output, i);
+		if (!encoder)
+			continue;
+		const size_t mixer = obs_encoder_get_mixer_index(encoder);
+		if (mixer < (size_t)MAX_AUDIO_MIXES)
+			boundMask |= (1u << mixer);
 	}
 
 	return true;

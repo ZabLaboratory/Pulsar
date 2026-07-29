@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs to name the next file); both automatic thresholds stay at `0`, so
   nothing splits by itself — the only trigger is an explicit `SplitRecordFile`,
   and the switch is announced by `RecordFileChanged`.
+- **Real multi-track audio** (`#168`, ADR Prism 028 §3.5). `PULSAR_AUDIO_TRACKS`
+  creates N `ffmpeg_aac` encoders — one per libobs mixer index — with per-track
+  bitrates (`PULSAR_AUDIO_BITRATE_<n>`), and
+  `PULSAR_{STREAM,RECORD,REPLAY}_AUDIO_TRACKS` choose which tracks each of the
+  three outputs carries. Every default reproduces the previous single-encoder
+  wiring exactly (one encoder, track 1, slot 0, on all three outputs).
+- `pulsar:GetAudioTracks` — per output, the encoder bound at each slot and the
+  **track** it pulls from (the encoder's mixer index, not the slot index).
+- `pulsar:MeasureAudioTrackFlow` — bounded measurement of the audio actually
+  flowing on each mix, i.e. what each track's encoder is fed. The only read that
+  tells *routed* from *consumed*; the input's mixer bits cannot (`#157`).
+- `capabilities.audio_tracks.tracks` — which tracks the streaming output carries,
+  not merely how many.
 
 ### 🔧 Changed
 
@@ -28,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **`CreateRecordChapter` still always fails on this build** — and now says
   why: chapter markers exist only on OBS's hybrid-MP4 output, while Pulsar
   records through `ffmpeg_muxer`, which does not expose `add_chapter`.
+- `pulsar:SetVideoSettings`'s `audio_bitrate` now patches **every** audio encoder
+  the streaming output carries (`audio_tracks_updated` reports the count), instead
+  of slot 0 alone.
+- `SetInputAudioTracks`'s output oracle (`#157`) reads each bound encoder's mixer
+  index instead of its slot index. With non-contiguous routing the two differ, and
+  the slot-based read would refuse a bound track while accepting an unbound one.
 
 ## [1.5.0] - 2026-07-28
 

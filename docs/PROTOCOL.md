@@ -201,10 +201,19 @@ Three things to keep in mind when driving the baseline against Pulsar:
    off is honest whatever the output carries. And when no streaming
    output exists at all nothing is refused, because nothing was read.
 
-   **This does not deliver multi-track output.** The streaming output
-   still binds a single audio encoder, at slot 0
-   (`audio_tracks.bound: 1`); what changed is that the server stopped
-   claiming otherwise.
+   Since `1.6.0` the output CAN carry several tracks (`#168`, see
+   *Multi-track audio* below), so this refusal is no longer a statement
+   about Pulsar's ceiling — it is a statement about **this spawn's**
+   routing. A default spawn still binds one encoder on track 1
+   (`audio_tracks.bound: 1`, `tracks: [1]`) and refuses tracks 2..6
+   exactly as before.
+
+   One consequence for anyone reading the output's slots directly: **the
+   slot index is not the track number.** OBS packs the selected tracks
+   into consecutive slots, so an output carrying tracks 1 and 3 binds
+   them at slots 0 and 1. The track is the encoder's own mixer index;
+   inferring it from the slot would refuse track 3 and accept track 2 on
+   exactly that output — #157's mistake, one level down.
 
 ## `pulsar:*` vendor namespace
 
@@ -253,8 +262,10 @@ clients see snake_case on the wire.
 | `StartAllDestinations` | Start every registered destination concurrently. Failed starts are logged server-side; the call resolves once the registry has tried them all. | — | `ok: bool`, `error?` |
 | `StopAllDestinations` | Mirror of the above. | — | `ok: bool`, `error?` |
 | `GetVideoSettings` | Snapshot the encoder + reset_video state. Includes the boot-fixed encoder identity (`video_encoder` / `video_preset` / `video_profile`). | — | `fps`, `width`, `height`, `video_bitrate`, `video_rate_control`, `video_keyint_sec`, `audio_bitrate`, `video_encoder`, `video_preset`, `video_profile`, `error?` |
-| `SetVideoSettings` | Mutate encoder bitrates **live**. Setting `fps` / `width` / `height` is rejected — those require boot-time env vars (`PULSAR_FPS`, `PULSAR_RESOLUTION`). `video_encoder` / `video_preset` / `video_profile` are likewise rejected: encoder identity is boot-fixed via `PULSAR_VIDEO_ENCODER` (no live swap — see ADR 004 §3.4). Audio bitrate is only applied while the audio encoder is idle. | `video_bitrate?`, `audio_bitrate?` | `changed: bool`, `video_bitrate?`, `audio_bitrate?`, `error?` |
+| `SetVideoSettings` | Mutate encoder bitrates **live**. Setting `fps` / `width` / `height` is rejected — those require boot-time env vars (`PULSAR_FPS`, `PULSAR_RESOLUTION`). `video_encoder` / `video_preset` / `video_profile` are likewise rejected: encoder identity is boot-fixed via `PULSAR_VIDEO_ENCODER` (no live swap — see ADR 004 §3.4). Audio bitrate is only applied while the audio encoders are idle, and is applied to **every** audio encoder the streaming output carries (`audio_tracks_updated` says how many) — patching slot 0 alone would report a whole write and perform a partial one. | `video_bitrate?`, `audio_bitrate?` | `changed: bool`, `video_bitrate?`, `audio_bitrate?`, `audio_tracks_updated?`, `error?` |
 | `GetCapabilities` | **Capability manifest** — the authoritative statement of what this Pulsar can do (Prism ADR 027 §3.1/§3.2). Enumerates the encoder families this build exposes (via `obs_enum_encoder_types()`, mapped to Pulsar short names) plus the bitrate windows, each with its application regime. Declares, per enumerated family, its presets / profiles / rate-controls / keyint and bitrate windows (`capabilities.encoder_families`, all `boot-fixed`), the audio block (monitoring, tracks, sample rate, speaker layout), the presence-only inventories (registered filters, source kinds, destination kinds), the effective video colorimetry, and the graphics adapters + admitted output scales (`capabilities.graphics_adapters` / `output_scales`, ADR 027 Amendment 1). Off-air detection; `active_encoder` is the family bound to the streaming output. See the manifest, encoder-block and list-encoding notes below. | — | `version: number`, `capabilities: { [name]: CapabilityEntry }`, `encoders: {value: string}[]`, `active_encoder: string`, `video_bitrate?: {min, max}`, `audio_bitrate?: {value: number}[]`, `error?` |
+| `GetAudioTracks` | What each output actually carries: per output (`stream` / `record` / `replay`), the encoder bound at each slot, the **track** it pulls from (`obs_encoder_get_mixer_index() + 1`, *not* the slot index), its name, codec, bitrate, `active` flag and `encoded_frames`. An output that does not exist is **absent** from the list, never an empty entry. | — | `count: number`, `outputs: { output, slots: { slot, track, encoder, codec?, bitrate, active, encoded_frames }[] }[]`, `error?` |
+| `MeasureAudioTrackFlow` | Measure, for a bounded window, the audio that actually **flows** on each of the six libobs mixes — i.e. what each track's encoder is fed. Installs a raw audio callback on every mix for `duration_ms`, then removes it (a permanently connected callback would force libobs to mix all six buses for the process's lifetime). `encoder_bound` says whether the streaming output carries an encoder for that track, and is **omitted** off-air rather than guessed. This is the only read that distinguishes *routed* from *consumed*: see the note below. | `duration_ms?` (50..2000, default 300) | `duration_ms`, `tracks: { track, frames, peak, encoder_bound? }[]`, `error?` |
 | `GetAdaptiveState` | Snapshot the bitrate adaptation worker. | — | `enabled`, `target_kbps`, `current_kbps`, `floor_kbps`, `stable_ticks`, `adjustments_total`, `last_delta_total`, `last_delta_dropped`, `last_drop_ratio`, `error?` |
 | `SetAdaptiveEnabled` | Toggle the worker. Disabling pauses sampling; the encoder bitrate is left at whatever value the worker last applied. Re-enabling resets `stable_ticks` to 0 so the loop re-warms before any climb attempt. | `enabled` | `enabled: bool`, `error?` |
 
@@ -307,7 +318,8 @@ encoder / audio / inventory / video blocks that land later:
     // Audio block (ADR 027 §3.3 bloc 2).
     "audio_monitoring":    { "applicability": "read-only", "available": true,
                              "device_bound": false },
-    "audio_tracks":        { "applicability": "read-only", "count": 6, "bound": 1 },
+    "audio_tracks":        { "applicability": "read-only", "count": 6, "bound": 1,
+                             "tracks": [{ "value": 1 }] },
     "audio_sample_rate":   { "applicability": "read-only", "hz": 48000 },
     "audio_speaker_layout":{ "applicability": "read-only", "layout": "stereo",
                              "channels": 2 },
@@ -383,7 +395,7 @@ fact, not a limitation waiting to be lifted (ADR 027 §3.5).
 | Entry | Fields | Regime | Source |
 |---|---|---|---|
 | `audio_monitoring` | `available: bool`, `device_bound: bool`, `device_id?`, `device_name?` | `read-only` | `obs_audio_monitoring_available()`, `obs_get_audio_monitoring_device()` |
-| `audio_tracks` | `count: number`, `bound?: number` | `read-only` | `MAX_AUDIO_MIXES`; `bound` walks the streaming output's mixer slots |
+| `audio_tracks` | `count: number`, `bound?: number`, `tracks?: {value: number}[]` | `read-only` | `MAX_AUDIO_MIXES`; `bound` counts the streaming output's occupied slots and `tracks` names them, each read from its encoder's mixer index (#168) |
 | `audio_sample_rate` | `hz: number` | `read-only` | `obs_get_audio_info()` |
 | `audio_speaker_layout` | `layout: string`, `channels: number` | `read-only` | `obs_get_audio_info()` + `get_audio_channels()` |
 
@@ -488,6 +500,44 @@ Pulsar is running.
 > family items carry their detail beside that `value`). `@clodocapeo/pulsar-client`'s
 > `CapabilitiesNamespace.get()` unwraps these back into flat `string[]` /
 > `number[]` before handing the typed `PulsarCapabilities` to callers.
+
+### Multi-track audio (`#168`)
+
+`PULSAR_AUDIO_TRACKS` creates *N* `ffmpeg_aac` encoders, encoder *i* bound to
+libobs mixer index *i*. `PULSAR_{STREAM,RECORD,REPLAY}_AUDIO_TRACKS` then pick
+which of those tracks each output carries — the antenna, the recording and the
+replay buffer have no reason to agree, and nothing forces them to.
+
+Everything defaults to the pre-`#168` wiring: **one** encoder, on track 1, at
+slot 0 of the three outputs. A spawn that sets none of these variables is
+byte-for-byte what it was.
+
+```
+PULSAR_AUDIO_TRACKS=3
+PULSAR_AUDIO_BITRATE_2=96
+PULSAR_STREAM_AUDIO_TRACKS=1,3      # slot 0 -> track 1, slot 1 -> track 3
+PULSAR_RECORD_AUDIO_TRACKS=1,2,3
+PULSAR_REPLAY_AUDIO_TRACKS=2
+```
+
+Two facts a consumer must not conflate:
+
+- **A track is bound** — an encoder for it sits in one of the output's slots.
+  `GetAudioTracks` and `capabilities.audio_tracks.tracks` answer that, and
+  `SetInputAudioTracks` judges an enable request against it (`#157`).
+- **A track is fed** — an input's audio actually reaches that mix. Nothing on
+  the input side can establish this: `obs_source_set_audio_mixers()` writes the
+  bit whatever anything downstream carries, and libobs hands every fresh source
+  `audio_mixers = 0xFF`, so `GetInputAudioTracks` reports tracks as enabled that
+  reach no encoder at all. `MeasureAudioTrackFlow` is the read that answers it,
+  taken on the very bus the encoder is attached to — an encoder created with
+  `obs_audio_encoder_create(…, mixer_idx, …)` and the probe's raw callback are
+  both registered as inputs of `obs->audio.mixes[mixer_idx]`.
+
+A track can be bound and fed nothing (no input routed to it), or fed and bound
+to nothing (an input's default `0xFF` mixer mask on a spawn that binds one
+encoder). `MeasureAudioTrackFlow` reports both halves side by side: `peak` /
+`frames` for the flow, `encoder_bound` for the binding.
 
 ### Destination kinds
 
@@ -752,7 +802,12 @@ value — operator/env-controlled only.
 | `PULSAR_VIDEO_PROFILE` | `pulsar-frontend-stub` | `high` | `baseline`\|`main`\|`high`. |
 | `PULSAR_VIDEO_KEYINT_SEC` | `pulsar-frontend-stub` | `2` | Keyframe interval, `0..20` seconds. |
 | `PULSAR_VIDEO_PRESET` | `pulsar-frontend-stub` | family-specific | Validated against the preset set of the resolved encoder family — x264 `ultrafast..veryslow` (default `veryfast`), NVENC `p1..p7` (`p5`, written to `preset` on `obs_nvenc_h264_tex` but to **`preset2` on the compat ids `jim_nvenc` / `ffmpeg_nvenc`** — the property name is resolved per encoder id, not per family), **QSV `TU1..TU7` (`TU4`, written to the `target_usage` property, not `preset`)**, AMF `speed`/`balanced`/`quality` (`balanced`). Matched case-insensitively, applied in the canonical spelling `capabilities.encoder_families` publishes; unknown value ⇒ family default (logged). |
-| `PULSAR_AUDIO_BITRATE` | `pulsar-frontend-stub` | `160` (kbps) | `ffmpeg_aac` bitrate, `32..512`. Mutable live via `pulsar:SetVideoSettings` while the audio encoder is idle. |
+| `PULSAR_AUDIO_BITRATE` | `pulsar-frontend-stub` | `160` (kbps) | Default `ffmpeg_aac` bitrate for every track, `32..512`. Mutable live via `pulsar:SetVideoSettings` while the audio encoders are idle. |
+| `PULSAR_AUDIO_TRACKS` | `pulsar-frontend-stub` | `1` | Number of audio encoders created, `1..6` (`MAX_AUDIO_MIXES`). Encoder *i* is bound to libobs mixer index *i*, i.e. track *i+1*. Out of range ⇒ warning + `1`. Boot-fixed. |
+| `PULSAR_AUDIO_BITRATE_<n>` | `pulsar-frontend-stub` | `PULSAR_AUDIO_BITRATE` | Per-track bitrate override for track *n* (`1..PULSAR_AUDIO_TRACKS`), `32..512`. |
+| `PULSAR_STREAM_AUDIO_TRACKS` | `pulsar-frontend-stub` | `1` | Tracks the **streaming** output carries, as a comma-separated list of 1-based track numbers (`1,3`). Unknown numbers and duplicates are dropped with a warning; an empty result falls back to `1`. The slot each track lands on is its rank in this list. |
+| `PULSAR_RECORD_AUDIO_TRACKS` | `pulsar-frontend-stub` | `1` | Same, for the **recording** output. |
+| `PULSAR_REPLAY_AUDIO_TRACKS` | `pulsar-frontend-stub` | `1` | Same, for the **replay buffer** output. |
 | `PULSAR_DESKTOP_AUDIO_DEVICE_ID` | `pulsar-frontend-stub` | `"default"` | `wasapi_output_capture` device id (mixer channel 1). |
 | `PULSAR_MIC_DEVICE_ID` | `pulsar-frontend-stub` | unset (source not created) | `wasapi_input_capture` device id (mixer channel 3) — opt-in, since mic devices are absent on CI/servers. |
 | `PULSAR_PROCESS_AUDIO_NAME` | `pulsar-frontend-stub` | unset (source not created) | Executable name for `wasapi_process_output_capture` (mixer channel 2, per-process loopback). Requires Windows 10 19041+ / recent win-wasapi; tolerated as unavailable otherwise. |

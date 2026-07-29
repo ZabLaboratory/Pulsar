@@ -631,7 +631,12 @@ private:
     obs_service_t *streamService = nullptr;
 
     obs_encoder_t *videoEncoder = nullptr;
-    obs_encoder_t *audioEncoder = nullptr;
+    // One audio encoder per libobs mixer slot in use (issue #168, ADR Prism 028
+    // §3.5). audioEncoders[i] encodes mix i -- track i+1 as a client numbers
+    // them -- and stays null when that track carries no encoder. The boot
+    // default creates exactly ONE, on track 1, bound at slot 0 of the three
+    // outputs: the pre-#168 wiring, unchanged.
+    obs_encoder_t *audioEncoders[MAX_AUDIO_MIXES] = {};
     obs_source_t *captureSource = nullptr;
     obs_sceneitem_t *captureItem = nullptr;
 
@@ -730,6 +735,53 @@ const char *encoderFamilyForId(const char *id)
     if (std::strcmp(id, "h264_texture_amf") == 0)
         return "amf";
     return "x264";
+}
+
+// Audio track list read off an env var, as the 1-based track numbers a client
+// uses ("1,3"). Values outside 1..trackCount and duplicates are dropped with a
+// named warning; an unset, empty or entirely invalid list yields {1} -- the
+// single-track wiring every pre-#168 spawn had, so the default path is
+// unchanged. Order matters: it is the order the tracks land on the output's
+// slots.
+std::vector<int> parseAudioTrackList(const char *envName, int trackCount)
+{
+    std::vector<int> tracks;
+    const char *raw = std::getenv(envName);
+    if (raw && *raw) {
+        const std::string value(raw);
+        size_t pos = 0;
+        while (pos <= value.size()) {
+            const size_t comma = value.find(',', pos);
+            std::string token = value.substr(
+                pos, comma == std::string::npos ? std::string::npos : comma - pos);
+            pos = (comma == std::string::npos) ? value.size() + 1 : comma + 1;
+
+            const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
+            token.erase(token.begin(),
+                        std::find_if(token.begin(), token.end(), notSpace));
+            token.erase(std::find_if(token.rbegin(), token.rend(), notSpace).base(),
+                        token.end());
+            if (token.empty())
+                continue;
+
+            const int track = std::atoi(token.c_str());
+            if (track < 1 || track > trackCount) {
+                blog(LOG_WARNING, "[pulsar-frontend-stub] %s: track '%s' rejected "
+                     "(1..%d -- the number of encoders actually created)",
+                     envName, token.c_str(), trackCount);
+                continue;
+            }
+            if (std::find(tracks.begin(), tracks.end(), track) != tracks.end()) {
+                blog(LOG_WARNING, "[pulsar-frontend-stub] %s: track %d listed twice, "
+                     "kept once", envName, track);
+                continue;
+            }
+            tracks.push_back(track);
+        }
+    }
+    if (tracks.empty())
+        tracks.push_back(1);
+    return tracks;
 }
 
 // Per-family whitelisted preset set + default + the libobs PROPERTY NAME that
@@ -1105,27 +1157,90 @@ bool PulsarFrontendAPI::setup()
              "%d kbps", encoderFamily.c_str(), encoderId, videoBitrate);
     }
 
+    // ---- Audio encoders: N tracks, routed per output (issue #168) ---------
+    // Before #168 there was exactly one encoder, hard-bound to slot 0 of the
+    // three outputs -- which is why a mixer bit set on an input above track 1
+    // reached nothing at all (#157 named that lie; this delivers the function).
+    //
+    // PULSAR_AUDIO_TRACKS creates N encoders, encoder i on libobs mixer index i.
+    // PULSAR_{RECORD,STREAM,REPLAY}_AUDIO_TRACKS then pick which of those tracks
+    // each output carries -- the three have no reason to agree. Every default
+    // reproduces the single-encoder wiring exactly.
     int audioBitrate = 160; // kbps
     if (const char *e = std::getenv("PULSAR_AUDIO_BITRATE"); e && *e) {
         int v = std::atoi(e);
         if (v >= 32 && v <= 512) audioBitrate = v;
         else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_AUDIO_BITRATE=%s rejected", e);
     }
-    OBSDataAutoRelease aEncSettings = obs_data_create();
-    obs_data_set_int(aEncSettings, "bitrate", audioBitrate);
-    audioEncoder = obs_audio_encoder_create("ffmpeg_aac", "PulsarAudioEnc", aEncSettings, 0, nullptr);
-    if (!audioEncoder) {
-        blog(LOG_WARNING, "[pulsar-frontend-stub] ffmpeg_aac encoder unavailable");
-    } else {
-        obs_encoder_set_audio(audioEncoder, obs_get_audio());
-        if (recordOutput)
-            obs_output_set_audio_encoder(recordOutput, audioEncoder, 0);
-        if (streamOutput)
-            obs_output_set_audio_encoder(streamOutput, audioEncoder, 0);
-        if (replayOutput) // same borrow as the video encoder above
-            obs_output_set_audio_encoder(replayOutput, audioEncoder, 0);
-        blog(LOG_INFO, "[pulsar-frontend-stub] aac configured: %d kbps", audioBitrate);
+
+    int audioTrackCount = 1;
+    if (const char *e = std::getenv("PULSAR_AUDIO_TRACKS"); e && *e) {
+        int v = std::atoi(e);
+        if (v >= 1 && v <= static_cast<int>(MAX_AUDIO_MIXES)) audioTrackCount = v;
+        else blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_AUDIO_TRACKS=%s rejected "
+                  "(1..%d); using 1", e, static_cast<int>(MAX_AUDIO_MIXES));
     }
+
+    for (int track = 1; track <= audioTrackCount; ++track) {
+        int trackBitrate = audioBitrate;
+        const std::string bitrateVar = "PULSAR_AUDIO_BITRATE_" + std::to_string(track);
+        if (const char *e = std::getenv(bitrateVar.c_str()); e && *e) {
+            int v = std::atoi(e);
+            if (v >= 32 && v <= 512) trackBitrate = v;
+            else blog(LOG_WARNING, "[pulsar-frontend-stub] %s=%s rejected (32..512); "
+                      "using %d", bitrateVar.c_str(), e, trackBitrate);
+        }
+
+        OBSDataAutoRelease aEncSettings = obs_data_create();
+        obs_data_set_int(aEncSettings, "bitrate", trackBitrate);
+        // Track 1 keeps the historical encoder name: it is the one logs and
+        // clients already know, and renaming it would break the single-track
+        // case for nothing.
+        const std::string encName =
+            (track == 1) ? "PulsarAudioEnc" : "PulsarAudioEnc" + std::to_string(track);
+        obs_encoder_t *enc = obs_audio_encoder_create(
+            "ffmpeg_aac", encName.c_str(), aEncSettings,
+            static_cast<size_t>(track - 1), nullptr);
+        if (!enc) {
+            blog(LOG_WARNING, "[pulsar-frontend-stub] ffmpeg_aac encoder unavailable "
+                 "for track %d", track);
+            continue;
+        }
+        obs_encoder_set_audio(enc, obs_get_audio());
+        audioEncoders[track - 1] = enc;
+        blog(LOG_INFO, "[pulsar-frontend-stub] aac track %d configured: %d kbps "
+             "(mixer index %d)", track, trackBitrate, track - 1);
+    }
+
+    // Per-output track selection. The SLOT index is sequential -- OBS's own
+    // convention: slot 0 carries the first selected track whatever its number.
+    // Which track a slot carries is therefore only knowable from the encoder's
+    // mixer index, never from the slot number; readers that infer it from the
+    // slot repeat #157's mistake one level down.
+    auto bindOutputTracks = [&](obs_output_t *output, const char *envName,
+                                const char *label) {
+        if (!output)
+            return;
+        const std::vector<int> tracks = parseAudioTrackList(envName, audioTrackCount);
+        std::string applied;
+        size_t slot = 0;
+        for (int track : tracks) {
+            obs_encoder_t *enc = audioEncoders[track - 1];
+            if (!enc)
+                continue;
+            obs_output_set_audio_encoder(output, enc, slot++);
+            if (!applied.empty())
+                applied += ",";
+            applied += std::to_string(track);
+        }
+        blog(LOG_INFO, "[pulsar-frontend-stub] %s audio tracks: %s", label,
+             applied.empty() ? "none" : applied.c_str());
+    };
+    bindOutputTracks(recordOutput, "PULSAR_RECORD_AUDIO_TRACKS", "record");
+    bindOutputTracks(streamOutput, "PULSAR_STREAM_AUDIO_TRACKS", "stream");
+    // Same borrow as the video encoder above -- arming the buffer never adds an
+    // encoder to the process.
+    bindOutputTracks(replayOutput, "PULSAR_REPLAY_AUDIO_TRACKS", "replay");
 
     // Capture source. Phase 6 uses window_capture (Windows). The window
     // descriptor follows obs's "<title>:<class>:<exe>" format. PULSAR_CAPTURE_WINDOW
@@ -1370,9 +1485,11 @@ void PulsarFrontendAPI::teardown()
         obs_encoder_release(videoEncoder);
         videoEncoder = nullptr;
     }
-    if (audioEncoder) {
-        obs_encoder_release(audioEncoder);
-        audioEncoder = nullptr;
+    for (obs_encoder_t *&enc : audioEncoders) {
+        if (!enc)
+            continue;
+        obs_encoder_release(enc);
+        enc = nullptr;
     }
     if (captureSource) {
         // The scene owns the sceneitem, which holds its own ref to the

@@ -1010,18 +1010,49 @@ static const char *speaker_layout_name(enum speaker_layout speakers)
     return nullptr;
 }
 
-// Number of audio tracks the streaming output actually carries, read by walking
-// its mixer slots. Returns false when no output is bound (off-air), in which
-// case the caller declares the count absent instead of guessing one.
-static bool read_bound_audio_tracks(long long &bound)
+// The audio TRACKS an output carries, read off the encoders bound to its slots.
+//
+// The slot index is NOT the track number (issue #168): OBS packs the selected
+// tracks into consecutive slots, so an output carrying tracks 1 and 3 binds them
+// at slots 0 and 1. The track an encoder pulls from is its own mixer index --
+// obs_encoder_get_mixer_index -- and nothing else. Deriving it from the slot
+// would be the same class of inference #157 was about, one level down.
+//
+// Tracks come back 1-based, the way a client numbers them.
+static void read_output_audio_tracks(obs_output_t *output, std::vector<long long> &tracks)
+{
+    tracks.clear();
+    if (!output) return;
+    for (size_t i = 0; i < static_cast<size_t>(MAX_AUDIO_MIXES); i++) {
+        obs_encoder_t *enc = obs_output_get_audio_encoder(output, i);
+        if (!enc) continue;
+        tracks.push_back(static_cast<long long>(obs_encoder_get_mixer_index(enc)) + 1);
+    }
+}
+
+// Tracks the streaming output actually carries. Returns false when no output is
+// bound (off-air), in which case the caller declares the answer absent instead
+// of guessing one.
+static bool read_bound_audio_tracks(long long &bound, std::vector<long long> &tracks)
 {
     OBSOutputAutoRelease srcOutput = obs_frontend_get_streaming_output();
     if (!srcOutput) return false;
-    bound = 0;
-    for (size_t i = 0; i < static_cast<size_t>(MAX_AUDIO_MIXES); i++) {
-        if (obs_output_get_audio_encoder(srcOutput, i)) bound++;
-    }
+    read_output_audio_tracks(srcOutput, tracks);
+    bound = static_cast<long long>(tracks.size());
     return true;
+}
+
+// Every audio encoder bound to the streaming output, in slot order. The
+// pointers belong to frontend-stub and must NOT be released.
+static void get_current_audio_encoders(std::vector<obs_encoder_t *> &encs)
+{
+    encs.clear();
+    OBSOutputAutoRelease srcOutput = obs_frontend_get_streaming_output();
+    if (!srcOutput) return;
+    for (size_t i = 0; i < static_cast<size_t>(MAX_AUDIO_MIXES); i++) {
+        if (obs_encoder_t *enc = obs_output_get_audio_encoder(srcOutput, i))
+            encs.push_back(enc);
+    }
 }
 
 // obs_properties_t has no OBSRefAutoRelease alias in obs.hpp; scope it here.
@@ -1318,6 +1349,153 @@ void on_get_video_settings(obs_data_t * /*req*/, obs_data_t *res, void *)
     }
 }
 
+// ---- Audio tracks: what each output carries, and what each track carries ---
+//
+// GetAudioTracks answers the CONFIGURATION question -- which encoder sits in
+// which slot of which output, and which mix it pulls from. That is enough to
+// see that several encoders are bound to distinct slots, and that the three
+// outputs carry different track sets (issue #168 criteria 1 and 3).
+//
+// It is NOT enough to answer the question that matters: is an input routed to
+// track N effectively CONSUMED by track N's encoder? Re-reading the input
+// cannot answer it either -- libobs writes the mixer bit whatever anything
+// downstream carries, and hands every fresh source audio_mixers = 0xFF. That is
+// exactly the trap #157 was about. MeasureAudioTrackFlow below is the read that
+// does answer it.
+static const struct {
+    const char *name;
+    obs_output_t *(*get)(void);
+} kAudioTrackOutputs[] = {
+    {"stream", obs_frontend_get_streaming_output},
+    {"record", obs_frontend_get_recording_output},
+    {"replay", obs_frontend_get_replay_buffer_output},
+};
+
+void on_get_audio_tracks(obs_data_t * /*req*/, obs_data_t *res, void *)
+{
+    obs_data_set_int(res, "count", static_cast<long long>(MAX_AUDIO_MIXES));
+
+    OBSDataArrayAutoRelease outputs = obs_data_array_create();
+    for (const auto &desc : kAudioTrackOutputs) {
+        OBSOutputAutoRelease output = desc.get();
+        if (!output) continue; // absent, never a fabricated empty entry
+
+        OBSDataAutoRelease entry = obs_data_create();
+        obs_data_set_string(entry, "output", desc.name);
+
+        OBSDataArrayAutoRelease slots = obs_data_array_create();
+        for (size_t i = 0; i < static_cast<size_t>(MAX_AUDIO_MIXES); i++) {
+            obs_encoder_t *enc = obs_output_get_audio_encoder(output, i);
+            if (!enc) continue;
+
+            OBSDataAutoRelease slot = obs_data_create();
+            obs_data_set_int(slot, "slot", static_cast<long long>(i));
+            obs_data_set_int(slot, "track",
+                             static_cast<long long>(obs_encoder_get_mixer_index(enc)) + 1);
+            obs_data_set_string(slot, "encoder", obs_encoder_get_name(enc));
+            if (const char *codec = obs_encoder_get_codec(enc))
+                obs_data_set_string(slot, "codec", codec);
+            OBSDataAutoRelease settings = obs_encoder_get_settings(enc);
+            obs_data_set_int(slot, "bitrate", obs_data_get_int(settings, "bitrate"));
+            obs_data_set_bool(slot, "active", obs_encoder_active(enc));
+            obs_data_set_int(slot, "encoded_frames",
+                             static_cast<long long>(obs_encoder_get_encoded_frames(enc)));
+            obs_data_array_push_back(slots, slot);
+        }
+        obs_data_set_array(entry, "slots", slots);
+        obs_data_array_push_back(outputs, entry);
+    }
+    obs_data_set_array(res, "outputs", outputs);
+}
+
+// The measurement is taken on the SAME libobs audio mix the track's encoder is
+// attached to: obs_audio_encoder_create(..., mixer_idx, ...) and
+// obs_add_raw_audio_callback(mixer_idx, ...) both register as inputs of
+// obs->audio.mixes[mixer_idx] (libobs/obs.c:3143 -> media-io/audio-io.c:289).
+// What comes back is therefore the signal the encoder is fed, not a mirror of a
+// configuration and not a read-back of the input's mixer bits. A mix nothing is
+// routed to reports a flat zero; routing an audible input to track N moves N's
+// peak and no other.
+//
+// The callbacks live for the duration of the call only -- a permanently
+// connected raw callback would force libobs to mix all six buses for the
+// lifetime of the process, which is a real cost paid for an introspection
+// nobody asked for.
+struct AudioTrackFlow {
+    std::atomic<uint64_t> frames{0};
+    // max |sample| x 1000. Integer because it is written from the audio thread
+    // and read from the request thread; the float would need its own lock for
+    // no gain at this resolution.
+    std::atomic<uint64_t> peak_milli{0};
+};
+
+static void audio_track_flow_callback(void *param, size_t /*mix_idx*/, struct audio_data *data)
+{
+    auto *flow = static_cast<AudioTrackFlow *>(param);
+    if (!flow || !data) return;
+
+    flow->frames.fetch_add(data->frames, std::memory_order_relaxed);
+
+    float peak = 0.0f;
+    for (size_t plane = 0; plane < MAX_AV_PLANES; plane++) {
+        const float *samples = reinterpret_cast<const float *>(data->data[plane]);
+        if (!samples) continue;
+        for (uint32_t i = 0; i < data->frames; i++) {
+            const float magnitude = samples[i] < 0.0f ? -samples[i] : samples[i];
+            if (magnitude > peak) peak = magnitude;
+        }
+    }
+
+    const uint64_t milli = static_cast<uint64_t>(peak * 1000.0f);
+    uint64_t previous = flow->peak_milli.load(std::memory_order_relaxed);
+    while (milli > previous &&
+           !flow->peak_milli.compare_exchange_weak(previous, milli, std::memory_order_relaxed)) {
+    }
+}
+
+void on_measure_audio_track_flow(obs_data_t *req, obs_data_t *res, void *)
+{
+    long long durationMs = 300;
+    if (obs_data_has_user_value(req, "duration_ms"))
+        durationMs = obs_data_get_int(req, "duration_ms");
+    if (durationMs < 50 || durationMs > 2000) {
+        obs_data_set_string(res, "error", "duration_ms must be in [50, 2000]");
+        return;
+    }
+
+    AudioTrackFlow flows[MAX_AUDIO_MIXES];
+    for (size_t i = 0; i < static_cast<size_t>(MAX_AUDIO_MIXES); i++)
+        obs_add_raw_audio_callback(i, nullptr, audio_track_flow_callback, &flows[i]);
+    std::this_thread::sleep_for(std::chrono::milliseconds(durationMs));
+    for (size_t i = 0; i < static_cast<size_t>(MAX_AUDIO_MIXES); i++)
+        obs_remove_raw_audio_callback(i, audio_track_flow_callback, &flows[i]);
+
+    obs_data_set_int(res, "duration_ms", durationMs);
+
+    long long bound = 0;
+    std::vector<long long> boundTracks;
+    const bool haveStreamOutput = read_bound_audio_tracks(bound, boundTracks);
+
+    OBSDataArrayAutoRelease tracks = obs_data_array_create();
+    for (size_t i = 0; i < static_cast<size_t>(MAX_AUDIO_MIXES); i++) {
+        OBSDataAutoRelease entry = obs_data_create();
+        const long long track = static_cast<long long>(i) + 1;
+        obs_data_set_int(entry, "track", track);
+        obs_data_set_int(entry, "frames",
+                         static_cast<long long>(flows[i].frames.load(std::memory_order_relaxed)));
+        obs_data_set_double(entry, "peak",
+                            static_cast<double>(flows[i].peak_milli.load(std::memory_order_relaxed)) /
+                                1000.0);
+        // Omitted, never guessed, when there is no streaming output to read.
+        if (haveStreamOutput)
+            obs_data_set_bool(entry, "encoder_bound",
+                              std::find(boundTracks.begin(), boundTracks.end(), track) !=
+                                  boundTracks.end());
+        obs_data_array_push_back(tracks, entry);
+    }
+    obs_data_set_array(res, "tracks", tracks);
+}
+
 void on_get_adaptive_state(obs_data_t * /*req*/, obs_data_t *res, void *)
 {
     if (!g_adaptive) {
@@ -1406,7 +1584,14 @@ void on_set_video_settings(obs_data_t *req, obs_data_t *res, void *)
             obs_data_set_string(res, "error", "audio_bitrate must be in [32, 512] kbps");
             return;
         }
-        if (obs_encoder_active(aEnc)) {
+        // Multi-track (#168): this scalar names ONE bitrate, so it is applied to
+        // every audio encoder the streaming output carries. Patching only slot 0
+        // would answer success while leaving tracks 2..N at their boot value --
+        // a partial write reported as a whole one.
+        std::vector<obs_encoder_t *> aEncs;
+        get_current_audio_encoders(aEncs);
+        for (obs_encoder_t *enc : aEncs) {
+            if (!obs_encoder_active(enc)) continue;
             // ffmpeg_aac re-init on bitrate change is not supported mid-stream;
             // reject so we don't introduce hidden encoder restarts.
             obs_data_set_string(res, "error",
@@ -1416,8 +1601,10 @@ void on_set_video_settings(obs_data_t *req, obs_data_t *res, void *)
         }
         OBSDataAutoRelease patch = obs_data_create();
         obs_data_set_int(patch, "bitrate", newKbps);
-        obs_encoder_update(aEnc, patch);
+        for (obs_encoder_t *enc : aEncs)
+            obs_encoder_update(enc, patch);
         obs_data_set_int(res, "audio_bitrate", newKbps);
+        obs_data_set_int(res, "audio_tracks_updated", static_cast<long long>(aEncs.size()));
         changed = true;
     }
 
@@ -1740,7 +1927,20 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
         obs_data_set_string(entry, "applicability", kRegimeReadOnly);
         obs_data_set_int(entry, "count", static_cast<long long>(MAX_AUDIO_MIXES));
         long long bound = 0;
-        if (read_bound_audio_tracks(bound)) obs_data_set_int(entry, "bound", bound);
+        std::vector<long long> boundTracks;
+        if (read_bound_audio_tracks(bound, boundTracks)) {
+            obs_data_set_int(entry, "bound", bound);
+            // WHICH tracks, not just how many: with per-output routing (#168) a
+            // consumer cannot infer {1, 3} from "bound: 2", and the slot order
+            // does not tell it either.
+            OBSDataArrayAutoRelease arr = obs_data_array_create();
+            for (long long track : boundTracks) {
+                OBSDataAutoRelease item = obs_data_create();
+                obs_data_set_int(item, "value", track);
+                obs_data_array_push_back(arr, item);
+            }
+            obs_data_set_array(entry, "tracks", arr);
+        }
         obs_data_set_obj(caps, "audio_tracks", entry);
     }
 
@@ -1901,6 +2101,8 @@ void obs_module_post_load(void)
     obs_websocket_vendor_register_request(g_vendor, "GetVideoSettings",     on_get_video_settings,  nullptr);
     obs_websocket_vendor_register_request(g_vendor, "SetVideoSettings",     on_set_video_settings,  nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetCapabilities",      on_get_capabilities,    nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "GetAudioTracks",       on_get_audio_tracks,    nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "MeasureAudioTrackFlow", on_measure_audio_track_flow, nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetAdaptiveState",     on_get_adaptive_state,  nullptr);
     obs_websocket_vendor_register_request(g_vendor, "SetAdaptiveEnabled",   on_set_adaptive_enabled, nullptr);
 
