@@ -57,6 +57,25 @@ static bool RecordOutputHasNoBytesYet()
 	return !output || obs_output_get_total_bytes(output) == 0;
 }
 
+// Issue #169 / ADR Prism 026 §3.2. obs_frontend_recording_split_file() and
+// obs_frontend_recording_add_chapter() return a bare bool, but since #169 the
+// frontend records WHY it refused on the output itself (obs_output_set_last_error).
+// Read it back instead of shipping upstream's generic "verify that ..." advice,
+// which names no cause and cannot distinguish "nothing is recording" from "this
+// container has no chapters".
+static RequestResult RecordProcFailure(const char *action)
+{
+	OBSOutputAutoRelease output = obs_frontend_get_recording_output();
+	std::string cause = Utils::Obs::OutputHelper::GetLastError(output);
+	// DescribeOutputRefusal's structural fallbacks (no service, no encoder) are
+	// start-time causes and would misdescribe a refusal taken mid-recording, so
+	// this path keeps its own neutral one.
+	if (cause.empty())
+		cause = "the recording output refused it and recorded no cause.";
+	return RequestResult::Error(RequestStatus::RequestProcessingFailed,
+				    std::string(action) + " was refused: " + cause);
+}
+
 /**
  * Gets the status of the record output.
  *
@@ -285,8 +304,7 @@ RequestResult RequestHandler::SplitRecordFile(const Request &)
 		return RequestResult::Error(RequestStatus::OutputNotRunning);
 
 	if (!obs_frontend_recording_split_file())
-		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
-					    "Verify that file splitting is enabled in the output settings.");
+		return RecordProcFailure("The file split");
 
 	return RequestResult::Success();
 }
@@ -320,8 +338,7 @@ RequestResult RequestHandler::CreateRecordChapter(const Request &request)
 		return RequestResult::Error(RequestStatus::OutputNotRunning);
 
 	if (!obs_frontend_recording_add_chapter(chapterName.empty() ? nullptr : chapterName.c_str()))
-		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
-					    "Verify that the output being used supports chapter markers.");
+		return RecordProcFailure("The chapter marker");
 
 	return RequestResult::Success();
 }

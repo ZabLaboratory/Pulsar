@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Added
+
+- **`SplitRecordFile` really splits the recording (#169, ADR Prism 028 §3.5).**
+  `obs_frontend_recording_split_file` and `obs_frontend_recording_add_chapter`
+  were stubbed to an unconditional `false` in the fork: both requests were
+  advertised and could only fail. They now delegate to the recording output's
+  proc handler, as upstream does. The record output is started with
+  `split_file` on (plus the `directory`/`format`/`extension` keys the muxer
+  needs to name the next file); both automatic thresholds stay at `0`, so
+  nothing splits by itself — the only trigger is an explicit `SplitRecordFile`,
+  and the switch is announced by `RecordFileChanged`.
+
+### 🔧 Changed
+
+- **`SplitRecordFile` / `CreateRecordChapter` refusals name their cause
+  (ADR Prism 026 §3.2).** The frontend publishes the reason on the record
+  output (`obs_output_set_last_error`) and the request reads it back verbatim,
+  replacing upstream's generic "verify that …" advice.
+  **`CreateRecordChapter` still always fails on this build** — and now says
+  why: chapter markers exist only on OBS's hybrid-MP4 output, while Pulsar
+  records through `ffmpeg_muxer`, which does not expose `add_chapter`.
+
 ## [1.5.0] - 2026-07-28
 
 Minor: everything here is **additive on the wire** — a fourth destination kind,
