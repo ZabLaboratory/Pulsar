@@ -1436,8 +1436,14 @@ static void audio_track_flow_callback(void *param, size_t /*mix_idx*/, struct au
 
     flow->frames.fetch_add(data->frames, std::memory_order_relaxed);
 
+    // ONLY the first audio_output_get_planes() entries of data->data are
+    // written: libobs builds `struct audio_data` on the stack, uninitialised,
+    // and fills data[0..planes-1] (media-io/audio-io.c:107-124). The remaining
+    // MAX_AV_PLANES entries are stack garbage, not null -- walking all eight
+    // dereferences them and takes the process down.
+    const size_t planes = audio_output_get_planes(obs_get_audio());
     float peak = 0.0f;
-    for (size_t plane = 0; plane < MAX_AV_PLANES; plane++) {
+    for (size_t plane = 0; plane < planes && plane < MAX_AV_PLANES; plane++) {
         const float *samples = reinterpret_cast<const float *>(data->data[plane]);
         if (!samples) continue;
         for (uint32_t i = 0; i < data->frames; i++) {

@@ -491,7 +491,10 @@ async def assert_flow(s: Session, tone_path: pathlib.Path) -> None:
                 f"'success' on SetInputAudioTracks would again mean nothing")
         print("   OK  the signal FOLLOWS the routing, track by track")
     finally:
-        await s.request("RemoveInput", {"inputName": INPUT_NAME})
+        try:
+            await s.request("RemoveInput", {"inputName": INPUT_NAME})
+        except Exception:
+            pass  # never let cleanup replace the diagnosis
 
 
 # --------------------------------------------------------------------------
@@ -537,9 +540,14 @@ async def run(exe: pathlib.Path, workdir: pathlib.Path) -> None:
             await assert_wiring(session)
             await assert_flow(session, tone)
         finally:
-            await session.ws.close()
-    except Failure as exc:
-        raise Failure(f"{exc}\n{proc.diag()}") from None
+            try:
+                await session.ws.close()
+            except Exception:
+                pass
+    # Any exception, not just Failure: a dropped socket means the server died
+    # under the probe, and the ONLY place that says so is its own log.
+    except Exception as exc:
+        raise Failure(f"{type(exc).__name__}: {exc}\n{proc.diag()}") from None
     finally:
         proc.shutdown()
 
@@ -552,9 +560,12 @@ async def run(exe: pathlib.Path, workdir: pathlib.Path) -> None:
         try:
             await assert_single_track(session)
         finally:
-            await session.ws.close()
-    except Failure as exc:
-        raise Failure(f"{exc}\n{proc.diag()}") from None
+            try:
+                await session.ws.close()
+            except Exception:
+                pass
+    except Exception as exc:
+        raise Failure(f"{type(exc).__name__}: {exc}\n{proc.diag()}") from None
     finally:
         proc.shutdown()
 
