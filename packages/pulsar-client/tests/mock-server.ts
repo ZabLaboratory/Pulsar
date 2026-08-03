@@ -93,6 +93,17 @@ export class MockObsWebSocket {
     last_drop_ratio: 0,
   };
 
+  /** Playback devices the mock machine enumerates (#173). "default" first,
+   *  the way libobs-plus-Pulsar answers: the OS-default follower is a real
+   *  choice, not a placeholder. */
+  readonly monitoringDevices: Array<{ id: string; name: string }> = [
+    { id: "default", name: "Default" },
+    { id: "{0.0.0.0}.{abcd}", name: "Headphones (Realtek)" },
+    { id: "{0.0.0.0}.{ef01}", name: "Studio Monitors (Focusrite)" },
+  ];
+  monitoringDeviceId = "default";
+  monitoringDeviceName = "Default";
+
   /** Hooks tests can swap in to override responses. */
   vendorOverride?: (requestType: string, requestData: Json) => Json | undefined;
 
@@ -426,14 +437,18 @@ export class MockObsWebSocket {
                     },
               ),
             },
-            // ADR 027 §3.3 bloc 2 (#143). Mirrors what a real headless Pulsar
-            // answers: monitoring available on the platform, but NO device
-            // bound -- nothing in Pulsar ever calls
-            // obs_set_audio_monitoring_device -- hence read-only, not live.
+            // ADR 027 §3.3 bloc 2 (#143), updated by #173. Mirrors what a real
+            // headless Pulsar answers today: pulsar-headless binds
+            // "Default"/"default" at boot, and the vendor pair
+            // GetMonitoringDeviceList / SetMonitoringDevice lets an operator
+            // choose another one hot -- hence `live` and `device_selectable`.
             audio_monitoring: {
-              applicability: "read-only",
+              applicability: "live",
               available: true,
-              device_bound: false,
+              device_bound: true,
+              device_id: this.monitoringDeviceId,
+              device_name: this.monitoringDeviceName,
+              device_selectable: true,
             },
             audio_tracks: { applicability: "read-only", count: 6, bound: 1 },
             audio_sample_rate: { applicability: "read-only", hz: 48000 },
@@ -497,6 +512,30 @@ export class MockObsWebSocket {
         this.adaptive.enabled = data["enabled"];
         if (data["enabled"]) this.adaptive.stable_ticks = 0;
         return { enabled: this.adaptive.enabled };
+      }
+
+      case "GetMonitoringDeviceList":
+        return {
+          available: true,
+          devices: this.monitoringDevices.map((d) => ({ ...d })),
+          active_device_id: this.monitoringDeviceId,
+          active_device_name: this.monitoringDeviceName,
+        };
+
+      case "SetMonitoringDevice": {
+        const id = data["device_id"] as string | undefined;
+        if (!id) return { error: "device_id required" };
+        // Same refusal the server performs: an id the machine does not
+        // enumerate is named, never stored into silence.
+        const dev = this.monitoringDevices.find((d) => d.id === id);
+        if (!dev) {
+          return {
+            error: `no such monitoring device: '${id}' is not among the playback devices this machine enumerates`,
+          };
+        }
+        this.monitoringDeviceId = dev.id;
+        this.monitoringDeviceName = dev.name;
+        return { changed: true, device_id: dev.id, device_name: dev.name };
       }
 
       default:

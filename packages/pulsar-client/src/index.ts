@@ -25,6 +25,10 @@ export type {
   // from PulsarCapabilities, so a consumer must be able to name them.
   GraphicsAdapter,
   InputMuteStateChangedEvent,
+  // Exported alongside the monitoring selector (#173): both are returned by
+  // audio.listMonitoringDevices / setMonitoringDevice.
+  MonitoringDevice,
+  MonitoringDeviceList,
   OutputScale,
   OutputState,
   PulsarCapabilities,

@@ -16,6 +16,8 @@ import type {
   DestinationKind,
   EncoderFamilyCapability,
   GraphicsAdapter,
+  MonitoringDevice,
+  MonitoringDeviceList,
   OutputScale,
   PulsarCapabilities,
   VideoSettings,
@@ -177,6 +179,25 @@ export interface WireSetAdaptiveEnabledResponse {
   error?: string;
 }
 
+export interface WireGetMonitoringDeviceListResponse {
+  available?: boolean;
+  devices?: Array<{ id?: unknown; name?: unknown }>;
+  active_device_id?: string;
+  active_device_name?: string;
+  error?: string;
+}
+
+export interface WireSetMonitoringDeviceRequest {
+  device_id: string;
+}
+
+export interface WireSetMonitoringDeviceResponse {
+  changed?: boolean;
+  device_id?: string;
+  device_name?: string;
+  error?: string;
+}
+
 export interface WireBitrateAdjustedEvent {
   bitrate: number;
   target: number;
@@ -291,6 +312,10 @@ function audioFromWire(w: WireGetCapabilitiesResponse): AudioCapabilities {
     const name = entryString(w, "audio_monitoring", "device_name");
     if (id) monitoring.deviceId = id;
     if (name) monitoring.deviceName = name;
+    // Same rule as the entry itself: a server that said nothing about
+    // selectability is left undefined, not turned into a `false` it never sent.
+    if (typeof mon.device_selectable === "boolean")
+      monitoring.deviceSelectable = mon.device_selectable;
     audio.monitoring = monitoring;
   }
 
@@ -489,6 +514,26 @@ export function adaptiveStateFromWire(w: WireGetAdaptiveStateResponse): Adaptive
     lastDeltaDropped: w.last_delta_dropped ?? 0,
     lastDropRatio: w.last_drop_ratio ?? 0,
   };
+}
+
+/**
+ * Decodes `GetMonitoringDeviceList` (#173). An item without a usable id is
+ * dropped rather than half-decoded: an id the client had to invent is one
+ * `SetMonitoringDevice` would refuse, so offering it in a selector would show
+ * a device that cannot be chosen.
+ */
+export function monitoringDeviceListFromWire(
+  w: WireGetMonitoringDeviceListResponse,
+): MonitoringDeviceList {
+  const devices: MonitoringDevice[] = [];
+  for (const item of Array.isArray(w.devices) ? w.devices : []) {
+    if (!item || typeof item.id !== "string" || item.id === "") continue;
+    devices.push({ id: item.id, name: typeof item.name === "string" ? item.name : "" });
+  }
+  const list: MonitoringDeviceList = { available: w.available === true, devices };
+  if (w.active_device_id) list.activeDeviceId = w.active_device_id;
+  if (w.active_device_name) list.activeDeviceName = w.active_device_name;
+  return list;
 }
 
 export function bitrateAdjustedFromWire(w: WireBitrateAdjustedEvent): BitrateAdjustedEvent {

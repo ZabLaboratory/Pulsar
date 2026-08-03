@@ -186,7 +186,13 @@ describe("PulsarClient", () => {
           },
         ],
         audio: {
-          monitoring: { available: true, deviceBound: false },
+          monitoring: {
+            available: true,
+            deviceBound: true,
+            deviceId: "default",
+            deviceName: "Default",
+            deviceSelectable: true,
+          },
           trackCount: 6,
           boundTrackCount: 1,
           sampleRateHz: 48000,
@@ -210,7 +216,7 @@ describe("PulsarClient", () => {
           destinationKinds: "live",
           colorimetry: "read-only",
           encoderFamilies: "boot-fixed",
-          audioMonitoring: "read-only",
+          audioMonitoring: "live",
           audioTracks: "read-only",
           audioSampleRate: "read-only",
           audioSpeakerLayout: "read-only",
@@ -250,20 +256,42 @@ describe("PulsarClient", () => {
 
     // ---- ADR 027 §3.3 bloc 2 / issue #143: audio block --------------------
 
-    it("declares monitoring availability and an unbound device as an explicit no", async () => {
-      // Criteria 1 & 2: the "no" must be readable, not inferred from a silence.
+    it("declares monitoring availability and the bound device explicitly", async () => {
+      // Criteria 1 & 2: the state must be readable, not inferred from a silence.
       const caps = await client.capabilities.get();
-      expect(caps.audio.monitoring).toEqual({ available: true, deviceBound: false });
-      expect(caps.audio.monitoring?.deviceId).toBeUndefined();
-      expect(caps.audio.monitoring?.deviceName).toBeUndefined();
+      expect(caps.audio.monitoring?.available).toBe(true);
+      expect(caps.audio.monitoring?.deviceBound).toBe(true);
+      expect(caps.audio.monitoring?.deviceId).toBe("default");
     });
 
-    it("does not declare monitoring live while Pulsar has no write path", async () => {
-      // Criterion 4: `live` requires the write AND the read-back to be really
-      // supported hot. Nothing in Pulsar calls obs_set_audio_monitoring_device.
+    it("declares monitoring live and selectable now that both requests exist (#173)", async () => {
+      // `live` requires the write AND the read-back to be supported hot:
+      // SetMonitoringDevice performs both. `deviceSelectable` is what gates a
+      // Prism selector -- without it, the cockpit must not offer one.
       const caps = await client.capabilities.get();
-      expect(caps.regimes.audioMonitoring).toBe("read-only");
-      expect(caps.regimes.audioMonitoring).not.toBe("live");
+      expect(caps.regimes.audioMonitoring).toBe("live");
+      expect(caps.audio.monitoring?.deviceSelectable).toBe(true);
+    });
+
+    it("leaves selectability undefined on a pre-#173 Pulsar rather than false", async () => {
+      // An absence is not a "no": a server that never heard of the selector
+      // must not be decoded as one that refuses it.
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: {
+                audio_monitoring: {
+                  applicability: "live",
+                  available: true,
+                  device_bound: true,
+                  device_id: "default",
+                },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.audio.monitoring?.deviceSelectable).toBeUndefined();
     });
 
     it("surfaces the bound monitoring device when there is one", async () => {
@@ -771,6 +799,49 @@ describe("PulsarClient", () => {
     it("setDevice applies device_id on top of existing settings", async () => {
       await client.audio.setDevice("Mic/Aux", "usb-mic-1");
       expect(server.inputs.get("Mic/Aux")?.settings["device_id"]).toBe("usb-mic-1");
+    });
+
+    // ---- Monitoring device selection (#173) ------------------------------
+
+    it("listMonitoringDevices names the devices and the one in force", async () => {
+      const list = await client.audio.listMonitoringDevices();
+      expect(list.available).toBe(true);
+      expect(list.devices).toEqual([
+        { id: "default", name: "Default" },
+        { id: "{0.0.0.0}.{abcd}", name: "Headphones (Realtek)" },
+        { id: "{0.0.0.0}.{ef01}", name: "Studio Monitors (Focusrite)" },
+      ]);
+      expect(list.activeDeviceId).toBe("default");
+    });
+
+    it("setMonitoringDevice returns the device read back after the write", async () => {
+      const dev = await client.audio.setMonitoringDevice("{0.0.0.0}.{abcd}");
+      expect(dev).toEqual({ id: "{0.0.0.0}.{abcd}", name: "Headphones (Realtek)" });
+
+      const list = await client.audio.listMonitoringDevices();
+      expect(list.activeDeviceId).toBe("{0.0.0.0}.{abcd}");
+    });
+
+    it("setMonitoringDevice throws on an id the machine does not enumerate", async () => {
+      await expect(client.audio.setMonitoringDevice("{not-a-device}")).rejects.toBeInstanceOf(
+        PulsarVendorError,
+      );
+      // The refusal left the previous device in force -- no silent unbinding.
+      const list = await client.audio.listMonitoringDevices();
+      expect(list.activeDeviceId).toBe("default");
+    });
+
+    it("drops a device item with no usable id instead of half-decoding it", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetMonitoringDeviceList"
+          ? {
+              available: true,
+              devices: [{ id: "default", name: "Default" }, { name: "nameless" }],
+              active_device_id: "default",
+            }
+          : undefined;
+      const list = await client.audio.listMonitoringDevices();
+      expect(list.devices).toEqual([{ id: "default", name: "Default" }]);
     });
 
     it("InputMuteStateChanged event maps to typed inputMuteStateChanged", async () => {
