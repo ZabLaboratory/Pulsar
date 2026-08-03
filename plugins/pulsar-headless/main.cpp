@@ -186,6 +186,25 @@ bool reset_audio()
         std::fprintf(stderr, "pulsar-headless: obs_reset_audio failed\n");
         return false;
     }
+
+    // Bind the system's DEFAULT playback device as the audio monitoring
+    // output. Without this call libobs accepts SetInputAudioMonitorType
+    // (obs-websocket's confirmed write succeeds, the source-level flag is
+    // genuinely set) but never routes any audio anywhere -- no monitoring
+    // device is bound, so "monitor" / "monitor_and_output" reach nobody's
+    // headphones. Same call OBS Studio's own GUI makes from Settings ->
+    // Audio -> Advanced (frontend/settings/OBSBasicSettings.cpp) with the
+    // "default" sentinel id; this headless service has no such settings
+    // dialog, so it must bind it once at boot instead. Guarded by
+    // obs_audio_monitoring_available() -- false on a platform build with no
+    // audio-monitoring backend compiled in (never true here on Windows).
+    if (obs_audio_monitoring_available()) {
+        obs_set_audio_monitoring_device("Default", "default");
+        std::fprintf(stdout, "pulsar-headless: audio monitoring device bound (default)\n");
+    } else {
+        std::fprintf(stderr, "pulsar-headless: audio monitoring unavailable on this platform build\n");
+    }
+
     return true;
 }
 

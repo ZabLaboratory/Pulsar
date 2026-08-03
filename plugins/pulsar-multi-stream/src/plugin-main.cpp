@@ -984,21 +984,23 @@ static constexpr long long kPolicyKeyintSecMax = 20;
 
 // ---- Audio block (Prism ADR 027 §3.3 bloc 2, issue #143) -------------------
 //
-// Prism offers three headphone-monitoring keys as `applyClass: live`, "verified
-// by read-back" of a state nobody established comes back. It does not: NOTHING
-// in this tree ever calls obs_set_audio_monitoring_device(), so no monitoring
-// device is ever bound by Pulsar and no write path exists over the wire. The
-// regime is therefore read-only, not live (ADR 027 §3.2: `live` requires the
-// write AND the read-back to be genuinely supported hot).
+// Prism used to offer three headphone-monitoring keys as `applyClass: live`,
+// "verified by read-back" of a state nobody established comes back -- because
+// nothing in this tree ever called obs_set_audio_monitoring_device(), so no
+// monitoring device was ever bound and no write path existed over the wire
+// (regime was read-only, not live: ADR 027 §3.2 `live` requires the write AND
+// the read-back to be genuinely supported hot).
 //
-// One trap deserves the explicit sentinel test below: libobs SEEDS
-// monitoring_device_name/_id with "Default"/"default" inside obs_init_audio()
-// (upstream/libobs/obs.c:916-917), before anyone chooses anything. Reporting
-// that seed as a bound device would republish exactly the fiction this block
-// exists to kill -- so a device counts as bound only when the id is present and
-// is not that seed. `device_bound` is always emitted, true or false: an absent
-// device is a positive, readable "no", never a silence (criterion 2).
-static constexpr const char *kMonitoringDeviceSeedId = "default";
+// pulsar-headless now calls obs_set_audio_monitoring_device("Default",
+// "default") once, unconditionally, at boot (reset_audio(),
+// pulsar-headless/main.cpp) -- BEFORE obs-websocket registers a single
+// request handler, so any process able to answer GetCapabilities has the
+// device genuinely bound already. libobs also SEEDS monitoring_device_name/
+// _id with that same "Default"/"default" pair inside obs_init_audio()
+// (upstream/libobs/obs.c:916-917) before anyone chooses anything, which used
+// to make the seed and a real explicit bind indistinguishable by id alone --
+// moot now that the explicit call always runs first, so `device_bound` below
+// no longer excludes the "default" id as a false positive.
 
 // Canonical name of a libobs speaker layout. Returns nullptr for
 // SPEAKERS_UNKNOWN -- the layout is then declared absent rather than published
@@ -1979,13 +1981,26 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
     // rather than one nested "audio" object precisely because their regimes
     // differ, and a regime belongs to an entry, not to a family.
 
-    // Monitoring: read-only. See the kMonitoringDeviceSeedId comment above --
-    // Pulsar has no monitoring write path at all, so `live` would be a lie.
-    // `available` and `device_bound` are ALWAYS emitted; the identity keys only
-    // when a device is genuinely bound.
+    // Monitoring: LIVE. pulsar-headless now calls obs_set_audio_monitoring_device
+    // ("Default"/"default") once at boot, unconditionally, in reset_audio() --
+    // BEFORE obs-websocket registers a single request handler (main.cpp's boot
+    // order: reset_video -> reset_audio -> install frontend callbacks -> load
+    // modules). Any process able to answer GetCapabilities has therefore
+    // ALREADY had the device genuinely bound -- there is no longer a live
+    // window where libobs's own untouched "Default"/"default" seed (see the
+    // module doc above) is observable, so the seed-string exclusion this
+    // block used to apply
+    // (device counted as bound only when its id was NOT the literal "default"
+    // seed) would now misreport a real, explicit bind as absent forever --
+    // "default" is libobs's own dynamic-follow-the-OS-default id, the CORRECT
+    // choice for a headless service with no settings dialog of its own to
+    // pin one device, not a placeholder. `available` and `device_bound` are
+    // ALWAYS emitted; the identity keys only when a device is genuinely
+    // bound (still possible to be false: obs_audio_monitoring_available()
+    // itself can be false on a platform build with no monitoring backend).
     {
         OBSDataAutoRelease entry = obs_data_create();
-        obs_data_set_string(entry, "applicability", kRegimeReadOnly);
+        obs_data_set_string(entry, "applicability", kRegimeLive);
 
         const bool available = obs_audio_monitoring_available();
         obs_data_set_bool(entry, "available", available);
@@ -1994,8 +2009,7 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
         const char *devId = nullptr;
         if (available) obs_get_audio_monitoring_device(&devName, &devId);
 
-        const bool bound = available && devId && *devId &&
-                           std::strcmp(devId, kMonitoringDeviceSeedId) != 0;
+        const bool bound = available && devId && *devId;
         obs_data_set_bool(entry, "device_bound", bound);
         if (bound) {
             obs_data_set_string(entry, "device_id", devId);
