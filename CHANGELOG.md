@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-08-03
+
+Headphone monitoring works for the first time. `SetInputAudioMonitorType`
+existed since day one and always answered `Success()` with a genuine
+source-level flag change — but nothing in this tree ever called
+`obs_set_audio_monitoring_device()`, so no monitoring OUTPUT device was ever
+bound and the audio reached no headphones. The capability manifest has
+documented this as `audio_monitoring: read-only` since #143/PR #146;
+consumers built their UI against that regime.
+
+- **`pulsar-headless` now binds the default monitoring device at boot**
+  (`obs_set_audio_monitoring_device("Default", "default")`, right after
+  `obs_reset_audio()` succeeds, before obs-websocket registers a single
+  request handler). `"default"` is libobs's own dynamic-follow-the-OS-default
+  id — the same value OBS Studio's GUI writes from Settings → Audio →
+  Advanced; a headless service with no such dialog binds it once instead.
+- **Consumers holding a captured manifest fixture must re-capture** (`npm run
+  manifest:capture` on Prism, ADR 027 RC 9): `capabilities.audio_monitoring`
+  flips from `{applicability: "read-only", device_bound: false}` to
+  `{applicability: "live", device_bound: true, device_id: "default",
+  device_name: "Default"}`. Any UI that hid or disabled a monitoring control
+  on the strength of the read-only regime should re-enable it — the knob now
+  reaches a pair of headphones.
+- Verified at runtime against the built binary (not a code-review-only
+  change): `GetCapabilities` was queried over a live obs-websocket session
+  and confirmed the block above.
+
 ## [1.6.0] - 2026-07-29
 
 Minor: three merges since 1.5.0 — `split_file` delegated to the record output
