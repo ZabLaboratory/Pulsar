@@ -702,6 +702,12 @@ $probes = @(
     # mixer bit is written whatever the output carries. Creates and removes
     # its own scene + input.
     'probe-audio-tracks-oracle.py',
+    # #173 / ADR Prism 029 §3.6 -- the monitoring DEVICE must be choosable, not
+    # just bound: GetMonitoringDeviceList / SetMonitoringDevice registered, the
+    # manifest agreeing with them, an unknown id refused BY NAME (libobs stores
+    # any pair and returns true), and the write reported only after read-back.
+    # Restores the device it found in force before returning.
+    'probe-monitoring-devices.py',
     # probe-multi-stream.py is INTENTIONALLY excluded.
     # The destination lifecycle has known race-condition crash paths
     # in obs upstream (rtmp_output worker thread vs ECONNREFUSED-fast

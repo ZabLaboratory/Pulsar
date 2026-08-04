@@ -63,6 +63,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 OBS_DECLARE_MODULE()
@@ -1512,6 +1513,120 @@ void on_measure_audio_track_flow(obs_data_t *req, obs_data_t *res, void *)
     obs_data_set_array(res, "tracks", tracks);
 }
 
+// ---- Monitoring device selection (#173) ------------------------------------
+//
+// pulsar-headless binds "Default"/"default" at boot, which makes monitoring
+// *work*; it does not let an operator choose WHICH output sounds. These two
+// requests are that choice, and nothing more.
+//
+// The list is an instance list, read from libobs at call time
+// (obs_enum_audio_monitoring_devices -> WASAPI eRender, DEVICE_STATE_ACTIVE):
+// plugging a headset in changes the answer without restarting Pulsar. libobs
+// does NOT enumerate a pseudo-entry for the OS default -- OBS's own UI prepends
+// it -- so we prepend it here, with libobs's own dynamic id "default", because
+// it is the device the boot bind picked and a list that omitted it could not
+// name the device already in force.
+
+using MonitoringDevice = std::pair<std::string, std::string>; // {id, name}
+
+static bool collect_monitoring_device(void *data, const char *name, const char *id)
+{
+    if (id && *id)
+        static_cast<std::vector<MonitoringDevice> *>(data)->emplace_back(id, name ? name : "");
+    return true;
+}
+
+static std::vector<MonitoringDevice> enumerate_monitoring_devices()
+{
+    std::vector<MonitoringDevice> devices;
+    devices.emplace_back("default", "Default");
+    obs_enum_audio_monitoring_devices(collect_monitoring_device, &devices);
+    return devices;
+}
+
+void on_get_monitoring_device_list(obs_data_t * /*req*/, obs_data_t *res, void *)
+{
+    const bool available = obs_audio_monitoring_available();
+    obs_data_set_bool(res, "available", available);
+
+    OBSDataArrayAutoRelease arr = obs_data_array_create();
+    if (available) {
+        for (const auto &dev : enumerate_monitoring_devices()) {
+            OBSDataAutoRelease item = obs_data_create();
+            obs_data_set_string(item, "id", dev.first.c_str());
+            obs_data_set_string(item, "name", dev.second.c_str());
+            obs_data_array_push_back(arr, item);
+        }
+    }
+    obs_data_set_array(res, "devices", arr);
+
+    const char *activeName = nullptr;
+    const char *activeId = nullptr;
+    if (available) obs_get_audio_monitoring_device(&activeName, &activeId);
+    if (activeId && *activeId) {
+        obs_data_set_string(res, "active_device_id", activeId);
+        obs_data_set_string(res, "active_device_name", activeName ? activeName : "");
+    }
+}
+
+void on_set_monitoring_device(obs_data_t *req, obs_data_t *res, void *)
+{
+    if (!obs_audio_monitoring_available()) {
+        obs_data_set_string(res, "error",
+                            "audio monitoring is not available on this build");
+        return;
+    }
+
+    const char *wanted = obs_data_get_string(req, "device_id");
+    if (!wanted || !*wanted) {
+        obs_data_set_string(res, "error", "device_id required");
+        return;
+    }
+
+    // obs_set_audio_monitoring_device() stores ANY non-empty {name,id} pair and
+    // returns true (upstream/libobs/obs.c:2981) -- an unknown id only surfaces
+    // later, as silence, when a monitor is created. So the id is checked against
+    // the enumeration BEFORE the write: a device the machine does not have is
+    // refused by name here, never accepted into a mute failure.
+    const auto devices = enumerate_monitoring_devices();
+    const auto it = std::find_if(devices.begin(), devices.end(),
+                                 [&](const MonitoringDevice &d) { return d.first == wanted; });
+    if (it == devices.end()) {
+        obs_data_set_string(res, "error",
+                            (std::string("no such monitoring device: '") + wanted +
+                             "' is not among the playback devices this machine enumerates")
+                                .c_str());
+        return;
+    }
+
+    if (!obs_set_audio_monitoring_device(it->second.c_str(), it->first.c_str())) {
+        obs_data_set_string(res, "error",
+                            (std::string("libobs refused monitoring device '") + wanted + "'")
+                                .c_str());
+        return;
+    }
+
+    // Read-back (ADR Prism 026 §3.2): the write is only reported once libobs
+    // reports the new device as the one in force. It proves the bind took, not
+    // that sound comes out of it -- that is the manual criterion of #173.
+    const char *nowName = nullptr;
+    const char *nowId = nullptr;
+    obs_get_audio_monitoring_device(&nowName, &nowId);
+    if (!nowId || it->first != nowId) {
+        obs_data_set_string(res, "error",
+                            (std::string("monitoring device read-back mismatch: asked '") +
+                             wanted + "', libobs reports '" + (nowId ? nowId : "") + "'")
+                                .c_str());
+        return;
+    }
+
+    obs_data_set_bool(res, "changed", true);
+    obs_data_set_string(res, "device_id", nowId);
+    obs_data_set_string(res, "device_name", nowName ? nowName : "");
+    blog(LOG_INFO, "[pulsar-multi-stream] monitoring device set to '%s' (%s)",
+         nowName ? nowName : "", nowId);
+}
+
 void on_get_adaptive_state(obs_data_t * /*req*/, obs_data_t *res, void *)
 {
     if (!g_adaptive) {
@@ -2015,6 +2130,13 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
             obs_data_set_string(entry, "device_id", devId);
             obs_data_set_string(entry, "device_name", devName ? devName : "");
         }
+        // #173: WHICH device sounds is now choosable hot, through the vendor
+        // pair GetMonitoringDeviceList / SetMonitoringDevice. The flag tracks
+        // obs_audio_monitoring_available() rather than being a literal `true`,
+        // because on a build with no monitoring backend both requests refuse --
+        // and a consumer that offered a selector on that build would offer a
+        // control the binary cannot honour (ADR 027 §3.1).
+        obs_data_set_bool(entry, "device_selectable", available);
         obs_data_set_obj(caps, "audio_monitoring", entry);
     }
 
@@ -2204,8 +2326,10 @@ void obs_module_post_load(void)
     obs_websocket_vendor_register_request(g_vendor, "MeasureAudioTrackFlow", on_measure_audio_track_flow, nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetAdaptiveState",     on_get_adaptive_state,  nullptr);
     obs_websocket_vendor_register_request(g_vendor, "SetAdaptiveEnabled",   on_set_adaptive_enabled, nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "GetMonitoringDeviceList", on_get_monitoring_device_list, nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "SetMonitoringDevice",  on_set_monitoring_device, nullptr);
 
-    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 12 requests");
+    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 16 requests");
 
     // Phase 12b: spin up the adaptive bitrate worker AFTER vendor registration
     // so its emit_event path has a valid handle.

@@ -110,6 +110,30 @@ export interface AudioMonitoringCapability {
   deviceId?: string;
   /** Human-readable device name — present only when `deviceBound`. */
   deviceName?: string;
+  /**
+   * Whether the monitoring device can be CHOSEN over the wire (#173). Absent
+   * on a pre-#173 Pulsar, which is not a `false`: a consumer must offer the
+   * selector only on an explicit `true`.
+   */
+  deviceSelectable?: boolean;
+}
+
+/** One playback device Pulsar can route monitoring to (#173). */
+export interface MonitoringDevice {
+  /** libobs device id. `"default"` follows the OS default device. */
+  id: string;
+  name: string;
+}
+
+/** Answer of `GetMonitoringDeviceList` (#173). */
+export interface MonitoringDeviceList {
+  /** Whether this build supports audio monitoring at all. */
+  available: boolean;
+  /** Playback devices enumerated at call time; empty when unavailable. */
+  devices: MonitoringDevice[];
+  /** Device currently in force — absent when none is bound. */
+  activeDeviceId?: string;
+  activeDeviceName?: string;
 }
 
 /**

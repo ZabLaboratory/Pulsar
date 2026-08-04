@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The monitoring device is now choosable, not just bound** (#173). v1.7.0
+  made monitoring *work* by binding `"Default"`/`"default"` at boot; it left
+  the operator on whatever Windows calls default, which in a régie is rarely
+  the right pair of headphones. Two vendor requests answer that:
+  `pulsar:GetMonitoringDeviceList` (playback devices enumerated from the
+  machine at call time, `default` at the head) and
+  `pulsar:SetMonitoringDevice` (`device_id`). A device id the machine does not
+  enumerate is refused **by name** — `obs_set_audio_monitoring_device()` stores
+  any non-empty pair and returns `true`, so an unchecked id would be a bind
+  into silence — and a successful write is reported only after
+  `obs_get_audio_monitoring_device()` reports it in force.
+- **`capabilities.audio_monitoring.device_selectable`**: consumers holding a
+  captured manifest fixture must re-capture. The field is `true` only where the
+  requests can honour a selection; an **absent** field (a pre-#173 Pulsar) is a
+  silence, not a `false`, and a consumer must not offer a selector on it.
+- `@clodocapeo/pulsar-client`: `audio.listMonitoringDevices()` /
+  `audio.setMonitoringDevice(id)`, plus `MonitoringDevice` /
+  `MonitoringDeviceList` types and `AudioMonitoringCapability.deviceSelectable`.
+
 ## [1.7.0] - 2026-08-03
 
 Headphone monitoring works for the first time. `SetInputAudioMonitorType`

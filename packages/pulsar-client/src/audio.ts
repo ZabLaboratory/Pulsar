@@ -1,5 +1,17 @@
 import type { PulsarClient } from "./client.js";
-import type { AudioDevice, AudioInput, SpecialInputs } from "./types.js";
+import {
+  monitoringDeviceListFromWire,
+  type WireGetMonitoringDeviceListResponse,
+  type WireSetMonitoringDeviceRequest,
+  type WireSetMonitoringDeviceResponse,
+} from "./wire.js";
+import type {
+  AudioDevice,
+  AudioInput,
+  MonitoringDevice,
+  MonitoringDeviceList,
+  SpecialInputs,
+} from "./types.js";
 
 /**
  * Mic / audio-input control. Wraps the native obs-websocket v5 Input*
@@ -67,5 +79,35 @@ export class AudioNamespace {
       inputSettings: { device_id: deviceId },
       overlay: true,
     } as never);
+  }
+
+  /**
+   * Playback devices monitoring can be routed to, read from the machine at
+   * call time (#173). `"default"` follows the OS default device.
+   *
+   * Offer these in a selector only when the manifest declares
+   * `audio.monitoring.deviceSelectable === true`: on a build without a
+   * monitoring backend the list is empty and every write refuses.
+   */
+  async listMonitoringDevices(): Promise<MonitoringDeviceList> {
+    const resp = await this.client.callVendor<object, WireGetMonitoringDeviceListResponse>(
+      "GetMonitoringDeviceList",
+    );
+    return monitoringDeviceListFromWire(resp);
+  }
+
+  /**
+   * Routes monitoring to `deviceId`. Throws `PulsarVendorError` when the id is
+   * not one the machine enumerates — the server refuses before writing rather
+   * than accepting an id into silence.
+   *
+   * Returns the device libobs reports in force after the write (read-back).
+   */
+  async setMonitoringDevice(deviceId: string): Promise<MonitoringDevice> {
+    const resp = await this.client.callVendor<
+      WireSetMonitoringDeviceRequest,
+      WireSetMonitoringDeviceResponse
+    >("SetMonitoringDevice", { device_id: deviceId });
+    return { id: resp.device_id ?? "", name: resp.device_name ?? "" };
   }
 }

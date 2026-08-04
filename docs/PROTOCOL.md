@@ -267,6 +267,8 @@ clients see snake_case on the wire.
 | `GetAudioTracks` | What each output actually carries: per output (`stream` / `record` / `replay`), the encoder bound at each slot, the **track** it pulls from (`obs_encoder_get_mixer_index() + 1`, *not* the slot index), its name, codec, bitrate, `active` flag and `encoded_frames`. An output that does not exist is **absent** from the list, never an empty entry. | — | `count: number`, `outputs: { output, slots: { slot, track, encoder, codec?, bitrate, active, encoded_frames }[] }[]`, `error?` |
 | `MeasureAudioTrackFlow` | Measure, for a bounded window, the audio that actually **flows** on each of the six libobs mixes — i.e. what each track's encoder is fed. Installs a raw audio callback on every mix for `duration_ms`, then removes it (a permanently connected callback would force libobs to mix all six buses for the process's lifetime). `encoder_bound` says whether the streaming output carries an encoder for that track, and is **omitted** off-air rather than guessed. This is the only read that distinguishes *routed* from *consumed*: see the note below. | `duration_ms?` (50..2000, default 300) | `duration_ms`, `tracks: { track, frames, peak, encoder_bound? }[]`, `error?` |
 | `GetAdaptiveState` | Snapshot the bitrate adaptation worker. | — | `enabled`, `target_kbps`, `current_kbps`, `floor_kbps`, `stable_ticks`, `adjustments_total`, `last_delta_total`, `last_delta_dropped`, `last_drop_ratio`, `error?` |
+| `GetMonitoringDeviceList` | Playback devices audio monitoring can be routed to, enumerated from the machine **at call time** (`obs_enum_audio_monitoring_devices`), plus libobs's own dynamic `default` id at the head of the list — it is the device `pulsar-headless` binds at boot and a real choice, not a placeholder. `devices` is empty when the build has no monitoring backend. | — | `available: bool`, `devices: { id, name }[]`, `active_device_id?`, `active_device_name?`, `error?` |
+| `SetMonitoringDevice` | Route monitoring to `device_id`. An id the machine does not enumerate is **refused by name**: `obs_set_audio_monitoring_device()` stores any non-empty pair and returns `true`, so an unchecked id would be accepted into silence. The write is reported only after `obs_get_audio_monitoring_device()` reports it in force (read-back); the returned `device_id` is that read-back, not the request. Proves the bind, not that the endpoint is audible. | `device_id` | `changed: bool`, `device_id`, `device_name`, `error?` |
 | `SetAdaptiveEnabled` | Toggle the worker. Disabling pauses sampling; the encoder bitrate is left at whatever value the worker last applied. Re-enabling resets `stable_ticks` to 0 so the loop re-warms before any climb attempt. | `enabled` | `enabled: bool`, `error?` |
 
 #### The capability manifest (`GetCapabilities`)
@@ -319,8 +321,9 @@ encoder / audio / inventory / video blocks that land later:
     "video_colorimetry": { "applicability": "read-only", "value": "709",
                            "range": "Partial", "format": "NV12" },
     // Audio block (ADR 027 §3.3 bloc 2).
-    "audio_monitoring":    { "applicability": "read-only", "available": true,
-                             "device_bound": false },
+    "audio_monitoring":    { "applicability": "live", "available": true,
+                             "device_bound": true, "device_id": "default",
+                             "device_name": "Default", "device_selectable": true },
     "audio_tracks":        { "applicability": "read-only", "count": 6, "bound": 1,
                              "tracks": [{ "value": 1 }] },
     "audio_sample_rate":   { "applicability": "read-only", "hz": 48000 },
@@ -397,7 +400,7 @@ fact, not a limitation waiting to be lifted (ADR 027 §3.5).
 
 | Entry | Fields | Regime | Source |
 |---|---|---|---|
-| `audio_monitoring` | `available: bool`, `device_bound: bool`, `device_id?`, `device_name?` | `read-only` | `obs_audio_monitoring_available()`, `obs_get_audio_monitoring_device()` |
+| `audio_monitoring` | `available: bool`, `device_bound: bool`, `device_selectable: bool`, `device_id?`, `device_name?` | `live` | `obs_audio_monitoring_available()`, `obs_get_audio_monitoring_device()` |
 | `audio_tracks` | `count: number`, `bound?: number`, `tracks?: {value: number}[]` | `read-only` | `MAX_AUDIO_MIXES`; `bound` counts the streaming output's occupied slots and `tracks` names them, each read from its encoder's mixer index (#168) |
 | `audio_sample_rate` | `hz: number` | `read-only` | `obs_get_audio_info()` |
 | `audio_speaker_layout` | `layout: string`, `channels: number` | `read-only` | `obs_get_audio_info()` + `get_audio_channels()` |
@@ -414,13 +417,15 @@ Two points carry the whole block:
   `device_bound` is `true`. A consumer must not read a *missing*
   `audio_monitoring` entry (a pre-#143 Pulsar) as `device_bound: false` — an
   absence is not a "no".
-- **Monitoring is `read-only`, not `live`.** `live` requires the write *and* the
-  read-back to be genuinely supported hot; Pulsar exposes **no** monitoring write
-  path — `obs_set_audio_monitoring_device()` is never called anywhere in this
-  tree — so nothing can bind a device today. Prism must not offer the headphone
-  monitoring keys as settable. (libobs seeds its monitoring device with
-  `"Default"` / `"default"` in `obs_init_audio()`; Pulsar treats that seed as
-  *not bound*, since it is a placeholder no one chose.)
+- **Monitoring is `live`** since #173. `live` requires the write *and* the
+  read-back to be genuinely supported hot, and both now exist:
+  `pulsar-headless` binds `"Default"` / `"default"` at boot (v1.7.0), and
+  `SetMonitoringDevice` changes the device afterwards, reporting success only
+  after reading it back. `device_selectable` is what gates a consumer-side
+  selector: it is `true` only where the requests can honour it (a build with no
+  monitoring backend refuses both), and an **absent** `device_selectable` (a
+  pre-#173 Pulsar) is not a `false` — it is a silence, and a consumer must not
+  offer a selector on it.
 
 `bound` is omitted off-air, when no streaming output exists to read tracks from.
 
