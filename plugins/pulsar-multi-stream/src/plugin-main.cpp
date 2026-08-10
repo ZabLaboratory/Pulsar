@@ -1096,6 +1096,27 @@ AdaptiveBitrate::State AdaptiveBitrate::get_state() const
 
 AdaptiveBitrate *g_adaptive = nullptr;
 
+// ADR-005 F1 (issue #197): registers `secret` with pulsar-headless's
+// process-local SecretRegistry (main.cpp's g_secret_registry) via the SAME
+// global-proc-handler bridge on_get_diagnostics uses below -- this module
+// has no compile-time link to that .exe's translation unit. Best-effort by
+// design: if pulsar-headless hasn't installed the proc yet, or the call
+// otherwise fails, the pattern layer (log-handler.cpp) remains the fallback
+// net -- registration is never allowed to block or fail destination
+// creation itself.
+void register_stream_secret(const std::string &secret)
+{
+    if (secret.empty())
+        return;
+    proc_handler_t *globalPh = obs_get_proc_handler();
+    if (!globalPh)
+        return;
+    calldata_t cd = {0, 0, 0, 0};
+    calldata_set_string(&cd, "value", secret.c_str());
+    proc_handler_call(globalPh, "pulsar_log_register_secret", &cd);
+    calldata_free(&cd);
+}
+
 // ---- vendor request handlers ----------------------------------------------
 
 void on_get_destinations(obs_data_t * /*req*/, obs_data_t *res, void *)
@@ -1134,6 +1155,15 @@ void on_create_destination(obs_data_t *req, obs_data_t *res, void *)
         obs_data_set_string(res, "error", err.c_str());
         return;
     }
+
+    // Register the raw stream key with pulsar-headless's log redactor only
+    // once it is known-good -- before it ever reaches
+    // DestinationRegistry::create (:474 -- d.key = key) or the RTMP service
+    // settings (:414), but after validate_destination_input so a rejected
+    // key never pollutes the registry (ADR-005 §5 R1; `err` above never
+    // contains the raw key).
+    if (key && *key)
+        register_stream_secret(key);
 
     // For a named platform the server URL is fixed; the user-supplied url
     // field is ignored. Stash the pinned URL so GetDestinations + diagnostics
