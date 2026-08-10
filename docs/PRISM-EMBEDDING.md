@@ -194,6 +194,28 @@ aggregator but MUST NOT block the boot — the sentinel always arrives
 last (or not at all, in which case spawn timed out and the consumer
 should kill the child).
 
+### Session correlation (ADR-005 §3.3)
+
+Immediately before the sentinel, Pulsar prints one more line:
+
+```
+PULSAR_SESSION <id>
+```
+
+`<id>` is `PULSAR_SESSION_ID` echoed back verbatim if the parent process
+set it, otherwise a fresh value Pulsar generates itself (non-empty, stable
+for the life of the process, different on every boot). The same id tags
+every log line written by the durable log handler (see PROTOCOL.md) and
+every `pulsar:*` obs-websocket vendor event (`OutputFailed`,
+`BitrateAdjusted`, ...), so a consumer that sets `PULSAR_SESSION_ID` up
+front can join its own logs to Pulsar's on that one key.
+
+This is a **separate, intercalary line** — it is never merged into the
+`PULSAR_READY` sentinel, which stays byte-for-byte unchanged. A consumer
+matching only `^PULSAR_READY ` (as shown above) already ignores it
+correctly; matching `^PULSAR_SESSION ` is optional and only needed if you
+want the id ahead of time.
+
 ```ts
 // Pseudocode -- handshake side.
 

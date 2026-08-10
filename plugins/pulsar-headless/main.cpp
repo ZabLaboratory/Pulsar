@@ -25,6 +25,7 @@
 
 #include <obs.h>
 
+#include "log-handler.h"
 #include "pulsar-frontend-stub.h"
 
 #include <QtCore/QByteArray>
@@ -32,11 +33,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <random>
 #include <string>
 #include <thread>
@@ -60,6 +64,244 @@ std::atomic<bool> g_running(true);
 // process via the PULSAR_READY stdout sentinel.
 int  g_session_port     = 4455;
 std::string g_session_password;
+
+// ADR-005 §3.1-§3.2: the log handler's registry-layer state and file sink.
+// `g_log_session_id` is the reserved `session` field of the log line
+// gabarit (ADR §3.3). Resolved once in main(), before
+// install_pulsar_log_handler() runs, so every line -- startup included --
+// carries it; never reassigned afterwards.
+pulsar_log::SecretRegistry g_secret_registry;
+std::unique_ptr<pulsar_log::LogFileSink> g_log_sink;
+std::mutex g_log_mutex;
+std::string g_log_session_id;
+
+// ADR-005 §3.6.1: counters + bounded WARN/ERROR ring, fed the same
+// redacted line written to the file below -- never a re-read of it.
+pulsar_log::DiagnosticsRing g_log_diagnostics;
+
+// base_set_log_handler callback. Formats, redacts (both layers), then
+// writes the SAME redacted line to stderr and to the rotating file --
+// never the raw one, on either destination (ADR §3.2 "posture d'échec,
+// non négociable": a line whose redaction can't be trusted is abandoned
+// entirely, not just kept off the file).
+void pulsar_log_handler(int log_level, const char *format, va_list args, void * /*param*/)
+{
+    char buf[4096];
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int written = std::vsnprintf(buf, sizeof(buf), format, args_copy);
+    va_end(args_copy);
+    std::string message = (written > 0)
+        ? std::string(buf, static_cast<std::size_t>(written) < sizeof(buf)
+                               ? static_cast<std::size_t>(written)
+                               : sizeof(buf) - 1)
+        : std::string();
+
+    pulsar_log::Level level;
+    switch (log_level) {
+    case LOG_ERROR:
+        level = pulsar_log::Level::Error;
+        break;
+    case LOG_WARNING:
+        level = pulsar_log::Level::Warn;
+        break;
+    case LOG_DEBUG:
+        level = pulsar_log::Level::Debug;
+        break;
+    case LOG_INFO:
+    default:
+        level = pulsar_log::Level::Info;
+        break;
+    }
+
+    std::string trimmed_message;
+    std::string subsystem = pulsar_log::derive_subsystem(message, trimmed_message);
+    std::string line =
+        pulsar_log::format_line(level, g_log_session_id, subsystem, trimmed_message);
+
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    auto redacted = pulsar_log::redact_line(line, g_secret_registry);
+    if (!redacted)
+        return; // abandon: neither destination gets an unverified line
+
+    std::fprintf(stderr, "%s\n", redacted->c_str());
+    std::fflush(stderr);
+
+    // ADR-005 §3.6.1: recorded for EVERY line reaching this point -- the
+    // same set the file below receives when it is opened -- so the
+    // extraction request's counters concord with an independent count of
+    // the file (RC14).
+    g_log_diagnostics.record(level, *redacted);
+
+    if (g_log_sink && g_log_sink->opened())
+        g_log_sink->write_line(*redacted);
+}
+
+// ADR-005 §3.6: bridges pulsar-headless's process-local diagnostics state
+// (this .exe's own translation unit -- g_log_sink / g_log_diagnostics are
+// not symbols any plugin DLL can link against) to the vendor requests
+// registered by pulsar-multi-stream, a separate module loaded into the same
+// process. Same pattern obs-websocket itself uses for its own cross-module
+// handle (WebSocketApi's "obs_websocket_api_get_ph" on the global proc
+// handler): any module, DLL or host exe, can reach a proc registered here.
+//
+// §3.6.1: `in int max_lines` is the caller's request; the response is
+// always clamped to pulsar_log::DiagnosticsRing::kServerMaxLines
+// server-side, never just to what was asked. `lines` transfers ownership
+// of a fresh obs_data_array_t* to the caller (obs_data_array_release()
+// once done), one object per line under the "line" key -- the array itself
+// carries WARN/ERROR content only, per the ring's own contract.
+void pulsar_log_get_diagnostics_cb(void * /*priv_data*/, calldata_t *cd)
+{
+    long long requested = calldata_int(cd, "max_lines");
+    if (requested < 0)
+        requested = 0;
+
+    std::string path;
+    bool path_known = false;
+    {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
+        if (g_log_sink && g_log_sink->opened()) {
+            path = g_log_sink->path();
+            path_known = true;
+        }
+    }
+
+    calldata_set_string(cd, "path", path.c_str());
+    calldata_set_bool(cd, "path_known", path_known);
+    calldata_set_int(cd, "errors", static_cast<long long>(g_log_diagnostics.count(pulsar_log::Level::Error)));
+    calldata_set_int(cd, "warnings", static_cast<long long>(g_log_diagnostics.count(pulsar_log::Level::Warn)));
+    calldata_set_int(cd, "infos", static_cast<long long>(g_log_diagnostics.count(pulsar_log::Level::Info)));
+    calldata_set_int(cd, "debugs", static_cast<long long>(g_log_diagnostics.count(pulsar_log::Level::Debug)));
+
+    obs_data_array_t *lines = obs_data_array_create();
+    for (const auto &line : g_log_diagnostics.last_warn_error_lines(static_cast<std::size_t>(requested))) {
+        obs_data_t *item = obs_data_create();
+        obs_data_set_string(item, "line", line.c_str());
+        obs_data_array_push_back(lines, item);
+        obs_data_release(item);
+    }
+    calldata_set_ptr(cd, "lines", lines);
+
+    calldata_set_bool(cd, "success", true);
+}
+
+// ADR-005 §3.6.2: the kill switch. Deliberately asymmetric -- stops file
+// writes, never reopens them; a second call is a no-op that reports
+// `already_stopped`, never an error, and never resurrects the file. Takes
+// no path (there is nothing to parameterise: it acts on the one sink this
+// process already owns). The stop itself is journalled as the last line
+// via LogFileSink::close(), which writes-then-closes -- exactly the
+// primitive #183 built this kill switch for.
+void pulsar_log_stop_file_write_cb(void * /*priv_data*/, calldata_t *cd)
+{
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+
+    if (!g_log_sink || !g_log_sink->opened()) {
+        calldata_set_bool(cd, "stopped", false);
+        calldata_set_bool(cd, "already_stopped", true);
+        calldata_set_string(cd, "path", g_log_sink ? g_log_sink->path().c_str() : "");
+        calldata_set_bool(cd, "success", true);
+        return;
+    }
+
+    const std::string path = g_log_sink->path();
+    std::string stopLine = pulsar_log::format_line(
+        pulsar_log::Level::Warn, g_log_session_id, "pulsar-headless",
+        "log file write stopped via kill-switch request; a restart is required to resume");
+    auto redacted = pulsar_log::redact_line(stopLine, g_secret_registry);
+    // ADR §3.2 posture d'échec: a line whose redaction can't be trusted is
+    // abandoned, same as the normal handler (:119-120) -- never fall back
+    // to the unredacted line. The sink still needs closing either way, so
+    // the fallback is a fixed, static, redaction-free sentinel rather than
+    // the (unverified) formatted stopLine.
+    const std::string finalLine = redacted ? *redacted
+                                            : "WARN pulsar-headless log file write stopped "
+                                              "via kill-switch request (redaction unavailable, "
+                                              "message omitted)";
+
+    g_log_sink->close(finalLine);
+    g_log_diagnostics.record(pulsar_log::Level::Warn, finalLine);
+
+    calldata_set_bool(cd, "stopped", true);
+    calldata_set_bool(cd, "already_stopped", false);
+    calldata_set_string(cd, "path", path.c_str());
+    calldata_set_bool(cd, "success", true);
+}
+
+// ADR-005 §3.3: bridges `g_log_session_id` -- resolved once at boot, in this
+// .exe's own translation unit -- to pulsar-multi-stream, which has no
+// compile-time link to it and needs the same value to stamp its `pulsar:*`
+// vendor events. Same global proc handler bridge as the diagnostics procs
+// above.
+void pulsar_log_get_session_id_cb(void * /*priv_data*/, calldata_t *cd)
+{
+    calldata_set_string(cd, "session", g_log_session_id.c_str());
+    calldata_set_bool(cd, "success", true);
+}
+
+// ADR-005 F1 (issue #197): registers `value` with THIS process's own
+// g_secret_registry -- the same registry pulsar_log_handler (:121) and the
+// kill-switch's own final line (:210) already consult on every write.
+// Exposed on the global proc handler for the identical reason
+// pulsar_log_get_diagnostics is (see install_pulsar_log_procs below):
+// g_secret_registry is a static of this .exe's translation unit, unreachable
+// from a plugin DLL (pulsar-multi-stream) by any compile-time link. Before
+// this proc existed there was no way for the Twitch stream key
+// pulsar-multi-stream receives to ever reach this registry.
+void pulsar_log_register_secret_cb(void * /*priv_data*/, calldata_t *cd)
+{
+    const char *value = calldata_string(cd, "value");
+    if (value && *value)
+        g_secret_registry.register_secret(value);
+    calldata_set_bool(cd, "success", true);
+}
+
+// Installs base_set_log_handler and opens the rotating file sink. Must run
+// BEFORE obs_startup (ADR §3.1) so every libobs blog() call, including
+// ones emitted during startup itself, is captured. A file-open failure
+// degrades to stderr-only, logged as its own ERROR line on stderr -- boot
+// continues either way.
+void install_pulsar_log_handler()
+{
+    g_log_sink = std::make_unique<pulsar_log::LogFileSink>(pulsar_log::default_log_dir(),
+                                                             pulsar_log::rotation_config_from_env());
+    if (!g_log_sink->opened()) {
+        std::fprintf(stderr, "ERROR pulsar-headless: log file unavailable (%s)\n",
+                     g_log_sink->error().c_str());
+    }
+    base_set_log_handler(pulsar_log_handler, nullptr);
+}
+
+// ADR-005 §3.6: publish the diagnostic surface's two procs on the GLOBAL obs
+// proc handler -- reachable from pulsar-multi-stream (a plugin DLL, no
+// compile-time link to this .exe) the same way obs-websocket's own API
+// handle is (see obs-websocket.cpp's "pulsar_websocket_is_loopback_only"
+// registration for the mirrored pattern on that side).
+//
+// Must run AFTER obs_startup(): obs_get_proc_handler() returns the global
+// `obs->procs` handle, which obs_startup() allocates (and, if called again,
+// replaces) -- calling it beforehand dereferences a still-NULL `obs` and
+// crashes on every boot. Called from main() once obs_startup() has
+// succeeded (around pulsar_frontend_init() time).
+void install_pulsar_log_procs()
+{
+    proc_handler_t *global_ph = obs_get_proc_handler();
+    proc_handler_add(global_ph,
+                     "bool pulsar_log_get_diagnostics(in int max_lines, out string path, "
+                     "out bool path_known, out int errors, out int warnings, out int infos, "
+                     "out int debugs, out ptr lines)",
+                     &pulsar_log_get_diagnostics_cb, nullptr);
+    proc_handler_add(global_ph,
+                     "bool pulsar_log_stop_file_write(out bool stopped, out bool already_stopped, "
+                     "out string path)",
+                     &pulsar_log_stop_file_write_cb, nullptr);
+    proc_handler_add(global_ph,
+                     "bool pulsar_log_get_session_id(out string session)",
+                     &pulsar_log_get_session_id_cb, nullptr);
+    proc_handler_add(global_ph, "bool pulsar_log_register_secret(in string value)",
+                     &pulsar_log_register_secret_cb, nullptr);
+}
 
 #ifdef _WIN32
 BOOL WINAPI console_ctrl_handler(DWORD ctrl_type)
@@ -144,7 +386,7 @@ bool reset_video()
         if (v == 24 || v == 30 || v == 48 || v == 60 || v == 120)
             fps = v;
         else
-            std::fprintf(stderr, "pulsar-headless: PULSAR_FPS=%s rejected; using %d\n", e, fps);
+            blog(LOG_WARNING, "[pulsar-headless] PULSAR_FPS=%s rejected; using %d", e, fps);
     }
     ovi.fps_num = fps;
     ovi.fps_den = 1;
@@ -156,8 +398,8 @@ bool reset_video()
             w <= 7680 && h <= 4320) {
             width = w; height = h;
         } else {
-            std::fprintf(stderr, "pulsar-headless: PULSAR_RESOLUTION=%s rejected; using %dx%d\n",
-                         e, width, height);
+            blog(LOG_WARNING, "[pulsar-headless] PULSAR_RESOLUTION=%s rejected; using %dx%d",
+                 e, width, height);
         }
     }
     ovi.base_width = width;
@@ -173,12 +415,10 @@ bool reset_video()
 
     int result = obs_reset_video(&ovi);
     if (result != OBS_VIDEO_SUCCESS) {
-        std::fprintf(stderr,
-                     "pulsar-headless: obs_reset_video failed (%d)\n",
-                     result);
+        blog(LOG_ERROR, "[pulsar-headless] obs_reset_video failed (%d)", result);
         return false;
     }
-    std::fprintf(stdout, "pulsar-headless: video %dx%d @ %d fps\n", width, height, fps);
+    blog(LOG_INFO, "[pulsar-headless] video %dx%d @ %d fps", width, height, fps);
     return true;
 }
 
@@ -220,8 +460,8 @@ std::string resolve_default_render_device_id()
     HRESULT co_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     bool co_owned = SUCCEEDED(co_hr);
     if (co_hr != RPC_E_CHANGED_MODE && FAILED(co_hr)) {
-        std::fprintf(stderr, "pulsar-headless: CoInitializeEx failed (0x%08lx)\n",
-                     static_cast<unsigned long>(co_hr));
+        blog(LOG_ERROR, "[pulsar-headless] CoInitializeEx failed (0x%08lx)",
+             static_cast<unsigned long>(co_hr));
         return result;
     }
 
@@ -257,9 +497,8 @@ std::string resolve_default_render_device_id()
         CoUninitialize();
 
     if (result.empty()) {
-        std::fprintf(stderr,
-                     "pulsar-headless: could not resolve the default playback device id (0x%08lx)\n",
-                     static_cast<unsigned long>(hr));
+        blog(LOG_WARNING, "[pulsar-headless] could not resolve the default playback device id (0x%08lx)",
+             static_cast<unsigned long>(hr));
     }
     return result;
 }
@@ -272,7 +511,7 @@ bool reset_audio()
     oai.speakers = SPEAKERS_STEREO;
 
     if (!obs_reset_audio(&oai)) {
-        std::fprintf(stderr, "pulsar-headless: obs_reset_audio failed\n");
+        blog(LOG_ERROR, "[pulsar-headless] obs_reset_audio failed");
         return false;
     }
 
@@ -298,16 +537,16 @@ bool reset_audio()
 #endif
         if (!resolved_id.empty()) {
             obs_set_audio_monitoring_device("Default", resolved_id.c_str());
-            std::fprintf(stdout, "pulsar-headless: audio monitoring device bound (resolved default, id=%s)\n",
-                         resolved_id.c_str());
+            blog(LOG_INFO, "[pulsar-headless] audio monitoring device bound (resolved default, id=%s)",
+                 resolved_id.c_str());
         } else {
             obs_set_audio_monitoring_device("Default", "default");
-            std::fprintf(stdout,
-                         "pulsar-headless: audio monitoring device bound (default sentinel -- id resolution "
-                         "failed, ZabCapture sources will self-monitor-guard silent)\n");
+            blog(LOG_INFO,
+                 "[pulsar-headless] audio monitoring device bound (default sentinel -- id resolution "
+                 "failed, ZabCapture sources will self-monitor-guard silent)");
         }
     } else {
-        std::fprintf(stderr, "pulsar-headless: audio monitoring unavailable on this platform build\n");
+        blog(LOG_WARNING, "[pulsar-headless] audio monitoring unavailable on this platform build");
     }
 
     return true;
@@ -349,6 +588,18 @@ std::string generate_session_password(std::size_t len = 22)
     for (std::size_t i = 0; i < len; ++i)
         out.push_back(alphabet[pick(rng)]);
     return out;
+}
+
+// ADR-005 §3.3: session correlation id. `PULSAR_SESSION_ID`, if set by the
+// parent process, is reused verbatim -- letting a supervisor correlate a
+// group of processes under one id it already knows. Otherwise generated
+// fresh from the same alphabet as the WebSocket password above (no new
+// dependency), so it is never empty and differs between two boots.
+std::string resolve_session_id()
+{
+    if (const char *e = std::getenv("PULSAR_SESSION_ID"); e && *e)
+        return e;
+    return generate_session_password(16);
 }
 
 #ifdef _WIN32
@@ -637,9 +888,8 @@ bool seed_websocket_config()
         if (v > 0 && v < 65536) {
             g_session_port = v;
         } else {
-            std::fprintf(stderr,
-                         "pulsar-headless: PULSAR_PORT=%s rejected; using %d\n",
-                         e, g_session_port);
+            blog(LOG_WARNING, "[pulsar-headless] PULSAR_PORT=%s rejected; using %d",
+                 e, g_session_port);
         }
     }
 
@@ -648,6 +898,11 @@ bool seed_websocket_config()
     } else {
         g_session_password = generate_session_password();
     }
+    // ADR-005 §3.2 registry layer: this is the one secret main.cpp itself
+    // creates, registered the moment it exists so the log handler's
+    // registry-layer redaction covers it even if it later surfaces bare
+    // (with no recognizable field/URL form) via a debug dump.
+    g_secret_registry.register_secret(g_session_password);
 
     // obs-websocket persists its config under <cwd>/obs-websocket/
     // when running headless (no profile path). pulsar.exe is always
@@ -761,8 +1016,17 @@ int main(int argc, char **argv)
 
     QApplication qt_app(argc, argv);
 
+    // ADR-005 §3.3: resolved before install_pulsar_log_handler() so every
+    // log line from here on -- startup included -- already carries it.
+    g_log_session_id = resolve_session_id();
+
+    // ADR-005 §3.1: installed before obs_startup so every blog() call from
+    // here on -- including ones libobs itself emits during startup -- is
+    // captured by our durable, redacted log handler.
+    install_pulsar_log_handler();
+
     if (!obs_startup("en-US", nullptr, nullptr)) {
-        std::fprintf(stderr, "pulsar-headless: obs_startup failed\n");
+        blog(LOG_ERROR, "[pulsar-headless] obs_startup failed");
         return 1;
     }
 
@@ -781,6 +1045,11 @@ int main(int argc, char **argv)
     // obs_frontend_add_event_callback inside obs_module_load) finds a
     // valid frontend and its callback registers correctly.
     pulsar_frontend_init();
+
+    // ADR-005 §3.6: register the diagnostic procs now that obs_startup()
+    // has produced the real global proc handler (obs_get_proc_handler()
+    // before obs_startup() dereferences a still-NULL `obs`).
+    install_pulsar_log_procs();
 
     // Seed obs-websocket's config.json before plugins load so the
     // pulsar-websocket fork picks up our session port + password
@@ -816,6 +1085,14 @@ int main(int argc, char **argv)
     SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
 #endif
 
+    // ADR-005 §3.3: the session correlation line, on its own, BEFORE the
+    // sentinel below -- never merged into it, never after it. The sentinel
+    // stays byte-for-byte unchanged (D5): twenty probes and spawn.ts anchor
+    // it, and both tolerate an intercalary line they don't recognise
+    // (probes loop past a non-match, spawn.ts only ever inspects the idle
+    // line further down, never this one).
+    std::printf("PULSAR_SESSION %s\n", g_log_session_id.c_str());
+
     // PULSAR_READY sentinel. The parent process (Prism, CI probes,
     // operators) reads stdout line-by-line, picks up this marker,
     // parses port + password, and uses them to authenticate the
@@ -830,8 +1107,7 @@ int main(int argc, char **argv)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    std::printf("pulsar-headless: shutting down\n");
-    std::fflush(stdout);
+    blog(LOG_INFO, "[pulsar-headless] shutting down");
 
     pulsar_frontend_shutdown();
     obs_shutdown();

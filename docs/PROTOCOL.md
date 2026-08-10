@@ -270,6 +270,8 @@ clients see snake_case on the wire.
 | `GetMonitoringDeviceList` | Playback devices audio monitoring can be routed to, enumerated from the machine **at call time** (`obs_enum_audio_monitoring_devices`), plus libobs's own dynamic `default` id at the head of the list — it is the device `pulsar-headless` binds at boot and a real choice, not a placeholder. `devices` is empty when the build has no monitoring backend. | — | `available: bool`, `devices: { id, name }[]`, `active_device_id?`, `active_device_name?`, `error?` |
 | `SetMonitoringDevice` | Route monitoring to `device_id`. An id the machine does not enumerate is **refused by name**: `obs_set_audio_monitoring_device()` stores any non-empty pair and returns `true`, so an unchecked id would be accepted into silence. The write is reported only after `obs_get_audio_monitoring_device()` reports it in force (read-back); the returned `device_id` is that read-back, not the request. Proves the bind, not that the endpoint is audible. | `device_id` | `changed: bool`, `device_id`, `device_name`, `error?` |
 | `SetAdaptiveEnabled` | Toggle the worker. Disabling pauses sampling; the encoder bitrate is left at whatever value the worker last applied. Re-enabling resets `stable_ticks` to 0 so the loop re-warms before any climb attempt. | `enabled` | `enabled: bool`, `error?` |
+| `GetDiagnostics` | ADR 005 §3.6.1 diagnostic extraction. Always returns per-level counters since start (`count_error`/`count_warn`/`count_info`/`count_debug`) and the known output/destination state — none of that carries message content. `log_path` and `recent_warn_error_lines` (served from memory, never a file re-read) are refused with an explicit `error` — never a silent empty array — unless obs-websocket is bound to the loopback interface; a bind widened via `PULSAR_WS_BIND` gets the same refusal. `max_lines` is clamped server-side regardless of what is asked. | `max_lines?` (server-capped) | `count_error`, `count_warn`, `count_info`, `count_debug`, `outputs: { output, active }[]`, `destinations: { id, name, kind, enabled, active }[]`, `log_path?`, `recent_warn_error_lines?: { line }[]`, `error?` |
+| `StopLogFileWrite` | ADR 005 §3.6.2 kill switch. Stops file writes on the running log sink **without a restart**; deliberately asymmetric — it never reopens the file, a restart is the only way to resume. No path in or out of scope: it acts on the one sink this process owns. The stop itself is journalled as the last line of the file before it closes. A second call is a no-op reporting `already_stopped: true`, never an error. | — | `stopped: bool`, `already_stopped: bool`, `log_path?`, `error?` |
 
 #### The capability manifest (`GetCapabilities`)
 
@@ -646,10 +648,94 @@ includes `vendorName: "pulsar"`, `eventType`, and `eventData`.
 
 | Event | Trigger | Payload |
 |---|---|---|
-| `BitrateAdjusted` | The adaptive worker changed the encoder bitrate (after a drop spike or a recovery climb). | `bitrate`, `target`, `floor`, `reason: "drops" \| "recovery"`, `drop_ratio` |
+| `BitrateAdjusted` | The adaptive worker changed the encoder bitrate (after a drop spike or a recovery climb). | `bitrate`, `target`, `floor`, `reason: "drops" \| "recovery"`, `drop_ratio`, `session` |
+| `OutputFailed` | An output (the legacy stream, virtualcam, or a multi-stream destination) that had already reached the active state left it other than on request (ADR-005 §3.4/§3.5). Never emitted for a client-requested or delay-drained graceful stop, and never for a start-of-attempt failure — see the authority split below. | `output`, `phase: "active"`, `code` (`OBS_OUTPUT_*`), `last_error`, `reason_class`, `session` |
+| `OutputAttemptSettled` | A go-live attempt on an output settled — success included — exactly once per attempt and per destination (ADR-005 §3.5, issue #186). | `output`, `destination`, `attempt` (1-based, monotonic per destination), `outcome: "live" \| "failed"`, `reason_class` (closed set below; key **absent**, not `null`, when `outcome` is `"live"`), `code`, `last_error`, `duration_ms`, `session` |
+
+`session` (all three events, ADR-005 §3.3) is the same id printed on the
+`PULSAR_SESSION <id>` stdout line at boot (§"READY handshake" above /
+`PRISM-EMBEDDING.md`) — `PULSAR_SESSION_ID` echoed verbatim if set,
+otherwise generated. Never renamed or retyped an existing field to add it.
 
 The v5 baseline events (`StreamStateChanged`, `RecordStateChanged`,
 `InputCreated`, …) are emitted unchanged by `pulsar-websocket`.
+
+#### Authority split — `OutputAttemptSettled` vs `OutputFailed` (ADR-005 §3.5)
+
+The two events never describe the same fact:
+
+- `pulsar:OutputAttemptSettled` is authoritative for the retry decision. It
+  covers the attempt itself — synchronous refusal, or an asynchronous
+  connect/auth failure before the output ever reached active — and success.
+  A consumer decides whether to retry from this event alone, with no
+  correlation window.
+- `pulsar:OutputFailed` is authoritative for failures **while already live**
+  — an output that reached active and then dropped. It is never emitted for
+  a start-of-attempt failure any more (that used to be `phase: "start"`;
+  `phase` is now always `"active"`), and `OutputAttemptSettled` is never
+  emitted for a mid-diffusion drop.
+
+A client-cancelled attempt that is stopped before ever reaching active
+(`code == 0`, no active state reached) settles neither event: `code 0` has no
+`reason_class` (it is libobs' success sentinel, not a failure) and RC7's own
+contract already treats a requested stop as carrying no failure signal.
+
+### Failure diagnosis — `reason_class` (ADR-005 §3.4, issue #182)
+
+`OutputFailed.reason_class` is a **closed set of seven values**, classified in
+`plugins/pulsar-output-classify/pulsar-output-classify.h` from the failing
+output's `(is_local_output, code, last_error)`. `unknown` is a legitimate,
+expected value — approximating a class here would reopen the log-scraping
+this event exists to end (ADR-005 R4).
+
+| `reason_class` | Sens |
+|---|---|
+| `auth_rejected` | L'ingest a refusé les identifiants — clé invalide ou révoquée. |
+| `ingest_unreachable` | Aucune connexion établie — DNS, routage, port, serveur injoignable. |
+| `ingest_dropped` | Connexion établie puis perdue (ou refusée juste après) avant/pendant la diffusion. |
+| `encoder_failed` | L'encodeur n'a pas démarré ou s'est arrêté en erreur. |
+| `config_rejected` | libobs a refusé la configuration avant toute tentative réseau. |
+| `disconnected_local` | Output sans surface réseau (virtualcam) : tout arrêt anormal est local. |
+| `unknown` | Aucune classe ne s'applique. `last_error` brut joint tel quel. |
+
+#### Correspondence table — RC5
+
+ADR-005 RC5 requires every signature `Prism/src/main/broadcast-url.ts` scans
+for (`PERSISTENT_RTMP_SIGNATURES`, `TRANSIENT_RTMP_SIGNATURES`) to land on
+exactly one `reason_class`, with no orphan. Produced once from the state of
+that consumer as of this issue (2026-08-10) — **not maintained** going
+forward (excluded from this issue's scope; a signature added to
+`broadcast-url.ts` later without a matching row here is a known, accepted
+gap until a follow-up issue owns the table's upkeep).
+
+| Prism signature (`broadcast-url.ts`) | `reason_class` |
+|---|---|
+| `PERSISTENT_RTMP_SIGNATURES`: `/unauthor/i` | `auth_rejected` |
+| `PERSISTENT_RTMP_SIGNATURES`: `/\binvalid (stream )?key\b/i` | `auth_rejected` |
+| `PERSISTENT_RTMP_SIGNATURES`: `/authenticat/i` | `auth_rejected` |
+| `PERSISTENT_RTMP_SIGNATURES`: `/403\b/i` | `auth_rejected` |
+| `TRANSIENT_RTMP_SIGNATURES`: `/rtmp[^\n]*failed[^\n]*-3\b/i` | `ingest_dropped` (`OBS_OUTPUT_INVALID_STREAM`, code `-3`) |
+| `TRANSIENT_RTMP_SIGNATURES`: `/rtmp[^\n]*-3\b/i` | `ingest_dropped` (`OBS_OUTPUT_INVALID_STREAM`, code `-3`) |
+| `TRANSIENT_RTMP_SIGNATURES`: `/connect failed[^\n]*-3\b/i` | `ingest_dropped` (`OBS_OUTPUT_INVALID_STREAM`, code `-3`) |
+
+The three transient signatures all key on the numeric `-3` libobs prints for
+`OBS_OUTPUT_INVALID_STREAM` (RTMP connect succeeded, the server then refused
+`createStream`/publish before any frame flowed) — Prism's own comment on
+`TRANSIENT_RTMP_SIGNATURES` describes exactly this case ("the ingest
+momentarily refuses a fresh connection… distinct from an auth failure").
+Mapping code `-3` to `ingest_dropped` rather than `ingest_unreachable` is a
+judgment call, not a certainty: the connection *was* established at the RTMP
+layer, then the stream was refused before diffusion could start, which reads
+closer to "established then lost" than to "never connected". See
+`pulsar-output-classify.h`'s inline comment on this case.
+
+No Prism signature maps to `ingest_unreachable`, `encoder_failed`,
+`config_rejected`, `disconnected_local`, or `unknown` — Prism does not scrape
+stdout for those cases (`OBS_OUTPUT_CONNECT_FAILED` produces no distinctive
+log text `broadcast-url.ts` looks for). That is not an orphan in the RC5
+sense (every *Prism* signature has a class); it means those four classes are
+reachable from Pulsar's structured event but were previously invisible to
+Prism's scraping entirely.
 
 ## `pulsar-scene:*` vendor namespace
 
@@ -872,6 +958,7 @@ value — operator/env-controlled only.
 |---|---|---|---|
 | `PULSAR_PORT` | `pulsar-headless` | `4455` | obs-websocket listen port. Rejected if outside `1..65535`. |
 | `PULSAR_PASSWORD` | `pulsar-headless` | fresh 22-char random string | obs-websocket session password, seeded into `obs-websocket/config.json` before module load. |
+| `PULSAR_SESSION_ID` | `pulsar-headless` | fresh 16-char random string | Correlation key (ADR-005 §3.3), echoed verbatim if set. Printed as `PULSAR_SESSION <id>` on stdout right before the `PULSAR_READY` sentinel; stamps every log line and every `pulsar:*` vendor event for the life of the process. |
 | `PULSAR_WS_BIND` | `pulsar-websocket` | `127.0.0.1` | Address the obs-websocket server binds. The default keeps the v5 surface off the network entirely; any other value is an explicit decision and logs a warning when it is not a loopback address. Not persisted in `config.json`. |
 | `PULSAR_FPS` | `pulsar-headless` | `60` | Output fps. Accepts only `24`/`30`/`48`/`60`/`120`; anything else is rejected with a warning. Boot-fixed (no live change). |
 | `PULSAR_RESOLUTION` | `pulsar-headless` | `1920x1080` | Base/output resolution, format `<W>x<H>`, up to `7680x4320`. Boot-fixed. |

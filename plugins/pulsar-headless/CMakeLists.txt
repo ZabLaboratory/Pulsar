@@ -55,7 +55,7 @@ list(GET _qt6_dirs 0 PULSAR_QT6_ROOT)
 list(APPEND CMAKE_PREFIX_PATH "${PULSAR_QT6_ROOT}")
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
 
-add_executable(pulsar-headless main.cpp)
+add_executable(pulsar-headless main.cpp log-handler.cpp)
 
 target_include_directories(pulsar-headless PRIVATE
     "${PULSAR_LIBOBS_HEADERS}"   # obs.h, obs-source.h, ...
@@ -68,6 +68,7 @@ target_link_libraries(pulsar-headless PRIVATE
     pulsar-frontend-stub
     Qt6::Core
     Qt6::Widgets
+    "$<$<PLATFORM_ID:Windows>:Advapi32>" # log-handler.cpp's ACL calls (ADR-005 §3.1)
 )
 
 # /SUBSYSTEM:WINDOWS so Windows does not allocate a console window for

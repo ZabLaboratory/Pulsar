@@ -69,6 +69,28 @@ describe("spawn()", () => {
     await handle.shutdown();
   });
 
+  // RC4 (ADR-005 §3.3): the fixture now emits "PULSAR_SESSION <id>" as an
+  // intercalary line right before the ready marker (matching main.cpp's
+  // real ordering). spawn() must reach ready without touching the watchdog
+  // -- it only ever inspects the idle/ready line, never this one.
+  it("reaches ready despite the PULSAR_SESSION line preceding the sentinel", async () => {
+    const lines: string[] = [];
+    const handle = await spawn({
+      binariesPath: tmp,
+      launchCommand: { exe: process.execPath, args: [FAKE_PULSAR] },
+      readyTimeoutMs: 5_000,
+      onLog: (_stream, line) => lines.push(line),
+    });
+
+    const sessionIdx = lines.findIndex((l) => l.startsWith("PULSAR_SESSION "));
+    const readyIdx = lines.findIndex((l) => l.includes("ready, idling"));
+    expect(sessionIdx).toBeGreaterThanOrEqual(0);
+    expect(readyIdx).toBeGreaterThan(sessionIdx);
+    expect(handle.client.isConnected()).toBe(true);
+
+    await handle.shutdown();
+  });
+
   it("shutdown is idempotent", async () => {
     const handle = await spawn({
       binariesPath: tmp,

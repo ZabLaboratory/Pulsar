@@ -47,7 +47,16 @@
 #endif
 #include <pulsar-nv-secure-load.h>
 
+// ADR-005 §3.4 / #182 -- shared reason_class classifier, also linked by
+// pulsar-frontend-stub (see plugins/pulsar-output-classify/README.md).
+#include <pulsar-output-classify.h>
+
 #include <obs-websocket-api.h>
+
+// ADR-005 §3.6: header-only reference for kServerMaxLines -- see the
+// CMakeLists.txt comment by PULSAR_LOG_HANDLER_HEADERS for why this does
+// not introduce a link dependency on pulsar-headless.
+#include <log-handler.h>
 
 #include <algorithm>
 #include <atomic>
@@ -246,6 +255,171 @@ bool validate_destination_input(DestinationKind kind, const char *url, const cha
     }
 }
 
+// ---- ADR-005 §3.4 / #182: pulsar:OutputFailed -----------------------------
+//
+// g_vendor is defined further down (module-static singletons, near
+// g_registry) but referenced by DestinationRegistry::start/start_all below
+// it in the file's original layout -- forward-declared here so those
+// members can call emit_output_failed without reordering the singletons.
+extern obs_websocket_vendor g_vendor;
+
+// ADR-005 §3.5 / #186: same forward-declaration need as g_vendor above --
+// DestSignalCtx (defined below, before the Destination struct) captures this
+// pointer so a destination's signal callback can call back into the
+// registry that owns it without a second global lookup.
+class DestinationRegistry;
+extern DestinationRegistry *g_registry;
+
+// ADR-005 §3.3: session correlation key. pulsar-headless.exe resolves it
+// once at boot; this module has no compile-time link to that translation
+// unit, so it reaches it through the same global proc handler bridge the
+// diagnostic surface above uses ("pulsar_log_get_diagnostics" /
+// "pulsar_log_stop_file_write"). Falls back to an empty string -- never a
+// fabricated value -- if the proc or the bridge itself is unavailable.
+std::string current_session_id()
+{
+    proc_handler_t *global_ph = obs_get_proc_handler();
+    if (!global_ph) return "";
+
+    calldata_t cd = {0, 0, 0, 0};
+    const bool called = proc_handler_call(global_ph, "pulsar_log_get_session_id", &cd);
+    std::string session;
+    if (called) {
+        const char *s = calldata_string(&cd, "session");
+        if (s) session = s;
+    }
+    calldata_free(&cd);
+    return session;
+}
+
+// Builds and emits pulsar:OutputFailed for a network-capable (is_local=false)
+// or local (is_local=true, e.g. virtualcam) output, or does nothing when the
+// stop is not a failure (OBS_OUTPUT_SUCCESS -- RC7). `output` is the display
+// name in the payload ("stream", "virtualcam", or a destination id);
+// `phase` is "start" (obs_output_start declined synchronously) or "active"
+// (the output was live and stopped abnormally). `session` is the boot-time
+// correlation key from ADR §3.3.
+void emit_output_failed(const char *output, const char *phase, bool is_local_output, int code,
+                         const char *last_error)
+{
+    const char *cls = pulsar::classify_output_failure(is_local_output, code, last_error);
+    if (!cls) return; // not a failure
+
+    if (!g_vendor) {
+        blog(LOG_WARNING, "[pulsar-multi-stream] OutputFailed dropped (%s/%s): no vendor", output, cls);
+        return;
+    }
+
+    OBSDataAutoRelease ev = obs_data_create();
+    obs_data_set_string(ev, "output", output ? output : "");
+    obs_data_set_string(ev, "phase", phase ? phase : "");
+    obs_data_set_int(ev, "code", code);
+    obs_data_set_string(ev, "last_error", last_error ? last_error : "");
+    obs_data_set_string(ev, "reason_class", cls);
+    obs_data_set_string(ev, "session", current_session_id().c_str());
+    obs_websocket_vendor_emit_event(g_vendor, "OutputFailed", ev);
+}
+
+// Cross-plugin bridge: pulsar-frontend-stub is a static lib linked into
+// pulsar-headless.exe, not an obs-websocket vendor of its own (obs_module_
+// load and post_load semantics do not apply to it -- see its CMakeLists.txt
+// header comment). Rather than register a second "pulsar" vendor from a
+// second binary component (obs-websocket's per-name registration is
+// single-owner, unlike this codebase's own convention of one distinct
+// vendor name per DLL plugin -- see pulsar-scene-source's "pulsar-scene"),
+// frontend-stub reaches this DLL's already-registered vendor through
+// libobs's own global proc handler -- the exact mechanism
+// obs-websocket-api.h itself uses to find obs-websocket
+// (obs_websocket_get_ph()). Registered in obs_module_post_load, after
+// g_vendor exists; frontend-stub only calls this after obs_post_load_modules
+// has run (pulsar-headless's own sequencing), so there is no load-order race.
+void emit_output_failed_proc(void *, calldata_t *cd)
+{
+    const char *output = calldata_string(cd, "output");
+    const char *phase = calldata_string(cd, "phase");
+    bool is_local = calldata_bool(cd, "is_local_output");
+    long long code = calldata_int(cd, "code");
+    const char *last_error = calldata_string(cd, "last_error");
+    emit_output_failed(output, phase, is_local, static_cast<int>(code), last_error);
+}
+
+// ---- ADR-005 §3.5 / #186: pulsar:OutputAttemptSettled ---------------------
+//
+// One verdict, exactly once, per go-live attempt and per destination --
+// success included. §3.5's authority split is implemented by WHO calls this:
+// a start-attempt failure (synchronous decline, or an async "stop" that
+// fires before the output ever went active) calls this and NOT
+// emit_output_failed; a mid-diffusion failure (the output was active, then
+// stopped abnormally) keeps calling emit_output_failed and never this. Two
+// authorities for the same fact is exactly the risk #186 exists to close --
+// see the issue's "Risks and rollback".
+//
+// `live` selects the outcome: true -> "live", reason_class key OMITTED
+// entirely (not null, not a placeholder -- obs_data_set_string is simply
+// never called for it, see below). false -> "failed", reason_class from
+// #182's closed set (pulsar-output-classify.h, unmodified by this issue).
+// A false verdict is never built for code == 0 (classify_output_failure
+// returns nullptr for it, and code 0 can only mean "not a failure" per its
+// own contract) -- callers only invoke this with live=false when code != 0.
+void emit_output_attempt_settled(const char *output, const char *destination, long long attempt, bool live,
+                                  bool is_local_output, int code, const char *last_error, long long duration_ms)
+{
+    if (!g_vendor) {
+        blog(LOG_WARNING, "[pulsar-multi-stream] OutputAttemptSettled dropped (%s/%s attempt %lld): no vendor",
+             output, destination, attempt);
+        return;
+    }
+
+    OBSDataAutoRelease ev = obs_data_create();
+    obs_data_set_string(ev, "output", output ? output : "");
+    obs_data_set_string(ev, "destination", destination ? destination : "");
+    obs_data_set_int(ev, "attempt", attempt);
+    obs_data_set_string(ev, "outcome", live ? "live" : "failed");
+    if (!live) {
+        const char *cls = pulsar::classify_output_failure(is_local_output, code, last_error);
+        // code != 0 here by contract (see comment above) -- classify_output_failure
+        // never returns nullptr for a non-zero code, but "unknown" is kept as an
+        // explicit, non-approximating fallback rather than trusting that invariant blindly.
+        obs_data_set_string(ev, "reason_class", cls ? cls : "unknown");
+    }
+    obs_data_set_int(ev, "code", code);
+    obs_data_set_string(ev, "last_error", last_error ? last_error : "");
+    obs_data_set_int(ev, "duration_ms", duration_ms);
+    obs_data_set_string(ev, "session", current_session_id().c_str());
+    obs_websocket_vendor_emit_event(g_vendor, "OutputAttemptSettled", ev);
+}
+
+// Same cross-plugin bridge rationale as emit_output_failed_proc, above.
+void emit_output_attempt_settled_proc(void *, calldata_t *cd)
+{
+    const char *output = calldata_string(cd, "output");
+    const char *destination = calldata_string(cd, "destination");
+    long long attempt = calldata_int(cd, "attempt");
+    bool live = calldata_bool(cd, "live");
+    bool is_local = calldata_bool(cd, "is_local_output");
+    long long code = calldata_int(cd, "code");
+    const char *last_error = calldata_string(cd, "last_error");
+    long long duration_ms = calldata_int(cd, "duration_ms");
+    emit_output_attempt_settled(output, destination, attempt, live, is_local, static_cast<int>(code), last_error,
+                                 duration_ms);
+}
+
+class DestinationRegistry; // forward declaration for DestSignalCtx below
+
+// Bound to a Destination's obs_output_t signal_handler ("start"/"stop") for
+// the lifetime of that output. Destination lives in DestinationRegistry's
+// std::map, whose node addresses are stable across insert/erase of OTHER
+// keys (map iterator/reference stability), so storing the registry pointer
+// plus the destination id -- rather than a raw Destination* -- is what keeps
+// the callback safe past a remove() that erases and reallocates nothing else
+// but genuinely frees THIS node: the ctx is deleted in the same call that
+// erases the node it points at (release_destination_handles_locked), never
+// read after.
+struct DestSignalCtx {
+    DestinationRegistry *registry;
+    std::string id;
+};
+
 struct Destination {
     std::string id;
     std::string name;
@@ -256,6 +430,17 @@ struct Destination {
 
     obs_output_t *output = nullptr;   // lazy-created on first start
     obs_service_t *service = nullptr; // rtmp_custom only
+
+    // ADR-005 §3.5 / #186: attempt lifecycle for pulsar:OutputAttemptSettled.
+    // attempt is a monotonic per-destination counter, bumped once per Start
+    // call that actually reaches obs_output_start(). went_active is true once
+    // the CURRENT attempt's "start" signal has fired -- it gates whether a
+    // subsequent "stop" is this attempt settling (false) or a mid-diffusion
+    // failure that is emit_output_failed's exclusive domain (true).
+    long long attempt = 0;
+    std::chrono::steady_clock::time_point attempt_start_time;
+    bool attempt_went_active = false;
+    std::unique_ptr<DestSignalCtx> signal_ctx; // non-null once signals are hooked
 };
 
 // 16-hex random id. Not a real UUID -- collisions across a single Pulsar
@@ -294,6 +479,16 @@ public:
     };
     std::vector<Snapshot> snapshot() const;
 
+    // ADR-005 §3.5 / #186: called from the destination's own obs_output_t
+    // "start"/"stop" signal callbacks (on_destination_start_signal /
+    // on_destination_stop_signal, free functions below the class so they
+    // can be passed as raw signal_handler_connect C callbacks). Public
+    // because the callbacks are not members, but not part of the vendor-facing
+    // API -- id-not-found (destination removed between signal fire and this
+    // call) is silently ignored, same tolerance as start()/stop() already have.
+    void on_attempt_started(const std::string &id);
+    void on_attempt_stopped(const std::string &id, int code, const char *last_error);
+
 private:
     bool ensure_output(Destination &d, std::string &errOut);
     void release_destination_handles_locked(Destination &d);
@@ -301,6 +496,26 @@ private:
     mutable std::mutex mu_;
     std::map<std::string, Destination> map_;
 };
+
+// ADR-005 §3.5 / #186: obs_output_t signal callbacks for a multi-stream
+// destination. param is the DestSignalCtx allocated in ensure_output() and
+// owned by the Destination it describes (freed in
+// release_destination_handles_locked, which also disconnects these).
+void on_destination_start_signal(void *param, calldata_t *)
+{
+    auto *ctx = static_cast<DestSignalCtx *>(param);
+    ctx->registry->on_attempt_started(ctx->id);
+}
+
+void on_destination_stop_signal(void *param, calldata_t *data)
+{
+    auto *ctx = static_cast<DestSignalCtx *>(param);
+    long long code = 0;
+    calldata_get_int(data, "code", &code);
+    const char *last_error = nullptr;
+    calldata_get_string(data, "last_error", &last_error);
+    ctx->registry->on_attempt_stopped(ctx->id, static_cast<int>(code), last_error);
+}
 
 bool DestinationRegistry::ensure_output(Destination &d, std::string &errOut)
 {
@@ -315,6 +530,13 @@ bool DestinationRegistry::ensure_output(Destination &d, std::string &errOut)
         if (!d.output) {
             errOut = std::string("could not create ") + outId;
             return false;
+        }
+        // ADR-005 §3.5 / #186: hook once, at output creation -- these fire
+        // for every attempt this Destination ever makes, not just the first.
+        if (signal_handler_t *sh = obs_output_get_signal_handler(d.output)) {
+            d.signal_ctx = std::make_unique<DestSignalCtx>(DestSignalCtx{this, d.id});
+            signal_handler_connect(sh, "start", on_destination_start_signal, d.signal_ctx.get());
+            signal_handler_connect(sh, "stop", on_destination_stop_signal, d.signal_ctx.get());
         }
     }
 
@@ -370,6 +592,16 @@ bool DestinationRegistry::ensure_output(Destination &d, std::string &errOut)
 void DestinationRegistry::release_destination_handles_locked(Destination &d)
 {
     if (d.output) {
+        // ADR-005 §3.5 / #186: disconnect before stopping -- a stop this
+        // function itself issues is a teardown, not an attempt settling, and
+        // must not produce a verdict (nor is on_attempt_stopped's registry
+        // lookup safe to re-enter while this call already holds mu_).
+        if (signal_handler_t *sh = obs_output_get_signal_handler(d.output)) {
+            signal_handler_disconnect(sh, "start", on_destination_start_signal, d.signal_ctx.get());
+            signal_handler_disconnect(sh, "stop", on_destination_stop_signal, d.signal_ctx.get());
+        }
+        d.signal_ctx.reset();
+
         // Drain the worker thread before release so we don't free
         // the output struct while a thread is mid-callback on it.
         //
@@ -427,9 +659,27 @@ bool DestinationRegistry::start(const std::string &id, std::string &errOut)
     auto &d = it->second;
     if (!ensure_output(d, errOut)) return false;
     if (obs_output_active(d.output)) { d.enabled = true; return true; }
+    // ADR-005 §3.5 / #186: a fresh attempt opens here -- the counter/timer
+    // are read by on_attempt_started/on_attempt_stopped for whichever verdict
+    // this attempt eventually settles with (sync decline, right below, or an
+    // async "start"/"stop" this same obs_output_start call is about to arm).
+    d.attempt += 1;
+    d.attempt_start_time = std::chrono::steady_clock::now();
+    d.attempt_went_active = false;
     if (!obs_output_start(d.output)) {
         const char *last = obs_output_get_last_error(d.output);
         errOut = last ? last : "obs_output_start declined";
+        // A synchronous refusal from obs_output_start carries no
+        // OBS_OUTPUT_* code (that only comes from the async "stop"
+        // signal) -- OBS_OUTPUT_ERROR (-4) is the honest sentinel: it
+        // falls through to "unknown" unless last_error's own text
+        // matches the auth patterns (still checked first). §3.5's authority
+        // split (issue #186) makes this attempt-settled's exclusive verdict
+        // -- emit_output_failed is NOT also called (two authorities for the
+        // same fact is exactly the risk that split exists to close).
+        std::string outName = "PulsarDest_" + d.id;
+        emit_output_attempt_settled(outName.c_str(), d.id.c_str(), d.attempt, /*live=*/false, /*is_local=*/false,
+                                     -4, errOut.c_str(), /*duration_ms=*/0);
         return false;
     }
     d.enabled = true;
@@ -453,6 +703,53 @@ bool DestinationRegistry::stop(const std::string &id)
     return true;
 }
 
+// ADR-005 §3.5 / #186: fired by on_destination_start_signal, i.e. exactly
+// when THIS destination's current attempt reaches "active" -- the moment
+// its verdict is decidable as a success.
+void DestinationRegistry::on_attempt_started(const std::string &id)
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = map_.find(id);
+    if (it == map_.end()) return; // removed between the signal firing and this call
+    auto &d = it->second;
+    d.attempt_went_active = true;
+    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - d.attempt_start_time)
+                            .count();
+    std::string outName = "PulsarDest_" + d.id;
+    emit_output_attempt_settled(outName.c_str(), d.id.c_str(), d.attempt, /*live=*/true, /*is_local=*/false,
+                                 /*code=*/0, /*last_error=*/nullptr, duration_ms);
+}
+
+// ADR-005 §3.5 / #186: fired by on_destination_stop_signal for EVERY stop,
+// whether the attempt ever went active or not -- the split lives here:
+//   - never went active -> this attempt's own failure, ours to settle;
+//     emit_output_failed is NOT called (§3.5's authority split).
+//   - went active already -> mid-diffusion, emit_output_failed's exclusive
+//     domain (#182); no attempt verdict (an attempt settles once).
+//   - code == 0 and never went active -> the client cancelled a still-
+//     connecting attempt. classify_output_failure has no class for code 0
+//     (RC7's own contract), so no verdict is built rather than forcing one.
+void DestinationRegistry::on_attempt_stopped(const std::string &id, int code, const char *last_error)
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = map_.find(id);
+    if (it == map_.end()) return;
+    auto &d = it->second;
+    bool wasActive = d.attempt_went_active;
+    d.attempt_went_active = false;
+    std::string outName = "PulsarDest_" + d.id;
+    if (wasActive) {
+        emit_output_failed(outName.c_str(), "active", /*is_local_output=*/false, code, last_error);
+    } else if (code != 0) {
+        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - d.attempt_start_time)
+                                .count();
+        emit_output_attempt_settled(outName.c_str(), d.id.c_str(), d.attempt, /*live=*/false, /*is_local=*/false,
+                                     code, last_error, duration_ms);
+    }
+}
+
 void DestinationRegistry::start_all()
 {
     std::lock_guard<std::mutex> lk(mu_);
@@ -464,10 +761,16 @@ void DestinationRegistry::start_all()
             continue;
         }
         if (obs_output_active(d.output)) continue;
+        d.attempt += 1;
+        d.attempt_start_time = std::chrono::steady_clock::now();
+        d.attempt_went_active = false;
         if (!obs_output_start(d.output)) {
             const char *last = obs_output_get_last_error(d.output);
             blog(LOG_WARNING, "[pulsar-multi-stream] start_all: %s declined (%s)",
                  d.id.c_str(), last ? last : "(null)");
+            std::string outName = "PulsarDest_" + d.id;
+            emit_output_attempt_settled(outName.c_str(), d.id.c_str(), d.attempt, /*live=*/false,
+                                         /*is_local=*/false, -4, last, /*duration_ms=*/0);
             continue;
         }
         d.enabled = true;
@@ -647,6 +950,8 @@ bool AdaptiveBitrate::apply_bitrate(obs_encoder_t *enc, long long new_kbps, cons
         obs_data_set_int(ev, "floor", state_.floor_kbps);
         obs_data_set_string(ev, "reason", reason);
         obs_data_set_double(ev, "drop_ratio", trigger_ratio);
+        // ADR-005 §3.3: added field, no existing field renamed or retyped.
+        obs_data_set_string(ev, "session", current_session_id().c_str());
         obs_websocket_vendor_emit_event(g_vendor, "BitrateAdjusted", ev);
     }
 
@@ -791,6 +1096,27 @@ AdaptiveBitrate::State AdaptiveBitrate::get_state() const
 
 AdaptiveBitrate *g_adaptive = nullptr;
 
+// ADR-005 F1 (issue #197): registers `secret` with pulsar-headless's
+// process-local SecretRegistry (main.cpp's g_secret_registry) via the SAME
+// global-proc-handler bridge on_get_diagnostics uses below -- this module
+// has no compile-time link to that .exe's translation unit. Best-effort by
+// design: if pulsar-headless hasn't installed the proc yet, or the call
+// otherwise fails, the pattern layer (log-handler.cpp) remains the fallback
+// net -- registration is never allowed to block or fail destination
+// creation itself.
+void register_stream_secret(const std::string &secret)
+{
+    if (secret.empty())
+        return;
+    proc_handler_t *globalPh = obs_get_proc_handler();
+    if (!globalPh)
+        return;
+    calldata_t cd = {0, 0, 0, 0};
+    calldata_set_string(&cd, "value", secret.c_str());
+    proc_handler_call(globalPh, "pulsar_log_register_secret", &cd);
+    calldata_free(&cd);
+}
+
 // ---- vendor request handlers ----------------------------------------------
 
 void on_get_destinations(obs_data_t * /*req*/, obs_data_t *res, void *)
@@ -829,6 +1155,15 @@ void on_create_destination(obs_data_t *req, obs_data_t *res, void *)
         obs_data_set_string(res, "error", err.c_str());
         return;
     }
+
+    // Register the raw stream key with pulsar-headless's log redactor only
+    // once it is known-good -- before it ever reaches
+    // DestinationRegistry::create (:474 -- d.key = key) or the RTMP service
+    // settings (:414), but after validate_destination_input so a rejected
+    // key never pollutes the registry (ADR-005 §5 R1; `err` above never
+    // contains the raw key).
+    if (key && *key)
+        register_stream_secret(key);
 
     // For a named platform the server URL is fixed; the user-supplied url
     // field is ignored. Stash the pinned URL so GetDestinations + diagnostics
@@ -2351,6 +2686,125 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
     obs_data_set_obj(res, "capabilities", caps);
 }
 
+// ---- ADR-005 §3.6: diagnostic surface --------------------------------------
+//
+// pulsar-headless's log diagnostics (g_log_diagnostics / g_log_sink -- this
+// module has no compile-time link to that .exe's translation unit) and
+// obs-websocket's bind state (Config is private to that DLL) are both
+// reached via the SAME global proc handler bridge obs-websocket's own API
+// handle uses (WebSocketApi::get_ph_cb / "obs_websocket_api_get_ph"): see
+// main.cpp's "pulsar_log_get_diagnostics" / "pulsar_log_stop_file_write"
+// and obs-websocket.cpp's "pulsar_websocket_is_loopback_only".
+
+void on_get_diagnostics(obs_data_t *req, obs_data_t *res, void *)
+{
+    long long maxLines = obs_data_has_user_value(req, "max_lines")
+                              ? obs_data_get_int(req, "max_lines")
+                              : static_cast<long long>(pulsar_log::DiagnosticsRing::kServerMaxLines);
+    if (maxLines < 0) maxLines = 0;
+
+    proc_handler_t *globalPh = obs_get_proc_handler();
+
+    calldata_t diagCd = {0, 0, 0, 0};
+    calldata_set_int(&diagCd, "max_lines", maxLines);
+    const bool diagCalled = globalPh && proc_handler_call(globalPh, "pulsar_log_get_diagnostics", &diagCd);
+    if (!diagCalled) {
+        obs_data_set_string(res, "error", "pulsar-headless diagnostics are unavailable");
+        calldata_free(&diagCd);
+        return;
+    }
+
+    // Counters + output state carry no message content -- served
+    // unconditionally, in both bind postures (ADR §3.6, RC24).
+    const long long errors = calldata_int(&diagCd, "errors");
+    const long long warnings = calldata_int(&diagCd, "warnings");
+    const long long infos = calldata_int(&diagCd, "infos");
+    const long long debugs = calldata_int(&diagCd, "debugs");
+    obs_data_set_int(res, "count_error", errors);
+    obs_data_set_int(res, "count_warn", warnings);
+    obs_data_set_int(res, "count_info", infos);
+    obs_data_set_int(res, "count_debug", debugs);
+
+    OBSDataArrayAutoRelease outputs = obs_data_array_create();
+    for (const auto &desc : kAudioTrackOutputs) {
+        OBSOutputAutoRelease output = desc.get();
+        if (!output) continue; // absent, never a fabricated entry
+        OBSDataAutoRelease entry = obs_data_create();
+        obs_data_set_string(entry, "output", desc.name);
+        obs_data_set_bool(entry, "active", obs_output_active(output));
+        obs_data_array_push_back(outputs, entry);
+    }
+    obs_data_set_array(res, "outputs", outputs);
+
+    OBSDataArrayAutoRelease destinations = obs_data_array_create();
+    for (auto &s : g_registry->snapshot()) {
+        OBSDataAutoRelease entry = obs_data_create();
+        obs_data_set_string(entry, "id", s.id.c_str());
+        obs_data_set_string(entry, "name", s.name.c_str());
+        obs_data_set_string(entry, "kind", s.kind.c_str());
+        obs_data_set_bool(entry, "enabled", s.enabled);
+        obs_data_set_bool(entry, "active", s.active);
+        obs_data_array_push_back(destinations, entry);
+    }
+    obs_data_set_array(res, "destinations", destinations);
+
+    // Everything below carries message content -- the log path and the
+    // WARN/ERROR tail -- and is refused outright, with a named reason, the
+    // moment the bind is not provably loopback-only (ADR §3.6, RC24). A
+    // failure to even query the bind state (obs-websocket absent) is the
+    // same refusal: unknown is never treated as loopback.
+    calldata_t lbCd = {0, 0, 0, 0};
+    const bool lbCalled = globalPh && proc_handler_call(globalPh, "pulsar_websocket_is_loopback_only", &lbCd);
+    const bool loopback = lbCalled && calldata_bool(&lbCd, "loopback");
+    calldata_free(&lbCd);
+
+    if (!loopback) {
+        obs_data_set_string(res, "error",
+                            lbCalled ? "log content refused: obs-websocket is not bound to the loopback "
+                                       "interface (PULSAR_WS_BIND); counters and output state above remain valid"
+                                     : "log content refused: bind state could not be determined; counters and "
+                                       "output state above remain valid");
+        void *linesPtr = nullptr;
+        if (calldata_get_ptr(&diagCd, "lines", &linesPtr) && linesPtr)
+            obs_data_array_release(static_cast<obs_data_array_t *>(linesPtr));
+        calldata_free(&diagCd);
+        return;
+    }
+
+    const char *path = calldata_string(&diagCd, "path");
+    if (calldata_bool(&diagCd, "path_known"))
+        obs_data_set_string(res, "log_path", path ? path : "");
+
+    void *linesPtr = nullptr;
+    if (calldata_get_ptr(&diagCd, "lines", &linesPtr) && linesPtr) {
+        OBSDataArrayAutoRelease lines = static_cast<obs_data_array_t *>(linesPtr);
+        obs_data_set_array(res, "recent_warn_error_lines", lines);
+    }
+    calldata_free(&diagCd);
+}
+
+// §3.6.2: asymmetric kill switch. Takes no request fields -- there is no
+// path to parameterise, it acts on the one file sink pulsar-headless
+// already owns. A second call is a no-op reporting `already_stopped`, not
+// an error, and never reopens the file (pulsar_log_stop_file_write_cb,
+// main.cpp, guards on LogFileSink::opened()).
+void on_stop_log_file_write(obs_data_t * /*req*/, obs_data_t *res, void *)
+{
+    proc_handler_t *globalPh = obs_get_proc_handler();
+    calldata_t cd = {0, 0, 0, 0};
+    const bool called = globalPh && proc_handler_call(globalPh, "pulsar_log_stop_file_write", &cd);
+    if (!called) {
+        obs_data_set_string(res, "error", "pulsar-headless log sink is unavailable");
+        calldata_free(&cd);
+        return;
+    }
+
+    obs_data_set_bool(res, "stopped", calldata_bool(&cd, "stopped"));
+    obs_data_set_bool(res, "already_stopped", calldata_bool(&cd, "already_stopped"));
+    if (const char *path = calldata_string(&cd, "path"))
+        obs_data_set_string(res, "log_path", path);
+    calldata_free(&cd);
+}
 
 } // namespace
 
@@ -2370,6 +2824,25 @@ bool obs_module_load(void)
 void obs_module_post_load(void)
 {
     g_vendor = obs_websocket_register_vendor("pulsar");
+
+    // Registered regardless of whether the vendor came up: emit_output_failed
+    // no-ops (with a warning) on a null g_vendor, and frontend-stub's own
+    // setup() runs after obs_post_load_modules, so the proc is always here
+    // by the time OnStreamStop/OnVCamStop can call it (#182, see the
+    // emit_output_failed_proc comment near DestinationRegistry).
+    proc_handler_add(obs_get_proc_handler(),
+        "void pulsar_multi_stream_emit_output_failed(string output, string phase, "
+        "bool is_local_output, int code, string last_error)",
+        emit_output_failed_proc, nullptr);
+
+    // ADR-005 §3.5 / #186: same cross-plugin bridge, same registration
+    // timing rationale, for pulsar-frontend-stub's stream/virtualcam attempt
+    // verdicts (emit_output_attempt_settled_proc, see its comment).
+    proc_handler_add(obs_get_proc_handler(),
+        "void pulsar_multi_stream_emit_output_attempt_settled(string output, string destination, "
+        "int attempt, bool live, bool is_local_output, int code, string last_error, int duration_ms)",
+        emit_output_attempt_settled_proc, nullptr);
+
     if (!g_vendor) {
         blog(LOG_WARNING, "[pulsar-multi-stream] obs-websocket not present; vendor API disabled");
         return;
@@ -2391,8 +2864,10 @@ void obs_module_post_load(void)
     obs_websocket_vendor_register_request(g_vendor, "SetAdaptiveEnabled",   on_set_adaptive_enabled, nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetMonitoringDeviceList", on_get_monitoring_device_list, nullptr);
     obs_websocket_vendor_register_request(g_vendor, "SetMonitoringDevice",  on_set_monitoring_device, nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "GetDiagnostics",      on_get_diagnostics,     nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "StopLogFileWrite",    on_stop_log_file_write, nullptr);
 
-    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 16 requests");
+    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 18 requests");
 
     // Phase 12b: spin up the adaptive bitrate worker AFTER vendor registration
     // so its emit_event path has a valid handle.
