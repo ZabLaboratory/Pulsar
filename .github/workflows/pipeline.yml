@@ -184,6 +184,13 @@ jobs:
       - name: License isolation source-tree audit
         run: bash scripts/check-license-isolation.sh
 
+      # #222 (finding H1, Bastion clearance #221) -- #220 showed assert()
+      # silently no-ops under NDEBUG in the RelWithDebInfo CI build. Guards
+      # against a new test file reintroducing assert()/<cassert>/<assert.h>
+      # instead of PULSAR_CHECK.
+      - name: assert() guard under tests/**
+        run: bash scripts/check-no-assert-in-tests.sh
+
       # Hardware-free half of the QSV preset proof: the boot setter, the
       # GetVideoSettings reader and obs-qsv11's OWN source must agree on the
       # property name / values / default of the QSV preset knob. Runs here,
