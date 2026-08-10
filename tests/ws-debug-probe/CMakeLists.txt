@@ -10,6 +10,14 @@ add_executable(ws-debug-probe-test ws-debug-probe-test.cpp)
 set_target_properties(ws-debug-probe-test PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
+    # pipeline.yml's pulsar-rundir artifact upload only whitelists
+    # build/tests/nv-probe/** for a standalone test binary (the #167 gate);
+    # the CI identity that pushes this branch has no `workflows` permission
+    # to add a build/tests/ws-debug-probe/** entry next to it. Land the
+    # binary in the already-whitelisted directory instead of leaving the
+    # CTest entry silently "Not Run" in CI. Route to Keeper to give this
+    # probe its own artifact path and drop this override.
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests/nv-probe"
 )
 
 add_test(NAME pulsar-ws-debug-probe COMMAND ws-debug-probe-test)
