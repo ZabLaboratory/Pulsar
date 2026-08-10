@@ -586,3 +586,69 @@ ont déjà été écrits sur le disque de l'opérateur, et un revert les y laiss
   manifesterait en direct.
 - **Croissance disque (R2)** — abaissement des plafonds par variable d'environnement, effectif au
   démarrage suivant.
+
+---
+
+## Amendment 1 — R10 : précondition de déploiement sur la DACL du répertoire d'installation
+
+- **Status**: accepted
+- **Date**: 2026-08-10
+- **Decided**: 2026-08-10
+- **Deciders**: @ClodoCapeo
+- **Author**: Atlas
+
+> Cet amendement ne réécrit ni ne corrige §1–§7 : il **ajoute** une entrée `R10` à la suite de
+> `R9` en §5 Risks, et deux critères de résolution qui lui sont propres. Origine : clearance
+> Bastion du 2026-08-10 sur la PR #194 (`forge/181-acl-create-new`, SHA `ab27d146`), issue #181,
+> finding **N1** — résidu non bloquant, veto du `4a4da40` levé par correction. §3 ne spécifiait
+> pas la création du répertoire `obs-websocket/` ; l'implémentation retenue le durcit **a
+> posteriori** par handle (`harden_directory_dacl()`, `SetSecurityInfo`) au lieu de refuser un
+> répertoire préexistant inscriptible — déviation assumée vs le remède F3 annoncé, et cause
+> directe du résidu ci-dessous. Suivi de durcissement : #201.
+
+### A1.1 — Entrée ajoutée en §5 Risks, à la suite de R9
+
+- R10 — **Risque résiduel accepté — précondition de déploiement sur la DACL du répertoire
+  d'installation.** Résidu de R9 après son traitement par l'unité dédiée (#181, PR #194). Le
+  seed de `obs-websocket/config.json` garantit la confidentialité du mot de passe de session et
+  l'échec fermé du boot **sous réserve que le répertoire parent de `obs-websocket/` ne soit
+  inscriptible par aucun compte local autre que celui qui exécute `pulsar.exe` (et les
+  administrateurs)**. Si cette précondition n'est pas tenue, un compte local tiers peut
+  pré-créer `obs-websocket/` — en répertoire ou en jonction — et en rester propriétaire ; la
+  propriété confère `WRITE_DAC` de façon permanente, ce qui lui permet de rétablir ses propres
+  droits après le durcissement effectué au boot, puis de substituer `config.json` entre sa
+  publication atomique (`MoveFileExA`) et sa lecture par `obs-websocket` pendant
+  `obs_load_all_modules`. L'impact est un contournement d'authentification (RPC v5 complet :
+  scènes, outputs, URLs de browser-source), non une divulgation du mot de passe, que la DACL du
+  fichier continue de protéger. Cette précondition est **acceptée** en l'état : Pulsar est
+  déployé embarqué par Prism dans un répertoire per-utilisateur. Son durcissement en profondeur
+  — création du répertoire via `CreateDirectoryA` avec la `SECURITY_ATTRIBUTES` protégée,
+  ouverture avec `FILE_FLAG_OPEN_REPARSE_POINT` et refus de tout point d'analyse, vérification
+  du propriétaire du répertoire, et re-vérification par handle du descripteur de sécurité de
+  `config.json` après le rename — est suivi hors de ce lot, par #201. Mitigation en vigueur :
+  `harden_directory_dacl()` ré-applique inconditionnellement, à chaque boot et par handle, une
+  DACL protégée user-only (self-healing, fail-closed) ; elle réduit la fenêtre sans la fermer,
+  la propriété du répertoire restant à l'attaquant dans le scénario ci-dessus.
+
+### A1.2 — Resolution criteria de cet amendement
+
+- A1.RC1 — `grep -n "R10" docs/adr/005-go-live-failure-diagnosability.md` retourne l'entrée
+  ci-dessus, et l'issue de durcissement #201 cite `docs/adr/005 §5 R10` dans sa provenance
+  canonique. #201 reste ouverte tant que les quatre gestes nommés (création avec
+  `SECURITY_ATTRIBUTES` protégée, `FILE_FLAG_OPEN_REPARSE_POINT` + refus de point d'analyse,
+  vérification du propriétaire du répertoire, re-vérification par handle après le rename) ne
+  sont pas livrés **et** exercés par une sonde.
+- A1.RC2 — La précondition est un invariant de **déploiement**, pas une propriété du code :
+  toute unité qui installe, déplace ou embarque `pulsar.exe` ailleurs que dans un répertoire
+  per-utilisateur (typiquement `%ProgramFiles%` ou tout chemin machine partagé) cite R10 et
+  obtient une clearance Bastion explicite avant merge. Preuve : commentaire de clearance nommant
+  R10 sur la PR concernée ; à défaut, le merge est refusé.
+
+### A1.3 — Ce que cet amendement ne décide pas
+
+N2 (TOCTOU gratuit du `CREATE_NEW` refermé puis rouvert par chemin), N3 (`config.*.tmp`
+orphelin porteur du mot de passe, pas de balayage au boot), N4 (branche `#else` non-Windows :
+`ofstream` + umask, aucun équivalent fail-closed), N5 (`generate_session_password` :
+`mt19937_64`, entropie plafonnée à 64 bits, PRNG non cryptographique) et N7 (aucun test négatif
+du chemin d'abort F2) restent **hors périmètre** de cet amendement. Ils ne sont ni acceptés, ni
+clos par lui.
