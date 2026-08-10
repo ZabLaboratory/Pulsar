@@ -131,33 +131,38 @@ void test_pattern_layer_url_and_query_params_unregistered()
 {
     // rtmp:// / rtmps:// URLs, INCLUDING the path/key, redacted even when
     // the value was never registered -- the pattern layer stands alone.
-    auto r1 = pulsar_log::redact_patterns("connecting to rtmp://ingest.example/live/sk_live_abc123");
+    auto r1 = pulsar_log::redact_patterns(
+        "connecting to rtmp://ingest.example/live/sk_live_abc123"); // pragma: allowlist secret
     assert(r1.has_value());
     assert(r1->find("sk_live_abc123") == std::string::npos);
     assert(r1->find("rtmp://[REDACTED]") != std::string::npos);
 
-    auto r2 = pulsar_log::redact_patterns("rtmps://ingest.example/app/other_secret_key");
+    auto r2 = pulsar_log::redact_patterns(
+        "rtmps://ingest.example/app/other_secret_key"); // pragma: allowlist secret
     assert(r2.has_value());
     assert(r2->find("other_secret_key") == std::string::npos);
 
     // Sensitive query params, several casings.
-    auto r3 = pulsar_log::redact_patterns("GET /source?Token=abc&Auth=def&sig=ghi");
+    auto r3 = pulsar_log::redact_patterns(
+        "GET /source?Token=abc&Auth=def&sig=ghi"); // pragma: allowlist secret
     assert(r3.has_value());
     assert(r3->find("abc") == std::string::npos);
     assert(r3->find("def") == std::string::npos);
     assert(r3->find("ghi") == std::string::npos);
 
     // token%3D encoded form.
-    auto r4 = pulsar_log::redact_patterns("source url ...token%3Dshowtoken123...");
+    auto r4 = pulsar_log::redact_patterns(
+        "source url ...token%3Dshowtoken123..."); // pragma: allowlist secret
     assert(r4.has_value());
     assert(r4->find("showtoken123") == std::string::npos);
 
     // key field, different casing of the field name (not the value).
-    auto r5 = pulsar_log::redact_patterns(R"(destination settings: "Key": "flowkey987")");
+    auto r5 = pulsar_log::redact_patterns(
+        R"(destination settings: "Key": "flowkey987")"); // pragma: allowlist secret
     assert(r5.has_value());
     assert(r5->find("flowkey987") == std::string::npos);
 
-    auto r6 = pulsar_log::redact_patterns("server_password=hunter2pw");
+    auto r6 = pulsar_log::redact_patterns("server_password=hunter2pw"); // pragma: allowlist secret
     assert(r6.has_value());
     assert(r6->find("hunter2pw") == std::string::npos);
 }
@@ -181,40 +186,45 @@ void test_pattern_layer_abandons_oversized_line()
 
 void test_registry_layer_bare_embedded_repeated()
 {
+    // Named once so the literal appears on exactly one line (with its
+    // allowlist pragma) instead of being repeated -- and re-flagged --
+    // across every assertion below.
+    static const std::string kFixtureSecret = "SUPERSECRETKEY99"; // pragma: allowlist secret
+
     pulsar_log::SecretRegistry registry;
-    registry.register_secret("SUPERSECRETKEY99");
+    registry.register_secret(kFixtureSecret);
 
     // Bare, nude occurrence.
-    auto bare = pulsar_log::redact_line("stream key accepted: SUPERSECRETKEY99", registry);
+    auto bare = pulsar_log::redact_line("stream key accepted: " + kFixtureSecret, registry);
     assert(bare.has_value());
-    assert(bare->find("SUPERSECRETKEY99") == std::string::npos);
+    assert(bare->find(kFixtureSecret) == std::string::npos);
     assert(bare->find("[REDACTED]") != std::string::npos);
 
     // Embedded inside an otherwise-unstructured string (not caught by the
     // pattern layer's field/URL forms -- only the registry can catch this).
     auto embedded =
-        pulsar_log::redact_line("dump: prefix-SUPERSECRETKEY99-suffix", registry);
+        pulsar_log::redact_line("dump: prefix-" + kFixtureSecret + "-suffix", registry);
     assert(embedded.has_value());
-    assert(embedded->find("SUPERSECRETKEY99") == std::string::npos);
+    assert(embedded->find(kFixtureSecret) == std::string::npos);
 
     // Repeated twice on the same line -- both occurrences must go.
-    auto repeated = pulsar_log::redact_line(
-        "SUPERSECRETKEY99 seen again: SUPERSECRETKEY99", registry);
+    auto repeated =
+        pulsar_log::redact_line(kFixtureSecret + " seen again: " + kFixtureSecret, registry);
     assert(repeated.has_value());
-    assert(repeated->find("SUPERSECRETKEY99") == std::string::npos);
+    assert(repeated->find(kFixtureSecret) == std::string::npos);
 
     // The two layers are exercised separately: pattern layer alone (empty
     // registry) does NOT know about this bare value -- it has no
     // recognizable form -- so it must survive un-redacted at that layer.
-    auto pattern_only = pulsar_log::redact_patterns("bare value SUPERSECRETKEY99 with no field");
+    auto pattern_only = pulsar_log::redact_patterns("bare value " + kFixtureSecret + " with no field");
     assert(pattern_only.has_value());
-    assert(pattern_only->find("SUPERSECRETKEY99") != std::string::npos);
+    assert(pattern_only->find(kFixtureSecret) != std::string::npos);
 }
 
 void test_redact_line_abandons_when_pattern_layer_fails()
 {
     pulsar_log::SecretRegistry registry;
-    registry.register_secret("irrelevant");
+    registry.register_secret("irrelevant"); // pragma: allowlist secret
     std::string huge(64 * 1024, 'x');
     auto r = pulsar_log::redact_line(huge, registry);
     assert(!r.has_value());
