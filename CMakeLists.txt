@@ -99,4 +99,10 @@ if(WIN32)
     # No pulsar.exe, no libobs/Qt: a boolean-predicate mirror is enough to
     # gate the merge (see tests/ws-debug-probe/ws-debug-probe-test.cpp).
     add_subdirectory(tests/ws-debug-probe)
+
+    # #183 -- ADR-005 §3.1-§3.2 log handler: formatting + two-layer
+    # redaction + rotation/ACL, built from the real
+    # plugins/pulsar-headless/log-handler.cpp translation unit (see
+    # tests/log-handler-probe/log-handler-probe-test.cpp).
+    add_subdirectory(tests/log-handler-probe)
 endif()

@@ -25,6 +25,7 @@
 
 #include <obs.h>
 
+#include "log-handler.h"
 #include "pulsar-frontend-stub.h"
 
 #include <QtCore/QByteArray>
@@ -32,11 +33,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <random>
 #include <string>
 #include <thread>
@@ -57,6 +61,82 @@ std::atomic<bool> g_running(true);
 // process via the PULSAR_READY stdout sentinel.
 int  g_session_port     = 4455;
 std::string g_session_password;
+
+// ADR-005 §3.1-§3.2: the log handler's registry-layer state and file sink.
+// `g_log_session_id` is the reserved `session` field of the log line
+// gabarit -- filled in by a later issue; kept empty here.
+pulsar_log::SecretRegistry g_secret_registry;
+std::unique_ptr<pulsar_log::LogFileSink> g_log_sink;
+std::mutex g_log_mutex;
+const std::string g_log_session_id;
+
+// base_set_log_handler callback. Formats, redacts (both layers), then
+// writes the SAME redacted line to stderr and to the rotating file --
+// never the raw one, on either destination (ADR §3.2 "posture d'échec,
+// non négociable": a line whose redaction can't be trusted is abandoned
+// entirely, not just kept off the file).
+void pulsar_log_handler(int log_level, const char *format, va_list args, void * /*param*/)
+{
+    char buf[4096];
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int written = std::vsnprintf(buf, sizeof(buf), format, args_copy);
+    va_end(args_copy);
+    std::string message = (written > 0)
+        ? std::string(buf, static_cast<std::size_t>(written) < sizeof(buf)
+                               ? static_cast<std::size_t>(written)
+                               : sizeof(buf) - 1)
+        : std::string();
+
+    pulsar_log::Level level;
+    switch (log_level) {
+    case LOG_ERROR:
+        level = pulsar_log::Level::Error;
+        break;
+    case LOG_WARNING:
+        level = pulsar_log::Level::Warn;
+        break;
+    case LOG_DEBUG:
+        level = pulsar_log::Level::Debug;
+        break;
+    case LOG_INFO:
+    default:
+        level = pulsar_log::Level::Info;
+        break;
+    }
+
+    std::string trimmed_message;
+    std::string subsystem = pulsar_log::derive_subsystem(message, trimmed_message);
+    std::string line =
+        pulsar_log::format_line(level, g_log_session_id, subsystem, trimmed_message);
+
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    auto redacted = pulsar_log::redact_line(line, g_secret_registry);
+    if (!redacted)
+        return; // abandon: neither destination gets an unverified line
+
+    std::fprintf(stderr, "%s\n", redacted->c_str());
+    std::fflush(stderr);
+
+    if (g_log_sink && g_log_sink->opened())
+        g_log_sink->write_line(*redacted);
+}
+
+// Installs base_set_log_handler and opens the rotating file sink. Must run
+// BEFORE obs_startup (ADR §3.1) so every libobs blog() call, including
+// ones emitted during startup itself, is captured. A file-open failure
+// degrades to stderr-only, logged as its own ERROR line on stderr -- boot
+// continues either way.
+void install_pulsar_log_handler()
+{
+    g_log_sink = std::make_unique<pulsar_log::LogFileSink>(pulsar_log::default_log_dir(),
+                                                             pulsar_log::rotation_config_from_env());
+    if (!g_log_sink->opened()) {
+        std::fprintf(stderr, "ERROR pulsar-headless: log file unavailable (%s)\n",
+                     g_log_sink->error().c_str());
+    }
+    base_set_log_handler(pulsar_log_handler, nullptr);
+}
 
 #ifdef _WIN32
 BOOL WINAPI console_ctrl_handler(DWORD ctrl_type)
@@ -141,7 +221,7 @@ bool reset_video()
         if (v == 24 || v == 30 || v == 48 || v == 60 || v == 120)
             fps = v;
         else
-            std::fprintf(stderr, "pulsar-headless: PULSAR_FPS=%s rejected; using %d\n", e, fps);
+            blog(LOG_WARNING, "[pulsar-headless] PULSAR_FPS=%s rejected; using %d", e, fps);
     }
     ovi.fps_num = fps;
     ovi.fps_den = 1;
@@ -153,8 +233,8 @@ bool reset_video()
             w <= 7680 && h <= 4320) {
             width = w; height = h;
         } else {
-            std::fprintf(stderr, "pulsar-headless: PULSAR_RESOLUTION=%s rejected; using %dx%d\n",
-                         e, width, height);
+            blog(LOG_WARNING, "[pulsar-headless] PULSAR_RESOLUTION=%s rejected; using %dx%d",
+                 e, width, height);
         }
     }
     ovi.base_width = width;
@@ -170,12 +250,10 @@ bool reset_video()
 
     int result = obs_reset_video(&ovi);
     if (result != OBS_VIDEO_SUCCESS) {
-        std::fprintf(stderr,
-                     "pulsar-headless: obs_reset_video failed (%d)\n",
-                     result);
+        blog(LOG_ERROR, "[pulsar-headless] obs_reset_video failed (%d)", result);
         return false;
     }
-    std::fprintf(stdout, "pulsar-headless: video %dx%d @ %d fps\n", width, height, fps);
+    blog(LOG_INFO, "[pulsar-headless] video %dx%d @ %d fps", width, height, fps);
     return true;
 }
 
@@ -217,8 +295,8 @@ std::string resolve_default_render_device_id()
     HRESULT co_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     bool co_owned = SUCCEEDED(co_hr);
     if (co_hr != RPC_E_CHANGED_MODE && FAILED(co_hr)) {
-        std::fprintf(stderr, "pulsar-headless: CoInitializeEx failed (0x%08lx)\n",
-                     static_cast<unsigned long>(co_hr));
+        blog(LOG_ERROR, "[pulsar-headless] CoInitializeEx failed (0x%08lx)",
+             static_cast<unsigned long>(co_hr));
         return result;
     }
 
@@ -254,9 +332,8 @@ std::string resolve_default_render_device_id()
         CoUninitialize();
 
     if (result.empty()) {
-        std::fprintf(stderr,
-                     "pulsar-headless: could not resolve the default playback device id (0x%08lx)\n",
-                     static_cast<unsigned long>(hr));
+        blog(LOG_WARNING, "[pulsar-headless] could not resolve the default playback device id (0x%08lx)",
+             static_cast<unsigned long>(hr));
     }
     return result;
 }
@@ -269,7 +346,7 @@ bool reset_audio()
     oai.speakers = SPEAKERS_STEREO;
 
     if (!obs_reset_audio(&oai)) {
-        std::fprintf(stderr, "pulsar-headless: obs_reset_audio failed\n");
+        blog(LOG_ERROR, "[pulsar-headless] obs_reset_audio failed");
         return false;
     }
 
@@ -295,16 +372,16 @@ bool reset_audio()
 #endif
         if (!resolved_id.empty()) {
             obs_set_audio_monitoring_device("Default", resolved_id.c_str());
-            std::fprintf(stdout, "pulsar-headless: audio monitoring device bound (resolved default, id=%s)\n",
-                         resolved_id.c_str());
+            blog(LOG_INFO, "[pulsar-headless] audio monitoring device bound (resolved default, id=%s)",
+                 resolved_id.c_str());
         } else {
             obs_set_audio_monitoring_device("Default", "default");
-            std::fprintf(stdout,
-                         "pulsar-headless: audio monitoring device bound (default sentinel -- id resolution "
-                         "failed, ZabCapture sources will self-monitor-guard silent)\n");
+            blog(LOG_INFO,
+                 "[pulsar-headless] audio monitoring device bound (default sentinel -- id resolution "
+                 "failed, ZabCapture sources will self-monitor-guard silent)");
         }
     } else {
-        std::fprintf(stderr, "pulsar-headless: audio monitoring unavailable on this platform build\n");
+        blog(LOG_WARNING, "[pulsar-headless] audio monitoring unavailable on this platform build");
     }
 
     return true;
@@ -355,9 +432,8 @@ void seed_websocket_config()
         if (v > 0 && v < 65536) {
             g_session_port = v;
         } else {
-            std::fprintf(stderr,
-                         "pulsar-headless: PULSAR_PORT=%s rejected; using %d\n",
-                         e, g_session_port);
+            blog(LOG_WARNING, "[pulsar-headless] PULSAR_PORT=%s rejected; using %d",
+                 e, g_session_port);
         }
     }
 
@@ -366,6 +442,11 @@ void seed_websocket_config()
     } else {
         g_session_password = generate_session_password();
     }
+    // ADR-005 §3.2 registry layer: this is the one secret main.cpp itself
+    // creates, registered the moment it exists so the log handler's
+    // registry-layer redaction covers it even if it later surfaces bare
+    // (with no recognizable field/URL form) via a debug dump.
+    g_secret_registry.register_secret(g_session_password);
 
     // obs-websocket persists its config under <cwd>/obs-websocket/
     // when running headless (no profile path). pulsar.exe is always
@@ -376,16 +457,14 @@ void seed_websocket_config()
     std::error_code ec;
     fs::create_directories("obs-websocket", ec);
     if (ec) {
-        std::fprintf(stderr,
-                     "pulsar-headless: could not create obs-websocket/ dir: %s\n",
-                     ec.message().c_str());
+        blog(LOG_ERROR, "[pulsar-headless] could not create obs-websocket/ dir: %s",
+             ec.message().c_str());
         return;
     }
 
     std::ofstream out("obs-websocket/config.json", std::ios::binary | std::ios::trunc);
     if (!out) {
-        std::fprintf(stderr,
-                     "pulsar-headless: could not write obs-websocket/config.json\n");
+        blog(LOG_ERROR, "[pulsar-headless] could not write obs-websocket/config.json");
         return;
     }
     // Hand-rolled JSON -- the only consumer is obs-websocket itself
@@ -419,8 +498,13 @@ int main(int argc, char **argv)
 
     QApplication qt_app(argc, argv);
 
+    // ADR-005 §3.1: installed before obs_startup so every blog() call from
+    // here on -- including ones libobs itself emits during startup -- is
+    // captured by our durable, redacted log handler.
+    install_pulsar_log_handler();
+
     if (!obs_startup("en-US", nullptr, nullptr)) {
-        std::fprintf(stderr, "pulsar-headless: obs_startup failed\n");
+        blog(LOG_ERROR, "[pulsar-headless] obs_startup failed");
         return 1;
     }
 
@@ -470,8 +554,7 @@ int main(int argc, char **argv)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    std::printf("pulsar-headless: shutting down\n");
-    std::fflush(stdout);
+    blog(LOG_INFO, "[pulsar-headless] shutting down");
 
     pulsar_frontend_shutdown();
     obs_shutdown();
