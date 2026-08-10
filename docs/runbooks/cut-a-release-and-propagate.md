@@ -1,18 +1,34 @@
 # Runbook — cut a Pulsar release and propagate it to consumers
 
 **Owner**: Keeper prepares (bump, branch, PR); **Eleven** merges the release PR and
-pushes the protected tag under App `eleven-by-clodocapeo`, the only identity carrying
-`Administration: write` (`docs/rules/github-app-agents.md` §4/§11). Corrected
-2026-08-10 by Scribe after a Bastion audit: this runbook predates the per-agent
-GitHub Apps (created 2026-08-09/10) and still described the merge/tag step run
-under the human account `ClodoCapeo` with `--admin`. Keeper's `merge-operator`
-profile carries no `Administration` permission and, per §11, no App ever bypasses a
-ruleset. See the explicit handoff at step 6 below.
+pushes the protected tag under App `eleven-by-clodocapeo`. Corrected 2026-08-10 after
+a Bastion audit: this runbook predates the per-agent GitHub Apps (created
+2026-08-09/10) and still described the merge/tag step run under the human account
+`ClodoCapeo`. Keeper's `merge-operator` profile carries no `Administration`
+permission and never merges/tags a protected ref itself — it stops at an open,
+green PR (doctrine étage 0, `docs/rules/github-app-agents.md` §4, hors dépôt).
+
+This repo's actual required-checks gate does not clear on `main` for a docs-only
+diff (`docs/**`/`**/*.md` never trigger the 4 required `pipeline.yml` checks —
+tracked as Pulsar#205), so **every merge onto `main` today, including this one,
+goes through `gh pr merge --squash --admin`** under Eleven's org-level
+`Administration: write` — observed four times on 2026-08-10 (PR#200, PR#203, PR#204,
+tag `v1.8.0`). `docs/rules/github-app-agents.md` §11 states no App should need to
+bypass a ruleset; that aspiration and this repo's actual gate configuration
+currently diverge. This runbook describes the gate as it behaves today, not as §11
+aspires to it — the doctrine/reality gap is a separate open point (routed to
+Atlas/Bastion, not resolved by editing this runbook). See the explicit handoff at
+step 6 below.
 **First written**: 2026-07-26, during the v1.2.2 release
 (RTMPS Twitch ingest, #113 / PR #114 — the fix that motivated the runbook).
-**Last exercised**: 2026-07-28, v1.5.0 (`youtube` destination kind #162 +
-graphics adapters / output scales manifest block #163, PR #164) — release cut
-squash-merged by Keeper without review under the hotfix exception
+**Last exercised**: 2026-08-10, v1.8.0 (ADR-005 go-live failure diagnosability,
+PR #204; consumer Prism PR #700) — first run under the per-agent Apps: Keeper
+prepared the bump/branch/PR, hit the merge/tag gate described above, and handed
+off to Eleven, who merged (`--admin`) and pushed the tag. This is the run that
+proved the Keeper→Eleven handoff and motivated this resync.
+Previously: 2026-07-28, v1.5.0 (`youtube` destination kind #162 +
+graphics adapters / output scales manifest block #163, PR #164) — pre-Apps era,
+release cut squash-merged by Keeper without review under the hotfix exception
 (`docs/rules/git.md`, Gate point 2): urgent (the merged chain is dormant on the
 artefact side, and Prism #473 plus the B8/B1 issues are blocked on it),
 infra-pure (VERSION / CHANGELOG / 3 × package.json / lockfile, zero code),
@@ -76,12 +92,15 @@ the old binary — silently, because
    (`docs/rules/github-app-agents.md` §4/§11) — Keeper's job stops at an
    open, green PR.
 6. **Handoff to Eleven for merge + tag.** Once CI is green on the PR, Keeper
-   hands off to Eleven: Eleven merges the release PR (squash, App
-   `eleven-by-clodocapeo`, no bypass — §11 forbids any App bypassing a
-   ruleset) and pushes the annotated tag `vX.Y.Z` on `main` HEAD. The tag is
-   what unlocks the release-grade stages; `pipeline.yml` gates them on
-   `startsWith(github.ref, 'refs/tags/v')`. Only Eleven's App carries the
-   `Administration: write` a protected-tag push requires.
+   hands off to Eleven: Eleven merges the release PR
+   (`gh pr merge <n> --squash --admin`, App `eleven-by-clodocapeo`, org-level
+   `Administration: write`) and pushes the annotated tag `vX.Y.Z` on `main`
+   HEAD. The tag is what unlocks the release-grade stages; `pipeline.yml`
+   gates them on `startsWith(github.ref, 'refs/tags/v')`. `--admin` is
+   required here today because a docs-only bump diff never triggers the 4
+   required `pipeline.yml` checks (Pulsar#205) — Eleven is the only identity
+   in the fleet that can clear that gate. This is the runbook describing the
+   gate as it behaves, not an endorsement of the gap.
 7. **Watch `pipeline.yml` on the tag** — four tag-only outcomes matter:
    - `publish @clodocapeo/pulsar-* to npm` (needs only `lint`, so it lands
      in ~2 min) — requires `secrets.NPM_TOKEN`; the job re-checks that the
@@ -158,10 +177,10 @@ the old binary — silently, because
   human account with `--admin`): two failed attempts, and each one leaves
   the local checkout switched back to a `main` that does not yet carry the
   bump, so `cat VERSION` reads the OLD number and looks like the merge
-  silently did nothing. Since the per-agent GitHub Apps (2026-08-09/10),
-  this merge is Eleven's, not Keeper's: Eleven merges with a plain squash —
-  never `--admin` (§11, no App bypass) — and re-checks `VERSION` after the
-  `git pull`.
+  silently did nothing. Since the per-agent GitHub Apps (2026-08-09/10), this
+  merge is Eleven's, not Keeper's: Eleven merges with `--squash --admin` (see
+  the handoff note at step 6 — the admin bypass is required by this repo's
+  current gate, not optional) and re-checks `VERSION` after the `git pull`.
 - **A stale local checkout hides the very code you are releasing.** At v1.3.0
   the working copy was 5 commits behind `origin/main`: `wire.ts` showed no
   `version` / `capabilities` / `regimes` and the release looked pointless.
