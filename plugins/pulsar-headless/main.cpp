@@ -40,13 +40,16 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <vector>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <functiondiscoverykeys_devpkey.h>
+#include <aclapi.h>
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "advapi32.lib")
 #endif
 
 namespace {
@@ -348,6 +351,88 @@ std::string generate_session_password(std::size_t len = 22)
     return out;
 }
 
+#ifdef _WIN32
+// obs-websocket/config.json carries the session password in clear
+// text (ADR-005 §5 R9). It is written to <cwd>/obs-websocket/ --
+// the install directory -- and inherits that directory's default
+// DACL, which on a normal Windows install grants the local "Users"
+// group read access: any other local account can read the session
+// password off disk.
+//
+// We tighten the file's DACL to the current account only, right
+// after writing it and before load_modules()/obs_load_all_modules()
+// runs. obs-websocket re-opens the file in-process, under the same
+// account, during obs_module_load (main.cpp:370-374 documents why
+// that ordering is load-bearing) -- so restricting access to "the
+// account that just wrote the file" can never break that read. It
+// only denies every *other* local account, closing the leak.
+//
+// Best-effort: on any API failure we log to stderr and leave the
+// file as-is rather than aborting boot. An ACL that failed to apply
+// is a confidentiality regression to catch via the probe script, not
+// a reason to take the whole service down (see ADR-005 §5 R9 risk
+// note: an overly strict ACL breaking obs_module_load is the outcome
+// we must avoid, not a silent no-op).
+void restrict_config_file_to_current_user(const char *path)
+{
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        std::fprintf(stderr,
+                     "pulsar-headless: OpenProcessToken failed (%lu); "
+                     "%s ACL left unrestricted\n",
+                     GetLastError(), path);
+        return;
+    }
+
+    DWORD needed = 0;
+    GetTokenInformation(token, TokenUser, nullptr, 0, &needed);
+    std::vector<BYTE> buf(needed);
+    if (needed == 0 || !GetTokenInformation(token, TokenUser, buf.data(), needed, &needed)) {
+        std::fprintf(stderr,
+                     "pulsar-headless: GetTokenInformation failed (%lu); "
+                     "%s ACL left unrestricted\n",
+                     GetLastError(), path);
+        CloseHandle(token);
+        return;
+    }
+    auto *user = reinterpret_cast<TOKEN_USER *>(buf.data());
+
+    EXPLICIT_ACCESSA ea{};
+    ea.grfAccessPermissions = GENERIC_ALL;
+    ea.grfAccessMode = SET_ACCESS;
+    ea.grfInheritance = NO_INHERITANCE;
+    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_USER;
+    ea.Trustee.ptstrName = reinterpret_cast<LPSTR>(user->User.Sid);
+
+    PACL new_dacl = nullptr;
+    DWORD rc = SetEntriesInAclA(1, &ea, nullptr, &new_dacl);
+    CloseHandle(token);
+    if (rc != ERROR_SUCCESS || !new_dacl) {
+        std::fprintf(stderr,
+                     "pulsar-headless: SetEntriesInAclA failed (%lu); "
+                     "%s ACL left unrestricted\n",
+                     rc, path);
+        return;
+    }
+
+    // PROTECTED_DACL_SECURITY_INFORMATION strips inherited ACEs (the
+    // directory's default "Users" grant) so only the explicit entry
+    // above applies -- an unprotected DACL would still union with the
+    // inherited grant and leave the file readable by other accounts.
+    rc = SetNamedSecurityInfoA(const_cast<char *>(path), SE_FILE_OBJECT,
+                               DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                               nullptr, nullptr, new_dacl, nullptr);
+    LocalFree(new_dacl);
+    if (rc != ERROR_SUCCESS) {
+        std::fprintf(stderr,
+                     "pulsar-headless: SetNamedSecurityInfoA failed (%lu); "
+                     "%s ACL left unrestricted\n",
+                     rc, path);
+    }
+}
+#endif
+
 void seed_websocket_config()
 {
     if (const char *e = std::getenv("PULSAR_PORT"); e && *e) {
@@ -399,6 +484,13 @@ void seed_websocket_config()
         << "  \"server_password\": \"" << g_session_password << "\",\n"
         << "  \"server_port\": " << g_session_port << "\n"
         << "}\n";
+    out.close();
+
+#ifdef _WIN32
+    // Restrict to the current account now that the file is flushed
+    // and closed -- before load_modules() lets obs-websocket read it.
+    restrict_config_file_to_current_user("obs-websocket/config.json");
+#endif
 }
 
 } // namespace
