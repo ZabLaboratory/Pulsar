@@ -44,6 +44,9 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <mmdeviceapi.h>
+#include <functiondiscoverykeys_devpkey.h>
+#pragma comment(lib, "ole32.lib")
 #endif
 
 namespace {
@@ -176,6 +179,89 @@ bool reset_video()
     return true;
 }
 
+#ifdef _WIN32
+// Resolves the CONCRETE endpoint id of the system's current default
+// playback device (same COM call libobs's own device-enumeration backend
+// uses internally, see audio-monitoring/win32/wasapi-enum-devices.c
+// get_default_id()) -- deliberately NOT the "default" sentinel string.
+//
+// Every WASAPI-backed capture source (mic / desktop-audio-device / a
+// captured app's audio -- ZabCapture:* sources all resolve to one of
+// these three plugin types) defaults its own `device_id` setting to the
+// literal string "default" unless something explicitly overrides it
+// (win-wasapi.cpp: obs_data_set_default_string(..., "default")), and all
+// three carry OBS_SOURCE_DO_NOT_SELF_MONITOR. That flag's guard
+// (audio-monitoring/win32/wasapi-output.c audio_monitor_init) compares
+// the SOURCE's own device_id against the bound MONITORING device id by
+// exact string match; if both sides are literally "default" it treats
+// them as the same physical device and silently disables that source's
+// monitor to avoid a feedback loop -- correct instinct for a microphone
+// captured then monitored back into a device that could pick it up
+// again, a false positive for every other ZabCapture source (capturing
+// an app's or the desktop's audio and playing it back in the operator's
+// headset is never a feedback loop). No error surfaces either way:
+// SetInputAudioMonitorType still succeeds and reads back "monitor" --
+// the antenna/stream mix is unaffected (a fully separate code path), only
+// the local headphone tap goes silent.
+//
+// Binding monitoring to the RESOLVED id instead breaks that accidental
+// string collision -- a source's own device_id stays "default" (still
+// correctly self-monitor-guarded against an actual mic loop), while the
+// monitoring device is now a concrete GUID that never matches it. Trade-
+// off accepted: this stops dynamically re-tracking the OS default if the
+// operator changes it without restarting Pulsar -- resolved once at
+// boot, same as the fixed 1080p30 video profile below.
+std::string resolve_default_render_device_id()
+{
+    std::string result;
+    HRESULT co_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool co_owned = SUCCEEDED(co_hr);
+    if (co_hr != RPC_E_CHANGED_MODE && FAILED(co_hr)) {
+        std::fprintf(stderr, "pulsar-headless: CoInitializeEx failed (0x%08lx)\n",
+                     static_cast<unsigned long>(co_hr));
+        return result;
+    }
+
+    IMMDeviceEnumerator *enumerator = nullptr;
+    IMMDevice *device = nullptr;
+    LPWSTR w_id = nullptr;
+
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                   __uuidof(IMMDeviceEnumerator),
+                                   reinterpret_cast<void **>(&enumerator));
+    if (SUCCEEDED(hr)) {
+        hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &device);
+    }
+    if (SUCCEEDED(hr)) {
+        hr = device->GetId(&w_id);
+    }
+    if (SUCCEEDED(hr) && w_id) {
+        int len = WideCharToMultiByte(CP_UTF8, 0, w_id, -1, nullptr, 0, nullptr, nullptr);
+        if (len > 0) {
+            std::string utf8(static_cast<size_t>(len) - 1, '\0');
+            WideCharToMultiByte(CP_UTF8, 0, w_id, -1, utf8.data(), len, nullptr, nullptr);
+            result = std::move(utf8);
+        }
+    }
+
+    if (w_id)
+        CoTaskMemFree(w_id);
+    if (device)
+        device->Release();
+    if (enumerator)
+        enumerator->Release();
+    if (co_owned)
+        CoUninitialize();
+
+    if (result.empty()) {
+        std::fprintf(stderr,
+                     "pulsar-headless: could not resolve the default playback device id (0x%08lx)\n",
+                     static_cast<unsigned long>(hr));
+    }
+    return result;
+}
+#endif
+
 bool reset_audio()
 {
     obs_audio_info oai = {};
@@ -188,19 +274,35 @@ bool reset_audio()
     }
 
     // Bind the system's DEFAULT playback device as the audio monitoring
-    // output. Without this call libobs accepts SetInputAudioMonitorType
-    // (obs-websocket's confirmed write succeeds, the source-level flag is
-    // genuinely set) but never routes any audio anywhere -- no monitoring
-    // device is bound, so "monitor" / "monitor_and_output" reach nobody's
-    // headphones. Same call OBS Studio's own GUI makes from Settings ->
-    // Audio -> Advanced (frontend/settings/OBSBasicSettings.cpp) with the
-    // "default" sentinel id; this headless service has no such settings
-    // dialog, so it must bind it once at boot instead. Guarded by
-    // obs_audio_monitoring_available() -- false on a platform build with no
-    // audio-monitoring backend compiled in (never true here on Windows).
+    // output, by its RESOLVED CONCRETE id -- never the "default" sentinel
+    // string. See resolve_default_render_device_id() above for why: every
+    // WASAPI-backed ZabCapture source's own device_id also defaults to
+    // that same literal "default", and OBS_SOURCE_DO_NOT_SELF_MONITOR
+    // treats an exact string match as "this is the same physical device,
+    // refuse to avoid a feedback loop" -- true for a microphone, a false
+    // positive for every captured-app/desktop-audio source, and it fails
+    // silently (SetInputAudioMonitorType still reports success). Without
+    // ANY monitoring device bound at all, libobs accepts
+    // SetInputAudioMonitorType too but never routes audio anywhere --
+    // hence resolving a real id is required either way, not optional.
+    // Falls back to the "default" sentinel (the original, narrower
+    // behaviour) only if resolution itself fails, so monitoring still
+    // works for at least the mic case rather than not at all.
     if (obs_audio_monitoring_available()) {
-        obs_set_audio_monitoring_device("Default", "default");
-        std::fprintf(stdout, "pulsar-headless: audio monitoring device bound (default)\n");
+        std::string resolved_id;
+#ifdef _WIN32
+        resolved_id = resolve_default_render_device_id();
+#endif
+        if (!resolved_id.empty()) {
+            obs_set_audio_monitoring_device("Default", resolved_id.c_str());
+            std::fprintf(stdout, "pulsar-headless: audio monitoring device bound (resolved default, id=%s)\n",
+                         resolved_id.c_str());
+        } else {
+            obs_set_audio_monitoring_device("Default", "default");
+            std::fprintf(stdout,
+                         "pulsar-headless: audio monitoring device bound (default sentinel -- id resolution "
+                         "failed, ZabCapture sources will self-monitor-guard silent)\n");
+        }
     } else {
         std::fprintf(stderr, "pulsar-headless: audio monitoring unavailable on this platform build\n");
     }
