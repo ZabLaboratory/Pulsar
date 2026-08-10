@@ -851,8 +851,8 @@ if (-not $abortProc.HasExited) {
     Stop-PulsarProcessTree -Proc $abortProc
 } else {
     $abortExitCode = $abortProc.ExitCode
-    if ($abortExitCode -eq 0) {
-        $abortFailMsg = "pulsar.exe exited 0 with obs-websocket/ blocked -- the fail-closed abort (#181 F2) did not fire, it booted degraded instead"
+    if ($abortExitCode -ne 1) {
+        $abortFailMsg = "pulsar.exe exited $abortExitCode (expected exactly 1, the fail-closed abort path main() takes in pulsar-headless/main.cpp) with obs-websocket/ blocked -- anything else, including a crash code such as 0xC0000005 = -1073741819 as Int32 (non-zero, would have PASSED the old '-eq 0' check, exactly the #212 masking), means the fail-closed abort (#181 F2) did not fire as designed"
     }
 }
 
