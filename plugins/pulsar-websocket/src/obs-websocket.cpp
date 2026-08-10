@@ -53,6 +53,25 @@ void OnWebSocketApiVendorEvent(std::string vendorName, std::string eventType, ob
 void OnEvent(uint64_t requiredIntent, std::string eventType, json eventData, uint8_t rpcVersion);
 void OnObsReady(bool ready);
 
+// ADR-005 §3.6: the diagnostic surface (registered by pulsar-multi-stream,
+// a separate module) needs to know whether THIS server is bound to the
+// loopback before it may serve log content. obs-websocket's own request
+// dispatch (obs_websocket_call_request) has no "am I loopback-bound"
+// request, and Config/_config are private to this module -- so this is
+// exposed the same way obs-websocket's own API handle is (WebSocketApi's
+// "obs_websocket_api_get_ph" on the GLOBAL proc handler, obs-websocket.cpp
+// vs. WebSocketApi.cpp): any module in the process, DLL or the host exe
+// alike, can query it without a compile-time dependency on this plugin.
+static void pulsar_is_loopback_only_cb(void * /*priv_data*/, calldata_t *cd)
+{
+	if (!_config) {
+		calldata_set_bool(cd, "success", false);
+		return;
+	}
+	calldata_set_bool(cd, "loopback", ComputeLoopbackOnly(_config->BindAddress));
+	calldata_set_bool(cd, "success", true);
+}
+
 bool obs_module_load(void)
 {
 	blog(LOG_INFO, "[obs_module_load] you can haz websockets (Version: %s | RPC Version: %d)", OBS_WEBSOCKET_VERSION,
@@ -73,6 +92,14 @@ bool obs_module_load(void)
 	// Create the config manager then load the parameters from storage
 	_config = std::make_shared<Config>();
 	_config->Load(migratedConfig);
+
+	// ADR-005 §3.6: publish the loopback predicate on the global proc
+	// handler so a module outside this DLL (pulsar-multi-stream's
+	// diagnostic surface) can gate log content on it without linking
+	// against this plugin.
+	proc_handler_add(obs_get_proc_handler(),
+			 "bool pulsar_websocket_is_loopback_only(out bool loopback)", &pulsar_is_loopback_only_cb,
+			 nullptr);
 
 	// Initialize the event handler
 	_eventHandler = std::make_shared<EventHandler>();

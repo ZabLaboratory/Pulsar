@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <fstream>
 #include <mutex>
 #include <optional>
@@ -116,6 +117,42 @@ private:
     std::string error_;
     std::ofstream file_;
     std::uint64_t current_bytes_ = 0;
+};
+
+// -- Diagnostics (ADR-005 §3.6.1) -------------------------------------------
+//
+// Per-level counters since construction, plus a bounded ring of the most
+// recent WARN/ERROR lines -- fed the SAME already-formatted, already-redacted
+// line the handler writes to the file (never a re-read of it), so the
+// extraction request has content to serve without ever opening a path.
+// Host-buildable like the rest of this file; exercised directly by
+// tests/log-handler-probe.
+class DiagnosticsRing {
+public:
+    // Hard ceiling on how many lines a single extraction request can ever
+    // receive, independent of how large the ring is configured to hold --
+    // ADR §3.6.1: "N est plafonne cote serveur quelle que soit la demande."
+    static constexpr std::size_t kServerMaxLines = 200;
+
+    explicit DiagnosticsRing(std::size_t capacity = kServerMaxLines);
+
+    // Increments the counter for `level` unconditionally, then -- for
+    // Warn/Error only -- pushes `redacted_line` into the ring, evicting the
+    // oldest entry past `capacity`.
+    void record(Level level, const std::string &redacted_line);
+
+    // Counter for `level` since construction.
+    std::uint64_t count(Level level) const;
+
+    // Up to `n` most recent WARN/ERROR lines, oldest first, clamped to
+    // min(n, kServerMaxLines, lines currently held).
+    std::vector<std::string> last_warn_error_lines(std::size_t n) const;
+
+private:
+    mutable std::mutex mutex_;
+    std::size_t capacity_;
+    std::deque<std::string> ring_;
+    std::uint64_t counts_[4] = {0, 0, 0, 0}; // indexed by static_cast<int>(Level)
 };
 
 // True when `dir` (already existing) grants access to any principal other

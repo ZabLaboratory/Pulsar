@@ -70,6 +70,10 @@ std::unique_ptr<pulsar_log::LogFileSink> g_log_sink;
 std::mutex g_log_mutex;
 const std::string g_log_session_id;
 
+// ADR-005 §3.6.1: counters + bounded WARN/ERROR ring, fed the same
+// redacted line written to the file below -- never a re-read of it.
+pulsar_log::DiagnosticsRing g_log_diagnostics;
+
 // base_set_log_handler callback. Formats, redacts (both layers), then
 // writes the SAME redacted line to stderr and to the rotating file --
 // never the raw one, on either destination (ADR §3.2 "posture d'échec,
@@ -118,8 +122,98 @@ void pulsar_log_handler(int log_level, const char *format, va_list args, void * 
     std::fprintf(stderr, "%s\n", redacted->c_str());
     std::fflush(stderr);
 
+    // ADR-005 §3.6.1: recorded for EVERY line reaching this point -- the
+    // same set the file below receives when it is opened -- so the
+    // extraction request's counters concord with an independent count of
+    // the file (RC14).
+    g_log_diagnostics.record(level, *redacted);
+
     if (g_log_sink && g_log_sink->opened())
         g_log_sink->write_line(*redacted);
+}
+
+// ADR-005 §3.6: bridges pulsar-headless's process-local diagnostics state
+// (this .exe's own translation unit -- g_log_sink / g_log_diagnostics are
+// not symbols any plugin DLL can link against) to the vendor requests
+// registered by pulsar-multi-stream, a separate module loaded into the same
+// process. Same pattern obs-websocket itself uses for its own cross-module
+// handle (WebSocketApi's "obs_websocket_api_get_ph" on the global proc
+// handler): any module, DLL or host exe, can reach a proc registered here.
+//
+// §3.6.1: `in int max_lines` is the caller's request; the response is
+// always clamped to pulsar_log::DiagnosticsRing::kServerMaxLines
+// server-side, never just to what was asked. `lines` transfers ownership
+// of a fresh obs_data_array_t* to the caller (obs_data_array_release()
+// once done), one object per line under the "line" key -- the array itself
+// carries WARN/ERROR content only, per the ring's own contract.
+void pulsar_log_get_diagnostics_cb(void * /*priv_data*/, calldata_t *cd)
+{
+    long long requested = calldata_int(cd, "max_lines");
+    if (requested < 0)
+        requested = 0;
+
+    std::string path;
+    bool path_known = false;
+    {
+        std::lock_guard<std::mutex> lock(g_log_mutex);
+        if (g_log_sink && g_log_sink->opened()) {
+            path = g_log_sink->path();
+            path_known = true;
+        }
+    }
+
+    calldata_set_string(cd, "path", path.c_str());
+    calldata_set_bool(cd, "path_known", path_known);
+    calldata_set_int(cd, "errors", static_cast<long long>(g_log_diagnostics.count(pulsar_log::Level::Error)));
+    calldata_set_int(cd, "warnings", static_cast<long long>(g_log_diagnostics.count(pulsar_log::Level::Warn)));
+    calldata_set_int(cd, "infos", static_cast<long long>(g_log_diagnostics.count(pulsar_log::Level::Info)));
+    calldata_set_int(cd, "debugs", static_cast<long long>(g_log_diagnostics.count(pulsar_log::Level::Debug)));
+
+    obs_data_array_t *lines = obs_data_array_create();
+    for (const auto &line : g_log_diagnostics.last_warn_error_lines(static_cast<std::size_t>(requested))) {
+        obs_data_t *item = obs_data_create();
+        obs_data_set_string(item, "line", line.c_str());
+        obs_data_array_push_back(lines, item);
+        obs_data_release(item);
+    }
+    calldata_set_ptr(cd, "lines", lines);
+
+    calldata_set_bool(cd, "success", true);
+}
+
+// ADR-005 §3.6.2: the kill switch. Deliberately asymmetric -- stops file
+// writes, never reopens them; a second call is a no-op that reports
+// `already_stopped`, never an error, and never resurrects the file. Takes
+// no path (there is nothing to parameterise: it acts on the one sink this
+// process already owns). The stop itself is journalled as the last line
+// via LogFileSink::close(), which writes-then-closes -- exactly the
+// primitive #183 built this kill switch for.
+void pulsar_log_stop_file_write_cb(void * /*priv_data*/, calldata_t *cd)
+{
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+
+    if (!g_log_sink || !g_log_sink->opened()) {
+        calldata_set_bool(cd, "stopped", false);
+        calldata_set_bool(cd, "already_stopped", true);
+        calldata_set_string(cd, "path", g_log_sink ? g_log_sink->path().c_str() : "");
+        calldata_set_bool(cd, "success", true);
+        return;
+    }
+
+    const std::string path = g_log_sink->path();
+    std::string stopLine = pulsar_log::format_line(
+        pulsar_log::Level::Warn, g_log_session_id, "pulsar-headless",
+        "log file write stopped via kill-switch request; a restart is required to resume");
+    auto redacted = pulsar_log::redact_line(stopLine, g_secret_registry);
+    const std::string &finalLine = redacted ? *redacted : stopLine;
+
+    g_log_sink->close(finalLine);
+    g_log_diagnostics.record(pulsar_log::Level::Warn, finalLine);
+
+    calldata_set_bool(cd, "stopped", true);
+    calldata_set_bool(cd, "already_stopped", false);
+    calldata_set_string(cd, "path", path.c_str());
+    calldata_set_bool(cd, "success", true);
 }
 
 // Installs base_set_log_handler and opens the rotating file sink. Must run
@@ -136,6 +230,23 @@ void install_pulsar_log_handler()
                      g_log_sink->error().c_str());
     }
     base_set_log_handler(pulsar_log_handler, nullptr);
+
+    // ADR-005 §3.6: publish the diagnostic surface's two procs on the
+    // GLOBAL obs proc handler -- reachable from pulsar-multi-stream (a
+    // plugin DLL, no compile-time link to this .exe) the same way
+    // obs-websocket's own API handle is (see obs-websocket.cpp's
+    // "pulsar_websocket_is_loopback_only" registration for the mirrored
+    // pattern on that side).
+    proc_handler_t *global_ph = obs_get_proc_handler();
+    proc_handler_add(global_ph,
+                     "bool pulsar_log_get_diagnostics(in int max_lines, out string path, "
+                     "out bool path_known, out int errors, out int warnings, out int infos, "
+                     "out int debugs, out ptr lines)",
+                     &pulsar_log_get_diagnostics_cb, nullptr);
+    proc_handler_add(global_ph,
+                     "bool pulsar_log_stop_file_write(out bool stopped, out bool already_stopped, "
+                     "out string path)",
+                     &pulsar_log_stop_file_write_cb, nullptr);
 }
 
 #ifdef _WIN32

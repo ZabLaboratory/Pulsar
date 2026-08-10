@@ -49,6 +49,11 @@
 
 #include <obs-websocket-api.h>
 
+// ADR-005 §3.6: header-only reference for kServerMaxLines -- see the
+// CMakeLists.txt comment by PULSAR_LOG_HANDLER_HEADERS for why this does
+// not introduce a link dependency on pulsar-headless.
+#include <log-handler.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -2351,6 +2356,125 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
     obs_data_set_obj(res, "capabilities", caps);
 }
 
+// ---- ADR-005 §3.6: diagnostic surface --------------------------------------
+//
+// pulsar-headless's log diagnostics (g_log_diagnostics / g_log_sink -- this
+// module has no compile-time link to that .exe's translation unit) and
+// obs-websocket's bind state (Config is private to that DLL) are both
+// reached via the SAME global proc handler bridge obs-websocket's own API
+// handle uses (WebSocketApi::get_ph_cb / "obs_websocket_api_get_ph"): see
+// main.cpp's "pulsar_log_get_diagnostics" / "pulsar_log_stop_file_write"
+// and obs-websocket.cpp's "pulsar_websocket_is_loopback_only".
+
+void on_get_diagnostics(obs_data_t *req, obs_data_t *res, void *)
+{
+    long long maxLines = obs_data_has_user_value(req, "max_lines")
+                              ? obs_data_get_int(req, "max_lines")
+                              : static_cast<long long>(pulsar_log::DiagnosticsRing::kServerMaxLines);
+    if (maxLines < 0) maxLines = 0;
+
+    proc_handler_t *globalPh = obs_get_proc_handler();
+
+    calldata_t diagCd = {0, 0, 0, 0};
+    calldata_set_int(&diagCd, "max_lines", maxLines);
+    const bool diagCalled = globalPh && proc_handler_call(globalPh, "pulsar_log_get_diagnostics", &diagCd);
+    if (!diagCalled) {
+        obs_data_set_string(res, "error", "pulsar-headless diagnostics are unavailable");
+        calldata_free(&diagCd);
+        return;
+    }
+
+    // Counters + output state carry no message content -- served
+    // unconditionally, in both bind postures (ADR §3.6, RC24).
+    const long long errors = calldata_int(&diagCd, "errors");
+    const long long warnings = calldata_int(&diagCd, "warnings");
+    const long long infos = calldata_int(&diagCd, "infos");
+    const long long debugs = calldata_int(&diagCd, "debugs");
+    obs_data_set_int(res, "count_error", errors);
+    obs_data_set_int(res, "count_warn", warnings);
+    obs_data_set_int(res, "count_info", infos);
+    obs_data_set_int(res, "count_debug", debugs);
+
+    OBSDataArrayAutoRelease outputs = obs_data_array_create();
+    for (const auto &desc : kAudioTrackOutputs) {
+        OBSOutputAutoRelease output = desc.get();
+        if (!output) continue; // absent, never a fabricated entry
+        OBSDataAutoRelease entry = obs_data_create();
+        obs_data_set_string(entry, "output", desc.name);
+        obs_data_set_bool(entry, "active", obs_output_active(output));
+        obs_data_array_push_back(outputs, entry);
+    }
+    obs_data_set_array(res, "outputs", outputs);
+
+    OBSDataArrayAutoRelease destinations = obs_data_array_create();
+    for (auto &s : g_registry->snapshot()) {
+        OBSDataAutoRelease entry = obs_data_create();
+        obs_data_set_string(entry, "id", s.id.c_str());
+        obs_data_set_string(entry, "name", s.name.c_str());
+        obs_data_set_string(entry, "kind", s.kind.c_str());
+        obs_data_set_bool(entry, "enabled", s.enabled);
+        obs_data_set_bool(entry, "active", s.active);
+        obs_data_array_push_back(destinations, entry);
+    }
+    obs_data_set_array(res, "destinations", destinations);
+
+    // Everything below carries message content -- the log path and the
+    // WARN/ERROR tail -- and is refused outright, with a named reason, the
+    // moment the bind is not provably loopback-only (ADR §3.6, RC24). A
+    // failure to even query the bind state (obs-websocket absent) is the
+    // same refusal: unknown is never treated as loopback.
+    calldata_t lbCd = {0, 0, 0, 0};
+    const bool lbCalled = globalPh && proc_handler_call(globalPh, "pulsar_websocket_is_loopback_only", &lbCd);
+    const bool loopback = lbCalled && calldata_bool(&lbCd, "loopback");
+    calldata_free(&lbCd);
+
+    if (!loopback) {
+        obs_data_set_string(res, "error",
+                            lbCalled ? "log content refused: obs-websocket is not bound to the loopback "
+                                       "interface (PULSAR_WS_BIND); counters and output state above remain valid"
+                                     : "log content refused: bind state could not be determined; counters and "
+                                       "output state above remain valid");
+        void *linesPtr = nullptr;
+        if (calldata_get_ptr(&diagCd, "lines", &linesPtr) && linesPtr)
+            obs_data_array_release(static_cast<obs_data_array_t *>(linesPtr));
+        calldata_free(&diagCd);
+        return;
+    }
+
+    const char *path = calldata_string(&diagCd, "path");
+    if (calldata_bool(&diagCd, "path_known"))
+        obs_data_set_string(res, "log_path", path ? path : "");
+
+    void *linesPtr = nullptr;
+    if (calldata_get_ptr(&diagCd, "lines", &linesPtr) && linesPtr) {
+        OBSDataArrayAutoRelease lines = static_cast<obs_data_array_t *>(linesPtr);
+        obs_data_set_array(res, "recent_warn_error_lines", lines);
+    }
+    calldata_free(&diagCd);
+}
+
+// §3.6.2: asymmetric kill switch. Takes no request fields -- there is no
+// path to parameterise, it acts on the one file sink pulsar-headless
+// already owns. A second call is a no-op reporting `already_stopped`, not
+// an error, and never reopens the file (pulsar_log_stop_file_write_cb,
+// main.cpp, guards on LogFileSink::opened()).
+void on_stop_log_file_write(obs_data_t * /*req*/, obs_data_t *res, void *)
+{
+    proc_handler_t *globalPh = obs_get_proc_handler();
+    calldata_t cd = {0, 0, 0, 0};
+    const bool called = globalPh && proc_handler_call(globalPh, "pulsar_log_stop_file_write", &cd);
+    if (!called) {
+        obs_data_set_string(res, "error", "pulsar-headless log sink is unavailable");
+        calldata_free(&cd);
+        return;
+    }
+
+    obs_data_set_bool(res, "stopped", calldata_bool(&cd, "stopped"));
+    obs_data_set_bool(res, "already_stopped", calldata_bool(&cd, "already_stopped"));
+    if (const char *path = calldata_string(&cd, "path"))
+        obs_data_set_string(res, "log_path", path);
+    calldata_free(&cd);
+}
 
 } // namespace
 
@@ -2391,8 +2515,10 @@ void obs_module_post_load(void)
     obs_websocket_vendor_register_request(g_vendor, "SetAdaptiveEnabled",   on_set_adaptive_enabled, nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetMonitoringDeviceList", on_get_monitoring_device_list, nullptr);
     obs_websocket_vendor_register_request(g_vendor, "SetMonitoringDevice",  on_set_monitoring_device, nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "GetDiagnostics",      on_get_diagnostics,     nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "StopLogFileWrite",    on_stop_log_file_write, nullptr);
 
-    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 16 requests");
+    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 18 requests");
 
     // Phase 12b: spin up the adaptive bitrate worker AFTER vendor registration
     // so its emit_event path has a valid handle.

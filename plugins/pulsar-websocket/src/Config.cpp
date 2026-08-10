@@ -28,6 +28,18 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include "utils/Obs.h"
 
 #define CONFIG_SECTION_NAME "OBSWebSocket"
+
+// ADR-005 §3.6: single definition of the predicate WebSocketServer::Start()
+// already computed inline (the three literal loopback forms Pulsar's own
+// Config::Load() can produce -- PULSAR_WS_BIND is a raw string, not
+// validated against a whitelist, so this only recognises the forms this
+// codebase itself writes into BindAddress; it is not a general loopback
+// classifier).
+bool ComputeLoopbackOnly(const std::string &bindAddress)
+{
+	return bindAddress == "127.0.0.1" || bindAddress == "::1" || bindAddress == "localhost";
+}
+
 #define CONFIG_PARAM_FIRSTLOAD "FirstLoad"
 #define CONFIG_PARAM_ENABLED "ServerEnabled"
 #define CONFIG_PARAM_PORT "ServerPort"

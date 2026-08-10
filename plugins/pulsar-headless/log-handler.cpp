@@ -529,4 +529,48 @@ void LogFileSink::enforce_retention()
     }
 }
 
+// ---------------------------------------------------------------------------
+// DiagnosticsRing
+// ---------------------------------------------------------------------------
+
+DiagnosticsRing::DiagnosticsRing(std::size_t capacity) : capacity_(capacity == 0 ? 1 : capacity) {}
+
+void DiagnosticsRing::record(Level level, const std::string &redacted_line)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++counts_[static_cast<int>(level)];
+
+    if (level != Level::Warn && level != Level::Error)
+        return;
+
+    ring_.push_back(redacted_line);
+    while (ring_.size() > capacity_)
+        ring_.pop_front();
+}
+
+std::uint64_t DiagnosticsRing::count(Level level) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return counts_[static_cast<int>(level)];
+}
+
+std::vector<std::string> DiagnosticsRing::last_warn_error_lines(std::size_t n) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Deliberately not std::min({...}): windows.h's min/max macros (pulled
+    // in above for the ACL calls, without NOMINMAX) would swallow it on
+    // this translation unit.
+    std::size_t capped = n;
+    if (capped > kServerMaxLines)
+        capped = kServerMaxLines;
+    if (capped > ring_.size())
+        capped = ring_.size();
+    std::vector<std::string> out;
+    out.reserve(capped);
+    // ring_ is oldest-first; the last `capped` entries are the most recent.
+    for (std::size_t i = ring_.size() - capped; i < ring_.size(); ++i)
+        out.push_back(ring_[i]);
+    return out;
+}
+
 } // namespace pulsar_log

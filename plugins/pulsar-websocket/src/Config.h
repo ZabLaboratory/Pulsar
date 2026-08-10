@@ -56,5 +56,12 @@ struct Config {
 	std::string ServerPassword;
 };
 
+// ADR-005 §3.6: the loopback predicate WebSocketServer::Start() already
+// computes to decide the bind address (WebSocketServer.cpp) -- hoisted here
+// so it has a single definition shared by the server itself and by the
+// diagnostic surface's bind-condition check (both need to agree on the
+// same three literal forms).
+bool ComputeLoopbackOnly(const std::string &bindAddress);
+
 json MigrateGlobalConfigData();
 bool MigratePersistentData();

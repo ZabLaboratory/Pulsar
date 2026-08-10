@@ -113,7 +113,7 @@ void WebSocketServer::Start()
 	// the default IS v4. It is only worth a word when it contradicts an
 	// explicit override, and then the explicit address wins.
 	const std::string &bindAddress = conf->BindAddress;
-	const bool loopbackOnly = bindAddress == "127.0.0.1" || bindAddress == "::1" || bindAddress == "localhost";
+	const bool loopbackOnly = ComputeLoopbackOnly(bindAddress);
 
 	if (conf->Ipv4Only && bindAddress != "127.0.0.1")
 		blog(LOG_WARNING,

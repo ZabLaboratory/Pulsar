@@ -310,6 +310,68 @@ void test_acl_restricted_at_creation_and_widened_dir_refused()
 #endif
 }
 
+// RC14: counters concord with an independent count, and a bounded ring
+// holds only WARN/ERROR lines, most-recent last.
+void test_diagnostics_ring_counts_and_ring_content()
+{
+    pulsar_log::DiagnosticsRing ring(/*capacity=*/3);
+
+    ring.record(pulsar_log::Level::Info, "info line 1");
+    ring.record(pulsar_log::Level::Warn, "warn line 1");
+    ring.record(pulsar_log::Level::Error, "error line 1");
+    ring.record(pulsar_log::Level::Debug, "debug line 1");
+    ring.record(pulsar_log::Level::Info, "info line 2");
+
+    assert(ring.count(pulsar_log::Level::Info) == 2);
+    assert(ring.count(pulsar_log::Level::Warn) == 1);
+    assert(ring.count(pulsar_log::Level::Error) == 1);
+    assert(ring.count(pulsar_log::Level::Debug) == 1);
+
+    // Only the two Warn/Error lines are in the ring -- Info/Debug never
+    // enter it despite being counted.
+    auto lines = ring.last_warn_error_lines(10);
+    assert(lines.size() == 2);
+    assert(lines[0] == "warn line 1");
+    assert(lines[1] == "error line 1");
+}
+
+// The ring itself never grows past its configured capacity -- oldest
+// entries are evicted first, so a caller always sees the MOST RECENT tail.
+void test_diagnostics_ring_bounded_eviction()
+{
+    pulsar_log::DiagnosticsRing ring(/*capacity=*/2);
+
+    ring.record(pulsar_log::Level::Warn, "warn 1");
+    ring.record(pulsar_log::Level::Warn, "warn 2");
+    ring.record(pulsar_log::Level::Warn, "warn 3");
+
+    auto lines = ring.last_warn_error_lines(10);
+    assert(lines.size() == 2);
+    assert(lines[0] == "warn 2");
+    assert(lines[1] == "warn 3");
+}
+
+// ADR §3.6.1: N is capped server-side no matter what the caller asks for,
+// and independently clamped to however many lines the ring actually holds.
+void test_diagnostics_ring_n_clamped_to_server_cap_and_ring_size()
+{
+    pulsar_log::DiagnosticsRing ring(/*capacity=*/pulsar_log::DiagnosticsRing::kServerMaxLines + 50);
+
+    for (int i = 0; i < 5; ++i)
+        ring.record(pulsar_log::Level::Error, "line " + std::to_string(i));
+
+    // Asking for more than exist returns only what exists.
+    assert(ring.last_warn_error_lines(1000).size() == 5);
+
+    for (int i = 5; i < static_cast<int>(pulsar_log::DiagnosticsRing::kServerMaxLines) + 20; ++i)
+        ring.record(pulsar_log::Level::Error, "line " + std::to_string(i));
+
+    // Even though the ring's own capacity is larger, and the caller asks for
+    // more still, the response never exceeds the server cap.
+    auto lines = ring.last_warn_error_lines(pulsar_log::DiagnosticsRing::kServerMaxLines + 1000);
+    assert(lines.size() == pulsar_log::DiagnosticsRing::kServerMaxLines);
+}
+
 void test_unwritable_directory_degrades_with_named_error()
 {
     fs::path parent = make_temp_dir("unwritable");
@@ -343,6 +405,9 @@ int main()
     test_redact_line_abandons_when_pattern_layer_fails();
     test_rotation_stays_under_max_files();
     test_age_purge_fires_under_size_and_count_bounds();
+    test_diagnostics_ring_counts_and_ring_content();
+    test_diagnostics_ring_bounded_eviction();
+    test_diagnostics_ring_n_clamped_to_server_cap_and_ring_size();
     test_acl_restricted_at_creation_and_widened_dir_refused();
     test_unwritable_directory_degrades_with_named_error();
 
