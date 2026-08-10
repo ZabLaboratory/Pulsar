@@ -47,6 +47,10 @@
 #endif
 #include <pulsar-nv-secure-load.h>
 
+// ADR-005 §3.4 / #182 -- shared reason_class classifier, also linked by
+// pulsar-frontend-stub (see plugins/pulsar-output-classify/README.md).
+#include <pulsar-output-classify.h>
+
 #include <obs-websocket-api.h>
 
 #include <algorithm>
@@ -246,6 +250,65 @@ bool validate_destination_input(DestinationKind kind, const char *url, const cha
     }
 }
 
+// ---- ADR-005 §3.4 / #182: pulsar:OutputFailed -----------------------------
+//
+// g_vendor is defined further down (module-static singletons, near
+// g_registry) but referenced by DestinationRegistry::start/start_all below
+// it in the file's original layout -- forward-declared here so those
+// members can call emit_output_failed without reordering the singletons.
+extern obs_websocket_vendor g_vendor;
+
+// Builds and emits pulsar:OutputFailed for a network-capable (is_local=false)
+// or local (is_local=true, e.g. virtualcam) output, or does nothing when the
+// stop is not a failure (OBS_OUTPUT_SUCCESS -- RC7). `output` is the display
+// name in the payload ("stream", "virtualcam", or a destination id);
+// `phase` is "start" (obs_output_start declined synchronously) or "active"
+// (the output was live and stopped abnormally). `session` is always empty
+// for now -- wired by a later issue (§3.3's correlation key).
+void emit_output_failed(const char *output, const char *phase, bool is_local_output, int code,
+                         const char *last_error)
+{
+    const char *cls = pulsar::classify_output_failure(is_local_output, code, last_error);
+    if (!cls) return; // not a failure
+
+    if (!g_vendor) {
+        blog(LOG_WARNING, "[pulsar-multi-stream] OutputFailed dropped (%s/%s): no vendor", output, cls);
+        return;
+    }
+
+    OBSDataAutoRelease ev = obs_data_create();
+    obs_data_set_string(ev, "output", output ? output : "");
+    obs_data_set_string(ev, "phase", phase ? phase : "");
+    obs_data_set_int(ev, "code", code);
+    obs_data_set_string(ev, "last_error", last_error ? last_error : "");
+    obs_data_set_string(ev, "reason_class", cls);
+    obs_data_set_string(ev, "session", "");
+    obs_websocket_vendor_emit_event(g_vendor, "OutputFailed", ev);
+}
+
+// Cross-plugin bridge: pulsar-frontend-stub is a static lib linked into
+// pulsar-headless.exe, not an obs-websocket vendor of its own (obs_module_
+// load and post_load semantics do not apply to it -- see its CMakeLists.txt
+// header comment). Rather than register a second "pulsar" vendor from a
+// second binary component (obs-websocket's per-name registration is
+// single-owner, unlike this codebase's own convention of one distinct
+// vendor name per DLL plugin -- see pulsar-scene-source's "pulsar-scene"),
+// frontend-stub reaches this DLL's already-registered vendor through
+// libobs's own global proc handler -- the exact mechanism
+// obs-websocket-api.h itself uses to find obs-websocket
+// (obs_websocket_get_ph()). Registered in obs_module_post_load, after
+// g_vendor exists; frontend-stub only calls this after obs_post_load_modules
+// has run (pulsar-headless's own sequencing), so there is no load-order race.
+void emit_output_failed_proc(void *, calldata_t *cd)
+{
+    const char *output = calldata_string(cd, "output");
+    const char *phase = calldata_string(cd, "phase");
+    bool is_local = calldata_bool(cd, "is_local_output");
+    long long code = calldata_int(cd, "code");
+    const char *last_error = calldata_string(cd, "last_error");
+    emit_output_failed(output, phase, is_local, static_cast<int>(code), last_error);
+}
+
 struct Destination {
     std::string id;
     std::string name;
@@ -430,6 +493,13 @@ bool DestinationRegistry::start(const std::string &id, std::string &errOut)
     if (!obs_output_start(d.output)) {
         const char *last = obs_output_get_last_error(d.output);
         errOut = last ? last : "obs_output_start declined";
+        // A synchronous refusal from obs_output_start carries no
+        // OBS_OUTPUT_* code (that only comes from the async "stop"
+        // signal) -- OBS_OUTPUT_ERROR (-4) is the honest sentinel: it
+        // falls through to "unknown" unless last_error's own text
+        // matches the auth patterns (still checked first).
+        std::string outName = "PulsarDest_" + d.id;
+        emit_output_failed(outName.c_str(), "start", false, -4, errOut.c_str());
         return false;
     }
     d.enabled = true;
@@ -468,6 +538,8 @@ void DestinationRegistry::start_all()
             const char *last = obs_output_get_last_error(d.output);
             blog(LOG_WARNING, "[pulsar-multi-stream] start_all: %s declined (%s)",
                  d.id.c_str(), last ? last : "(null)");
+            std::string outName = "PulsarDest_" + d.id;
+            emit_output_failed(outName.c_str(), "start", false, -4, last);
             continue;
         }
         d.enabled = true;
@@ -2370,6 +2442,17 @@ bool obs_module_load(void)
 void obs_module_post_load(void)
 {
     g_vendor = obs_websocket_register_vendor("pulsar");
+
+    // Registered regardless of whether the vendor came up: emit_output_failed
+    // no-ops (with a warning) on a null g_vendor, and frontend-stub's own
+    // setup() runs after obs_post_load_modules, so the proc is always here
+    // by the time OnStreamStop/OnVCamStop can call it (#182, see the
+    // emit_output_failed_proc comment near DestinationRegistry).
+    proc_handler_add(obs_get_proc_handler(),
+        "void pulsar_multi_stream_emit_output_failed(string output, string phase, "
+        "bool is_local_output, int code, string last_error)",
+        emit_output_failed_proc, nullptr);
+
     if (!g_vendor) {
         blog(LOG_WARNING, "[pulsar-multi-stream] obs-websocket not present; vendor API disabled");
         return;
