@@ -635,6 +635,40 @@ function Stop-PulsarProcessTree {
     & taskkill /PID $Proc.Id /T /F 2>&1 | Out-Null
     try { $Proc.WaitForExit($WaitMs) | Out-Null } catch {}
 }
+# Get-Acl requires the Microsoft.PowerShell.Security module to autoload;
+# on some restricted self-hosted CI runners that autoload fails outright
+# (#181 CI hang -- CouldNotAutoloadMatchingModule), and unlike a normal
+# cmdlet-not-found error it does not reliably unwind the script even
+# under $ErrorActionPreference = 'Stop', leaving whatever pulsar.exe was
+# under test running until the suite's own timeout kills the job. icacls
+# is a plain console tool with no module dependency, so this check works
+# identically on dev boxes and on minimal CI images. Returns $true only
+# if the DACL is protected (no inherited ACEs, "(I)" flag) and every ACE
+# names exactly the expected account.
+function Test-ConfigDaclRestricted {
+    param(
+        [string] $Path,
+        [System.Security.Principal.SecurityIdentifier] $ExpectedSid
+    )
+    $icaclsOutput = & icacls $Path 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "icacls failed on '$Path' (exit $LASTEXITCODE): $($icaclsOutput -join ' ')"
+    }
+    $aceLines = $icaclsOutput | Where-Object {
+        $_ -match ':\(' -and $_ -notmatch '^Successfully processed'
+    }
+    if (-not $aceLines) {
+        throw "icacls returned no parsable ACE lines for '$Path': $($icaclsOutput -join ' ')"
+    }
+    if ($aceLines | Where-Object { $_ -match '\(I\)' }) {
+        return $false
+    }
+    $expectedAccount = $ExpectedSid.Translate([System.Security.Principal.NTAccount]).Value
+    if ($aceLines | Where-Object { $_ -notmatch [regex]::Escape($expectedAccount) }) {
+        return $false
+    }
+    return $true
+}
 function Wait-PulsarReady {
     param($Proc, $StdoutLog, $TimeoutSec)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -711,32 +745,43 @@ if (-not (Wait-PulsarReady -Proc $reseedProc2 -StdoutLog $reseedStdout2 -Timeout
 }
 Log-Phase "==> Reseed probe: boot #2 READY"
 
-# (a) DACL still protected + current-user-only after the SECOND boot.
+# (a) DACL still protected + current-user-only after the SECOND boot,
+# and (b) boot #2's NEW port/password actually work over a real
+# WebSocket connection. Both checks run inside try/catch/finally: no
+# matter which one fails outright (bad DACL), throws (icacls error),
+# or fails its assertion (WS auth), $reseedProc2 is reaped exactly
+# once in the finally block -- an unreaped boot #2 process left behind
+# by an interrupted check is what burns the suite's whole CTest budget
+# on this probe (#181 CI hang).
 $reseedCurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$reseedAcl = Get-Acl -Path $reseedConfigPath
-$reseedBadAces = $reseedAcl.Access | Where-Object {
-    -not $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Equals($reseedCurrentUser)
-}
-if (-not $reseedAcl.AreAccessRulesProtected -or $reseedBadAces) {
-    Log-Phase "==> Reseed probe FAILED: config.json DACL is not restricted to the current account after boot #2 (reseed)"
-    Write-Host ($reseedAcl.Access | Format-Table IdentityReference, FileSystemRights, AccessControlType | Out-String)
-    Stop-PulsarProcessTree -Proc $reseedProc2 -WaitMs 5000
-    exit 1
-}
-Log-Phase "==> Reseed probe: DACL OK after boot #2 (restricted to $($reseedCurrentUser.Value))"
+$reseedFailMsg = $null
+try {
+    if (-not (Test-ConfigDaclRestricted -Path $reseedConfigPath -ExpectedSid $reseedCurrentUser)) {
+        $reseedFailMsg = "config.json DACL is not restricted to the current account after boot #2 (reseed)"
+        & icacls $reseedConfigPath | Write-Host
+    } else {
+        Log-Phase "==> Reseed probe: DACL OK after boot #2 (restricted to $($reseedCurrentUser.Value))"
 
-# (b) boot #2's NEW port/password actually work -- a real WebSocket
-# connection using the reseeded credentials, not a file-content
-# assumption. probe-websocket.py --connect-port/--connect-password
-# skips its own spawn and drives the v5 handshake against an
-# already-running instance (added for this probe, #181 F4).
-$reseedWsProbe = Join-Path $repoRoot "scripts/probe-websocket.py"
-Log-Phase "==> Reseed probe: connecting to boot #2 with its reseeded credentials"
-& python $reseedWsProbe --connect-port $reseedPort2 --connect-password $reseedPwd2 --ready-timeout $ReadyTimeoutSec
-$reseedWsCode = $LASTEXITCODE
-Stop-PulsarProcessTree -Proc $reseedProc2
-if ($reseedWsCode -ne 0) {
-    Log-Phase "==> Reseed probe FAILED: reseeded credentials (boot #2) did not authenticate over the wire (exit $reseedWsCode)"
+        # boot #2's NEW port/password actually work -- a real WebSocket
+        # connection using the reseeded credentials, not a file-content
+        # assumption. probe-websocket.py --connect-port/--connect-password
+        # skips its own spawn and drives the v5 handshake against an
+        # already-running instance (added for this probe, #181 F4).
+        $reseedWsProbe = Join-Path $repoRoot "scripts/probe-websocket.py"
+        Log-Phase "==> Reseed probe: connecting to boot #2 with its reseeded credentials"
+        & python $reseedWsProbe --connect-port $reseedPort2 --connect-password $reseedPwd2 --ready-timeout $ReadyTimeoutSec
+        $reseedWsCode = $LASTEXITCODE
+        if ($reseedWsCode -ne 0) {
+            $reseedFailMsg = "reseeded credentials (boot #2) did not authenticate over the wire (exit $reseedWsCode)"
+        }
+    }
+} catch {
+    $reseedFailMsg = "unexpected error verifying boot #2 DACL/connection: $_"
+} finally {
+    Stop-PulsarProcessTree -Proc $reseedProc2 -WaitMs 5000
+}
+if ($reseedFailMsg) {
+    Log-Phase "==> Reseed probe FAILED: $reseedFailMsg"
     exit 1
 }
 Log-Phase "==> Reseed probe OK: config.json reseeds correctly across boots (#181 V1/V4 closed)"
@@ -827,13 +872,20 @@ if (-not (Test-Path $aclConfigPath)) {
     exit 1
 }
 $aclCurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$aclInfo = Get-Acl -Path $aclConfigPath
-$aclBadAces = $aclInfo.Access | Where-Object {
-    -not $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Equals($aclCurrentUser)
+$aclDaclOk = $false
+$aclCheckError = $null
+try {
+    $aclDaclOk = Test-ConfigDaclRestricted -Path $aclConfigPath -ExpectedSid $aclCurrentUser
+} catch {
+    $aclCheckError = $_
 }
-if (-not $aclInfo.AreAccessRulesProtected -or $aclBadAces) {
-    Log-Phase "==> ACL probe FAILED: config.json DACL is not restricted to the current account ($($aclCurrentUser.Value))"
-    Write-Host ($aclInfo.Access | Format-Table IdentityReference, FileSystemRights, AccessControlType | Out-String)
+if ($aclCheckError -or -not $aclDaclOk) {
+    if ($aclCheckError) {
+        Log-Phase "==> ACL probe FAILED: error verifying config.json DACL: $aclCheckError"
+    } else {
+        Log-Phase "==> ACL probe FAILED: config.json DACL is not restricted to the current account ($($aclCurrentUser.Value))"
+        & icacls $aclConfigPath | Write-Host
+    }
     Stop-Process -Id $proc.Id -Force; $proc.WaitForExit(5000) | Out-Null
     exit 1
 }
