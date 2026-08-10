@@ -167,6 +167,46 @@ void test_pattern_layer_url_and_query_params_unregistered()
     assert(r6->find("hunter2pw") == std::string::npos);
 }
 
+// ADR-005 F1 (issue #197): the five forms Bastion's rejeu of the pattern
+// layer found leaking -- stream_key=/streamKey (the plain \bkey\b form does
+// not break on "_"), a key wrapped in apostrophes, srt:// ingest URLs,
+// access_token= (same underscore-boundary gap as stream_key), and
+// `Bearer <token>`.
+void test_pattern_layer_covers_adr005_f1_forms()
+{
+    auto r1 = pulsar_log::redact_patterns(
+        "stream_key=live_abcDEF123secret"); // pragma: allowlist secret
+    assert(r1.has_value());
+    assert(r1->find("live_abcDEF123secret") == std::string::npos);
+    assert(r1->find("stream_key=[REDACTED]") != std::string::npos);
+
+    auto r2 = pulsar_log::redact_patterns(
+        "streamKey=camelCaseSecret999"); // pragma: allowlist secret
+    assert(r2.has_value());
+    assert(r2->find("camelCaseSecret999") == std::string::npos);
+
+    auto r3 = pulsar_log::redact_patterns(
+        "destination created: key='quotedSecretValue42'"); // pragma: allowlist secret
+    assert(r3.has_value());
+    assert(r3->find("quotedSecretValue42") == std::string::npos);
+
+    auto r4 = pulsar_log::redact_patterns(
+        "connecting to srt://ingest.example:9998?streamid=srtSecretPath77"); // pragma: allowlist secret
+    assert(r4.has_value());
+    assert(r4->find("srtSecretPath77") == std::string::npos);
+    assert(r4->find("srt://[REDACTED]") != std::string::npos);
+
+    auto r5 = pulsar_log::redact_patterns(
+        "GET /source?access_token=accessTokenSecret55"); // pragma: allowlist secret
+    assert(r5.has_value());
+    assert(r5->find("accessTokenSecret55") == std::string::npos);
+
+    auto r6 = pulsar_log::redact_patterns(
+        "Authorization: Bearer bearerTokenSecret.part-2"); // pragma: allowlist secret
+    assert(r6.has_value());
+    assert(r6->find("bearerTokenSecret.part-2") == std::string::npos);
+}
+
 void test_pattern_layer_leaves_ordinary_text_alone()
 {
     auto r = pulsar_log::redact_patterns("pulsar-headless: video 1920x1080 @ 60 fps");
@@ -216,9 +256,27 @@ void test_registry_layer_bare_embedded_repeated()
     // The two layers are exercised separately: pattern layer alone (empty
     // registry) does NOT know about this bare value -- it has no
     // recognizable form -- so it must survive un-redacted at that layer.
-    auto pattern_only = pulsar_log::redact_patterns("bare value " + kFixtureSecret + " with no field");
+    // This is exactly the shape of leak ADR-005 F1 (issue #197) found: a
+    // Twitch stream key reaching the log with no recognizable field/URL
+    // form around it, and nothing ever calling register_secret() for it.
+    const std::string bare_line = "bare value " + kFixtureSecret + " with no field";
+    auto pattern_only = pulsar_log::redact_patterns(bare_line);
     assert(pattern_only.has_value());
     assert(pattern_only->find(kFixtureSecret) != std::string::npos);
+
+    // Regression gate for the F1 fix: pulsar-multi-stream now calls
+    // pulsar_log_register_secret (cross-DLL proc, main.cpp) the moment it
+    // receives a stream key, before that key ever reaches a log line. Once
+    // registered -- exactly what `registry` above simulates -- the SAME
+    // bare line the pattern layer alone cannot catch MUST be caught by the
+    // full pipeline (redact_line = pattern + registry). If the cross-DLL
+    // registration wiring regresses (proc removed, call site dropped, or
+    // the key is registered too late), this line leaks nude again and this
+    // assertion fails.
+    auto full_pipeline = pulsar_log::redact_line(bare_line, registry);
+    assert(full_pipeline.has_value());
+    assert(full_pipeline->find(kFixtureSecret) == std::string::npos);
+    assert(full_pipeline->find("[REDACTED]") != std::string::npos);
 }
 
 void test_redact_line_abandons_when_pattern_layer_fails()
@@ -399,6 +457,7 @@ int main()
     test_format_line_matches_gabarit();
     test_derive_subsystem();
     test_pattern_layer_url_and_query_params_unregistered();
+    test_pattern_layer_covers_adr005_f1_forms();
     test_pattern_layer_leaves_ordinary_text_alone();
     test_pattern_layer_abandons_oversized_line();
     test_registry_layer_bare_embedded_repeated();

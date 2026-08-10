@@ -58,8 +58,11 @@ private:
 
 // Pattern layer: the five classes from §3.2 -- stream key field, full
 // ingest URL, WebSocket password, show token (raw and `token%3D`-encoded),
-// and sensitive query params (token/key/password/auth/sig). Active without
-// any configuration loaded. Returns std::nullopt only when the redaction
+// and sensitive query params (token/key/password/auth/sig) -- plus the five
+// forms added by ADR-005 F1 (issue #197): stream_key=/streamKey, a key
+// wrapped in apostrophes, srt:// ingest URLs, access_token=, and
+// `Bearer <token>`. Active without any configuration loaded. Returns
+// std::nullopt only when the redaction
 // pass itself could not be trusted (e.g. a line past the safety length
 // cap, where the risk of pathological regex behaviour is judged higher
 // than the value of the line) -- callers MUST drop the line rather than

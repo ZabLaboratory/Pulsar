@@ -240,6 +240,23 @@ void pulsar_log_get_session_id_cb(void * /*priv_data*/, calldata_t *cd)
     calldata_set_bool(cd, "success", true);
 }
 
+// ADR-005 F1 (issue #197): registers `value` with THIS process's own
+// g_secret_registry -- the same registry pulsar_log_handler (:121) and the
+// kill-switch's own final line (:210) already consult on every write.
+// Exposed on the global proc handler for the identical reason
+// pulsar_log_get_diagnostics is (see install_pulsar_log_procs below):
+// g_secret_registry is a static of this .exe's translation unit, unreachable
+// from a plugin DLL (pulsar-multi-stream) by any compile-time link. Before
+// this proc existed there was no way for the Twitch stream key
+// pulsar-multi-stream receives to ever reach this registry.
+void pulsar_log_register_secret_cb(void * /*priv_data*/, calldata_t *cd)
+{
+    const char *value = calldata_string(cd, "value");
+    if (value && *value)
+        g_secret_registry.register_secret(value);
+    calldata_set_bool(cd, "success", true);
+}
+
 // Installs base_set_log_handler and opens the rotating file sink. Must run
 // BEFORE obs_startup (ADR §3.1) so every libobs blog() call, including
 // ones emitted during startup itself, is captured. A file-open failure
@@ -282,6 +299,8 @@ void install_pulsar_log_procs()
     proc_handler_add(global_ph,
                      "bool pulsar_log_get_session_id(out string session)",
                      &pulsar_log_get_session_id_cb, nullptr);
+    proc_handler_add(global_ph, "bool pulsar_log_register_secret(in string value)",
+                     &pulsar_log_register_secret_cb, nullptr);
 }
 
 #ifdef _WIN32

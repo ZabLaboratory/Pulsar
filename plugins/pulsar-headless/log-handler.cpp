@@ -181,18 +181,35 @@ std::optional<std::string> redact_patterns(const std::string &line)
             // (host, path, stream key) redacted as one block -- RTMP carries
             // the key in the path/query, not a separate field.
             {std::regex(R"((rtmps?://)[^\s"'<>]+)", std::regex::icase), "$1[REDACTED]"},
+            // SRT ingest URL -- same shape as RTMP: the stream id/passphrase
+            // rides in the query string, not a separate field (ADR-005 F1).
+            {std::regex(R"((srt://)[^\s"'<>]+)", std::regex::icase), "$1[REDACTED]"},
             // token%3D<value> -- percent-encoded token seen inside a
             // recomposed query string (e.g. a browser-source URL).
             {std::regex(R"(token%3[dD][^\s&"'<>]*)", std::regex::icase), "token%3D[REDACTED]"},
-            // Stream key field: key=<value> / "key": "<value>" / key: <value>.
-            {std::regex(R"(("?\bkey"?\s*[:=]\s*"?)([^\s"'&,<>]+))", std::regex::icase),
+            // Stream key field, single-quoted value: key='<value>' /
+            // stream_key='<value>' (ADR-005 F1) -- the double-quote-aware
+            // rule below stops at the first apostrophe, so this needs its
+            // own pass rather than widening the excluded-char set there.
+            {std::regex(R"((\b(?:stream_?)?key\s*[:=]\s*)'[^']*')", std::regex::icase),
+             "$1'[REDACTED]'"},
+            // Stream key field: key=<value> / "key": "<value>" / key: <value>
+            // / stream_key=<value> / streamKey=<value>. The optional
+            // "stream_?" prefix (ADR-005 F1) is needed because "_" is a word
+            // character: \b does not break between "stream_" and "key", so
+            // the bare \bkey\b form never matched "stream_key" at all.
+            {std::regex(R"(("?\b(?:stream_?)?key"?\s*[:=]\s*"?)([^\s"'&,<>]+))", std::regex::icase),
              "$1[REDACTED]"},
             // WebSocket password: server_password and any bare password field.
             {std::regex(R"(("?\b(?:server_)?password"?\s*[:=]\s*"?)([^\s"'&,<>]+))",
                         std::regex::icase),
              "$1[REDACTED]"},
-            // Show token, raw form (field or query).
-            {std::regex(R"(("?\btoken"?\s*[:=]\s*"?)([^\s"'&,<>]+))", std::regex::icase),
+            // Show token, raw form (field or query), including access_token=
+            // (ADR-005 F1 -- same underscore-boundary fix as stream_key above).
+            {std::regex(R"(("?\b(?:access_?)?token"?\s*[:=]\s*"?)([^\s"'&,<>]+))", std::regex::icase),
+             "$1[REDACTED]"},
+            // Authorization: Bearer <token> (ADR-005 F1).
+            {std::regex(R"((\bBearer\s+)([A-Za-z0-9\-_.~+/]+=*))", std::regex::icase),
              "$1[REDACTED]"},
             // Remaining sensitive query params not already covered above.
             {std::regex(R"([?&](auth|sig)=([^&\s"'<>]+))", std::regex::icase), "&$1=[REDACTED]"},
