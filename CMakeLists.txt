@@ -35,6 +35,12 @@ option(PULSAR_BUILD_BROWSER       "Build the pulsar-browser plugin (forked CEF)"
 # project; see patches/0003.)
 add_subdirectory(plugins/pulsar-nv-secure-load)
 
+# Header-only, no build of its own -- the pulsar:OutputFailed reason_class
+# classifier (ADR-005 §3.4, issue #182), needed identically by
+# pulsar-frontend-stub and pulsar-multi-stream and by
+# tests/output-classify-probe, so it is added before all three.
+add_subdirectory(plugins/pulsar-output-classify)
+
 # Order matters: pulsar-headless links pulsar-frontend-stub, so the
 # subdirectory exposing that target must be added first.
 if(PULSAR_BUILD_FRONTEND_STUB)
@@ -99,4 +105,9 @@ if(WIN32)
     # No pulsar.exe, no libobs/Qt: a boolean-predicate mirror is enough to
     # gate the merge (see tests/ws-debug-probe/ws-debug-probe-test.cpp).
     add_subdirectory(tests/ws-debug-probe)
+
+    # #182 -- regression gate for the pulsar:OutputFailed reason_class
+    # classifier (ADR-005 §3.4). No pulsar.exe, no libobs/Qt: a pure
+    # function of (is_local_output, code, last_error).
+    add_subdirectory(tests/output-classify-probe)
 endif()

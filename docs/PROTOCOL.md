@@ -647,9 +647,67 @@ includes `vendorName: "pulsar"`, `eventType`, and `eventData`.
 | Event | Trigger | Payload |
 |---|---|---|
 | `BitrateAdjusted` | The adaptive worker changed the encoder bitrate (after a drop spike or a recovery climb). | `bitrate`, `target`, `floor`, `reason: "drops" \| "recovery"`, `drop_ratio` |
+| `OutputFailed` | An output (the legacy stream, virtualcam, or a multi-stream destination) left the active state other than on request, or a start was refused (ADR-005 §3.4). Never emitted for a client-requested or delay-drained graceful stop. | `output`, `phase: "start" \| "active"`, `code` (`OBS_OUTPUT_*`), `last_error`, `reason_class`, `session` (empty until a later issue wires the §3.3 correlation key) |
 
 The v5 baseline events (`StreamStateChanged`, `RecordStateChanged`,
 `InputCreated`, …) are emitted unchanged by `pulsar-websocket`.
+
+### Failure diagnosis — `reason_class` (ADR-005 §3.4, issue #182)
+
+`OutputFailed.reason_class` is a **closed set of seven values**, classified in
+`plugins/pulsar-output-classify/pulsar-output-classify.h` from the failing
+output's `(is_local_output, code, last_error)`. `unknown` is a legitimate,
+expected value — approximating a class here would reopen the log-scraping
+this event exists to end (ADR-005 R4).
+
+| `reason_class` | Sens |
+|---|---|
+| `auth_rejected` | L'ingest a refusé les identifiants — clé invalide ou révoquée. |
+| `ingest_unreachable` | Aucune connexion établie — DNS, routage, port, serveur injoignable. |
+| `ingest_dropped` | Connexion établie puis perdue (ou refusée juste après) avant/pendant la diffusion. |
+| `encoder_failed` | L'encodeur n'a pas démarré ou s'est arrêté en erreur. |
+| `config_rejected` | libobs a refusé la configuration avant toute tentative réseau. |
+| `disconnected_local` | Output sans surface réseau (virtualcam) : tout arrêt anormal est local. |
+| `unknown` | Aucune classe ne s'applique. `last_error` brut joint tel quel. |
+
+#### Correspondence table — RC5
+
+ADR-005 RC5 requires every signature `Prism/src/main/broadcast-url.ts` scans
+for (`PERSISTENT_RTMP_SIGNATURES`, `TRANSIENT_RTMP_SIGNATURES`) to land on
+exactly one `reason_class`, with no orphan. Produced once from the state of
+that consumer as of this issue (2026-08-10) — **not maintained** going
+forward (excluded from this issue's scope; a signature added to
+`broadcast-url.ts` later without a matching row here is a known, accepted
+gap until a follow-up issue owns the table's upkeep).
+
+| Prism signature (`broadcast-url.ts`) | `reason_class` |
+|---|---|
+| `PERSISTENT_RTMP_SIGNATURES`: `/unauthor/i` | `auth_rejected` |
+| `PERSISTENT_RTMP_SIGNATURES`: `/\binvalid (stream )?key\b/i` | `auth_rejected` |
+| `PERSISTENT_RTMP_SIGNATURES`: `/authenticat/i` | `auth_rejected` |
+| `PERSISTENT_RTMP_SIGNATURES`: `/403\b/i` | `auth_rejected` |
+| `TRANSIENT_RTMP_SIGNATURES`: `/rtmp[^\n]*failed[^\n]*-3\b/i` | `ingest_dropped` (`OBS_OUTPUT_INVALID_STREAM`, code `-3`) |
+| `TRANSIENT_RTMP_SIGNATURES`: `/rtmp[^\n]*-3\b/i` | `ingest_dropped` (`OBS_OUTPUT_INVALID_STREAM`, code `-3`) |
+| `TRANSIENT_RTMP_SIGNATURES`: `/connect failed[^\n]*-3\b/i` | `ingest_dropped` (`OBS_OUTPUT_INVALID_STREAM`, code `-3`) |
+
+The three transient signatures all key on the numeric `-3` libobs prints for
+`OBS_OUTPUT_INVALID_STREAM` (RTMP connect succeeded, the server then refused
+`createStream`/publish before any frame flowed) — Prism's own comment on
+`TRANSIENT_RTMP_SIGNATURES` describes exactly this case ("the ingest
+momentarily refuses a fresh connection… distinct from an auth failure").
+Mapping code `-3` to `ingest_dropped` rather than `ingest_unreachable` is a
+judgment call, not a certainty: the connection *was* established at the RTMP
+layer, then the stream was refused before diffusion could start, which reads
+closer to "established then lost" than to "never connected". See
+`pulsar-output-classify.h`'s inline comment on this case.
+
+No Prism signature maps to `ingest_unreachable`, `encoder_failed`,
+`config_rejected`, `disconnected_local`, or `unknown` — Prism does not scrape
+stdout for those cases (`OBS_OUTPUT_CONNECT_FAILED` produces no distinctive
+log text `broadcast-url.ts` looks for). That is not an orphan in the RC5
+sense (every *Prism* signature has a class); it means those four classes are
+reachable from Pulsar's structured event but were previously invisible to
+Prism's scraping entirely.
 
 ## `pulsar-scene:*` vendor namespace
 
