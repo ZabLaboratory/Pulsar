@@ -648,9 +648,14 @@ includes `vendorName: "pulsar"`, `eventType`, and `eventData`.
 
 | Event | Trigger | Payload |
 |---|---|---|
-| `BitrateAdjusted` | The adaptive worker changed the encoder bitrate (after a drop spike or a recovery climb). | `bitrate`, `target`, `floor`, `reason: "drops" \| "recovery"`, `drop_ratio` |
-| `OutputFailed` | An output (the legacy stream, virtualcam, or a multi-stream destination) that had already reached the active state left it other than on request (ADR-005 §3.4/§3.5). Never emitted for a client-requested or delay-drained graceful stop, and never for a start-of-attempt failure — see the authority split below. | `output`, `phase: "active"`, `code` (`OBS_OUTPUT_*`), `last_error`, `reason_class`, `session` (empty until a later issue wires the §3.3 correlation key) |
-| `OutputAttemptSettled` | A go-live attempt on an output settled — success included — exactly once per attempt and per destination (ADR-005 §3.5, issue #186). | `output`, `destination`, `attempt` (1-based, monotonic per destination), `outcome: "live" \| "failed"`, `reason_class` (closed set below; key **absent**, not `null`, when `outcome` is `"live"`), `code`, `last_error`, `duration_ms`, `session` (empty until a later issue wires the §3.3 correlation key) |
+| `BitrateAdjusted` | The adaptive worker changed the encoder bitrate (after a drop spike or a recovery climb). | `bitrate`, `target`, `floor`, `reason: "drops" \| "recovery"`, `drop_ratio`, `session` |
+| `OutputFailed` | An output (the legacy stream, virtualcam, or a multi-stream destination) that had already reached the active state left it other than on request (ADR-005 §3.4/§3.5). Never emitted for a client-requested or delay-drained graceful stop, and never for a start-of-attempt failure — see the authority split below. | `output`, `phase: "active"`, `code` (`OBS_OUTPUT_*`), `last_error`, `reason_class`, `session` |
+| `OutputAttemptSettled` | A go-live attempt on an output settled — success included — exactly once per attempt and per destination (ADR-005 §3.5, issue #186). | `output`, `destination`, `attempt` (1-based, monotonic per destination), `outcome: "live" \| "failed"`, `reason_class` (closed set below; key **absent**, not `null`, when `outcome` is `"live"`), `code`, `last_error`, `duration_ms`, `session` |
+
+`session` (all three events, ADR-005 §3.3) is the same id printed on the
+`PULSAR_SESSION <id>` stdout line at boot (§"READY handshake" above /
+`PRISM-EMBEDDING.md`) — `PULSAR_SESSION_ID` echoed verbatim if set,
+otherwise generated. Never renamed or retyped an existing field to add it.
 
 The v5 baseline events (`StreamStateChanged`, `RecordStateChanged`,
 `InputCreated`, …) are emitted unchanged by `pulsar-websocket`.
@@ -953,6 +958,7 @@ value — operator/env-controlled only.
 |---|---|---|---|
 | `PULSAR_PORT` | `pulsar-headless` | `4455` | obs-websocket listen port. Rejected if outside `1..65535`. |
 | `PULSAR_PASSWORD` | `pulsar-headless` | fresh 22-char random string | obs-websocket session password, seeded into `obs-websocket/config.json` before module load. |
+| `PULSAR_SESSION_ID` | `pulsar-headless` | fresh 16-char random string | Correlation key (ADR-005 §3.3), echoed verbatim if set. Printed as `PULSAR_SESSION <id>` on stdout right before the `PULSAR_READY` sentinel; stamps every log line and every `pulsar:*` vendor event for the life of the process. |
 | `PULSAR_WS_BIND` | `pulsar-websocket` | `127.0.0.1` | Address the obs-websocket server binds. The default keeps the v5 surface off the network entirely; any other value is an explicit decision and logs a warning when it is not a loopback address. Not persisted in `config.json`. |
 | `PULSAR_FPS` | `pulsar-headless` | `60` | Output fps. Accepts only `24`/`30`/`48`/`60`/`120`; anything else is rejected with a warning. Boot-fixed (no live change). |
 | `PULSAR_RESOLUTION` | `pulsar-headless` | `1920x1080` | Base/output resolution, format `<W>x<H>`, up to `7680x4320`. Boot-fixed. |

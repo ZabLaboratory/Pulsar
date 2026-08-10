@@ -67,11 +67,13 @@ std::string g_session_password;
 
 // ADR-005 §3.1-§3.2: the log handler's registry-layer state and file sink.
 // `g_log_session_id` is the reserved `session` field of the log line
-// gabarit -- filled in by a later issue; kept empty here.
+// gabarit (ADR §3.3). Resolved once in main(), before
+// install_pulsar_log_handler() runs, so every line -- startup included --
+// carries it; never reassigned afterwards.
 pulsar_log::SecretRegistry g_secret_registry;
 std::unique_ptr<pulsar_log::LogFileSink> g_log_sink;
 std::mutex g_log_mutex;
-const std::string g_log_session_id;
+std::string g_log_session_id;
 
 // ADR-005 §3.6.1: counters + bounded WARN/ERROR ring, fed the same
 // redacted line written to the file below -- never a re-read of it.
@@ -227,6 +229,17 @@ void pulsar_log_stop_file_write_cb(void * /*priv_data*/, calldata_t *cd)
     calldata_set_bool(cd, "success", true);
 }
 
+// ADR-005 §3.3: bridges `g_log_session_id` -- resolved once at boot, in this
+// .exe's own translation unit -- to pulsar-multi-stream, which has no
+// compile-time link to it and needs the same value to stamp its `pulsar:*`
+// vendor events. Same global proc handler bridge as the diagnostics procs
+// above.
+void pulsar_log_get_session_id_cb(void * /*priv_data*/, calldata_t *cd)
+{
+    calldata_set_string(cd, "session", g_log_session_id.c_str());
+    calldata_set_bool(cd, "success", true);
+}
+
 // Installs base_set_log_handler and opens the rotating file sink. Must run
 // BEFORE obs_startup (ADR §3.1) so every libobs blog() call, including
 // ones emitted during startup itself, is captured. A file-open failure
@@ -266,6 +279,9 @@ void install_pulsar_log_procs()
                      "bool pulsar_log_stop_file_write(out bool stopped, out bool already_stopped, "
                      "out string path)",
                      &pulsar_log_stop_file_write_cb, nullptr);
+    proc_handler_add(global_ph,
+                     "bool pulsar_log_get_session_id(out string session)",
+                     &pulsar_log_get_session_id_cb, nullptr);
 }
 
 #ifdef _WIN32
@@ -555,6 +571,18 @@ std::string generate_session_password(std::size_t len = 22)
     return out;
 }
 
+// ADR-005 §3.3: session correlation id. `PULSAR_SESSION_ID`, if set by the
+// parent process, is reused verbatim -- letting a supervisor correlate a
+// group of processes under one id it already knows. Otherwise generated
+// fresh from the same alphabet as the WebSocket password above (no new
+// dependency), so it is never empty and differs between two boots.
+std::string resolve_session_id()
+{
+    if (const char *e = std::getenv("PULSAR_SESSION_ID"); e && *e)
+        return e;
+    return generate_session_password(16);
+}
+
 #ifdef _WIN32
 // obs-websocket/config.json carries the session password in clear
 // text (ADR-005 §5 R9). It is written to <cwd>/obs-websocket/ --
@@ -717,6 +745,10 @@ int main(int argc, char **argv)
 
     QApplication qt_app(argc, argv);
 
+    // ADR-005 §3.3: resolved before install_pulsar_log_handler() so every
+    // log line from here on -- startup included -- already carries it.
+    g_log_session_id = resolve_session_id();
+
     // ADR-005 §3.1: installed before obs_startup so every blog() call from
     // here on -- including ones libobs itself emits during startup -- is
     // captured by our durable, redacted log handler.
@@ -763,6 +795,14 @@ int main(int argc, char **argv)
 #ifdef _WIN32
     SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
 #endif
+
+    // ADR-005 §3.3: the session correlation line, on its own, BEFORE the
+    // sentinel below -- never merged into it, never after it. The sentinel
+    // stays byte-for-byte unchanged (D5): twenty probes and spawn.ts anchor
+    // it, and both tolerate an intercalary line they don't recognise
+    // (probes loop past a non-match, spawn.ts only ever inspects the idle
+    // line further down, never this one).
+    std::printf("PULSAR_SESSION %s\n", g_log_session_id.c_str());
 
     // PULSAR_READY sentinel. The parent process (Prism, CI probes,
     // operators) reads stdout line-by-line, picks up this marker,

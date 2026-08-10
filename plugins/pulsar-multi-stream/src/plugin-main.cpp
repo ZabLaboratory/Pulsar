@@ -270,13 +270,35 @@ extern obs_websocket_vendor g_vendor;
 class DestinationRegistry;
 extern DestinationRegistry *g_registry;
 
+// ADR-005 §3.3: session correlation key. pulsar-headless.exe resolves it
+// once at boot; this module has no compile-time link to that translation
+// unit, so it reaches it through the same global proc handler bridge the
+// diagnostic surface above uses ("pulsar_log_get_diagnostics" /
+// "pulsar_log_stop_file_write"). Falls back to an empty string -- never a
+// fabricated value -- if the proc or the bridge itself is unavailable.
+std::string current_session_id()
+{
+    proc_handler_t *global_ph = obs_get_proc_handler();
+    if (!global_ph) return "";
+
+    calldata_t cd = {0, 0, 0, 0};
+    const bool called = proc_handler_call(global_ph, "pulsar_log_get_session_id", &cd);
+    std::string session;
+    if (called) {
+        const char *s = calldata_string(&cd, "session");
+        if (s) session = s;
+    }
+    calldata_free(&cd);
+    return session;
+}
+
 // Builds and emits pulsar:OutputFailed for a network-capable (is_local=false)
 // or local (is_local=true, e.g. virtualcam) output, or does nothing when the
 // stop is not a failure (OBS_OUTPUT_SUCCESS -- RC7). `output` is the display
 // name in the payload ("stream", "virtualcam", or a destination id);
 // `phase` is "start" (obs_output_start declined synchronously) or "active"
-// (the output was live and stopped abnormally). `session` is always empty
-// for now -- wired by a later issue (§3.3's correlation key).
+// (the output was live and stopped abnormally). `session` is the boot-time
+// correlation key from ADR §3.3.
 void emit_output_failed(const char *output, const char *phase, bool is_local_output, int code,
                          const char *last_error)
 {
@@ -294,7 +316,7 @@ void emit_output_failed(const char *output, const char *phase, bool is_local_out
     obs_data_set_int(ev, "code", code);
     obs_data_set_string(ev, "last_error", last_error ? last_error : "");
     obs_data_set_string(ev, "reason_class", cls);
-    obs_data_set_string(ev, "session", "");
+    obs_data_set_string(ev, "session", current_session_id().c_str());
     obs_websocket_vendor_emit_event(g_vendor, "OutputFailed", ev);
 }
 
@@ -363,7 +385,7 @@ void emit_output_attempt_settled(const char *output, const char *destination, lo
     obs_data_set_int(ev, "code", code);
     obs_data_set_string(ev, "last_error", last_error ? last_error : "");
     obs_data_set_int(ev, "duration_ms", duration_ms);
-    obs_data_set_string(ev, "session", "");
+    obs_data_set_string(ev, "session", current_session_id().c_str());
     obs_websocket_vendor_emit_event(g_vendor, "OutputAttemptSettled", ev);
 }
 
@@ -928,6 +950,8 @@ bool AdaptiveBitrate::apply_bitrate(obs_encoder_t *enc, long long new_kbps, cons
         obs_data_set_int(ev, "floor", state_.floor_kbps);
         obs_data_set_string(ev, "reason", reason);
         obs_data_set_double(ev, "drop_ratio", trigger_ratio);
+        // ADR-005 §3.3: added field, no existing field renamed or retyped.
+        obs_data_set_string(ev, "session", current_session_id().c_str());
         obs_websocket_vendor_emit_event(g_vendor, "BitrateAdjusted", ev);
     }
 

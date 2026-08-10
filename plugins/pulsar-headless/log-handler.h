@@ -33,7 +33,9 @@ const char *level_name(Level level);
 std::string derive_subsystem(const std::string &message, std::string &out_message);
 
 // "<ISO8601 UTC> <LEVEL> <session> <subsystem> | <message>". `session` is
-// the reserved field an upcoming issue fills in; an empty string is valid.
+// the correlation id resolved once at boot (ADR-005 §3.3, main.cpp's
+// `g_log_session_id`); an empty string remains valid for any other caller
+// (e.g. tests) that has none to give.
 std::string format_line(Level level, const std::string &session, const std::string &subsystem,
                          const std::string &message);
 
