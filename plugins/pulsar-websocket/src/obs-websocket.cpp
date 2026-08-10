@@ -180,7 +180,7 @@ WebSocketServerPtr GetWebSocketServer()
 
 bool IsDebugEnabled()
 {
-	return !_config || _config->DebugEnabled;
+	return _config && _config->DebugEnabled;
 }
 
 /**
