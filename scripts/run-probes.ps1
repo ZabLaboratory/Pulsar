@@ -639,6 +639,34 @@ if (-not $ready) {
 }
 Write-Host "==> PULSAR_READY received"
 
+# --------------------------------------------------------------------
+# Phase 2 (ACL) -- config.json DACL hardening regression, Bastion
+# follow-up on #181/#191 (C4). The old best-effort comment above
+# main.cpp's ACL code claimed a "confidentiality regression [to]
+# catch via the probe script" that did not exist -- this is that
+# probe. It asserts the config.json produced by the shared instance's
+# boot carries a protected DACL naming only the current account, so a
+# regression back to the inherited BUILTIN\Users grant (or a
+# CreateFile/DACL-ordering bug) fails CI instead of leaking silently.
+# --------------------------------------------------------------------
+$aclConfigPath = Join-Path $configDir "config.json"
+if (-not (Test-Path $aclConfigPath)) {
+    Write-Host "==> ACL probe FAILED: $aclConfigPath does not exist after boot"
+    Stop-Process -Id $proc.Id -Force; $proc.WaitForExit(5000) | Out-Null
+    exit 1
+}
+$aclCurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$aclInfo = Get-Acl -Path $aclConfigPath
+$aclBadAces = $aclInfo.Access | Where-Object {
+    -not $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Equals($aclCurrentUser)
+}
+if (-not $aclInfo.AreAccessRulesProtected -or $aclBadAces) {
+    Write-Host "==> ACL probe FAILED: config.json DACL is not restricted to the current account ($($aclCurrentUser.Value))"
+    Write-Host ($aclInfo.Access | Format-Table IdentityReference, FileSystemRights, AccessControlType | Out-String)
+    Stop-Process -Id $proc.Id -Force; $proc.WaitForExit(5000) | Out-Null
+    exit 1
+}
+Write-Host "==> ACL probe OK (config.json DACL restricted to $($aclCurrentUser.Value))"
 
 # --------------------------------------------------------------------
 # Phase 2a -- scene-source name-drift regression (probe-scene-name-drift.py,
