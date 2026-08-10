@@ -790,6 +790,100 @@ if (Test-Path $reseedConfigPath) {
     Remove-Item $reseedConfigPath -Force
 }
 
+# --------------------------------------------------------------------
+# Phase 1L -- FATAL ABORT negative probe (issue #202, ADR-005 finding
+# N7 / #181 veto F2). Every probe above proves the happy path only:
+# config.json seeds, hardens, and the plugin loads normally. None of
+# them ever force seed_websocket_config() to FAIL and prove main()
+# actually takes the fail-closed exit main.cpp installs for it (#181
+# V2/F2, pulsar-headless/main.cpp): abort with a non-zero code BEFORE
+# obs_load_all_modules(), never printing PULSAR_READY, and never
+# leaking the session password it already generated
+# (g_secret_registry.register_secret runs before the hardening call)
+# onto stdout/stderr on the way out.
+#
+# Forcing mechanism: seed_websocket_config() calls
+# harden_directory_dacl("obs-websocket", ...), whose FIRST step is
+# std::filesystem::create_directories("obs-websocket"). That call
+# fails (sets an error_code, returns false) when a path of that name
+# already exists but is NOT a directory -- so pre-creating a plain
+# FILE named `obs-websocket` in the rundir deterministically forces
+# the fail-closed branch, with no admin rights and no ACL trickery
+# required (portable to every CI runner that can already write its
+# own rundir).
+# --------------------------------------------------------------------
+Log-Phase "==> Fatal-abort negative probe: obs-websocket/ blocked by a pre-existing file (#202, #181 F2)"
+
+$abortConfigDir = Join-Path $binDir "obs-websocket"
+if (Test-Path $abortConfigDir -PathType Container) {
+    Remove-Item $abortConfigDir -Recurse -Force
+} elseif (Test-Path $abortConfigDir) {
+    Remove-Item $abortConfigDir -Force
+}
+# Force the type conflict: a FILE sits where seed_websocket_config
+# expects to create a DIRECTORY.
+New-Item -ItemType File -Path $abortConfigDir -Force | Out-Null
+
+$abortPort = New-FreePort
+$abortPwd  = New-SessionPassword  # must never appear anywhere in the child's output
+$env:PULSAR_PORT = "$abortPort"
+$env:PULSAR_PASSWORD = $abortPwd
+$abortStdout = Join-Path $repoRoot "build/probe-fatal-abort-stdout.log"
+$abortStderr = Join-Path $repoRoot "build/probe-fatal-abort-stderr.log"
+New-Item -ItemType Directory -Path (Split-Path $abortStdout) -Force | Out-Null
+
+$abortProc = Start-Process -FilePath $pulsar -WorkingDirectory $binDir -PassThru `
+    -RedirectStandardOutput $abortStdout -RedirectStandardError $abortStderr
+
+# This process must NEVER reach READY -- wait for EXIT instead, bounded
+# by the same timeout budget as a normal boot (the forced failure
+# fires AFTER obs_startup/reset_video/reset_audio, so it takes as long
+# to fail as a normal boot takes to succeed).
+$abortDeadline = (Get-Date).AddSeconds($ReadyTimeoutSec)
+while (-not $abortProc.HasExited -and (Get-Date) -lt $abortDeadline) {
+    Start-Sleep -Milliseconds 250
+}
+
+$abortFailMsg = $null
+$abortExitCode = $null
+if (-not $abortProc.HasExited) {
+    $abortFailMsg = "pulsar.exe never exited within ${ReadyTimeoutSec}s -- it did not fail closed, it hung (or booted degraded) instead of aborting"
+    Stop-PulsarProcessTree -Proc $abortProc
+} else {
+    $abortExitCode = $abortProc.ExitCode
+    if ($abortExitCode -eq 0) {
+        $abortFailMsg = "pulsar.exe exited 0 with obs-websocket/ blocked -- the fail-closed abort (#181 F2) did not fire, it booted degraded instead"
+    }
+}
+
+if (-not $abortFailMsg) {
+    $abortStdoutText = Get-Content $abortStdout -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $abortStdoutText) { $abortStdoutText = "" }
+    $abortStderrText = Get-Content $abortStderr -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $abortStderrText) { $abortStderrText = "" }
+
+    if ($abortStdoutText -match 'PULSAR_READY') {
+        $abortFailMsg = "PULSAR_READY sentinel was printed despite the forced hardening failure -- fail-closed regression (#181 F2)"
+    } elseif ($abortStdoutText -match [regex]::Escape($abortPwd) -or $abortStderrText -match [regex]::Escape($abortPwd)) {
+        $abortFailMsg = "the session password leaked onto stdout/stderr before the abort -- fail-closed regression"
+    }
+}
+
+if ($abortFailMsg) {
+    Log-Phase "==> Fatal-abort negative probe FAILED: $abortFailMsg"
+    Log-Phase "==> Pulsar stdout tail:"
+    Show-LogTail -Path $abortStdout -Tail 30
+    Log-Phase "==> Pulsar stderr tail:"
+    Show-LogTail -Path $abortStderr -Tail 30
+    Remove-Item $abortConfigDir -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+Log-Phase "==> Fatal-abort negative probe OK: exit code $abortExitCode, no PULSAR_READY, no password leak (#202, #181 F2 closed)"
+
+# Restore obs-websocket/ to a plain missing state for the probes that
+# follow -- they all expect to seed it fresh themselves.
+Remove-Item $abortConfigDir -Force -ErrorAction SilentlyContinue
+
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
 # Port 0 -> bind a random free port so back-to-back ctest runs don't
