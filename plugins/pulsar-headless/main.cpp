@@ -205,7 +205,15 @@ void pulsar_log_stop_file_write_cb(void * /*priv_data*/, calldata_t *cd)
         pulsar_log::Level::Warn, g_log_session_id, "pulsar-headless",
         "log file write stopped via kill-switch request; a restart is required to resume");
     auto redacted = pulsar_log::redact_line(stopLine, g_secret_registry);
-    const std::string &finalLine = redacted ? *redacted : stopLine;
+    // ADR §3.2 posture d'échec: a line whose redaction can't be trusted is
+    // abandoned, same as the normal handler (:119-120) -- never fall back
+    // to the unredacted line. The sink still needs closing either way, so
+    // the fallback is a fixed, static, redaction-free sentinel rather than
+    // the (unverified) formatted stopLine.
+    const std::string finalLine = redacted ? *redacted
+                                            : "WARN pulsar-headless log file write stopped "
+                                              "via kill-switch request (redaction unavailable, "
+                                              "message omitted)";
 
     g_log_sink->close(finalLine);
     g_log_diagnostics.record(pulsar_log::Level::Warn, finalLine);
@@ -230,13 +238,21 @@ void install_pulsar_log_handler()
                      g_log_sink->error().c_str());
     }
     base_set_log_handler(pulsar_log_handler, nullptr);
+}
 
-    // ADR-005 §3.6: publish the diagnostic surface's two procs on the
-    // GLOBAL obs proc handler -- reachable from pulsar-multi-stream (a
-    // plugin DLL, no compile-time link to this .exe) the same way
-    // obs-websocket's own API handle is (see obs-websocket.cpp's
-    // "pulsar_websocket_is_loopback_only" registration for the mirrored
-    // pattern on that side).
+// ADR-005 §3.6: publish the diagnostic surface's two procs on the GLOBAL obs
+// proc handler -- reachable from pulsar-multi-stream (a plugin DLL, no
+// compile-time link to this .exe) the same way obs-websocket's own API
+// handle is (see obs-websocket.cpp's "pulsar_websocket_is_loopback_only"
+// registration for the mirrored pattern on that side).
+//
+// Must run AFTER obs_startup(): obs_get_proc_handler() returns the global
+// `obs->procs` handle, which obs_startup() allocates (and, if called again,
+// replaces) -- calling it beforehand dereferences a still-NULL `obs` and
+// crashes on every boot. Called from main() once obs_startup() has
+// succeeded (around pulsar_frontend_init() time).
+void install_pulsar_log_procs()
+{
     proc_handler_t *global_ph = obs_get_proc_handler();
     proc_handler_add(global_ph,
                      "bool pulsar_log_get_diagnostics(in int max_lines, out string path, "
@@ -634,6 +650,11 @@ int main(int argc, char **argv)
     // obs_frontend_add_event_callback inside obs_module_load) finds a
     // valid frontend and its callback registers correctly.
     pulsar_frontend_init();
+
+    // ADR-005 §3.6: register the diagnostic procs now that obs_startup()
+    // has produced the real global proc handler (obs_get_proc_handler()
+    // before obs_startup() dereferences a still-NULL `obs`).
+    install_pulsar_log_procs();
 
     // Seed obs-websocket's config.json before plugins load so the
     // pulsar-websocket fork picks up our session port + password

@@ -64,11 +64,16 @@ void OnObsReady(bool ready);
 // alike, can query it without a compile-time dependency on this plugin.
 static void pulsar_is_loopback_only_cb(void * /*priv_data*/, calldata_t *cd)
 {
-	if (!_config) {
+	// Local copy: obs_module_unload() can null out the global `_config`
+	// from another thread between the truthiness check and the dereference
+	// below. Holding our own shared_ptr keeps the Config object alive for
+	// the rest of this call regardless of what happens to the global.
+	ConfigPtr cfg = _config;
+	if (!cfg) {
 		calldata_set_bool(cd, "success", false);
 		return;
 	}
-	calldata_set_bool(cd, "loopback", ComputeLoopbackOnly(_config->BindAddress));
+	calldata_set_bool(cd, "loopback", ComputeLoopbackOnly(cfg->BindAddress));
 	calldata_set_bool(cd, "success", true);
 }
 
