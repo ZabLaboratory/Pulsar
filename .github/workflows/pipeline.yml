@@ -699,10 +699,21 @@ jobs:
   # MSVC), different runner (ubuntu-latest, faster). Only `needs: lint`
   # so it doesn't sit waiting for the C++ build. Publishes pulsar-client
   # first, then bundle + bundle-full which depend on it.
+  #
+  # #206 : the OR form this used to be (`startsWith(tag) ||
+  # (dispatch && flag)`) let workflow_dispatch publish from ANY ref --
+  # the tag check and the dispatch check were alternatives, not both
+  # required, so `enable_npm_publish=true` dispatched from an arbitrary
+  # branch bypassed the v*.*.* tag protection entirely. `github.ref` is
+  # AND-ed in now : whatever the event, the ref actually being run
+  # against must be a tag. workflow_dispatch still works exactly as
+  # before -- but only when the operator explicitly picks a `v*.*.*`
+  # tag as "Use workflow from" and flips the input on ; a push of a
+  # matching tag keeps publishing unconditionally, same as always.
   npm-publish:
     name: publish @clodocapeo/pulsar-* to npm
     needs: lint
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.enable_npm_publish == 'true')
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'workflow_dispatch' || github.event.inputs.enable_npm_publish == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
