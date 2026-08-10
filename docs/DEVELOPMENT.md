@@ -254,3 +254,12 @@ The `live-broadcast` job uploads the full pulsar stdout/stderr +
 diagnostic JSON as workflow artefacts. Download them from the failed
 run page. The JSON includes per-poll perf samples (active fps, render
 time, drops) so you can attribute lag to encoder vs network.
+
+### A go-live attempt failed, or an output dropped after reaching live
+
+Start from `pulsar:OutputAttemptSettled` / `pulsar:OutputFailed`
+(ADR-005 §3.4/§3.5), never from the log file first — and copy
+`%LOCALAPPDATA%\Pulsar\logs\` out of the retention window before
+investigating further. Full decision tree, the `reason_class` table, and
+the evidence-collection procedure:
+[docs/runbooks/diagnose-a-failed-go-live.md](runbooks/diagnose-a-failed-go-live.md).

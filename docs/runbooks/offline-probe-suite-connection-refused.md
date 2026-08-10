@@ -40,8 +40,14 @@ Since PR #132 the suite answers this itself. Look for:
   `ConnectionRefused` lines are consequences. The probe named "last alive" is
   *where* it died, not necessarily *why*. The suite stops there and lists the
   remaining probes as `NOT RUN`. Diagnose from the **stderr tail** printed right
-  under the banner — libobs writes its own log to stderr, that is where the crash
-  context lives.
+  under the banner. Since #183 this is no longer a raw libobs dump: every line
+  is redacted and leveled by `pulsar-headless`'s log handler before it reaches
+  stderr, and the same redacted line is mirrored to the rotating file sink under
+  `%LOCALAPPDATA%\Pulsar\logs\` on the runner (survives past the redirected
+  capture in `build/probe-pulsar-stderr.log`) — see
+  [docs/runbooks/diagnose-a-failed-go-live.md](diagnose-a-failed-go-live.md) for
+  the structured path (`GetDiagnostics`, ADR-005 §3.6.1) when the process is
+  still alive to query.
 - **No banner** → the server stayed up the whole time and the probe assertion
   genuinely failed. Read the probe, not the infra.
 
@@ -81,9 +87,12 @@ saying which of the two cases it is.
 
 ## Resolution
 
-- Server crash (`FATAL` present): attach the stderr tail to the upstream-obs
-  investigation. **Do not** re-run blind, **do not** widen the retry budget, and
-  never add `continue-on-error` — the gate (#121/#128) is blocking on purpose.
+- Server crash (`FATAL` present): attach the stderr tail (already redacted since
+  #183) to the upstream-obs investigation — the mirrored copy under
+  `%LOCALAPPDATA%\Pulsar\logs\` on the runner is a fallback if the workflow
+  artefact was not preserved. **Do not** re-run blind, **do not** widen the
+  retry budget, and never add `continue-on-error` — the gate (#121/#128) is
+  blocking on purpose.
 - Assertion failure (no `FATAL`): normal red CI, route to the owner of the probe.
 
 ## Rollback
