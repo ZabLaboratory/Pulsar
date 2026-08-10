@@ -53,7 +53,7 @@ public:
 
 private:
     mutable std::mutex mutex_;
-    std::vector<std::string> secrets_;
+    std::deque<std::string> secrets_;
 };
 
 // Pattern layer: the five classes from §3.2 -- stream key field, full

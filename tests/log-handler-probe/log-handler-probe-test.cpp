@@ -279,6 +279,53 @@ void test_registry_layer_bare_embedded_repeated()
     assert(full_pipeline->find("[REDACTED]") != std::string::npos);
 }
 
+void test_registry_rejects_short_dedups_and_caps()
+{
+    pulsar_log::SecretRegistry registry;
+
+    // Below the credential floor: never enters the registry, so it must
+    // never get redacted out of a line -- this is what keeps a
+    // validation-rejected/garbage `key` from polluting every future line.
+    static const std::string kShort = "short7c"; // pragma: allowlist secret, 7 chars
+    registry.register_secret(kShort);
+    auto short_line = pulsar_log::redact_line("value=" + kShort + " end", registry);
+    assert(short_line.has_value());
+    assert(short_line->find(kShort) != std::string::npos);
+
+    // Re-registering the same value (e.g. CreateDestination called twice
+    // for the same destination/key) must not grow the registry: register
+    // it 300 times, then register 300 distinct secrets on top -- if dedup
+    // were missing, the repeated one alone would already have evicted
+    // itself out of the (small) cap.
+    static const std::string kRepeated = "REPEATEDSTREAMKEY01"; // pragma: allowlist secret
+    for (int i = 0; i < 300; ++i)
+        registry.register_secret(kRepeated);
+    auto repeated_line = pulsar_log::redact_line("k=" + kRepeated, registry);
+    assert(repeated_line.has_value());
+    assert(repeated_line->find(kRepeated) == std::string::npos);
+
+    // Cap with FIFO eviction: push well past the registry's cap with
+    // distinct secrets. The earliest one registered (before the dedup
+    // block above even ran) must have aged out; the most recent one must
+    // still be present and redacted.
+    static const std::string kOldest = "OLDESTEVICTEDSECRET03"; // pragma: allowlist secret
+    pulsar_log::SecretRegistry cap_registry;
+    cap_registry.register_secret(kOldest);
+    std::string last_secret;
+    for (int i = 0; i < 300; ++i) {
+        last_secret = "DISTINCTSTREAMKEYNUMBER" + std::to_string(i) + "PAD"; // pragma: allowlist secret
+        cap_registry.register_secret(last_secret);
+    }
+
+    auto oldest_line = pulsar_log::redact_line("k=" + kOldest, cap_registry);
+    assert(oldest_line.has_value());
+    assert(oldest_line->find(kOldest) != std::string::npos); // evicted, no longer redacted
+
+    auto newest_line = pulsar_log::redact_line("k=" + last_secret, cap_registry);
+    assert(newest_line.has_value());
+    assert(newest_line->find(last_secret) == std::string::npos);
+}
+
 void test_redact_line_abandons_when_pattern_layer_fails()
 {
     pulsar_log::SecretRegistry registry;
@@ -461,6 +508,7 @@ int main()
     test_pattern_layer_leaves_ordinary_text_alone();
     test_pattern_layer_abandons_oversized_line();
     test_registry_layer_bare_embedded_repeated();
+    test_registry_rejects_short_dedups_and_caps();
     test_redact_line_abandons_when_pattern_layer_fails();
     test_rotation_stays_under_max_files();
     test_age_purge_fires_under_size_and_count_bounds();

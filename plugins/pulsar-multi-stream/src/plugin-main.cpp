@@ -1143,13 +1143,6 @@ void on_create_destination(obs_data_t *req, obs_data_t *res, void *)
     const char *url  = obs_data_get_string(req, "url");
     const char *key  = obs_data_get_string(req, "key");
 
-    // Register the raw stream key with pulsar-headless's log redactor the
-    // moment it is received -- before validation, before it ever reaches
-    // DestinationRegistry::create (:474 -- d.key = key) or the RTMP service
-    // settings (:414). This is the worst case named in ADR-005 §5 R1.
-    if (key && *key)
-        register_stream_secret(key);
-
     DestinationKind kind = kind_from_string(kindS);
     if (kind == Kind_Unknown) {
         obs_data_set_string(res, "error",
@@ -1162,6 +1155,15 @@ void on_create_destination(obs_data_t *req, obs_data_t *res, void *)
         obs_data_set_string(res, "error", err.c_str());
         return;
     }
+
+    // Register the raw stream key with pulsar-headless's log redactor only
+    // once it is known-good -- before it ever reaches
+    // DestinationRegistry::create (:474 -- d.key = key) or the RTMP service
+    // settings (:414), but after validate_destination_input so a rejected
+    // key never pollutes the registry (ADR-005 §5 R1; `err` above never
+    // contains the raw key).
+    if (key && *key)
+        register_stream_secret(key);
 
     // For a named platform the server URL is fixed; the user-supplied url
     // field is ignored. Stash the pinned URL so GetDestinations + diagnostics

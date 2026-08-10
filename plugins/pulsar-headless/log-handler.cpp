@@ -27,6 +27,16 @@ namespace fs = std::filesystem;
 // it -- abandoning the line is the documented failure posture (§3.2).
 constexpr std::size_t kMaxRedactableLineBytes = 32 * 1024;
 
+// Shortest real credential this registry ever needs to hold (Twitch/YouTube
+// stream keys and access tokens run 30+ chars); anything shorter is refused
+// outright rather than risk redacting common short substrings out of every
+// log line. Registry size is capped with FIFO eviction so a caller that
+// registers on every CreateDestination (including re-creating the same
+// destination) cannot grow it, and redact()'s per-line O(N log N) sort/scan
+// with it, without bound.
+constexpr std::size_t kMinSecretLength = 8;
+constexpr std::size_t kMaxRegisteredSecrets = 256;
+
 std::string iso8601_utc_now()
 {
     using namespace std::chrono;
@@ -138,9 +148,18 @@ std::string format_line(Level level, const std::string &session, const std::stri
 
 void SecretRegistry::register_secret(std::string value)
 {
-    if (value.empty())
+    // A floor below the shortest real credential (Twitch/YouTube stream
+    // keys and access tokens all run 30+ chars) keeps short/garbage values
+    // -- and a validation-rejected `key` on any caller that skips ordering
+    // -- from ever entering the registry and being redacted out of every
+    // log line that happens to contain that substring.
+    if (value.size() < kMinSecretLength)
         return;
     std::lock_guard<std::mutex> lock(mutex_);
+    if (std::find(secrets_.begin(), secrets_.end(), value) != secrets_.end())
+        return;
+    if (secrets_.size() >= kMaxRegisteredSecrets)
+        secrets_.pop_front();
     secrets_.push_back(std::move(value));
 }
 
@@ -149,7 +168,7 @@ std::string SecretRegistry::redact(const std::string &line) const
     std::vector<std::string> ordered;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        ordered = secrets_;
+        ordered.assign(secrets_.begin(), secrets_.end());
     }
     // Longest-first: a secret that happens to be a substring of another
     // registered secret must not be partially redacted by the shorter one
