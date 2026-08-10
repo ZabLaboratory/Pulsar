@@ -75,3 +75,8 @@ probe-output.log
 
 # Local agent constitution (untracked, kept locally)
 /CLAUDE.md
+
+# Agent report/PR-body staging files (repo root only; never meant to be
+# tracked — #181 veto V8, Bastion 2026-08-10)
+/.agent-report-*.md
+/.pr-body.md

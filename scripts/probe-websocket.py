@@ -306,7 +306,48 @@ def main() -> int:
         default=READY_TIMEOUT_S,
         help="seconds to wait for the READY sentinel",
     )
+    ap.add_argument(
+        "--connect-port",
+        type=int,
+        default=None,
+        help=(
+            "skip spawning pulsar.exe and instead connect to an already-"
+            "running instance on this loopback port (used by run-probes.ps1's "
+            "reseed regression probe, #181 F4, to prove a SECOND boot's "
+            "reseeded credentials actually authenticate over the wire — "
+            "requires --connect-password too)"
+        ),
+    )
+    ap.add_argument(
+        "--connect-password",
+        type=str,
+        default=None,
+        help="obs-websocket password for --connect-port (see --connect-port)",
+    )
     args = ap.parse_args()
+
+    if bool(args.connect_port) != bool(args.connect_password):
+        print("error: --connect-port and --connect-password must be given together")
+        return 2
+
+    if args.connect_port is not None:
+        # Connect-only mode: no spawn, no lifecycle to manage — just prove
+        # the given port/password authenticate a real v5 handshake.
+        ws_url = f"ws://127.0.0.1:{args.connect_port}"
+        print(f"connect-only mode: {ws_url}")
+        try:
+            data = asyncio.run(
+                handshake_and_getversion(ws_url, args.connect_password)
+            )
+        except Exception as exc:  # noqa: BLE001 — top-level probe diagnostic
+            print(f"FAIL: {exc}")
+            print("FAILED (exit 1)")
+            return 1
+        print("GetVersion ok:")
+        for k, v in data.items():
+            print(f"  {k}: {v}")
+        print("PASS")
+        return 0
 
     exe: pathlib.Path = args.exe
     if not exe.exists():

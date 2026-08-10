@@ -574,6 +574,143 @@ if ($multitrackCode -ne 0) {
 }
 Write-Host "==> probe-audio-multitrack.py OK"
 
+# --------------------------------------------------------------------
+# Phase 1k -- RESEED regression probe (#181 veto V1/V4, Bastion
+# 2026-08-10). Every probe above wipes config.json before its own
+# self-spawn -- none of them ever exercise a SECOND boot against an
+# EXISTING config.json written by a PRIOR boot of the same binary.
+# That is exactly the code path V1 broke: an earlier ownership
+# heuristic classified our own just-written file as foreign under a
+# full-admin token and refused to reseed on every boot after the
+# first -- CI never caught it because every gate deleted config.json
+# first. This probe boots pulsar.exe TWICE in the SAME rundir WITHOUT
+# deleting config.json in between, then asserts (a) the DACL is still
+# protected/current-user-only after the SECOND boot, and (b) the
+# SECOND boot's port + password actually authenticate over a real
+# WebSocket connection -- not a file-content assumption.
+# --------------------------------------------------------------------
+Write-Host "==> Reseed regression probe: booting pulsar.exe twice without wiping config.json (#181 F4)"
+
+function New-FreePort {
+    $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $l.Start()
+    $p = $l.LocalEndpoint.Port
+    $l.Stop()
+    return $p
+}
+function New-SessionPassword {
+    -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 22 | ForEach-Object { [char]$_ })
+}
+function Wait-PulsarReady {
+    param($Proc, $StdoutLog, $TimeoutSec)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path $StdoutLog) {
+            $hit = Select-String -Path $StdoutLog -Pattern '^PULSAR_READY ' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { return $true }
+        }
+        if ($Proc.HasExited) { return $false }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
+$reseedConfigDir  = Join-Path $binDir "obs-websocket"
+$reseedConfigPath = Join-Path $reseedConfigDir "config.json"
+if (Test-Path $reseedConfigPath) {
+    Remove-Item $reseedConfigPath -Force
+}
+
+$reseedPort1 = New-FreePort
+$reseedPwd1  = New-SessionPassword
+$env:PULSAR_PORT = "$reseedPort1"
+$env:PULSAR_PASSWORD = $reseedPwd1
+$env:PULSAR_MIC_DEVICE_ID = $null
+$env:PULSAR_CAPTURE_WINDOW = $null
+$reseedStdout1 = Join-Path $repoRoot "build/probe-reseed-boot1-stdout.log"
+$reseedStderr1 = Join-Path $repoRoot "build/probe-reseed-boot1-stderr.log"
+New-Item -ItemType Directory -Path (Split-Path $reseedStdout1) -Force | Out-Null
+
+Write-Host "==> Reseed probe: boot #1 (port=$reseedPort1)"
+$reseedProc1 = Start-Process -FilePath $pulsar -WorkingDirectory $binDir -PassThru `
+    -RedirectStandardOutput $reseedStdout1 -RedirectStandardError $reseedStderr1
+if (-not (Wait-PulsarReady -Proc $reseedProc1 -StdoutLog $reseedStdout1 -TimeoutSec $ReadyTimeoutSec)) {
+    Write-Host "==> Reseed probe FAILED: boot #1 never reached READY"
+    Show-LogTail -Path $reseedStdout1 -Tail 30
+    Show-LogTail -Path $reseedStderr1 -Tail 30
+    if (-not $reseedProc1.HasExited) { Stop-Process -Id $reseedProc1.Id -Force }
+    exit 1
+}
+if (-not (Test-Path $reseedConfigPath)) {
+    Write-Host "==> Reseed probe FAILED: $reseedConfigPath missing after boot #1"
+    Stop-Process -Id $reseedProc1.Id -Force; $reseedProc1.WaitForExit(5000) | Out-Null
+    exit 1
+}
+Write-Host "==> Reseed probe: boot #1 READY, config.json seeded"
+
+# Stop boot #1 WITHOUT deleting config.json -- the whole point is the
+# second boot finds its own prior file still on disk.
+Stop-Process -Id $reseedProc1.Id -Force
+$reseedProc1.WaitForExit(10000) | Out-Null
+
+$reseedPort2 = New-FreePort
+$reseedPwd2  = New-SessionPassword
+if ($reseedPort2 -eq $reseedPort1 -or $reseedPwd2 -eq $reseedPwd1) {
+    Write-Host "==> Reseed probe FAILED: boot #2 port/password collided with boot #1 (test cannot distinguish reseed from no-op)"
+    exit 1
+}
+$env:PULSAR_PORT = "$reseedPort2"
+$env:PULSAR_PASSWORD = $reseedPwd2
+$reseedStdout2 = Join-Path $repoRoot "build/probe-reseed-boot2-stdout.log"
+$reseedStderr2 = Join-Path $repoRoot "build/probe-reseed-boot2-stderr.log"
+
+Write-Host "==> Reseed probe: boot #2 (port=$reseedPort2) -- config.json from boot #1 is still on disk"
+$reseedProc2 = Start-Process -FilePath $pulsar -WorkingDirectory $binDir -PassThru `
+    -RedirectStandardOutput $reseedStdout2 -RedirectStandardError $reseedStderr2
+if (-not (Wait-PulsarReady -Proc $reseedProc2 -StdoutLog $reseedStdout2 -TimeoutSec $ReadyTimeoutSec)) {
+    Write-Host "==> Reseed probe FAILED: boot #2 never reached READY -- this is the V1 regression class (reseed starved/refused after boot #1 owned the file)"
+    Show-LogTail -Path $reseedStdout2 -Tail 30
+    Show-LogTail -Path $reseedStderr2 -Tail 30
+    if (-not $reseedProc2.HasExited) { Stop-Process -Id $reseedProc2.Id -Force }
+    exit 1
+}
+Write-Host "==> Reseed probe: boot #2 READY"
+
+# (a) DACL still protected + current-user-only after the SECOND boot.
+$reseedCurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$reseedAcl = Get-Acl -Path $reseedConfigPath
+$reseedBadAces = $reseedAcl.Access | Where-Object {
+    -not $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Equals($reseedCurrentUser)
+}
+if (-not $reseedAcl.AreAccessRulesProtected -or $reseedBadAces) {
+    Write-Host "==> Reseed probe FAILED: config.json DACL is not restricted to the current account after boot #2 (reseed)"
+    Write-Host ($reseedAcl.Access | Format-Table IdentityReference, FileSystemRights, AccessControlType | Out-String)
+    Stop-Process -Id $reseedProc2.Id -Force; $reseedProc2.WaitForExit(5000) | Out-Null
+    exit 1
+}
+Write-Host "==> Reseed probe: DACL OK after boot #2 (restricted to $($reseedCurrentUser.Value))"
+
+# (b) boot #2's NEW port/password actually work -- a real WebSocket
+# connection using the reseeded credentials, not a file-content
+# assumption. probe-websocket.py --connect-port/--connect-password
+# skips its own spawn and drives the v5 handshake against an
+# already-running instance (added for this probe, #181 F4).
+$reseedWsProbe = Join-Path $repoRoot "scripts/probe-websocket.py"
+Write-Host "==> Reseed probe: connecting to boot #2 with its reseeded credentials"
+& python $reseedWsProbe --connect-port $reseedPort2 --connect-password $reseedPwd2 --ready-timeout $ReadyTimeoutSec
+$reseedWsCode = $LASTEXITCODE
+Stop-Process -Id $reseedProc2.Id -Force
+$reseedProc2.WaitForExit(10000) | Out-Null
+if ($reseedWsCode -ne 0) {
+    Write-Host "==> Reseed probe FAILED: reseeded credentials (boot #2) did not authenticate over the wire (exit $reseedWsCode)"
+    exit 1
+}
+Write-Host "==> Reseed probe OK: config.json reseeds correctly across boots (#181 V1/V4 closed)"
+
+if (Test-Path $reseedConfigPath) {
+    Remove-Item $reseedConfigPath -Force
+}
+
 # Each test run gets its own session credentials so an existing
 # obs-websocket/config.json from a prior session never leaks in.
 # Port 0 -> bind a random free port so back-to-back ctest runs don't
