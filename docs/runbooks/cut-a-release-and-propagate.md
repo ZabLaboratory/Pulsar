@@ -1,6 +1,14 @@
 # Runbook — cut a Pulsar release and propagate it to consumers
 
-**Owner**: Keeper. **First written**: 2026-07-26, during the v1.2.2 release
+**Owner**: Keeper prepares (bump, branch, PR); **Eleven** merges the release PR and
+pushes the protected tag under App `eleven-by-clodocapeo`, the only identity carrying
+`Administration: write` (`docs/rules/github-app-agents.md` §4/§11). Corrected
+2026-08-10 by Scribe after a Bastion audit: this runbook predates the per-agent
+GitHub Apps (created 2026-08-09/10) and still described the merge/tag step run
+under the human account `ClodoCapeo` with `--admin`. Keeper's `merge-operator`
+profile carries no `Administration` permission and, per §11, no App ever bypasses a
+ruleset. See the explicit handoff at step 6 below.
+**First written**: 2026-07-26, during the v1.2.2 release
 (RTMPS Twitch ingest, #113 / PR #114 — the fix that motivated the runbook).
 **Last exercised**: 2026-07-28, v1.5.0 (`youtube` destination kind #162 +
 graphics adapters / output scales manifest block #163, PR #164) — release cut
@@ -61,11 +69,19 @@ the old binary — silently, because
    `binaries/` **before** fetching — and the new release does not exist
    yet, so you would delete a working local binary for nothing.
 5. **Commit** `chore(release): vX.Y.Z` on a `keeper/release-vX.Y.Z-<slug>`
-   branch, then fast-forward `main`. Expected diff shape: CHANGELOG,
-   VERSION, 3 × package.json, package-lock.json — nothing else.
-6. **Push `main`, then push the tag** `vX.Y.Z` (annotated). The tag is what
-   unlocks the release-grade stages; `pipeline.yml` gates them on
-   `startsWith(github.ref, 'refs/tags/v')`.
+   branch, push it, open a PR against `main`. Expected diff shape: CHANGELOG,
+   VERSION, 3 × package.json, package-lock.json — nothing else. Keeper's
+   `merge-operator` App profile carries no `Administration` right and never
+   fast-forwards or force-pushes `main` directly
+   (`docs/rules/github-app-agents.md` §4/§11) — Keeper's job stops at an
+   open, green PR.
+6. **Handoff to Eleven for merge + tag.** Once CI is green on the PR, Keeper
+   hands off to Eleven: Eleven merges the release PR (squash, App
+   `eleven-by-clodocapeo`, no bypass — §11 forbids any App bypassing a
+   ruleset) and pushes the annotated tag `vX.Y.Z` on `main` HEAD. The tag is
+   what unlocks the release-grade stages; `pipeline.yml` gates them on
+   `startsWith(github.ref, 'refs/tags/v')`. Only Eleven's App carries the
+   `Administration: write` a protected-tag push requires.
 7. **Watch `pipeline.yml` on the tag** — four tag-only outcomes matter:
    - `publish @clodocapeo/pulsar-* to npm` (needs only `lint`, so it lands
      in ~2 min) — requires `secrets.NPM_TOKEN`; the job re-checks that the
@@ -138,11 +154,14 @@ the old binary — silently, because
   what makes it fire.
 - **`gh pr merge --merge` and `--rebase` both fail on this repo** — only
   squash is allowed (`GraphQL: Merge commits are not allowed on this
-  repository`). Cost at v1.3.0: two failed attempts, and each one leaves the
-  local checkout switched back to a `main` that does not yet carry the bump, so
-  `cat VERSION` reads the OLD number and looks like the merge silently did
-  nothing. Use `gh pr merge <n> --squash --admin` and re-check `VERSION` after
-  the `git pull`.
+  repository`). Cost at v1.3.0 (pre-Apps era, merged by Keeper under the
+  human account with `--admin`): two failed attempts, and each one leaves
+  the local checkout switched back to a `main` that does not yet carry the
+  bump, so `cat VERSION` reads the OLD number and looks like the merge
+  silently did nothing. Since the per-agent GitHub Apps (2026-08-09/10),
+  this merge is Eleven's, not Keeper's: Eleven merges with a plain squash —
+  never `--admin` (§11, no App bypass) — and re-checks `VERSION` after the
+  `git pull`.
 - **A stale local checkout hides the very code you are releasing.** At v1.3.0
   the working copy was 5 commits behind `origin/main`: `wire.ts` showed no
   `version` / `capabilities` / `regimes` and the release looked pointless.
