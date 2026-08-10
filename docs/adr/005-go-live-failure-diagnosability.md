@@ -657,9 +657,9 @@ clos par lui.
 
 ## Amendment 2 — R10 révisée : la précondition porte sur le répertoire *parent*
 
-- **Status**: proposed
+- **Status**: accepted
 - **Date**: 2026-08-10
-- **Decided**: —
+- **Decided**: 2026-08-10
 - **Deciders**: @ClodoCapeo
 - **Author**: Atlas
 
@@ -709,18 +709,25 @@ clos par lui.
 
 ### A2.3 — Resolution criteria de cet amendement
 
-- A2.RC1 — `grep -n "R10 (révisée après #201/PR #209)"
-  docs/adr/005-go-live-failure-diagnosability.md` retourne exactement une occurrence, dans A2.1 ; et
+- A2.RC1 — `grep -c "^- R10 (révisée après #201/PR #209)"
+  docs/adr/005-go-live-failure-diagnosability.md` retourne exactement 1 (ancré en début de puce,
+  pour ne pas se compter lui-même dans ce critère) ; et
   `git show 89544fc:docs/adr/005-go-live-failure-diagnosability.md | sed -n '609,631p'` est
   identique aux lignes correspondantes de `HEAD` — A1.1 n'a pas été retouchée. Toute lecture de
   R10 se fait sur A2.1 ; A1.1 est historique.
 - A2.RC2 — La fermeture de #201 exige, **en plus** des quatre gestes déjà livrés, la preuve
   d'exercice réclamée par A1.RC1 : la sonde `pulsar-dir-hardening-probe` échoue durement quand
   `mklink /J` est indisponible (aucun skip silencieux) et couvre un cas négatif « répertoire
-  possédé par un autre SID ». Preuve : un log de job CI où `grep -Ei "reparse|mklink"` sur la
-  sortie du test retourne au moins une occurrence, et un cas négatif observable en échec attendu.
-  À défaut de faisabilité (pas de second compte sur le runner), l'impossibilité est documentée
-  nommément dans le `CLOSURE_REPORT` de #201 et le geste concerné reste déclaré non exercé.
+  possédé par un autre SID ». **Préalable de vérifiabilité** : `ctest --output-on-failure` (le
+  mode utilisé par `pipeline.yml`) n'imprime la sortie d'un test que s'il ÉCHOUE — un test qui
+  passe ne peut donc jamais démontrer par le log de job qu'un cas a été exercé, quel que soit son
+  contenu. Le job CI doit produire cette preuve autrement (`--output-junit` avec upload
+  d'artefact, ou invocation `-V` ciblée sur ce test précis) avant que la clause de preuve
+  ci-dessous ne soit évaluable. Preuve : un artefact/log de job CI où `grep -Ei "reparse|mklink"`
+  sur la sortie du test retourne au moins une occurrence, et un cas négatif observable en échec
+  attendu. À défaut de faisabilité (pas de second compte sur le runner), l'impossibilité est
+  documentée nommément dans le `CLOSURE_REPORT` de #201 et le geste concerné reste déclaré non
+  exercé.
 - A2.RC3 — La précondition d'A2.1 est structurellement causée par une classe d'opérations : toute
   unité qui **ajoute ou déplace** une opération du chemin de seeding désignant sa cible **par
   chemin** plutôt que par handle (ouverture, création, rename, balayage, re-vérification, sous
