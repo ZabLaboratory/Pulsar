@@ -394,13 +394,44 @@ private:
 
     void teardown();
 
+    // ADR-005 §3.4 / #182: pulsar:OutputFailed. This binary is a static lib
+    // linked into pulsar-headless.exe -- it owns no obs-websocket vendor of
+    // its own, so it reaches pulsar-multi-stream's already-registered
+    // "pulsar" vendor through libobs's global proc handler, the same
+    // mechanism obs-websocket-api.h itself uses to find obs-websocket
+    // (see plugins/pulsar-multi-stream/src/plugin-main.cpp's
+    // emit_output_failed_proc comment for the full rationale). The callee
+    // no-ops on OBS_OUTPUT_SUCCESS (a requested/graceful stop, RC7) and on a
+    // missing proc/vendor (obs-websocket or pulsar-multi-stream absent), so
+    // this call is unconditional and safe on every "stop" signal.
+    static void EmitOutputFailedViaGlobalProc(const char *output_name, bool is_local, calldata_t *stopData)
+    {
+        long long code = 0;
+        calldata_get_int(stopData, "code", &code);
+        const char *last_error = nullptr;
+        calldata_get_string(stopData, "last_error", &last_error);
+
+        proc_handler_t *ph = obs_get_proc_handler();
+        if (!ph)
+            return;
+        calldata_t cd = {};
+        calldata_set_string(&cd, "output", output_name);
+        calldata_set_string(&cd, "phase", "active");
+        calldata_set_bool(&cd, "is_local_output", is_local);
+        calldata_set_int(&cd, "code", code);
+        calldata_set_string(&cd, "last_error", last_error ? last_error : "");
+        proc_handler_call(ph, "pulsar_multi_stream_emit_output_failed", &cd);
+        calldata_free(&cd);
+    }
+
     static void OnStreamStart(void *param, calldata_t *)
     {
         static_cast<PulsarFrontendAPI *>(param)->emit(OBS_FRONTEND_EVENT_STREAMING_STARTED);
     }
-    static void OnStreamStop(void *param, calldata_t *)
+    static void OnStreamStop(void *param, calldata_t *data)
     {
         static_cast<PulsarFrontendAPI *>(param)->emit(OBS_FRONTEND_EVENT_STREAMING_STOPPED);
+        EmitOutputFailedViaGlobalProc("stream", /*is_local_output=*/false, data);
     }
     static void OnRecordStart(void *param, calldata_t *)
     {
@@ -505,9 +536,10 @@ private:
     {
         static_cast<PulsarFrontendAPI *>(param)->emit(OBS_FRONTEND_EVENT_VIRTUALCAM_STARTED);
     }
-    static void OnVCamStop(void *param, calldata_t *)
+    static void OnVCamStop(void *param, calldata_t *data)
     {
         static_cast<PulsarFrontendAPI *>(param)->emit(OBS_FRONTEND_EVENT_VIRTUALCAM_STOPPED);
+        EmitOutputFailedViaGlobalProc("virtualcam", /*is_local_output=*/true, data);
     }
 
     void hookOutputSignals(obs_output_t *out, void (*onStart)(void *, calldata_t *),

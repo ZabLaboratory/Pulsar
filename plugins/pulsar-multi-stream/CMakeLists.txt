@@ -69,6 +69,9 @@ target_link_libraries(pulsar-multi-stream PRIVATE
     # probe the manifest publishes, shared verbatim with the nv-filters
     # loaders so the two cannot disagree.
     Pulsar::nv-secure-load
+    # #182 -- header-only. The pulsar:OutputFailed reason_class classifier,
+    # shared verbatim with tests/output-classify-probe.
+    Pulsar::output-classify
 )
 
 set_target_properties(pulsar-multi-stream PROPERTIES
