@@ -263,6 +263,13 @@ bool validate_destination_input(DestinationKind kind, const char *url, const cha
 // members can call emit_output_failed without reordering the singletons.
 extern obs_websocket_vendor g_vendor;
 
+// ADR-005 §3.5 / #186: same forward-declaration need as g_vendor above --
+// DestSignalCtx (defined below, before the Destination struct) captures this
+// pointer so a destination's signal callback can call back into the
+// registry that owns it without a second global lookup.
+class DestinationRegistry;
+extern DestinationRegistry *g_registry;
+
 // Builds and emits pulsar:OutputFailed for a network-capable (is_local=false)
 // or local (is_local=true, e.g. virtualcam) output, or does nothing when the
 // stop is not a failure (OBS_OUTPUT_SUCCESS -- RC7). `output` is the display
@@ -314,6 +321,83 @@ void emit_output_failed_proc(void *, calldata_t *cd)
     emit_output_failed(output, phase, is_local, static_cast<int>(code), last_error);
 }
 
+// ---- ADR-005 §3.5 / #186: pulsar:OutputAttemptSettled ---------------------
+//
+// One verdict, exactly once, per go-live attempt and per destination --
+// success included. §3.5's authority split is implemented by WHO calls this:
+// a start-attempt failure (synchronous decline, or an async "stop" that
+// fires before the output ever went active) calls this and NOT
+// emit_output_failed; a mid-diffusion failure (the output was active, then
+// stopped abnormally) keeps calling emit_output_failed and never this. Two
+// authorities for the same fact is exactly the risk #186 exists to close --
+// see the issue's "Risks and rollback".
+//
+// `live` selects the outcome: true -> "live", reason_class key OMITTED
+// entirely (not null, not a placeholder -- obs_data_set_string is simply
+// never called for it, see below). false -> "failed", reason_class from
+// #182's closed set (pulsar-output-classify.h, unmodified by this issue).
+// A false verdict is never built for code == 0 (classify_output_failure
+// returns nullptr for it, and code 0 can only mean "not a failure" per its
+// own contract) -- callers only invoke this with live=false when code != 0.
+void emit_output_attempt_settled(const char *output, const char *destination, long long attempt, bool live,
+                                  bool is_local_output, int code, const char *last_error, long long duration_ms)
+{
+    if (!g_vendor) {
+        blog(LOG_WARNING, "[pulsar-multi-stream] OutputAttemptSettled dropped (%s/%s attempt %lld): no vendor",
+             output, destination, attempt);
+        return;
+    }
+
+    OBSDataAutoRelease ev = obs_data_create();
+    obs_data_set_string(ev, "output", output ? output : "");
+    obs_data_set_string(ev, "destination", destination ? destination : "");
+    obs_data_set_int(ev, "attempt", attempt);
+    obs_data_set_string(ev, "outcome", live ? "live" : "failed");
+    if (!live) {
+        const char *cls = pulsar::classify_output_failure(is_local_output, code, last_error);
+        // code != 0 here by contract (see comment above) -- classify_output_failure
+        // never returns nullptr for a non-zero code, but "unknown" is kept as an
+        // explicit, non-approximating fallback rather than trusting that invariant blindly.
+        obs_data_set_string(ev, "reason_class", cls ? cls : "unknown");
+    }
+    obs_data_set_int(ev, "code", code);
+    obs_data_set_string(ev, "last_error", last_error ? last_error : "");
+    obs_data_set_int(ev, "duration_ms", duration_ms);
+    obs_data_set_string(ev, "session", "");
+    obs_websocket_vendor_emit_event(g_vendor, "OutputAttemptSettled", ev);
+}
+
+// Same cross-plugin bridge rationale as emit_output_failed_proc, above.
+void emit_output_attempt_settled_proc(void *, calldata_t *cd)
+{
+    const char *output = calldata_string(cd, "output");
+    const char *destination = calldata_string(cd, "destination");
+    long long attempt = calldata_int(cd, "attempt");
+    bool live = calldata_bool(cd, "live");
+    bool is_local = calldata_bool(cd, "is_local_output");
+    long long code = calldata_int(cd, "code");
+    const char *last_error = calldata_string(cd, "last_error");
+    long long duration_ms = calldata_int(cd, "duration_ms");
+    emit_output_attempt_settled(output, destination, attempt, live, is_local, static_cast<int>(code), last_error,
+                                 duration_ms);
+}
+
+class DestinationRegistry; // forward declaration for DestSignalCtx below
+
+// Bound to a Destination's obs_output_t signal_handler ("start"/"stop") for
+// the lifetime of that output. Destination lives in DestinationRegistry's
+// std::map, whose node addresses are stable across insert/erase of OTHER
+// keys (map iterator/reference stability), so storing the registry pointer
+// plus the destination id -- rather than a raw Destination* -- is what keeps
+// the callback safe past a remove() that erases and reallocates nothing else
+// but genuinely frees THIS node: the ctx is deleted in the same call that
+// erases the node it points at (release_destination_handles_locked), never
+// read after.
+struct DestSignalCtx {
+    DestinationRegistry *registry;
+    std::string id;
+};
+
 struct Destination {
     std::string id;
     std::string name;
@@ -324,6 +408,17 @@ struct Destination {
 
     obs_output_t *output = nullptr;   // lazy-created on first start
     obs_service_t *service = nullptr; // rtmp_custom only
+
+    // ADR-005 §3.5 / #186: attempt lifecycle for pulsar:OutputAttemptSettled.
+    // attempt is a monotonic per-destination counter, bumped once per Start
+    // call that actually reaches obs_output_start(). went_active is true once
+    // the CURRENT attempt's "start" signal has fired -- it gates whether a
+    // subsequent "stop" is this attempt settling (false) or a mid-diffusion
+    // failure that is emit_output_failed's exclusive domain (true).
+    long long attempt = 0;
+    std::chrono::steady_clock::time_point attempt_start_time;
+    bool attempt_went_active = false;
+    std::unique_ptr<DestSignalCtx> signal_ctx; // non-null once signals are hooked
 };
 
 // 16-hex random id. Not a real UUID -- collisions across a single Pulsar
@@ -362,6 +457,16 @@ public:
     };
     std::vector<Snapshot> snapshot() const;
 
+    // ADR-005 §3.5 / #186: called from the destination's own obs_output_t
+    // "start"/"stop" signal callbacks (on_destination_start_signal /
+    // on_destination_stop_signal, free functions below the class so they
+    // can be passed as raw signal_handler_connect C callbacks). Public
+    // because the callbacks are not members, but not part of the vendor-facing
+    // API -- id-not-found (destination removed between signal fire and this
+    // call) is silently ignored, same tolerance as start()/stop() already have.
+    void on_attempt_started(const std::string &id);
+    void on_attempt_stopped(const std::string &id, int code, const char *last_error);
+
 private:
     bool ensure_output(Destination &d, std::string &errOut);
     void release_destination_handles_locked(Destination &d);
@@ -369,6 +474,26 @@ private:
     mutable std::mutex mu_;
     std::map<std::string, Destination> map_;
 };
+
+// ADR-005 §3.5 / #186: obs_output_t signal callbacks for a multi-stream
+// destination. param is the DestSignalCtx allocated in ensure_output() and
+// owned by the Destination it describes (freed in
+// release_destination_handles_locked, which also disconnects these).
+void on_destination_start_signal(void *param, calldata_t *)
+{
+    auto *ctx = static_cast<DestSignalCtx *>(param);
+    ctx->registry->on_attempt_started(ctx->id);
+}
+
+void on_destination_stop_signal(void *param, calldata_t *data)
+{
+    auto *ctx = static_cast<DestSignalCtx *>(param);
+    long long code = 0;
+    calldata_get_int(data, "code", &code);
+    const char *last_error = nullptr;
+    calldata_get_string(data, "last_error", &last_error);
+    ctx->registry->on_attempt_stopped(ctx->id, static_cast<int>(code), last_error);
+}
 
 bool DestinationRegistry::ensure_output(Destination &d, std::string &errOut)
 {
@@ -383,6 +508,13 @@ bool DestinationRegistry::ensure_output(Destination &d, std::string &errOut)
         if (!d.output) {
             errOut = std::string("could not create ") + outId;
             return false;
+        }
+        // ADR-005 §3.5 / #186: hook once, at output creation -- these fire
+        // for every attempt this Destination ever makes, not just the first.
+        if (signal_handler_t *sh = obs_output_get_signal_handler(d.output)) {
+            d.signal_ctx = std::make_unique<DestSignalCtx>(DestSignalCtx{this, d.id});
+            signal_handler_connect(sh, "start", on_destination_start_signal, d.signal_ctx.get());
+            signal_handler_connect(sh, "stop", on_destination_stop_signal, d.signal_ctx.get());
         }
     }
 
@@ -438,6 +570,16 @@ bool DestinationRegistry::ensure_output(Destination &d, std::string &errOut)
 void DestinationRegistry::release_destination_handles_locked(Destination &d)
 {
     if (d.output) {
+        // ADR-005 §3.5 / #186: disconnect before stopping -- a stop this
+        // function itself issues is a teardown, not an attempt settling, and
+        // must not produce a verdict (nor is on_attempt_stopped's registry
+        // lookup safe to re-enter while this call already holds mu_).
+        if (signal_handler_t *sh = obs_output_get_signal_handler(d.output)) {
+            signal_handler_disconnect(sh, "start", on_destination_start_signal, d.signal_ctx.get());
+            signal_handler_disconnect(sh, "stop", on_destination_stop_signal, d.signal_ctx.get());
+        }
+        d.signal_ctx.reset();
+
         // Drain the worker thread before release so we don't free
         // the output struct while a thread is mid-callback on it.
         //
@@ -495,6 +637,13 @@ bool DestinationRegistry::start(const std::string &id, std::string &errOut)
     auto &d = it->second;
     if (!ensure_output(d, errOut)) return false;
     if (obs_output_active(d.output)) { d.enabled = true; return true; }
+    // ADR-005 §3.5 / #186: a fresh attempt opens here -- the counter/timer
+    // are read by on_attempt_started/on_attempt_stopped for whichever verdict
+    // this attempt eventually settles with (sync decline, right below, or an
+    // async "start"/"stop" this same obs_output_start call is about to arm).
+    d.attempt += 1;
+    d.attempt_start_time = std::chrono::steady_clock::now();
+    d.attempt_went_active = false;
     if (!obs_output_start(d.output)) {
         const char *last = obs_output_get_last_error(d.output);
         errOut = last ? last : "obs_output_start declined";
@@ -502,9 +651,13 @@ bool DestinationRegistry::start(const std::string &id, std::string &errOut)
         // OBS_OUTPUT_* code (that only comes from the async "stop"
         // signal) -- OBS_OUTPUT_ERROR (-4) is the honest sentinel: it
         // falls through to "unknown" unless last_error's own text
-        // matches the auth patterns (still checked first).
+        // matches the auth patterns (still checked first). §3.5's authority
+        // split (issue #186) makes this attempt-settled's exclusive verdict
+        // -- emit_output_failed is NOT also called (two authorities for the
+        // same fact is exactly the risk that split exists to close).
         std::string outName = "PulsarDest_" + d.id;
-        emit_output_failed(outName.c_str(), "start", false, -4, errOut.c_str());
+        emit_output_attempt_settled(outName.c_str(), d.id.c_str(), d.attempt, /*live=*/false, /*is_local=*/false,
+                                     -4, errOut.c_str(), /*duration_ms=*/0);
         return false;
     }
     d.enabled = true;
@@ -528,6 +681,53 @@ bool DestinationRegistry::stop(const std::string &id)
     return true;
 }
 
+// ADR-005 §3.5 / #186: fired by on_destination_start_signal, i.e. exactly
+// when THIS destination's current attempt reaches "active" -- the moment
+// its verdict is decidable as a success.
+void DestinationRegistry::on_attempt_started(const std::string &id)
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = map_.find(id);
+    if (it == map_.end()) return; // removed between the signal firing and this call
+    auto &d = it->second;
+    d.attempt_went_active = true;
+    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - d.attempt_start_time)
+                            .count();
+    std::string outName = "PulsarDest_" + d.id;
+    emit_output_attempt_settled(outName.c_str(), d.id.c_str(), d.attempt, /*live=*/true, /*is_local=*/false,
+                                 /*code=*/0, /*last_error=*/nullptr, duration_ms);
+}
+
+// ADR-005 §3.5 / #186: fired by on_destination_stop_signal for EVERY stop,
+// whether the attempt ever went active or not -- the split lives here:
+//   - never went active -> this attempt's own failure, ours to settle;
+//     emit_output_failed is NOT called (§3.5's authority split).
+//   - went active already -> mid-diffusion, emit_output_failed's exclusive
+//     domain (#182); no attempt verdict (an attempt settles once).
+//   - code == 0 and never went active -> the client cancelled a still-
+//     connecting attempt. classify_output_failure has no class for code 0
+//     (RC7's own contract), so no verdict is built rather than forcing one.
+void DestinationRegistry::on_attempt_stopped(const std::string &id, int code, const char *last_error)
+{
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = map_.find(id);
+    if (it == map_.end()) return;
+    auto &d = it->second;
+    bool wasActive = d.attempt_went_active;
+    d.attempt_went_active = false;
+    std::string outName = "PulsarDest_" + d.id;
+    if (wasActive) {
+        emit_output_failed(outName.c_str(), "active", /*is_local_output=*/false, code, last_error);
+    } else if (code != 0) {
+        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - d.attempt_start_time)
+                                .count();
+        emit_output_attempt_settled(outName.c_str(), d.id.c_str(), d.attempt, /*live=*/false, /*is_local=*/false,
+                                     code, last_error, duration_ms);
+    }
+}
+
 void DestinationRegistry::start_all()
 {
     std::lock_guard<std::mutex> lk(mu_);
@@ -539,12 +739,16 @@ void DestinationRegistry::start_all()
             continue;
         }
         if (obs_output_active(d.output)) continue;
+        d.attempt += 1;
+        d.attempt_start_time = std::chrono::steady_clock::now();
+        d.attempt_went_active = false;
         if (!obs_output_start(d.output)) {
             const char *last = obs_output_get_last_error(d.output);
             blog(LOG_WARNING, "[pulsar-multi-stream] start_all: %s declined (%s)",
                  d.id.c_str(), last ? last : "(null)");
             std::string outName = "PulsarDest_" + d.id;
-            emit_output_failed(outName.c_str(), "start", false, -4, last);
+            emit_output_attempt_settled(outName.c_str(), d.id.c_str(), d.attempt, /*live=*/false,
+                                         /*is_local=*/false, -4, last, /*duration_ms=*/0);
             continue;
         }
         d.enabled = true;
@@ -2576,6 +2780,14 @@ void obs_module_post_load(void)
         "void pulsar_multi_stream_emit_output_failed(string output, string phase, "
         "bool is_local_output, int code, string last_error)",
         emit_output_failed_proc, nullptr);
+
+    // ADR-005 §3.5 / #186: same cross-plugin bridge, same registration
+    // timing rationale, for pulsar-frontend-stub's stream/virtualcam attempt
+    // verdicts (emit_output_attempt_settled_proc, see its comment).
+    proc_handler_add(obs_get_proc_handler(),
+        "void pulsar_multi_stream_emit_output_attempt_settled(string output, string destination, "
+        "int attempt, bool live, bool is_local_output, int code, string last_error, int duration_ms)",
+        emit_output_attempt_settled_proc, nullptr);
 
     if (!g_vendor) {
         blog(LOG_WARNING, "[pulsar-multi-stream] obs-websocket not present; vendor API disabled");

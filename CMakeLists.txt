@@ -116,4 +116,10 @@ if(WIN32)
     # classifier (ADR-005 §3.4). No pulsar.exe, no libobs/Qt: a pure
     # function of (is_local_output, code, last_error).
     add_subdirectory(tests/output-classify-probe)
+
+    # #186 -- regression gate for the pulsar:OutputAttemptSettled
+    # outcome/reason_class-absence contract (ADR-005 §3.5). No pulsar.exe,
+    # no libobs/Qt: the went-active state machine itself is exercised by
+    # scripts/probe-multi-stream.py instead (see the probe's own header).
+    add_subdirectory(tests/output-attempt-settled-probe)
 endif()

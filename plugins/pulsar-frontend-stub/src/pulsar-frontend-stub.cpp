@@ -424,14 +424,79 @@ private:
         calldata_free(&cd);
     }
 
+    // ADR-005 §3.5 / #186: same global-proc bridge as
+    // EmitOutputFailedViaGlobalProc above, for pulsar:OutputAttemptSettled.
+    // `live` selects "live" (reason_class omitted) vs "failed"
+    // (reason_class from #182's closed set, computed on the receiving side
+    // by pulsar-multi-stream's classify_output_failure -- this binary does
+    // not link that header, see plugin-main.cpp's classify_output_failure
+    // callers for why it must stay the single source of that mapping).
+    static void EmitOutputAttemptSettledViaGlobalProc(const char *output_name, const char *destination_id,
+                                                        long long attempt, bool live, bool is_local, int code,
+                                                        const char *last_error, long long duration_ms)
+    {
+        proc_handler_t *ph = obs_get_proc_handler();
+        if (!ph)
+            return;
+        calldata_t cd = {};
+        calldata_set_string(&cd, "output", output_name);
+        calldata_set_string(&cd, "destination", destination_id);
+        calldata_set_int(&cd, "attempt", attempt);
+        calldata_set_bool(&cd, "live", live);
+        calldata_set_bool(&cd, "is_local_output", is_local);
+        calldata_set_int(&cd, "code", code);
+        calldata_set_string(&cd, "last_error", last_error ? last_error : "");
+        calldata_set_int(&cd, "duration_ms", duration_ms);
+        proc_handler_call(ph, "pulsar_multi_stream_emit_output_attempt_settled", &cd);
+        calldata_free(&cd);
+    }
+
+    // Milliseconds elapsed since a std::atomic<long long>-stored
+    // steady_clock::now().time_since_epoch().count() reading was taken.
+    static long long ElapsedMsSince(long long startNs)
+    {
+        auto start = std::chrono::steady_clock::time_point(std::chrono::nanoseconds(startNs));
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+            .count();
+    }
+
     static void OnStreamStart(void *param, calldata_t *)
     {
-        static_cast<PulsarFrontendAPI *>(param)->emit(OBS_FRONTEND_EVENT_STREAMING_STARTED);
+        auto *self = static_cast<PulsarFrontendAPI *>(param);
+        self->emit(OBS_FRONTEND_EVENT_STREAMING_STARTED);
+        // ADR-005 §3.5 / #186: this IS the attempt reaching "live" -- settle
+        // it here, once, before any later "stop" can be mistaken for the
+        // same attempt failing.
+        self->streamAttemptWentActive.store(true);
+        EmitOutputAttemptSettledViaGlobalProc("stream", "stream", self->streamAttempt.load(), /*live=*/true,
+                                               /*is_local=*/false, /*code=*/0, /*last_error=*/nullptr,
+                                               ElapsedMsSince(self->streamAttemptStartNs.load()));
     }
     static void OnStreamStop(void *param, calldata_t *data)
     {
-        static_cast<PulsarFrontendAPI *>(param)->emit(OBS_FRONTEND_EVENT_STREAMING_STOPPED);
-        EmitOutputFailedViaGlobalProc("stream", /*is_local_output=*/false, data);
+        auto *self = static_cast<PulsarFrontendAPI *>(param);
+        self->emit(OBS_FRONTEND_EVENT_STREAMING_STOPPED);
+        long long code = 0;
+        calldata_get_int(data, "code", &code);
+        const char *last_error = nullptr;
+        calldata_get_string(data, "last_error", &last_error);
+        // ADR-005 §3.5 / #186 authority split: went active already -> this is
+        // a mid-diffusion failure, #182's emit_output_failed stays the sole
+        // authority (RC7's code==0 no-op is unaffected, decided downstream by
+        // classify_output_failure). Never went active -> this stop settles
+        // the SAME attempt that OnStreamStart never got to fire for; that
+        // verdict belongs to attempt-settled exclusively, not to
+        // emit_output_failed, per the same split. code==0 and never active is
+        // a client cancelling a still-connecting attempt: no class exists for
+        // it (classify_output_failure returns nullptr for code 0), so no
+        // verdict is built at all rather than forcing one.
+        if (self->streamAttemptWentActive.exchange(false)) {
+            EmitOutputFailedViaGlobalProc("stream", /*is_local_output=*/false, data);
+        } else if (code != 0) {
+            EmitOutputAttemptSettledViaGlobalProc("stream", "stream", self->streamAttempt.load(), /*live=*/false,
+                                                   /*is_local=*/false, static_cast<int>(code), last_error,
+                                                   ElapsedMsSince(self->streamAttemptStartNs.load()));
+        }
     }
     static void OnRecordStart(void *param, calldata_t *)
     {
@@ -534,12 +599,31 @@ private:
 
     static void OnVCamStart(void *param, calldata_t *)
     {
-        static_cast<PulsarFrontendAPI *>(param)->emit(OBS_FRONTEND_EVENT_VIRTUALCAM_STARTED);
+        auto *self = static_cast<PulsarFrontendAPI *>(param);
+        self->emit(OBS_FRONTEND_EVENT_VIRTUALCAM_STARTED);
+        self->vcamAttemptWentActive.store(true);
+        EmitOutputAttemptSettledViaGlobalProc("virtualcam", "virtualcam", self->vcamAttempt.load(), /*live=*/true,
+                                               /*is_local=*/true, /*code=*/0, /*last_error=*/nullptr,
+                                               ElapsedMsSince(self->vcamAttemptStartNs.load()));
     }
     static void OnVCamStop(void *param, calldata_t *data)
     {
-        static_cast<PulsarFrontendAPI *>(param)->emit(OBS_FRONTEND_EVENT_VIRTUALCAM_STOPPED);
-        EmitOutputFailedViaGlobalProc("virtualcam", /*is_local_output=*/true, data);
+        auto *self = static_cast<PulsarFrontendAPI *>(param);
+        self->emit(OBS_FRONTEND_EVENT_VIRTUALCAM_STOPPED);
+        long long code = 0;
+        calldata_get_int(data, "code", &code);
+        const char *last_error = nullptr;
+        calldata_get_string(data, "last_error", &last_error);
+        // Same §3.5 authority split as OnStreamStop, is_local=true throughout
+        // (virtualcam has no ingest/auth surface -- classify_output_failure
+        // always answers "disconnected_local" for it).
+        if (self->vcamAttemptWentActive.exchange(false)) {
+            EmitOutputFailedViaGlobalProc("virtualcam", /*is_local_output=*/true, data);
+        } else if (code != 0) {
+            EmitOutputAttemptSettledViaGlobalProc("virtualcam", "virtualcam", self->vcamAttempt.load(),
+                                                   /*live=*/false, /*is_local=*/true, static_cast<int>(code),
+                                                   last_error, ElapsedMsSince(self->vcamAttemptStartNs.load()));
+        }
     }
 
     void hookOutputSignals(obs_output_t *out, void (*onStart)(void *, calldata_t *),
@@ -654,6 +738,20 @@ private:
     obs_output_t *recordOutput = nullptr;
     obs_output_t *replayOutput = nullptr;
     obs_output_t *virtualcamOutput = nullptr;
+
+    // ADR-005 §3.5 / #186: attempt lifecycle for pulsar:OutputAttemptSettled,
+    // one pair per output this binary owns directly (multi-stream's own
+    // destinations track the same thing on Destination itself, see
+    // plugin-main.cpp). Atomics: the "start"/"stop" signal callbacks run on
+    // libobs's own thread, concurrently with the API-thread call that opens
+    // an attempt. StartNs stores steady_clock::now().time_since_epoch().count()
+    // rather than a non-atomic-friendly time_point.
+    std::atomic<long long> streamAttempt{0};
+    std::atomic<long long> streamAttemptStartNs{0};
+    std::atomic<bool> streamAttemptWentActive{false};
+    std::atomic<long long> vcamAttempt{0};
+    std::atomic<long long> vcamAttemptStartNs{0};
+    std::atomic<bool> vcamAttemptWentActive{false};
     // Source-mode virtual cam (Zab): when a "ZabVirtualCamSource" scene exists,
     // the vcam carries THAT scene (the source the operator chose in settings)
     // through a dedicated view instead of the program. Created lazily on the
@@ -1792,6 +1890,18 @@ void PulsarFrontendAPI::obs_frontend_streaming_start(void)
 
     obs_output_set_service(streamOutput, streamService);
 
+    // ADR-005 §3.5 / #186: a fresh attempt opens here, right before the
+    // libobs call that is about to arm either a synchronous decline (below)
+    // or the async "start"/"stop" pair OnStreamStart/OnStreamStop settle.
+    // The egressRefusal path above never reaches here, so it never opens or
+    // settles an attempt -- it is Pulsar's own policy gate, not a libobs
+    // go-live attempt, same precedent as multi-stream's
+    // validate_destination_input (plugin-main.cpp) never calling
+    // emit_output_failed either.
+    streamAttempt.fetch_add(1);
+    streamAttemptStartNs.store(std::chrono::steady_clock::now().time_since_epoch().count());
+    streamAttemptWentActive.store(false);
+
     // Honesty corollary (issue #131, #120 family): STREAMING_STARTING used to be
     // emitted BEFORE obs_output_start(), so a REFUSED start still put a
     // StreamStateChanged/OBS_WEBSOCKET_OUTPUT_STARTING event on the wire -- an
@@ -1803,8 +1913,14 @@ void PulsarFrontendAPI::obs_frontend_streaming_start(void)
     // (obs-output.c), not to this frontend event, so their Refused/Pending verdict
     // is decided by libobs regardless of when the frontend event is emitted.
     if (!obs_output_start(streamOutput)) {
-        blog(LOG_INFO, "[pulsar-frontend-stub] obs_output_start (stream) declined: %s",
-             obs_output_get_last_error(streamOutput));
+        const char *declineErr = obs_output_get_last_error(streamOutput);
+        blog(LOG_INFO, "[pulsar-frontend-stub] obs_output_start (stream) declined: %s", declineErr);
+        // ADR-005 §3.5 / #186: sole verdict authority for a synchronous
+        // decline (same rationale as plugin-main.cpp's registry start()) --
+        // OBS_OUTPUT_ERROR (-4) is the honest sentinel, no "stop" signal will
+        // ever fire for an attempt libobs refused before starting it.
+        EmitOutputAttemptSettledViaGlobalProc("stream", "stream", streamAttempt.load(), /*live=*/false,
+                                               /*is_local=*/false, -4, declineErr, /*duration_ms=*/0);
         return;
     }
     emit(OBS_FRONTEND_EVENT_STREAMING_STARTING);
@@ -2100,10 +2216,16 @@ void PulsarFrontendAPI::obs_frontend_start_virtualcam(void)
              "[pulsar-frontend-stub] virtual cam SOURCE mode -> 'ZabVirtualCamSource'");
     }
     obs_output_set_media(virtualcamOutput, vcamMix, obs_get_audio());
+    // ADR-005 §3.5 / #186: same attempt-open point as obs_frontend_streaming_start.
+    vcamAttempt.fetch_add(1);
+    vcamAttemptStartNs.store(std::chrono::steady_clock::now().time_since_epoch().count());
+    vcamAttemptWentActive.store(false);
     if (!obs_output_start(virtualcamOutput)) {
         const char *vcamErr = obs_output_get_last_error(virtualcamOutput);
         blog(LOG_INFO, "[pulsar-frontend-stub] obs_output_start (vcam) declined: %s",
              vcamErr ? vcamErr : "(null)");
+        EmitOutputAttemptSettledViaGlobalProc("virtualcam", "virtualcam", vcamAttempt.load(), /*live=*/false,
+                                               /*is_local=*/true, -4, vcamErr, /*duration_ms=*/0);
     }
 }
 

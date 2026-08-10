@@ -649,10 +649,31 @@ includes `vendorName: "pulsar"`, `eventType`, and `eventData`.
 | Event | Trigger | Payload |
 |---|---|---|
 | `BitrateAdjusted` | The adaptive worker changed the encoder bitrate (after a drop spike or a recovery climb). | `bitrate`, `target`, `floor`, `reason: "drops" \| "recovery"`, `drop_ratio` |
-| `OutputFailed` | An output (the legacy stream, virtualcam, or a multi-stream destination) left the active state other than on request, or a start was refused (ADR-005 §3.4). Never emitted for a client-requested or delay-drained graceful stop. | `output`, `phase: "start" \| "active"`, `code` (`OBS_OUTPUT_*`), `last_error`, `reason_class`, `session` (empty until a later issue wires the §3.3 correlation key) |
+| `OutputFailed` | An output (the legacy stream, virtualcam, or a multi-stream destination) that had already reached the active state left it other than on request (ADR-005 §3.4/§3.5). Never emitted for a client-requested or delay-drained graceful stop, and never for a start-of-attempt failure — see the authority split below. | `output`, `phase: "active"`, `code` (`OBS_OUTPUT_*`), `last_error`, `reason_class`, `session` (empty until a later issue wires the §3.3 correlation key) |
+| `OutputAttemptSettled` | A go-live attempt on an output settled — success included — exactly once per attempt and per destination (ADR-005 §3.5, issue #186). | `output`, `destination`, `attempt` (1-based, monotonic per destination), `outcome: "live" \| "failed"`, `reason_class` (closed set below; key **absent**, not `null`, when `outcome` is `"live"`), `code`, `last_error`, `duration_ms`, `session` (empty until a later issue wires the §3.3 correlation key) |
 
 The v5 baseline events (`StreamStateChanged`, `RecordStateChanged`,
 `InputCreated`, …) are emitted unchanged by `pulsar-websocket`.
+
+#### Authority split — `OutputAttemptSettled` vs `OutputFailed` (ADR-005 §3.5)
+
+The two events never describe the same fact:
+
+- `pulsar:OutputAttemptSettled` is authoritative for the retry decision. It
+  covers the attempt itself — synchronous refusal, or an asynchronous
+  connect/auth failure before the output ever reached active — and success.
+  A consumer decides whether to retry from this event alone, with no
+  correlation window.
+- `pulsar:OutputFailed` is authoritative for failures **while already live**
+  — an output that reached active and then dropped. It is never emitted for
+  a start-of-attempt failure any more (that used to be `phase: "start"`;
+  `phase` is now always `"active"`), and `OutputAttemptSettled` is never
+  emitted for a mid-diffusion drop.
+
+A client-cancelled attempt that is stopped before ever reaching active
+(`code == 0`, no active state reached) settles neither event: `code 0` has no
+`reason_class` (it is libobs' success sentinel, not a failure) and RC7's own
+contract already treats a requested stop as carrying no failure signal.
 
 ### Failure diagnosis — `reason_class` (ADR-005 §3.4, issue #182)
 
