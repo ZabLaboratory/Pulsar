@@ -94,4 +94,9 @@ if(WIN32)
     # tests a loader property with its own fixture DLLs, which is what
     # lets criterion 3 (first level) gate the merge.
     add_subdirectory(tests/nv-probe)
+
+    # #177 -- fail-closed regression for obs-websocket's IsDebugEnabled().
+    # No pulsar.exe, no libobs/Qt: a boolean-predicate mirror is enough to
+    # gate the merge (see tests/ws-debug-probe/ws-debug-probe-test.cpp).
+    add_subdirectory(tests/ws-debug-probe)
 endif()
