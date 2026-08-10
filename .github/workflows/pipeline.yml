@@ -346,7 +346,7 @@ jobs:
     name: offline probe suite (CTest)
     needs: build
     runs-on: windows-2022
-    timeout-minutes: 15
+    timeout-minutes: 28
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -389,9 +389,17 @@ jobs:
         # TODO(upstream-obs) : investigate the worker-thread vs
         # service-ref-release race + WASAPI source destroy path,
         # submit fixes upstream.
+        # timeout_minutes MUST stay above the CTest TIMEOUT property
+        # (pulsar-offline-probes = 600s, CMakeLists.txt) with margin for
+        # CTest's own report + process teardown. It was 5 (300s) < 600s,
+        # so this wrapper SIGKILLed the whole process tree before CTest's
+        # internal timeout handler ever fired -- CTest never reached
+        # --output-on-failure, so a hang (or a legitimately slow run)
+        # printed nothing at all. Letting CTest's own timeout win first
+        # is what makes the failure diagnosable.
         uses: nick-fields/retry@v3
         with:
-          timeout_minutes: 5
+          timeout_minutes: 12
           max_attempts: 2
           retry_wait_seconds: 10
           shell: pwsh

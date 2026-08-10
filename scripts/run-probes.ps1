@@ -41,6 +41,20 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# CTest captures this process's stdout into a buffer and only prints it
+# (via --output-on-failure) once the test process exits -- pass, fail, or
+# CTest's own TIMEOUT. If something upstream of CTest kills the whole tree
+# first (e.g. a CI wrapper timeout shorter than CTest's TIMEOUT), nothing
+# gets printed at all and a hang is indistinguishable from a slow pass.
+# Explicit flush after every phase marker below is what lets a partial
+# buffer -- whatever CTest captured before being killed -- still name the
+# last phase reached instead of showing nothing.
+function Log-Phase {
+    param([string] $Message)
+    Write-Host $Message
+    [Console]::Out.Flush()
+}
+
 $repoRoot = Resolve-Path "$PSScriptRoot/.."
 $binDir   = Join-Path $repoRoot "$RundirRoot/bin/64bit"
 $pulsar   = Join-Path $binDir "pulsar.exe"
@@ -102,18 +116,18 @@ function Show-PulsarDeath {
     $code = 'unknown'
     try { $code = $Proc.ExitCode } catch { }
     Write-Host ""
-    Write-Host "==> FATAL: the shared pulsar.exe DIED (pid $($Proc.Id), exit code $code)."
+    Log-Phase "==> FATAL: the shared pulsar.exe DIED (pid $($Proc.Id), exit code $code)."
     if ($LastAliveProbe) {
-        Write-Host "==>        Last probe that had it alive: $LastAliveProbe"
+        Log-Phase "==>        Last probe that had it alive: $LastAliveProbe"
     } else {
-        Write-Host "==>        It died before the first connect-only probe completed."
+        Log-Phase "==>        It died before the first connect-only probe completed."
     }
-    Write-Host "==>        Any 'connection closed / refused' above is a CONSEQUENCE, not the cause."
-    Write-Host "==>        This is a SERVER-side defect (crash in the libobs/plugin lifecycle),"
-    Write-Host "==>        not CI flakiness -- diagnose the tails below, do not retry blind."
-    Write-Host "==> Pulsar stdout tail:"
+    Log-Phase "==>        Any 'connection closed / refused' above is a CONSEQUENCE, not the cause."
+    Log-Phase "==>        This is a SERVER-side defect (crash in the libobs/plugin lifecycle),"
+    Log-Phase "==>        not CI flakiness -- diagnose the tails below, do not retry blind."
+    Log-Phase "==> Pulsar stdout tail:"
     Show-LogTail -Path $StdoutLog -Tail 60
-    Write-Host "==> Pulsar stderr tail (libobs log -- crash context lives here):"
+    Log-Phase "==> Pulsar stderr tail (libobs log -- crash context lives here):"
     Show-LogTail -Path $StderrLog -Tail 60
 }
 
@@ -132,15 +146,15 @@ function Show-PulsarDeath {
 # Run it standalone here, NOT inside the shared $probes loop.
 # --------------------------------------------------------------------
 $smokeProbe = Join-Path $repoRoot "scripts/probe-websocket.py"
-Write-Host "==> Running probe-websocket.py (self-spawn smoke, M1)"
+Log-Phase "==> Running probe-websocket.py (self-spawn smoke, M1)"
 & python $smokeProbe --exe $pulsar
 $smokeCode = $LASTEXITCODE
 if ($smokeCode -ne 0) {
-    Write-Host "==> probe-websocket.py FAILED (exit $smokeCode)"
-    Write-Host "==> The freshly-built pulsar.exe did not boot cleanly -- aborting before the shared suite."
+    Log-Phase "==> probe-websocket.py FAILED (exit $smokeCode)"
+    Log-Phase "==> The freshly-built pulsar.exe did not boot cleanly -- aborting before the shared suite."
     exit 1
 }
-Write-Host "==> probe-websocket.py OK"
+Log-Phase "==> probe-websocket.py OK"
 
 # --------------------------------------------------------------------
 # Phase 1b -- self-spawning media-output probe (probe-record-m2.py, M2).
@@ -155,15 +169,15 @@ Write-Host "==> probe-websocket.py OK"
 # shared suite.
 # --------------------------------------------------------------------
 $recordProbe = Join-Path $repoRoot "scripts/probe-record-m2.py"
-Write-Host "==> Running probe-record-m2.py (self-spawn media output, M2)"
+Log-Phase "==> Running probe-record-m2.py (self-spawn media output, M2)"
 & python $recordProbe --exe $pulsar
 $recordCode = $LASTEXITCODE
 if ($recordCode -ne 0) {
-    Write-Host "==> probe-record-m2.py FAILED (exit $recordCode)"
-    Write-Host "==> The binary could not be driven to produce a valid MP4 -- aborting before the shared suite."
+    Log-Phase "==> probe-record-m2.py FAILED (exit $recordCode)"
+    Log-Phase "==> The binary could not be driven to produce a valid MP4 -- aborting before the shared suite."
     exit 1
 }
-Write-Host "==> probe-record-m2.py OK"
+Log-Phase "==> probe-record-m2.py OK"
 
 # --------------------------------------------------------------------
 # Phase 1c -- self-spawning CEF browser-source capture probe
@@ -183,17 +197,17 @@ Write-Host "==> probe-record-m2.py OK"
 # is present and M3 asserts for real.
 # --------------------------------------------------------------------
 $browserProbe = Join-Path $repoRoot "scripts/probe-browser-m3.py"
-Write-Host "==> Running probe-browser-m3.py (self-spawn CEF capture, M3)"
+Log-Phase "==> Running probe-browser-m3.py (self-spawn CEF capture, M3)"
 & python $browserProbe --exe $pulsar
 $browserCode = $LASTEXITCODE
 if ($browserCode -eq 3) {
-    Write-Host "==> probe-browser-m3.py SKIPPED (light build -- browser_source absent, no CEF)"
+    Log-Phase "==> probe-browser-m3.py SKIPPED (light build -- browser_source absent, no CEF)"
 } elseif ($browserCode -ne 0) {
-    Write-Host "==> probe-browser-m3.py FAILED (exit $browserCode)"
-    Write-Host "==> CEF could not render + capture a page -- aborting before the shared suite."
+    Log-Phase "==> probe-browser-m3.py FAILED (exit $browserCode)"
+    Log-Phase "==> CEF could not render + capture a page -- aborting before the shared suite."
     exit 1
 } else {
-    Write-Host "==> probe-browser-m3.py OK"
+    Log-Phase "==> probe-browser-m3.py OK"
 }
 
 # --------------------------------------------------------------------
@@ -223,17 +237,17 @@ if ($browserCode -eq 3) {
 # retire grace window).
 # --------------------------------------------------------------------
 $wclProbe = Join-Path $repoRoot "scripts/probe-webpage-control-level.py"
-Write-Host "==> Running probe-webpage-control-level.py (self-spawn control level + lifecycle, #158)"
+Log-Phase "==> Running probe-webpage-control-level.py (self-spawn control level + lifecycle, #158)"
 & python $wclProbe --exe $pulsar
 $wclCode = $LASTEXITCODE
 if ($wclCode -eq 3) {
-    Write-Host "==> probe-webpage-control-level.py SKIPPED (light build -- browser_source absent, no CEF)"
+    Log-Phase "==> probe-webpage-control-level.py SKIPPED (light build -- browser_source absent, no CEF)"
 } elseif ($wclCode -ne 0) {
-    Write-Host "==> probe-webpage-control-level.py FAILED (exit $wclCode)"
-    Write-Host "==> A third-party page can reach OBS state, or a retired page is still running -- aborting before the shared suite."
+    Log-Phase "==> probe-webpage-control-level.py FAILED (exit $wclCode)"
+    Log-Phase "==> A third-party page can reach OBS state, or a retired page is still running -- aborting before the shared suite."
     exit 1
 } else {
-    Write-Host "==> probe-webpage-control-level.py OK"
+    Log-Phase "==> probe-webpage-control-level.py OK"
 }
 
 # --------------------------------------------------------------------
@@ -256,17 +270,17 @@ if ($wclCode -eq 3) {
 # full build.
 # --------------------------------------------------------------------
 $stingerProbe = Join-Path $repoRoot "scripts/probe-stinger-smoke.py"
-Write-Host "==> Running probe-stinger-smoke.py (self-spawn stinger seam, M10 #57)"
+Log-Phase "==> Running probe-stinger-smoke.py (self-spawn stinger seam, M10 #57)"
 & python $stingerProbe --exe $pulsar
 $stingerCode = $LASTEXITCODE
 if ($stingerCode -eq 3) {
-    Write-Host "==> probe-stinger-smoke.py SKIPPED (light build -- obs_stinger_transition absent)"
+    Log-Phase "==> probe-stinger-smoke.py SKIPPED (light build -- obs_stinger_transition absent)"
 } elseif ($stingerCode -ne 0) {
-    Write-Host "==> probe-stinger-smoke.py FAILED (exit $stingerCode)"
-    Write-Host "==> The stinger transition seam did not load/compose cleanly -- aborting before the shared suite."
+    Log-Phase "==> probe-stinger-smoke.py FAILED (exit $stingerCode)"
+    Log-Phase "==> The stinger transition seam did not load/compose cleanly -- aborting before the shared suite."
     exit 1
 } else {
-    Write-Host "==> probe-stinger-smoke.py OK"
+    Log-Phase "==> probe-stinger-smoke.py OK"
 }
 
 # --------------------------------------------------------------------
@@ -284,15 +298,15 @@ if ($stingerCode -eq 3) {
 # Encoder-agnostic, so it runs on a light build too.
 # --------------------------------------------------------------------
 $replayProbe = Join-Path $repoRoot "scripts/probe-replay.py"
-Write-Host "==> Running probe-replay.py (self-spawn replay buffer, #117)"
+Log-Phase "==> Running probe-replay.py (self-spawn replay buffer, #117)"
 & python $replayProbe --exe $pulsar
 $replayCode = $LASTEXITCODE
 if ($replayCode -ne 0) {
-    Write-Host "==> probe-replay.py FAILED (exit $replayCode)"
-    Write-Host "==> The replay buffer did not arm/save a real file -- aborting before the shared suite."
+    Log-Phase "==> probe-replay.py FAILED (exit $replayCode)"
+    Log-Phase "==> The replay buffer did not arm/save a real file -- aborting before the shared suite."
     exit 1
 }
-Write-Host "==> probe-replay.py OK"
+Log-Phase "==> probe-replay.py OK"
 
 # --------------------------------------------------------------------
 # Phase 1e -- self-spawning M10 OVERLAY live end-to-end probe in
@@ -320,17 +334,17 @@ Write-Host "==> probe-replay.py OK"
 # -> exit 3, tolerated.
 # --------------------------------------------------------------------
 $m10Probe = Join-Path $repoRoot "scripts/probe-m10-canvas-live.py"
-Write-Host "==> Running probe-m10-canvas-live.py (self-spawn M10 e2e, proof-only, #61)"
+Log-Phase "==> Running probe-m10-canvas-live.py (self-spawn M10 e2e, proof-only, #61)"
 & python $m10Probe --exe $pulsar --no-broadcast --loopback-leaf --allow-blank --duration 12
 $m10Code = $LASTEXITCODE
 if ($m10Code -eq 3) {
-    Write-Host "==> probe-m10-canvas-live.py SKIPPED (light build -- stinger/monitor_capture absent)"
+    Log-Phase "==> probe-m10-canvas-live.py SKIPPED (light build -- stinger/monitor_capture absent)"
 } elseif ($m10Code -ne 0) {
-    Write-Host "==> probe-m10-canvas-live.py FAILED (exit $m10Code)"
-    Write-Host "==> The M10 Blue->leaf->consumer->switch chain did not wire/compose cleanly -- aborting before the shared suite."
+    Log-Phase "==> probe-m10-canvas-live.py FAILED (exit $m10Code)"
+    Log-Phase "==> The M10 Blue->leaf->consumer->switch chain did not wire/compose cleanly -- aborting before the shared suite."
     exit 1
 } else {
-    Write-Host "==> probe-m10-canvas-live.py OK"
+    Log-Phase "==> probe-m10-canvas-live.py OK"
 }
 
 # --------------------------------------------------------------------
@@ -351,15 +365,15 @@ if ($m10Code -eq 3) {
 # CEF, no capture target and no network -- it runs on a light build too.
 # --------------------------------------------------------------------
 $outputEffectProbe = Join-Path $repoRoot "scripts/probe-output-effect.py"
-Write-Host "==> Running probe-output-effect.py (self-spawn output effect, #120)"
+Log-Phase "==> Running probe-output-effect.py (self-spawn output effect, #120)"
 & python $outputEffectProbe --exe $pulsar
 $outputEffectCode = $LASTEXITCODE
 if ($outputEffectCode -ne 0) {
-    Write-Host "==> probe-output-effect.py FAILED (exit $outputEffectCode)"
-    Write-Host "==> An output request reported an effect it did not have -- aborting before the shared suite."
+    Log-Phase "==> probe-output-effect.py FAILED (exit $outputEffectCode)"
+    Log-Phase "==> An output request reported an effect it did not have -- aborting before the shared suite."
     exit 1
 }
-Write-Host "==> probe-output-effect.py OK"
+Log-Phase "==> probe-output-effect.py OK"
 
 # --------------------------------------------------------------------
 # Phase 1f-bis -- self-spawning v5 STREAM-EGRESS GUARD
@@ -386,15 +400,15 @@ Write-Host "==> probe-output-effect.py OK"
 # as the other Phase-1 probes. ~5 s wall clock.
 # --------------------------------------------------------------------
 $egressProbe = Join-Path $repoRoot "scripts/probe-stream-egress-guard.py"
-Write-Host "==> Running probe-stream-egress-guard.py (self-spawn v5 egress guard, #133 C1/C2)"
+Log-Phase "==> Running probe-stream-egress-guard.py (self-spawn v5 egress guard, #133 C1/C2)"
 & python $egressProbe --exe $pulsar
 $egressCode = $LASTEXITCODE
 if ($egressCode -ne 0) {
-    Write-Host "==> probe-stream-egress-guard.py FAILED (exit $egressCode)"
-    Write-Host "==> The v5 stream path accepted a destination it must refuse -- aborting before the shared suite."
+    Log-Phase "==> probe-stream-egress-guard.py FAILED (exit $egressCode)"
+    Log-Phase "==> The v5 stream path accepted a destination it must refuse -- aborting before the shared suite."
     exit 1
 }
-Write-Host "==> probe-stream-egress-guard.py OK"
+Log-Phase "==> probe-stream-egress-guard.py OK"
 
 # --------------------------------------------------------------------
 # Phase 1f-ter -- self-spawning LOOPBACK BIND probe
@@ -412,17 +426,17 @@ Write-Host "==> probe-stream-egress-guard.py OK"
 # Self-spawns its OWN pulsar.exe children (two, sequential). ~10 s wall clock.
 # --------------------------------------------------------------------
 $bindProbe = Join-Path $repoRoot "scripts/probe-loopback-bind.py"
-Write-Host "==> Running probe-loopback-bind.py (self-spawn loopback bind, #134)"
+Log-Phase "==> Running probe-loopback-bind.py (self-spawn loopback bind, #134)"
 & python $bindProbe --exe $pulsar
 $bindCode = $LASTEXITCODE
 if ($bindCode -eq 3) {
-    Write-Host "==> probe-loopback-bind.py SKIPPED (no non-loopback IPv4 on this host)"
+    Log-Phase "==> probe-loopback-bind.py SKIPPED (no non-loopback IPv4 on this host)"
 } elseif ($bindCode -ne 0) {
-    Write-Host "==> probe-loopback-bind.py FAILED (exit $bindCode)"
-    Write-Host "==> The v5 server is listening beyond the loopback -- aborting before the shared suite."
+    Log-Phase "==> probe-loopback-bind.py FAILED (exit $bindCode)"
+    Log-Phase "==> The v5 server is listening beyond the loopback -- aborting before the shared suite."
     exit 1
 } else {
-    Write-Host "==> probe-loopback-bind.py OK"
+    Log-Phase "==> probe-loopback-bind.py OK"
 }
 
 # --------------------------------------------------------------------
@@ -449,17 +463,17 @@ if ($bindCode -eq 3) {
 # passes silently.
 # --------------------------------------------------------------------
 $vcamProbe = Join-Path $repoRoot "scripts/probe-vcam-scene-mode.py"
-Write-Host "==> Running probe-vcam-scene-mode.py (self-spawn vcam source mode, #119 crit 3)"
+Log-Phase "==> Running probe-vcam-scene-mode.py (self-spawn vcam source mode, #119 crit 3)"
 & python $vcamProbe --exe $pulsar
 $vcamCode = $LASTEXITCODE
 if ($vcamCode -eq 3) {
-    Write-Host "==> probe-vcam-scene-mode.py SKIPPED (no virtual-camera driver registered on this machine)"
+    Log-Phase "==> probe-vcam-scene-mode.py SKIPPED (no virtual-camera driver registered on this machine)"
 } elseif ($vcamCode -ne 0) {
-    Write-Host "==> probe-vcam-scene-mode.py FAILED (exit $vcamCode)"
-    Write-Host "==> The vcam source mode regressed after the #119 mirror removal -- aborting before the shared suite."
+    Log-Phase "==> probe-vcam-scene-mode.py FAILED (exit $vcamCode)"
+    Log-Phase "==> The vcam source mode regressed after the #119 mirror removal -- aborting before the shared suite."
     exit 1
 } else {
-    Write-Host "==> probe-vcam-scene-mode.py OK"
+    Log-Phase "==> probe-vcam-scene-mode.py OK"
 }
 
 # --------------------------------------------------------------------
@@ -494,15 +508,15 @@ if ($vcamCode -eq 3) {
 # branch, which passes. ~10 s wall clock.
 # --------------------------------------------------------------------
 $contractProbe = Join-Path $repoRoot "scripts/probe-capability-contract.py"
-Write-Host "==> Running probe-capability-contract.py (self-spawn v5 capability contract, #121)"
+Log-Phase "==> Running probe-capability-contract.py (self-spawn v5 capability contract, #121)"
 & python $contractProbe --exe $pulsar
 $contractCode = $LASTEXITCODE
 if ($contractCode -ne 0) {
-    Write-Host "==> probe-capability-contract.py FAILED (exit $contractCode)"
-    Write-Host "==> A v5 request reported an effect it did not have, or the frozen coverage list drifted -- aborting before the shared suite."
+    Log-Phase "==> probe-capability-contract.py FAILED (exit $contractCode)"
+    Log-Phase "==> A v5 request reported an effect it did not have, or the frozen coverage list drifted -- aborting before the shared suite."
     exit 1
 }
-Write-Host "==> probe-capability-contract.py OK"
+Log-Phase "==> probe-capability-contract.py OK"
 
 # --------------------------------------------------------------------
 # Phase 1i -- self-spawning PRESET ROUND-TRIP probe
@@ -528,15 +542,15 @@ Write-Host "==> probe-capability-contract.py OK"
 # Phase-1 probes.
 # --------------------------------------------------------------------
 $presetProbe = Join-Path $repoRoot "scripts/probe-qsv-preset.py"
-Write-Host "==> Running probe-qsv-preset.py (self-spawn preset round-trip)"
+Log-Phase "==> Running probe-qsv-preset.py (self-spawn preset round-trip)"
 & python $presetProbe --exe $pulsar
 $presetCode = $LASTEXITCODE
 if ($presetCode -ne 0) {
-    Write-Host "==> probe-qsv-preset.py FAILED (exit $presetCode)"
-    Write-Host "==> The preset asked for at boot is not the preset the encoder carries -- aborting before the shared suite."
+    Log-Phase "==> probe-qsv-preset.py FAILED (exit $presetCode)"
+    Log-Phase "==> The preset asked for at boot is not the preset the encoder carries -- aborting before the shared suite."
     exit 1
 }
-Write-Host "==> probe-qsv-preset.py OK"
+Log-Phase "==> probe-qsv-preset.py OK"
 
 # --------------------------------------------------------------------
 # Phase 1j -- self-spawning MULTI-TRACK AUDIO probe
@@ -564,15 +578,15 @@ Write-Host "==> probe-qsv-preset.py OK"
 # ffmpeg_source reads. ~25 s wall clock.
 # --------------------------------------------------------------------
 $multitrackProbe = Join-Path $repoRoot "scripts/probe-audio-multitrack.py"
-Write-Host "==> Running probe-audio-multitrack.py (self-spawn multi-track audio, #168)"
+Log-Phase "==> Running probe-audio-multitrack.py (self-spawn multi-track audio, #168)"
 & python $multitrackProbe --exe $pulsar
 $multitrackCode = $LASTEXITCODE
 if ($multitrackCode -ne 0) {
-    Write-Host "==> probe-audio-multitrack.py FAILED (exit $multitrackCode)"
-    Write-Host "==> Multi-track audio is wired but not carried, or the single-track default regressed -- aborting before the shared suite."
+    Log-Phase "==> probe-audio-multitrack.py FAILED (exit $multitrackCode)"
+    Log-Phase "==> Multi-track audio is wired but not carried, or the single-track default regressed -- aborting before the shared suite."
     exit 1
 }
-Write-Host "==> probe-audio-multitrack.py OK"
+Log-Phase "==> probe-audio-multitrack.py OK"
 
 # --------------------------------------------------------------------
 # Phase 1k -- RESEED regression probe (#181 veto V1/V4, Bastion
@@ -589,7 +603,7 @@ Write-Host "==> probe-audio-multitrack.py OK"
 # SECOND boot's port + password actually authenticate over a real
 # WebSocket connection -- not a file-content assumption.
 # --------------------------------------------------------------------
-Write-Host "==> Reseed regression probe: booting pulsar.exe twice without wiping config.json (#181 F4)"
+Log-Phase "==> Reseed regression probe: booting pulsar.exe twice without wiping config.json (#181 F4)"
 
 function New-FreePort {
     $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -651,22 +665,22 @@ $reseedStdout1 = Join-Path $repoRoot "build/probe-reseed-boot1-stdout.log"
 $reseedStderr1 = Join-Path $repoRoot "build/probe-reseed-boot1-stderr.log"
 New-Item -ItemType Directory -Path (Split-Path $reseedStdout1) -Force | Out-Null
 
-Write-Host "==> Reseed probe: boot #1 (port=$reseedPort1)"
+Log-Phase "==> Reseed probe: boot #1 (port=$reseedPort1)"
 $reseedProc1 = Start-Process -FilePath $pulsar -WorkingDirectory $binDir -PassThru `
     -RedirectStandardOutput $reseedStdout1 -RedirectStandardError $reseedStderr1
 if (-not (Wait-PulsarReady -Proc $reseedProc1 -StdoutLog $reseedStdout1 -TimeoutSec $ReadyTimeoutSec)) {
-    Write-Host "==> Reseed probe FAILED: boot #1 never reached READY"
+    Log-Phase "==> Reseed probe FAILED: boot #1 never reached READY"
     Show-LogTail -Path $reseedStdout1 -Tail 30
     Show-LogTail -Path $reseedStderr1 -Tail 30
     Stop-PulsarProcessTree -Proc $reseedProc1
     exit 1
 }
 if (-not (Test-Path $reseedConfigPath)) {
-    Write-Host "==> Reseed probe FAILED: $reseedConfigPath missing after boot #1"
+    Log-Phase "==> Reseed probe FAILED: $reseedConfigPath missing after boot #1"
     Stop-PulsarProcessTree -Proc $reseedProc1 -WaitMs 5000
     exit 1
 }
-Write-Host "==> Reseed probe: boot #1 READY, config.json seeded"
+Log-Phase "==> Reseed probe: boot #1 READY, config.json seeded"
 
 # Stop boot #1 WITHOUT deleting config.json -- the whole point is the
 # second boot finds its own prior file still on disk. Kill the whole
@@ -677,7 +691,7 @@ Stop-PulsarProcessTree -Proc $reseedProc1
 $reseedPort2 = New-FreePort
 $reseedPwd2  = New-SessionPassword
 if ($reseedPort2 -eq $reseedPort1 -or $reseedPwd2 -eq $reseedPwd1) {
-    Write-Host "==> Reseed probe FAILED: boot #2 port/password collided with boot #1 (test cannot distinguish reseed from no-op)"
+    Log-Phase "==> Reseed probe FAILED: boot #2 port/password collided with boot #1 (test cannot distinguish reseed from no-op)"
     exit 1
 }
 $env:PULSAR_PORT = "$reseedPort2"
@@ -685,17 +699,17 @@ $env:PULSAR_PASSWORD = $reseedPwd2
 $reseedStdout2 = Join-Path $repoRoot "build/probe-reseed-boot2-stdout.log"
 $reseedStderr2 = Join-Path $repoRoot "build/probe-reseed-boot2-stderr.log"
 
-Write-Host "==> Reseed probe: boot #2 (port=$reseedPort2) -- config.json from boot #1 is still on disk"
+Log-Phase "==> Reseed probe: boot #2 (port=$reseedPort2) -- config.json from boot #1 is still on disk"
 $reseedProc2 = Start-Process -FilePath $pulsar -WorkingDirectory $binDir -PassThru `
     -RedirectStandardOutput $reseedStdout2 -RedirectStandardError $reseedStderr2
 if (-not (Wait-PulsarReady -Proc $reseedProc2 -StdoutLog $reseedStdout2 -TimeoutSec $ReadyTimeoutSec)) {
-    Write-Host "==> Reseed probe FAILED: boot #2 never reached READY -- this is the V1 regression class (reseed starved/refused after boot #1 owned the file)"
+    Log-Phase "==> Reseed probe FAILED: boot #2 never reached READY -- this is the V1 regression class (reseed starved/refused after boot #1 owned the file)"
     Show-LogTail -Path $reseedStdout2 -Tail 30
     Show-LogTail -Path $reseedStderr2 -Tail 30
     Stop-PulsarProcessTree -Proc $reseedProc2
     exit 1
 }
-Write-Host "==> Reseed probe: boot #2 READY"
+Log-Phase "==> Reseed probe: boot #2 READY"
 
 # (a) DACL still protected + current-user-only after the SECOND boot.
 $reseedCurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -704,12 +718,12 @@ $reseedBadAces = $reseedAcl.Access | Where-Object {
     -not $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Equals($reseedCurrentUser)
 }
 if (-not $reseedAcl.AreAccessRulesProtected -or $reseedBadAces) {
-    Write-Host "==> Reseed probe FAILED: config.json DACL is not restricted to the current account after boot #2 (reseed)"
+    Log-Phase "==> Reseed probe FAILED: config.json DACL is not restricted to the current account after boot #2 (reseed)"
     Write-Host ($reseedAcl.Access | Format-Table IdentityReference, FileSystemRights, AccessControlType | Out-String)
     Stop-PulsarProcessTree -Proc $reseedProc2 -WaitMs 5000
     exit 1
 }
-Write-Host "==> Reseed probe: DACL OK after boot #2 (restricted to $($reseedCurrentUser.Value))"
+Log-Phase "==> Reseed probe: DACL OK after boot #2 (restricted to $($reseedCurrentUser.Value))"
 
 # (b) boot #2's NEW port/password actually work -- a real WebSocket
 # connection using the reseeded credentials, not a file-content
@@ -717,15 +731,15 @@ Write-Host "==> Reseed probe: DACL OK after boot #2 (restricted to $($reseedCurr
 # skips its own spawn and drives the v5 handshake against an
 # already-running instance (added for this probe, #181 F4).
 $reseedWsProbe = Join-Path $repoRoot "scripts/probe-websocket.py"
-Write-Host "==> Reseed probe: connecting to boot #2 with its reseeded credentials"
+Log-Phase "==> Reseed probe: connecting to boot #2 with its reseeded credentials"
 & python $reseedWsProbe --connect-port $reseedPort2 --connect-password $reseedPwd2 --ready-timeout $ReadyTimeoutSec
 $reseedWsCode = $LASTEXITCODE
 Stop-PulsarProcessTree -Proc $reseedProc2
 if ($reseedWsCode -ne 0) {
-    Write-Host "==> Reseed probe FAILED: reseeded credentials (boot #2) did not authenticate over the wire (exit $reseedWsCode)"
+    Log-Phase "==> Reseed probe FAILED: reseeded credentials (boot #2) did not authenticate over the wire (exit $reseedWsCode)"
     exit 1
 }
-Write-Host "==> Reseed probe OK: config.json reseeds correctly across boots (#181 V1/V4 closed)"
+Log-Phase "==> Reseed probe OK: config.json reseeds correctly across boots (#181 V1/V4 closed)"
 
 if (Test-Path $reseedConfigPath) {
     Remove-Item $reseedConfigPath -Force
@@ -762,7 +776,7 @@ New-Item -ItemType Directory -Path (Split-Path $stdoutLog) -Force | Out-Null
 # --------------------------------------------------------------------
 # Phase 2 -- shared instance for the connect-only probes.
 # --------------------------------------------------------------------
-Write-Host "==> Spawning shared pulsar.exe (cwd=$binDir, port=$sessionPort)"
+Log-Phase "==> Spawning shared pulsar.exe (cwd=$binDir, port=$sessionPort)"
 # pulsar.exe is built /SUBSYSTEM:WINDOWS so spawning it never allocates
 # a console window, regardless of redirection. Start-Process with
 # -RedirectStandard* drains stdio at OS level (file redirection),
@@ -787,14 +801,14 @@ while ((Get-Date) -lt $readyDeadline) {
 }
 
 if (-not $ready) {
-    Write-Host "==> Pulsar failed to reach READY within ${ReadyTimeoutSec}s. Tail of stdout:"
+    Log-Phase "==> Pulsar failed to reach READY within ${ReadyTimeoutSec}s. Tail of stdout:"
     Show-LogTail -Path $stdoutLog -Tail 30
-    Write-Host "==> stderr:"
+    Log-Phase "==> stderr:"
     Show-LogTail -Path $stderrLog -Tail 30
     if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
     exit 1
 }
-Write-Host "==> PULSAR_READY received"
+Log-Phase "==> PULSAR_READY received"
 
 # --------------------------------------------------------------------
 # Phase 2 (ACL) -- config.json DACL hardening regression, Bastion
@@ -808,7 +822,7 @@ Write-Host "==> PULSAR_READY received"
 # --------------------------------------------------------------------
 $aclConfigPath = Join-Path $configDir "config.json"
 if (-not (Test-Path $aclConfigPath)) {
-    Write-Host "==> ACL probe FAILED: $aclConfigPath does not exist after boot"
+    Log-Phase "==> ACL probe FAILED: $aclConfigPath does not exist after boot"
     Stop-Process -Id $proc.Id -Force; $proc.WaitForExit(5000) | Out-Null
     exit 1
 }
@@ -818,12 +832,12 @@ $aclBadAces = $aclInfo.Access | Where-Object {
     -not $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Equals($aclCurrentUser)
 }
 if (-not $aclInfo.AreAccessRulesProtected -or $aclBadAces) {
-    Write-Host "==> ACL probe FAILED: config.json DACL is not restricted to the current account ($($aclCurrentUser.Value))"
+    Log-Phase "==> ACL probe FAILED: config.json DACL is not restricted to the current account ($($aclCurrentUser.Value))"
     Write-Host ($aclInfo.Access | Format-Table IdentityReference, FileSystemRights, AccessControlType | Out-String)
     Stop-Process -Id $proc.Id -Force; $proc.WaitForExit(5000) | Out-Null
     exit 1
 }
-Write-Host "==> ACL probe OK (config.json DACL restricted to $($aclCurrentUser.Value))"
+Log-Phase "==> ACL probe OK (config.json DACL restricted to $($aclCurrentUser.Value))"
 
 # --------------------------------------------------------------------
 # Phase 2a -- scene-source name-drift regression (probe-scene-name-drift.py,
@@ -838,22 +852,22 @@ Write-Host "==> ACL probe OK (config.json DACL restricted to $($aclCurrentUser.V
 # paint).
 # --------------------------------------------------------------------
 $nameDriftProbe = Join-Path $repoRoot "scripts/probe-scene-name-drift.py"
-Write-Host "==> Running probe-scene-name-drift.py (connect-only, #110)"
+Log-Phase "==> Running probe-scene-name-drift.py (connect-only, #110)"
 & python $nameDriftProbe
 $nameDriftCode = $LASTEXITCODE
 if ($nameDriftCode -eq 3) {
-    Write-Host "==> probe-scene-name-drift.py SKIPPED (light build -- browser_source absent)"
+    Log-Phase "==> probe-scene-name-drift.py SKIPPED (light build -- browser_source absent)"
 } elseif ($nameDriftCode -ne 0) {
-    Write-Host "==> probe-scene-name-drift.py FAILED (exit $nameDriftCode)"
+    Log-Phase "==> probe-scene-name-drift.py FAILED (exit $nameDriftCode)"
     if ($proc.HasExited) {
         Show-PulsarDeath -Proc $proc -LastAliveProbe '' -StdoutLog $stdoutLog -StderrLog $stderrLog
     } else {
-        Write-Host "==> Stopping pulsar.exe"
+        Log-Phase "==> Stopping pulsar.exe"
         Stop-Process -Id $proc.Id -Force; $proc.WaitForExit(5000) | Out-Null
     }
     exit 1
 } else {
-    Write-Host "==> probe-scene-name-drift.py OK"
+    Log-Phase "==> probe-scene-name-drift.py OK"
 }
 
 # Connect-only probes. Each reads the shared instance's port/password
@@ -929,60 +943,60 @@ for ($i = 0; $i -lt $probes.Count; $i++) {
     if ($proc.HasExited) {
         Show-PulsarDeath -Proc $proc -LastAliveProbe $lastAlive -StdoutLog $stdoutLog -StderrLog $stderrLog
         $skipped = $probes[$i..($probes.Count - 1)]
-        Write-Host "==> NOT RUN (nothing to connect to): $($skipped -join ', ')"
+        Log-Phase "==> NOT RUN (nothing to connect to): $($skipped -join ', ')"
         $died = $true
         break
     }
 
     $script = Join-Path $repoRoot "scripts/$p"
     Write-Host ""
-    Write-Host "==> Running $p"
+    Log-Phase "==> Running $p"
     & python $script
     $code = $LASTEXITCODE
     if ($code -ne 0) {
-        Write-Host "==> $p FAILED (exit $code)"
+        Log-Phase "==> $p FAILED (exit $code)"
         $failed += $p
         # Distinguish "the probe's assertion failed" from "the server died
         # under it" -- same exit code, opposite diagnosis.
         if ($proc.HasExited) {
             Show-PulsarDeath -Proc $proc -LastAliveProbe $lastAlive -StdoutLog $stdoutLog -StderrLog $stderrLog
-            Write-Host "==>        $p is the probe it died UNDER, not necessarily the culprit."
+            Log-Phase "==>        $p is the probe it died UNDER, not necessarily the culprit."
             if ($i -lt $probes.Count - 1) {
                 $skipped = $probes[($i + 1)..($probes.Count - 1)]
-                Write-Host "==> NOT RUN (nothing to connect to): $($skipped -join ', ')"
+                Log-Phase "==> NOT RUN (nothing to connect to): $($skipped -join ', ')"
             }
             $died = $true
             break
         }
     } else {
-        Write-Host "==> $p OK"
+        Log-Phase "==> $p OK"
         $lastAlive = $p
     }
 }
 
 Write-Host ""
 if ($proc.HasExited) {
-    Write-Host "==> pulsar.exe already exited on its own -- nothing to stop."
+    Log-Phase "==> pulsar.exe already exited on its own -- nothing to stop."
 } else {
-    Write-Host "==> Stopping pulsar.exe"
+    Log-Phase "==> Stopping pulsar.exe"
     Stop-Process -Id $proc.Id -Force
     $proc.WaitForExit(5000) | Out-Null
 }
 
 if ($died) {
-    Write-Host "==> SUITE ABORTED -- shared pulsar.exe crash (see FATAL above)."
+    Log-Phase "==> SUITE ABORTED -- shared pulsar.exe crash (see FATAL above)."
     exit 1
 }
 
 if ($failed.Count -gt 0) {
-    Write-Host "==> $($failed.Count) probe(s) failed: $($failed -join ', ')"
-    Write-Host "==> (pulsar.exe stayed alive throughout -- these are real assertion failures.)"
-    Write-Host "==> Pulsar stdout tail:"
+    Log-Phase "==> $($failed.Count) probe(s) failed: $($failed -join ', ')"
+    Log-Phase "==> (pulsar.exe stayed alive throughout -- these are real assertion failures.)"
+    Log-Phase "==> Pulsar stdout tail:"
     Show-LogTail -Path $stdoutLog -Tail 50
-    Write-Host "==> Pulsar stderr tail (libobs log):"
+    Log-Phase "==> Pulsar stderr tail (libobs log):"
     Show-LogTail -Path $stderrLog -Tail 50
     exit 1
 }
 
-Write-Host "==> All probes passed"
+Log-Phase "==> All probes passed"
 exit 0
