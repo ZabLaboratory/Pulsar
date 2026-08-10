@@ -106,6 +106,12 @@ if(WIN32)
     # gate the merge (see tests/ws-debug-probe/ws-debug-probe-test.cpp).
     add_subdirectory(tests/ws-debug-probe)
 
+    # #183 -- ADR-005 §3.1-§3.2 log handler: formatting + two-layer
+    # redaction + rotation/ACL, built from the real
+    # plugins/pulsar-headless/log-handler.cpp translation unit (see
+    # tests/log-handler-probe/log-handler-probe-test.cpp).
+    add_subdirectory(tests/log-handler-probe)
+
     # #182 -- regression gate for the pulsar:OutputFailed reason_class
     # classifier (ADR-005 §3.4). No pulsar.exe, no libobs/Qt: a pure
     # function of (is_local_output, code, last_error).
