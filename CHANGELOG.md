@@ -7,8 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-10
+
 ### Added
 
+- **Go-live failure diagnosability** (ADR-005, RC1-RC24; unblocks
+  `ZabLaboratory/Prism#688`, gated on this release per ADR-005 §3.7 — the
+  consumer only adopts the event/verdict path after this bundle is published
+  and bumped, per this runbook). Pulsar stops being a black box when a
+  broadcast fails to start:
+  - **Durable, typed, redacted log handler** (§3.1-3.2, PR #192) replaces
+    stdout-only logging. Four levels, one line per event, written under
+    `%LOCALAPPDATA%\Pulsar\logs\` with size/count/age rotation
+    (`PULSAR_LOG_MAX_BYTES` / `_MAX_FILES` / `_MAX_AGE_DAYS`) and a two-layer
+    redactor covering stream keys, ingest URLs and session passwords in any
+    position on the line (RC9, RC10, RC16).
+  - **`PULSAR_SESSION <id>` correlation line + field** (§3.3, PR #198) on
+    every log line and every `pulsar:*` event, so a Pulsar log and a
+    consumer log join on one key.
+  - **`pulsar:OutputFailed` now carries a structured `reason_class`** (§3.4,
+    PR #193) instead of forcing the consumer to regex-classify libobs
+    strings.
+  - **`pulsar:OutputAttemptSettled` is the authoritative attempt verdict**
+    (§3.5, PR #196, refs #186) — `outcome` + `reason_class` + retry
+    authority, decoupled from log scraping.
+  - **Diagnostic extraction request** (§3.6.1) — path, per-level counters,
+    known-output state and the last `N` `WARN`/`ERROR` lines, served from the
+    in-memory buffer (no re-read, no arbitrary path), `N` server-capped;
+    content-bearing fields refuse to serve outside loopback bind with an
+    explicit error, never a silent empty/truncated answer.
+  - **Write circuit-breaker request** (§3.6.2) — stops file logging hot
+    without a restart; deliberately one-way (no resume without restart), the
+    stop itself is the last logged line before close. Rollback lever for R1:
+    the only way to cut an in-progress leak without pulling the antenna.
+  - **`docs/runbooks/diagnose-a-failed-go-live.md`** (§3.9, PR #200) — a
+    reader outside the campaign qualifies RC6/RC7 without opening the log
+    file (RC15).
 - **Selectable recording container + declared marker support** (#166,
   ADR Prism 028 §3.5 B5/B6). `PULSAR_RECORD_CONTAINER` (`mp4` default, or
   `mkv`) picks the recorder's container once at boot; the choice applies to
@@ -42,6 +76,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `@clodocapeo/pulsar-client`: `audio.listMonitoringDevices()` /
   `audio.setMonitoringDevice(id)`, plus `MonitoringDevice` /
   `MonitoringDeviceList` types and `AudioMonitoringCapability.deviceSelectable`.
+
+### Fixed
+
+- **`obs-websocket/config.json` restricted to the current user, then hardened
+  against a pre-creation race** (§3.0, issue #181: PR #191 restricts the
+  ACL, PR #194 moves creation to `CREATE_NEW` + a pre-built DACL so a local
+  account cannot pre-create the directory and inherit write access to the
+  session password before Pulsar seeds it).
+- **`IsDebugEnabled()` fails closed when `_config` is null** (issue #177, PR
+  #178, RC17) — no request payload is logged on a boot that never received
+  config, independently of #177's own status.
+- **Cross-DLL secret registration for log redaction** (PR #199) — plugins /
+  filters outside `pulsar-headless` can now register a secret into the
+  redactor instead of it only covering values known to the core.
+
+### Security
+
+- **R10 (ADR-005 Amendment 1, accepted 2026-08-10)** — the `obs-websocket/`
+  directory DACL is re-hardened by handle at every boot
+  (`harden_directory_dacl()`, self-healing) rather than refusing a
+  pre-existing writable directory outright. Accepted under the precondition
+  that Pulsar is deployed embedded, per-user (Prism's actual deployment
+  shape) — a shared/machine-wide install path (e.g. `%ProgramFiles%`) must
+  cite R10 and clear Bastion explicitly before merge. Residual: a local
+  account that pre-creates and owns `obs-websocket/` keeps `WRITE_DAC` and
+  can race the config seed between its atomic publish and
+  `obs-websocket`'s read — impact is RPC v5 authentication bypass, not
+  password disclosure (the file DACL still holds). Deeper hardening tracked
+  separately, `#201`.
 
 ## [1.7.0] - 2026-08-03
 
