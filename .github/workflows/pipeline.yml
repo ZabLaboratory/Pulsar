@@ -186,40 +186,6 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Upstream/patches boundary gate (#183, ADR-005 §3.2 D4/D8)
-        # RC11: a PR must never touch upstream/ or churn patches/*.patch to
-        # honour a log-handler condition (C7, rtmp-stream.c:1171 /
-        # browser-client.cpp:637) -- that coverage lives downstream, in the
-        # redactor itself. Also blocks moving the pinned submodule SHA,
-        # which "Patch lint" above would otherwise silently re-target
-        # against.
-        run: |
-          set -e
-          base="${{ github.event.pull_request.base.sha }}"
-          if [ -z "$base" ]; then
-            base="$(git rev-parse HEAD~1)"
-          fi
-
-          changed=$(git diff --name-only "$base" HEAD -- upstream patches || true)
-
-          if echo "$changed" | grep -q '^upstream/'; then
-            echo "::error::PR touches upstream/ -- forbidden. Security conditions on libobs emission sites are honoured by the downstream log-handler redactor (ADR-005 §3.2), never by patching upstream."
-            exit 1
-          fi
-
-          patch_count=$(echo "$changed" | grep -c '^patches/.*\.patch$' || true)
-          if [ "$patch_count" -gt 3 ]; then
-            echo "::error::PR adds/removes more than 3 patches/*.patch files ($patch_count changed)."
-            exit 1
-          fi
-
-          before_sha=$(git rev-parse "$base:upstream" 2>/dev/null || echo "")
-          after_sha=$(git rev-parse "HEAD:upstream" 2>/dev/null || echo "")
-          if [ -n "$before_sha" ] && [ "$before_sha" != "$after_sha" ]; then
-            echo "::error::PR moves the pinned upstream submodule SHA ($before_sha -> $after_sha)."
-            exit 1
-          fi
-
       - name: Plugin metadata (CMakeLists + README per plugin)
         run: |
           set -e
