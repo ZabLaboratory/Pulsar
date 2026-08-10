@@ -1070,6 +1070,13 @@ int main(int argc, char **argv)
                      "pulsar-headless: could not seed a trustworthy "
                      "obs-websocket/config.json; refusing to load plugins or "
                      "report ready (fail closed, #181 V2)\n");
+        // #212: pulsar_frontend_init() already ran above, so the frontend
+        // must be torn down before obs_shutdown() -- same pairing as the
+        // normal exit path below. Skipping this call leaves libobs
+        // shutdown tearing down objects the frontend still references,
+        // producing a reproducible STATUS_ACCESS_VIOLATION instead of a
+        // clean fail-closed exit.
+        pulsar_frontend_shutdown();
         obs_shutdown();
         return 1;
     }
