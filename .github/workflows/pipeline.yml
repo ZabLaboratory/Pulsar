@@ -31,9 +31,21 @@
 # porteur decision) -- rationale and the coverage it costs are written
 # out above the `live-broadcast` job itself.
 #
-# paths-ignore : touching only docs / changelog / .gitignore / LICENSE
-# skips the whole pipeline -- nothing in those paths affects what
-# pulsar.exe builds or how the broadcast renders.
+# docs-only diffs : the workflow ALWAYS triggers (no more paths-ignore
+# at the trigger level, #205) so branch protection always gets a
+# status for the 4 required contexts (lint / build / binary-gate /
+# offline-probes). The cheap `changes` job (ubuntu, git diff against
+# base) detects whether the diff touches anything outside docs / .md /
+# CHANGELOG.md / .gitignore / LICENSE and exposes `outputs.code`.
+# `lint` and `contract-tests` gate on it directly; `build` (and
+# everything that needs: build) inherits the skip for free through
+# GitHub's default `needs` success() check -- a skipped `lint` is not
+# a success, so `build` (needs: lint) is skipped too, and so on down
+# the graph. A skipped job still reports a conclusion (`skipped`) on
+# its required-check context, which GitHub counts as passing -- so a
+# docs-only PR gets all 4 required checks green without the MSVC
+# build ever running. A code diff (`code == 'true'`) runs the full
+# graph exactly as before, no regression.
 #
 # Concurrency : `pipeline-<ref>` group with cancel-in-progress=true
 # means a fresh push to the same ref cancels the previous run, so you
@@ -79,20 +91,8 @@ on:
     branches: [main]
     tags:
       - 'v*.*.*'
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'CHANGELOG.md'
-      - '.gitignore'
-      - 'LICENSE'
   pull_request:
     branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'CHANGELOG.md'
-      - '.gitignore'
-      - 'LICENSE'
 
 concurrency:
   group: pipeline-${{ github.ref }}
@@ -105,12 +105,68 @@ env:
 
 jobs:
 
+  # ── Stage 0 : docs-only detection (#205) ──────────────────────────
+  # Always runs (no paths-ignore on the trigger anymore) so it can
+  # itself report a status, and so the jobs below have something to
+  # gate on. Compares the PR head against its base (or the push
+  # before/after SHAs) and flags `code=true` the moment a single
+  # changed file falls outside docs/**, *.md, CHANGELOG.md,
+  # .gitignore, LICENSE. Missing/unusable base (new branch, force
+  # push with no prior SHA) fails safe to `code=true` -- never
+  # silently skip the real gates.
+  changes:
+    name: detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect non-docs changes
+        id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+          if [ -z "${base}" ] || [ "${base}" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "::notice::no usable base revision -- treating as a code change"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "${base}" "${head}")"
+          if echo "${changed}" | grep -vE '(^|/)[^/]+\.md$|^docs/|^CHANGELOG\.md$|^\.gitignore$|^LICENSE$' | grep -q .; then
+            echo "::notice::non-docs changes detected"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::docs-only diff"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # ── Stage 1 : lint ────────────────────────────────────────────────
   # Cheap fail-fast checks that don't need the build. Source-grep for
   # forbidden patterns, patch lint against pinned upstream SHA, plugin
   # metadata, npm tarball audit. Runs on ubuntu (faster, cheaper).
+  #
+  # Skipped (not run) on a docs-only diff (#205) -- `build`,
+  # `binary-gate` and `offline-probes` all chain off `needs: lint`
+  # (directly or transitively) with no custom `if:` of their own, so
+  # GitHub's default `success()` requirement skips them automatically
+  # the moment lint is skipped. A skipped required check still counts
+  # as passing.
   lint:
     name: lint
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -212,6 +268,8 @@ jobs:
   # by Conduit (#59).
   contract-tests:
     name: contract tests (scene_control)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
