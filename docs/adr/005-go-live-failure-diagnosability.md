@@ -652,3 +652,89 @@ orphelin porteur du mot de passe, pas de balayage au boot), N4 (branche `#else` 
 `mt19937_64`, entropie plafonnée à 64 bits, PRNG non cryptographique) et N7 (aucun test négatif
 du chemin d'abort F2) restent **hors périmètre** de cet amendement. Ils ne sont ni acceptés, ni
 clos par lui.
+
+---
+
+## Amendment 2 — R10 révisée : la précondition porte sur le répertoire *parent*
+
+- **Status**: proposed
+- **Date**: 2026-08-10
+- **Decided**: —
+- **Deciders**: @ClodoCapeo
+- **Author**: Atlas
+
+> Cet amendement ne réécrit ni ne corrige §1–§7, ni le texte de l'Amendment 1 : il **révise
+> l'entrée `R10`** de §5 Risks, dont la rédaction A1.1 devient factuellement fausse au merge de
+> #201 / PR #209 (SHA de branche audité `e416596a`, SHA de merge `fb4b6dfc`). A1.1 est conservée
+> **telle quelle** comme état antérieur du risque ; le texte normatif de R10 est désormais A2.1.
+> Origine : re-audit Bastion du 2026-08-10 sur PR #209, verdict **CLEARED**, constat **O5** — le
+> résidu nommé par A1.1 est fermé, mais la précondition de déploiement subsiste **un cran plus
+> haut**, sur le répertoire contenant `obs-websocket/`. A1.1 annonçait le durcissement « suivi
+> hors de ce lot, par #201 » : ce suivi est livré, la phrase n'a plus d'objet.
+
+### A2.1 — Rédaction révisée de R10, en remplacement de A1.1 en §5 Risks
+
+- R10 (révisée après #201/PR #209) — **Risque résiduel accepté — précondition de déploiement sur
+  la DACL du répertoire *parent* du répertoire d'installation.** Le résidu nommé par la rédaction
+  initiale — un compte local tiers pré-crée `obs-websocket/`, en reste propriétaire, et conserve
+  donc `WRITE_DAC` en permanence — est **fermé** par #201 : `create_directory_hardened()` crée le
+  répertoire via `CreateDirectoryA` avec une `SECURITY_ATTRIBUTES` protégée, l'ouvre avec
+  `FILE_FLAG_OPEN_REPARSE_POINT`, refuse tout point d'analyse, refuse tout répertoire dont le
+  propriétaire n'est pas le `TokenOwner` courant, et re-vérifie par handle le propriétaire de
+  `config.json` après le `MoveFileExA`. Subsiste la précondition **parente** : la vérification du
+  répertoire est faite par handle, mais toutes les opérations subséquentes (balayage des `.tmp`,
+  création du fichier temporaire, publication atomique, re-vérification finale) désignent leurs
+  cibles **par chemin**. Un compte local tiers inscriptible dans le répertoire **contenant**
+  `obs-websocket/` peut donc substituer l'entrée entre la vérification et l'usage, et retrouver la
+  primitive de substitution de `config.json` entre sa publication et sa lecture par
+  `obs-websocket` pendant `obs_load_all_modules` — impact inchangé : contournement
+  d'authentification RPC v5, non divulgation du mot de passe. Cette précondition reste **acceptée**
+  en l'état (Pulsar est déployé embarqué par Prism dans un répertoire per-utilisateur) et A1.RC2
+  continue de s'appliquer sans changement : toute unité qui installe, déplace ou embarque
+  `pulsar.exe` hors d'un répertoire per-utilisateur cite R10 et obtient une clearance Bastion
+  explicite avant merge.
+
+### A2.2 — Effet sur les critères de l'Amendement 1
+
+- **A1.RC1 — non satisfaite, non levée par cet amendement.** Les quatre gestes nommés sont
+  **livrés** (constat Bastion, PR #209), mais le critère exige « livrés **et** exercés par une
+  sonde ». Le cas du point d'analyse se **skippe silencieusement** quand `mklink /J` échoue et le
+  binaire imprime malgré tout `all assertions passed` ; les gestes « refus d'un répertoire possédé
+  par un tiers » et « re-vérification après le rename » n'ont aucun cas négatif. #201 **reste
+  ouverte** sur ce seul motif. Aucune clôture ne s'appuie sur A2.
+- **A1.RC2 — reconduite mot pour mot**, sans amendement ni assouplissement. Elle est le seul
+  contrôle en vigueur sur la précondition décrite en A2.1 et A2.1 la cite explicitement.
+- **A1.3 — inchangée.** N4 et N5 restent hors périmètre et ouverts ; ils ne sont ni acceptés, ni
+  clos, ni par A1, ni par A2.
+
+### A2.3 — Resolution criteria de cet amendement
+
+- A2.RC1 — `grep -n "R10 (révisée après #201/PR #209)"
+  docs/adr/005-go-live-failure-diagnosability.md` retourne exactement une occurrence, dans A2.1 ; et
+  `git show 89544fc:docs/adr/005-go-live-failure-diagnosability.md | sed -n '609,631p'` est
+  identique aux lignes correspondantes de `HEAD` — A1.1 n'a pas été retouchée. Toute lecture de
+  R10 se fait sur A2.1 ; A1.1 est historique.
+- A2.RC2 — La fermeture de #201 exige, **en plus** des quatre gestes déjà livrés, la preuve
+  d'exercice réclamée par A1.RC1 : la sonde `pulsar-dir-hardening-probe` échoue durement quand
+  `mklink /J` est indisponible (aucun skip silencieux) et couvre un cas négatif « répertoire
+  possédé par un autre SID ». Preuve : un log de job CI où `grep -Ei "reparse|mklink"` sur la
+  sortie du test retourne au moins une occurrence, et un cas négatif observable en échec attendu.
+  À défaut de faisabilité (pas de second compte sur le runner), l'impossibilité est documentée
+  nommément dans le `CLOSURE_REPORT` de #201 et le geste concerné reste déclaré non exercé.
+- A2.RC3 — La précondition d'A2.1 est structurellement causée par une classe d'opérations : toute
+  unité qui **ajoute ou déplace** une opération du chemin de seeding désignant sa cible **par
+  chemin** plutôt que par handle (ouverture, création, rename, balayage, re-vérification, sous
+  `plugins/pulsar-headless/`) cite R10 dans sa provenance canonique et obtient une clearance
+  Bastion avant merge. Preuve : commentaire de clearance nommant R10 sur la PR concernée ; à
+  défaut, le merge est refusé. Une unité qui **supprime** une telle désignation par chemin, au
+  contraire, réduit R10 et peut la citer comme motif de révision.
+
+### A2.4 — Ce que cet amendement ne décide pas
+
+O1 (aucun contrôle de reparse ni de propriétaire sur les entrées balayées par
+`sweep_orphaned_temp_files`, notamment les orphelins hérités d'un boot antérieur à #209), O2
+(`verify_owned_by_current_token` ouvre **sans** `FILE_FLAG_OPEN_REPARSE_POINT`), O3 (couverture de
+sonde partielle — traité comme critère en A2.RC2, pas comme décision), O4 (nouveau mode
+d'indisponibilité permanent sur `obs-websocket/` possédé par un tiers, sans ligne de runbook), O7
+(retry-once de `pulsar-offline-probes`, entorse standing à `git.md`), ainsi que N4 et N5 déjà
+réservés par A1.3, restent **hors périmètre**. Ils ne sont ni acceptés, ni clos par cet amendement.
