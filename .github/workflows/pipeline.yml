@@ -453,7 +453,28 @@ jobs:
           max_attempts: 2
           retry_wait_seconds: 10
           shell: pwsh
-          command: ctest --test-dir build --output-on-failure -C RelWithDebInfo
+          command: ctest --test-dir build --output-on-failure --output-junit ctest-junit.xml -C RelWithDebInfo
+
+      - name: Upload CTest output (passing and failing tests)
+        # --output-on-failure only echoes a test's internal stdout/stderr to
+        # this job's console log when that test fails, so a green run leaves
+        # no trace of what it actually exercised -- structurally unverifiable
+        # after the fact (Vigil, PR #211 review + ADR-005 Amendment 2 review).
+        # CTest's own Testing/Temporary/LastTest.log always captures every
+        # test's full output regardless of outcome, and --output-junit above
+        # adds a structured per-test index ; archive both instead of
+        # switching the whole suite to -V, which would just drown the normal
+        # case in noise. if: always() so a genuine regression's evidence is
+        # still attached alongside the retry's own console output.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsar-ctest-output
+          path: |
+            ctest-junit.xml
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
+          retention-days: 14
 
   # ── Stage 3c : live broadcast (Twitch + record + diagnostic) ─────
   #
