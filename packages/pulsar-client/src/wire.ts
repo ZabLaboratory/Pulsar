@@ -133,6 +133,13 @@ export interface WireOutputScale {
   scale?: number;
 }
 
+/** `capabilities.record_markers` (issue #166, ADR Prism 028 §3.5 B6). Both
+ *  booleans are always sent together when the block is present. */
+export interface WireRecordMarkers {
+  split_file?: boolean;
+  add_chapter?: boolean;
+}
+
 export interface WireGetCapabilitiesResponse {
   /** Manifest schema version. Absent on a pre-#141 Pulsar. */
   version?: number;
@@ -389,6 +396,22 @@ function canvasFromWire(
   return { width: raw.width, height: raw.height };
 }
 
+/**
+ * Decodes `capabilities.record_markers` (issue #166, ADR Prism 028 §3.5 B6).
+ *
+ * Both booleans or nothing: a server that sent only one is treated as absent
+ * rather than half-read, exactly like colorimetry above -- the two flags
+ * describe the same recording output and a partial pair cannot be trusted.
+ */
+function recordMarkersFromWire(
+  w: WireGetCapabilitiesResponse,
+): { splitFile: boolean; addChapter: boolean } | undefined {
+  const raw = w.capabilities?.["record_markers"] as WireRecordMarkers | undefined;
+  if (!raw || typeof raw.split_file !== "boolean" || typeof raw.add_chapter !== "boolean")
+    return undefined;
+  return { splitFile: raw.split_file, addChapter: raw.add_chapter };
+}
+
 export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapabilities {
   // Regimes are only populated for entries the manifest actually declares. A
   // pre-#141 Pulsar sends no `capabilities` block at all: every regime is then
@@ -425,6 +448,10 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
   if (adaptersRegime) regimes.graphicsAdapters = adaptersRegime;
   const scalesRegime = regimeOf(w, "output_scales");
   if (scalesRegime) regimes.outputScales = scalesRegime;
+  const recordContainerRegime = regimeOf(w, "record_container");
+  if (recordContainerRegime) regimes.recordContainer = recordContainerRegime;
+  const recordMarkersRegime = regimeOf(w, "record_markers");
+  if (recordMarkersRegime) regimes.recordMarkers = recordMarkersRegime;
 
   // Colorimetry is reported only when the three fields are there; a partial
   // entry is treated as absent rather than half-read.
@@ -448,6 +475,7 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
     audio: audioFromWire(w),
     graphicsAdapters: graphicsAdaptersFromWire(w),
     outputScales: outputScalesFromWire(w),
+    recordContainers: inventoryOf(w, "record_container"),
     regimes,
   };
   if (colorSpace && range && format) caps.colorimetry = { colorSpace, range, format };
@@ -455,6 +483,10 @@ export function capabilitiesFromWire(w: WireGetCapabilitiesResponse): PulsarCapa
   if (activeAdapter !== undefined) caps.activeGraphicsAdapter = activeAdapter;
   const canvas = canvasFromWire(w);
   if (canvas) caps.canvas = canvas;
+  const recordContainer = entryString(w, "record_container", "value");
+  if (recordContainer) caps.recordContainer = recordContainer;
+  const recordMarkers = recordMarkersFromWire(w);
+  if (recordMarkers) caps.recordMarkers = recordMarkers;
   return caps;
 }
 

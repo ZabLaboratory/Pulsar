@@ -291,7 +291,8 @@ via `opts.env`.
 | `PULSAR_RECORD_AUDIO_TRACKS` | list | `1` | Tracks the recording output carries. |
 | `PULSAR_REPLAY_AUDIO_TRACKS` | list | `1` | Tracks the replay buffer carries. |
 | `PULSAR_CAPTURE_WINDOW` | `<title>:<class>:<exe>` | unset (no window source) | Window descriptor for `window_capture`. Find it via `obs.call("GetSourceFilterList")` after a one-shot enumerate, or with [Spy++](https://learn.microsoft.com/en-us/visualstudio/debugger/introducing-spy-increment) for a manual lookup. |
-| `PULSAR_RECORD_DIR` | path | `<cwd>/recordings/` | Output dir for the singleton recorder + the auto-named MP4. |
+| `PULSAR_RECORD_DIR` | path | `<cwd>/recordings/` | Output dir for the singleton recorder + the auto-named file. |
+| `PULSAR_RECORD_CONTAINER` | `mp4`\|`mkv` | `mp4` | Recording container, case-insensitive; unknown values warn and keep `mp4`. Boot-fixed (issue #166). |
 | `PULSAR_DESKTOP_AUDIO_DEVICE_ID` | device id | system default | Pin desktop loopback device. |
 | `PULSAR_MIC_DEVICE_ID` | device id | system default | Pin mic device. |
 | `PULSAR_PROCESS_AUDIO_NAME` | exe name (`chrome.exe`, etc.) | unset (off) | Per-process loopback target. |

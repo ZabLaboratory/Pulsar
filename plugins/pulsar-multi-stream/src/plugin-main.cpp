@@ -2293,6 +2293,61 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
         }
     }
 
+    // ---- Recording container + marker support (issue #166, ADR Prism 028 §3.5 B5/B6) ----
+    //
+    // record_container is boot-fixed: PULSAR_RECORD_CONTAINER selects it once
+    // in pulsar-frontend-stub's setup() and nothing in this tree mutates it
+    // hot -- switching containers mid-archive would corrupt the file being
+    // written. The value published here is READ off the recording output's
+    // own live settings ("extension"), which pulsar-frontend-stub seeds at
+    // boot alongside the same knob -- not a duplicated parse of an env var
+    // this plugin never touches, and readable even before any recording has
+    // ever started.
+    //
+    // record_markers is read-only: SplitRecordFile / CreateRecordChapter
+    // delegate straight to the recording output's proc handler and neither
+    // request writes anything back, so there is no apply-class to advertise.
+    // Both booleans are derived from the recording output's own registered
+    // id, the one input that actually determines which procs its proc
+    // handler carries: obs-ffmpeg-mux.c registers "split_file" alone
+    // (obs-ffmpeg-mux.c:107), mp4_output.c additionally registers
+    // "add_chapter" (mp4_output.c:218). Calling either proc here to probe for
+    // its presence is not an option: on an ACTIVE recording, split_file
+    // genuinely arms a real split and add_chapter genuinely writes a real
+    // chapter -- a capability *read* must not become a capability *side
+    // effect*, so the id is read instead of the proc invoked.
+    {
+        OBSOutputAutoRelease recOutput = obs_frontend_get_recording_output();
+        if (recOutput) {
+            OBSDataAutoRelease settings = obs_output_get_settings(recOutput);
+            const char *ext = obs_data_get_string(settings, "extension");
+            if (ext && *ext) {
+                OBSDataAutoRelease entry = obs_data_create();
+                obs_data_set_string(entry, "applicability", kRegimeBootFixed);
+                obs_data_set_string(entry, "value", ext);
+                OBSDataArrayAutoRelease values = obs_data_array_create();
+                for (const char *v : {"mp4", "mkv"}) {
+                    OBSDataAutoRelease item = obs_data_create();
+                    obs_data_set_string(item, "value", v);
+                    obs_data_array_push_back(values, item);
+                }
+                obs_data_set_array(entry, "values", values);
+                obs_data_set_obj(caps, "record_container", entry);
+            }
+
+            const char *outputId = obs_output_get_id(recOutput);
+            if (outputId) {
+                const bool hasSplitFile = std::strcmp(outputId, "ffmpeg_muxer") == 0;
+                const bool hasAddChapter = std::strcmp(outputId, "mp4_output") == 0;
+                OBSDataAutoRelease entry = obs_data_create();
+                obs_data_set_string(entry, "applicability", kRegimeReadOnly);
+                obs_data_set_bool(entry, "split_file", hasSplitFile);
+                obs_data_set_bool(entry, "add_chapter", hasAddChapter);
+                obs_data_set_obj(caps, "record_markers", entry);
+            }
+        }
+    }
+
     obs_data_set_obj(res, "capabilities", caps);
 }
 

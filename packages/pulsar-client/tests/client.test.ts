@@ -206,6 +206,9 @@ describe("PulsarClient", () => {
         activeGraphicsAdapter: 0,
         canvas: { width: 1920, height: 1080 },
         outputScales: [{ width: 1920, height: 1080, scale: 1 }],
+        recordContainer: "mp4",
+        recordContainers: ["mp4", "mkv"],
+        recordMarkers: { splitFile: true, addChapter: false },
         regimes: {
           encoders: "boot-fixed",
           activeEncoder: "boot-fixed",
@@ -222,6 +225,8 @@ describe("PulsarClient", () => {
           audioSpeakerLayout: "read-only",
           graphicsAdapters: "read-only",
           outputScales: "boot-fixed",
+          recordContainer: "boot-fixed",
+          recordMarkers: "read-only",
         },
       });
     });
@@ -249,6 +254,8 @@ describe("PulsarClient", () => {
         "filters",
         "graphicsAdapters",
         "outputScales",
+        "recordContainer",
+        "recordMarkers",
         "sourceKinds",
         "videoBitrateKbps",
       ]);
@@ -737,6 +744,57 @@ describe("PulsarClient", () => {
       expect(caps.encoders).toEqual(["x264"]);
       expect(caps.videoBitrateKbps).toEqual({ min: 200, max: 50000 });
       expect(caps.regimes.videoBitrateKbps).toBe("live");
+    });
+
+    // ---- issue #166: recording container + marker declaration -------------
+
+    it("decodes an mkv-selected container and its inventory (RC5/RC2 mirror)", async () => {
+      server.recordContainer = "mkv";
+      const caps = await client.capabilities.get();
+      expect(caps.recordContainer).toBe("mkv");
+      expect(caps.recordContainers).toEqual(["mp4", "mkv"]);
+      expect(caps.regimes.recordContainer).toBe("boot-fixed");
+    });
+
+    it("RC7: a manifest without the record block leaves it absent, not a decreed false", async () => {
+      // A pre-#166 Pulsar says nothing about record_container / record_markers.
+      // The client must report absence, never synthesise {splitFile:false,
+      // addChapter:false} for a server that never declared the block.
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              encoders: [{ value: "x264" }],
+              active_encoder: "x264",
+              video_bitrate: { min: 200, max: 50000 },
+              capabilities: {
+                encoders: { applicability: "boot-fixed", values: [{ value: "x264" }] },
+                video_bitrate: { applicability: "live", min: 200, max: 50000, step: 50 },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.recordContainer).toBeUndefined();
+      expect(caps.recordContainers).toEqual([]);
+      expect(caps.recordMarkers).toBeUndefined();
+      expect(caps.regimes.recordContainer).toBeUndefined();
+      expect(caps.regimes.recordMarkers).toBeUndefined();
+      // The rest of the manifest is untouched by the absence.
+      expect(caps.encoders).toEqual(["x264"]);
+    });
+
+    it("treats a half-sent record_markers pair as absent, not half-read", async () => {
+      server.vendorOverride = (req) =>
+        req === "GetCapabilities"
+          ? {
+              version: 1,
+              capabilities: {
+                record_markers: { applicability: "read-only", split_file: true },
+              },
+            }
+          : undefined;
+      const caps = await client.capabilities.get();
+      expect(caps.recordMarkers).toBeUndefined();
     });
 
     it("always advertises at least x264", async () => {
