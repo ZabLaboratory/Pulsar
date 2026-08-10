@@ -120,6 +120,13 @@ if(WIN32)
     # tests/log-handler-probe/log-handler-probe-test.cpp).
     add_subdirectory(tests/log-handler-probe)
 
+    # #201 -- ADR-005 §5 R10 (Amendment 1) directory/temp-file hardening:
+    # atomic protected-DACL creation, reparse-point refusal, owner
+    # verification, no-reopen temp file handle, orphaned .tmp sweep --
+    # built from the real plugins/pulsar-headless/dir-hardening.cpp
+    # translation unit (see tests/dir-hardening-probe/dir-hardening-probe-test.cpp).
+    add_subdirectory(tests/dir-hardening-probe)
+
     # #182 -- regression gate for the pulsar:OutputFailed reason_class
     # classifier (ADR-005 §3.4). No pulsar.exe, no libobs/Qt: a pure
     # function of (is_local_output, code, last_error).

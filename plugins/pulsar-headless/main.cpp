@@ -25,6 +25,7 @@
 
 #include <obs.h>
 
+#include "dir-hardening.h"
 #include "log-handler.h"
 #include "pulsar-frontend-stub.h"
 
@@ -51,9 +52,7 @@
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <functiondiscoverykeys_devpkey.h>
-#include <aclapi.h>
 #pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "advapi32.lib")
 #endif
 
 namespace {
@@ -602,274 +601,6 @@ std::string resolve_session_id()
     return generate_session_password(16);
 }
 
-#ifdef _WIN32
-// obs-websocket/config.json carries the session password in clear
-// text (ADR-005 §5 R9). It is written to <cwd>/obs-websocket/ -- the
-// install directory -- and a file created with the directory's
-// default DACL inherits that directory's grants, which on a normal
-// Windows install include the local "Users" group: any other local
-// account could read the session password off disk.
-//
-// Bastion follow-up on #181/#191 (R1/R2/R3): restricting the DACL
-// *after* writing the file (ofstream(trunc) then
-// SetNamedSecurityInfoA) left a race window between creation and the
-// DACL update -- a handle opened by a third party during that window
-// survives the later restriction, and since the file is truncated,
-// not replaced, on every subsequent boot, that handle keeps reading
-// every future session password (R1/R2). Worse, CREATE_ALWAYS
-// (ofstream's default open mode) on a file that already exists keeps
-// that file's existing security descriptor and never applies the new
-// DACL to it at all -- an attacker who pre-creates the file with
-// their own permissive ACL keeps read access silently forever (R3).
-//
-// Fix: build the restricted, protected DACL first, then hand it to
-// CreateFileA as SECURITY_ATTRIBUTES with CREATE_NEW. CREATE_NEW
-// applies the DACL atomically at creation -- there is no window where
-// a permissive or inherited ACL exists, and there is no in-place
-// truncation of a file we did not just create ourselves.
-bool build_current_user_only_security_attributes(SECURITY_ATTRIBUTES &sa,
-                                                   SECURITY_DESCRIPTOR &sd_storage,
-                                                   const char *context)
-{
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
-        std::fprintf(stderr,
-                     "pulsar-headless: OpenProcessToken failed (%lu); %s\n",
-                     GetLastError(), context);
-        return false;
-    }
-
-    DWORD needed = 0;
-    GetTokenInformation(token, TokenUser, nullptr, 0, &needed);
-    std::vector<BYTE> buf(needed);
-    if (needed == 0 || !GetTokenInformation(token, TokenUser, buf.data(), needed, &needed)) {
-        std::fprintf(stderr,
-                     "pulsar-headless: GetTokenInformation failed (%lu); %s\n",
-                     GetLastError(), context);
-        CloseHandle(token);
-        return false;
-    }
-    auto *user = reinterpret_cast<TOKEN_USER *>(buf.data());
-
-    EXPLICIT_ACCESSA ea{};
-    ea.grfAccessPermissions = GENERIC_ALL;
-    ea.grfAccessMode = SET_ACCESS;
-    ea.grfInheritance = NO_INHERITANCE;
-    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-    ea.Trustee.TrusteeType = TRUSTEE_IS_USER;
-    ea.Trustee.ptstrName = reinterpret_cast<LPSTR>(user->User.Sid);
-
-    PACL new_dacl = nullptr;
-    DWORD rc = SetEntriesInAclA(1, &ea, nullptr, &new_dacl);
-    CloseHandle(token);
-    if (rc != ERROR_SUCCESS || !new_dacl) {
-        std::fprintf(stderr,
-                     "pulsar-headless: SetEntriesInAclA failed (%lu); %s\n",
-                     rc, context);
-        return false;
-    }
-
-    if (!InitializeSecurityDescriptor(&sd_storage, SECURITY_DESCRIPTOR_REVISION)) {
-        std::fprintf(stderr,
-                     "pulsar-headless: InitializeSecurityDescriptor failed (%lu); %s\n",
-                     GetLastError(), context);
-        LocalFree(new_dacl);
-        return false;
-    }
-    // bDaclDefaulted=FALSE, and SE_DACL_PROTECTED below, so the DACL
-    // is never unioned with an inherited grant from the parent
-    // directory -- an unprotected/defaulted DACL would still leave
-    // the file readable by whatever the directory grants.
-    if (!SetSecurityDescriptorDacl(&sd_storage, TRUE, new_dacl, FALSE)) {
-        std::fprintf(stderr,
-                     "pulsar-headless: SetSecurityDescriptorDacl failed (%lu); %s\n",
-                     GetLastError(), context);
-        LocalFree(new_dacl);
-        return false;
-    }
-    if (!SetSecurityDescriptorControl(&sd_storage, SE_DACL_PROTECTED, SE_DACL_PROTECTED)) {
-        std::fprintf(stderr,
-                     "pulsar-headless: SetSecurityDescriptorControl failed (%lu); %s\n",
-                     GetLastError(), context);
-        LocalFree(new_dacl);
-        return false;
-    }
-    // new_dacl is intentionally never LocalFree'd: it must outlive
-    // every use of `sa`/`sd_storage` through CreateFileA, and the
-    // process either exits or reseeds again (a fresh allocation) long
-    // before this would accumulate meaningfully.
-
-    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-    sa.lpSecurityDescriptor = &sd_storage;
-    sa.bInheritHandle = FALSE;
-    return true;
-}
-
-// V1 fail-closed history (#181 veto, Bastion 2026-08-10): a prior
-// revision (#191/C4) tried to distinguish "our own file from a past
-// boot" (safe to replace) from "planted by another account" (refuse)
-// by comparing the file's OWNER SID to the current TokenUser via
-// file_owned_by_current_user(). That heuristic is wrong under a full
-// admin token (CI runner, an admin operator account): the DEFAULT
-// owner of a file WE JUST CREATED is BUILTIN\Administrators, not our
-// individual TokenUser. Every subsequent boot then saw its own,
-// self-written config.json as "owned by someone else" and refused to
-// reseed forever -- config.json never rotated again after the first
-// boot, a permanent regression versus the pre-#194 ofstream-trunc
-// behavior it was meant to harden.
-//
-// Fix: stop asking "who owns the file that is already there" at all.
-// Write into a freshly created, randomly-named temp file (CREATE_NEW,
-// our own protected DACL applied atomically at creation -- see
-// build_current_user_only_security_attributes above), then
-// MoveFileExA(..., MOVEFILE_REPLACE_EXISTING) it onto the real path.
-// Renaming onto an existing destination keeps the MOVED file's own
-// security descriptor; it does not adopt whatever descriptor (or
-// none) sat on the file being replaced. First boot and every reseed
-// boot take the identical code path -- no ownership decision, no
-// TokenUser comparison, nothing that can classify our own prior
-// output as hostile.
-bool create_protected_temp_file(const char *dir, const char *context,
-                                 std::string &out_path)
-{
-    SECURITY_ATTRIBUTES sa{};
-    SECURITY_DESCRIPTOR sd_storage{};
-    if (!build_current_user_only_security_attributes(sa, sd_storage, context))
-        return false;
-
-    std::random_device rd;
-    std::mt19937_64 rng(((uint64_t)rd() << 32) ^ rd());
-    static const char alphabet[] = "abcdefghijklmnopqrstuvwxyz0123456789";
-    std::uniform_int_distribution<std::size_t> pick(0, sizeof(alphabet) - 2);
-
-    // CREATE_NEW fails closed on any collision (including a squatted
-    // name); a handful of random-name retries absorbs an honest
-    // same-process re-run without ever falling back to opening or
-    // truncating a file we did not just create ourselves.
-    for (int attempt = 0; attempt < 8; ++attempt) {
-        std::string suffix;
-        for (int i = 0; i < 12; ++i)
-            suffix.push_back(alphabet[pick(rng)]);
-        std::string candidate = std::string(dir) + "/config." + suffix + ".tmp";
-
-        HANDLE h = CreateFileA(candidate.c_str(), GENERIC_WRITE, 0, &sa, CREATE_NEW,
-                                FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h == INVALID_HANDLE_VALUE) {
-            if (GetLastError() == ERROR_FILE_EXISTS)
-                continue; // collision/squat on this name -- try another
-            std::fprintf(stderr,
-                         "pulsar-headless: CreateFileA(%s) failed (%lu); %s\n",
-                         candidate.c_str(), GetLastError(), context);
-            return false;
-        }
-        CloseHandle(h);
-        out_path = candidate;
-        return true;
-    }
-    std::fprintf(stderr,
-                 "pulsar-headless: could not allocate a fresh temp file under "
-                 "%s after 8 attempts; refusing (fail closed); %s\n",
-                 dir, context);
-    return false;
-}
-
-// Applies a protected, current-user-only DACL to an already-open
-// directory handle. Handle-based (SetSecurityInfo), not path-based
-// (SetNamedSecurityInfoA), so a reparse point/symlink swapped in for
-// "obs-websocket/" between resolution and the ACL write cannot steer
-// the DACL onto a different object (#181 R6).
-bool harden_directory_handle_dacl(HANDLE dir_handle, const char *context)
-{
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
-        std::fprintf(stderr,
-                     "pulsar-headless: OpenProcessToken failed (%lu); %s\n",
-                     GetLastError(), context);
-        return false;
-    }
-    DWORD needed = 0;
-    GetTokenInformation(token, TokenUser, nullptr, 0, &needed);
-    std::vector<BYTE> buf(needed);
-    bool have_user = needed != 0 && GetTokenInformation(token, TokenUser, buf.data(), needed, &needed);
-    CloseHandle(token);
-    if (!have_user) {
-        std::fprintf(stderr,
-                     "pulsar-headless: GetTokenInformation failed; %s\n", context);
-        return false;
-    }
-    auto *user = reinterpret_cast<TOKEN_USER *>(buf.data());
-
-    EXPLICIT_ACCESSA ea{};
-    ea.grfAccessPermissions = GENERIC_ALL;
-    ea.grfAccessMode = SET_ACCESS;
-    ea.grfInheritance = NO_INHERITANCE;
-    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-    ea.Trustee.TrusteeType = TRUSTEE_IS_USER;
-    ea.Trustee.ptstrName = reinterpret_cast<LPSTR>(user->User.Sid);
-
-    PACL new_dacl = nullptr;
-    DWORD rc = SetEntriesInAclA(1, &ea, nullptr, &new_dacl);
-    if (rc != ERROR_SUCCESS || !new_dacl) {
-        std::fprintf(stderr,
-                     "pulsar-headless: SetEntriesInAclA failed (%lu); %s\n",
-                     rc, context);
-        return false;
-    }
-
-    // PROTECTED_DACL_SECURITY_INFORMATION: never union with whatever
-    // the parent directory would otherwise inherit down (a leftover
-    // BUILTIN\Users grant, for instance) -- this DACL and only this
-    // DACL applies.
-    rc = SetSecurityInfo(dir_handle, SE_FILE_OBJECT,
-                          DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                          nullptr, nullptr, new_dacl, nullptr);
-    LocalFree(new_dacl);
-    if (rc != ERROR_SUCCESS) {
-        std::fprintf(stderr,
-                     "pulsar-headless: SetSecurityInfo(dir) failed (%lu); %s\n",
-                     rc, context);
-        return false;
-    }
-    return true;
-}
-
-// Ensures `dir` exists and carries a protected, current-user-only
-// DACL, unconditionally re-applied on every boot -- self-healing any
-// inherited or pre-existing permissive grant rather than trying to
-// enumerate its ACEs and decide whether it "looks" writable by
-// others (#181 R3/F3). Opens via a handle (FILE_FLAG_BACKUP_SEMANTICS
-// is required to get a directory handle) so the hardening call is
-// handle-based end to end, same rationale as R6 above. Fails closed:
-// any step that cannot be completed refuses rather than boots with a
-// directory whose DACL we did not just verify.
-bool harden_directory_dacl(const char *dir, const char *context)
-{
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    fs::create_directories(dir, ec);
-    if (ec) {
-        std::fprintf(stderr,
-                     "pulsar-headless: could not create %s: %s; %s\n",
-                     dir, ec.message().c_str(), context);
-        return false;
-    }
-
-    HANDLE h = CreateFileA(dir, GENERIC_READ | WRITE_DAC, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                            nullptr, OPEN_EXISTING,
-                            FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-    if (h == INVALID_HANDLE_VALUE) {
-        std::fprintf(stderr,
-                     "pulsar-headless: CreateFileA(%s) for DACL hardening failed "
-                     "(%lu); %s\n",
-                     dir, GetLastError(), context);
-        return false;
-    }
-    bool ok = harden_directory_handle_dacl(h, context);
-    CloseHandle(h);
-    return ok;
-}
-#endif
-
 // V2 fail-closed history (#181 veto, Bastion 2026-08-10): every path
 // below used to be `void` and just `return;` on failure -- but the
 // caller (main(), below) pressed on into obs_load_all_modules()
@@ -926,28 +657,27 @@ bool seed_websocket_config()
     body += "}\n";
 
 #ifdef _WIN32
-    if (!harden_directory_dacl(dir, dir)) {
+    // #201 N1 (three of four named gestures) / ADR-005 §5 R10: atomic
+    // creation with a protected DACL, reparse-point refusal, and
+    // handle-based owner verification -- see dir-hardening.h/.cpp.
+    if (!pulsar_dir::create_directory_hardened(dir, dir)) {
         std::fprintf(stderr,
-                     "pulsar-headless: could not enforce a protected DACL on %s; "
-                     "refusing to boot (fail closed, #181 F3)\n",
+                     "pulsar-headless: could not create/verify a protected, "
+                     "owned %s; refusing to boot (fail closed, #201 N1)\n",
                      dir);
         return false;
     }
 
-    std::string tmp_path;
-    if (!create_protected_temp_file(dir, path, tmp_path))
-        return false; // create_protected_temp_file already logged why
+    // #201 N3: sweep before allocating a new temp file, not after --
+    // an orphan from a prior crashed boot never lingers past this one.
+    pulsar_dir::sweep_orphaned_temp_files(dir, dir);
 
-    HANDLE h = CreateFileA(tmp_path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
-                            FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) {
-        std::fprintf(stderr,
-                     "pulsar-headless: re-opening %s for write failed (%lu); "
-                     "refusing to write the session password (fail closed)\n",
-                     tmp_path.c_str(), GetLastError());
-        DeleteFileA(tmp_path.c_str());
-        return false;
-    }
+    std::string tmp_path;
+    HANDLE h = INVALID_HANDLE_VALUE;
+    // #201 N2: the returned handle is the one CREATE_NEW just opened --
+    // no close-then-OPEN_EXISTING-reopen TOCTOU window before the write.
+    if (!pulsar_dir::create_protected_temp_file(dir, path, tmp_path, h))
+        return false; // create_protected_temp_file already logged why
 
     DWORD written = 0;
     BOOL wrote = WriteFile(h, body.data(), static_cast<DWORD>(body.size()), &written, nullptr);
@@ -975,6 +705,23 @@ bool seed_websocket_config()
                      "refusing to publish the session password (fail closed)\n",
                      tmp_path.c_str(), path, GetLastError());
         DeleteFileA(tmp_path.c_str());
+        return false;
+    }
+
+    // #201 N1, 4th named gesture ("re-vérification par handle ... après
+    // le rename"): re-open the published config.json by handle and
+    // re-verify its owner is us. Defense in depth against a substitution
+    // not anticipated above -- the temp file was already ours (created
+    // under our protected SECURITY_ATTRIBUTES, N1/N2), so this is
+    // expected to be a no-op on every honest boot; a mismatch means
+    // something intervened between the rename and this check, and we
+    // fail closed rather than let obs-websocket load an unverified file.
+    if (!pulsar_dir::verify_owned_by_current_token(path, path)) {
+        std::fprintf(stderr,
+                     "pulsar-headless: %s is not owned by the current token "
+                     "after rename; refusing to trust it (fail closed, #201 N1 "
+                     "4th gesture)\n",
+                     path);
         return false;
     }
     return true;
