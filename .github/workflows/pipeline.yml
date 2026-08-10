@@ -306,12 +306,17 @@ jobs:
           # finds the test registered and the binary missing, which reads
           # as an infrastructure failure rather than as the security check
           # it is.
+          #
+          # build/tests/ws-debug-probe/** : same reasoning for #177's
+          # fail-closed regression probe -- self-contained executable, not
+          # part of the rundir.
           path: |
             upstream/build_x64/rundir/RelWithDebInfo
             build/CTestTestfile.cmake
             build/**/CTestTestfile.cmake
             build/**/*.vcxproj
             build/tests/nv-probe/**
+            build/tests/ws-debug-probe/**
           retention-days: 1
           compression-level: 1
 
