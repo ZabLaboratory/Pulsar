@@ -85,7 +85,15 @@ if(WIN32)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     )
     set_tests_properties(pulsar-offline-probes PROPERTIES
-        TIMEOUT 600  # generous: 5 probes plus pulsar boot/teardown
+        # Must stay BELOW the CI wrapper's timeout_minutes (pipeline.yml,
+        # nick-fields/retry around `ctest`, currently 300s). A passing run
+        # takes ~122s (measured, run 31384751144); a real hang otherwise
+        # gets externally SIGKILLed by the CI wrapper before CTest's own
+        # timeout handler can fire, so `--output-on-failure` never prints
+        # the buffered stdout capture -- a hang and a slow pass look
+        # identical (zero output). 240s leaves CTest a ~60s margin to
+        # win that race and report the exact phase it was in.
+        TIMEOUT 240
         LABELS "integration"
     )
 
