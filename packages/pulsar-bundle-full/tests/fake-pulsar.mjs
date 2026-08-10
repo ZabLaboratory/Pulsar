@@ -4,8 +4,11 @@
 //   1. Open a WebSocket server on a random localhost port.
 //   2. Write obs-websocket/config.json under cwd with that port +
 //      a fresh password.
-//   3. Print the exact ready marker pulsar-headless emits ("ready, idling").
-//   4. Stay alive until SIGTERM / SIGINT.
+//   3. Print the ADR-005 §3.3 "PULSAR_SESSION <id>" line, an intercalary
+//      line spawn() must ignore (RC4) -- BEFORE the ready marker, never
+//      after, matching main.cpp's real ordering.
+//   4. Print the exact ready marker pulsar-headless emits ("ready, idling").
+//   5. Stay alive until SIGTERM / SIGINT.
 //
 // The WS handler honours both obswebsocket.json and obswebsocket.msgpack
 // subprotocols and answers the v5 Hello/Identify dance, which is enough
@@ -76,6 +79,10 @@ httpServer.listen(0, "127.0.0.1", () => {
       }
     });
   });
+
+  // ADR-005 §3.3: session correlation line, on its own, before the
+  // sentinel -- spawn() must skip over it (RC4).
+  process.stdout.write(`PULSAR_SESSION fake-session-${Date.now()}\n`);
 
   // The marker spawn() greps for. Format must match exactly.
   process.stdout.write(
