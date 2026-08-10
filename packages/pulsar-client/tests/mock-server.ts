@@ -81,6 +81,9 @@ export class MockObsWebSocket {
   /** Encoder families the mock advertises via GetCapabilities. */
   capabilityEncoders: string[] = ["x264", "nvenc"];
 
+  /** Recording container the mock advertises via GetCapabilities (issue #166). */
+  recordContainer: string = "mp4";
+
   adaptive: AdaptiveState = {
     enabled: true,
     target_kbps: 6000,
@@ -474,6 +477,20 @@ export class MockObsWebSocket {
               applicability: "boot-fixed",
               canvas: { width: 1920, height: 1080 },
               values: [{ value: "1920x1080", width: 1920, height: 1080, scale: 1 }],
+            },
+            // Issue #166: recording container (boot-fixed, PULSAR_RECORD_CONTAINER)
+            // and marker support (read-only, derived from the ffmpeg_muxer
+            // recording output every headless Pulsar actually runs today --
+            // split_file yes, add_chapter no, mp4_output/Hybrid MP4 out of scope).
+            record_container: {
+              applicability: "boot-fixed",
+              value: this.recordContainer,
+              values: [{ value: "mp4" }, { value: "mkv" }],
+            },
+            record_markers: {
+              applicability: "read-only",
+              split_file: true,
+              add_chapter: false,
             },
           },
         };

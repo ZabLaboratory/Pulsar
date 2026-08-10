@@ -335,7 +335,12 @@ encoder / audio / inventory / video blocks that land later:
     "output_scales":     { "applicability": "boot-fixed",
                            "canvas": { "width": 1920, "height": 1080 },
                            "values": [{ "value": "1920x1080", "width": 1920,
-                                        "height": 1080, "scale": 1.0 }] }
+                                        "height": 1080, "scale": 1.0 }] },
+    // Recording container + marker support (issue #166, ADR Prism 028 §3.5 B5/B6).
+    "record_container": { "applicability": "boot-fixed", "value": "mp4",
+                          "values": [{ "value": "mp4" }, { "value": "mkv" }] },
+    "record_markers":   { "applicability": "read-only",
+                          "split_file": true, "add_chapter": false }
   }
 }
 ```
@@ -541,6 +546,31 @@ Pulsar is running.
   `value` is the `"<W>x<H>"` label; `width`/`height` are the load-bearing pair.
 - **Restrictive, as everywhere else**: an adapter or a scale the consumer's own
   registry does not know stays non-selectable. The manifest may only narrow.
+
+##### Recording container and markers (issue #166, ADR Prism 028 §3.5 B5/B6)
+
+| Entry | Fields | Regime | Source |
+|---|---|---|---|
+| `record_container` | `value: "mp4"\|"mkv"`, `values: {value}[]` | `boot-fixed` | `PULSAR_RECORD_CONTAINER`, read back off the recording output's own `extension` setting |
+| `record_markers` | `split_file: boolean`, `add_chapter: boolean` | `read-only` | derived from the recording output's registered id (`ffmpeg_muxer` registers `split_file` alone; `mp4_output`/Hybrid MP4, out of scope, additionally registers `add_chapter`) |
+
+- **`record_container` is boot-fixed**: `PULSAR_RECORD_CONTAINER` selects `mp4`
+  (default) or `mkv` once at `setup()`, and mutating it mid-archive would break
+  the file currently being written. The value published here is read off the
+  recording output's live settings, not re-parsed from the env var, so it
+  reflects what the output will actually write.
+- **`record_markers` is read-only**: `SplitRecordFile` / `CreateRecordChapter`
+  delegate straight to the recording output's proc handler and neither request
+  writes anything back, so there is no apply-class to advertise. Calling either
+  proc merely to probe for its presence is not an option — on an active
+  recording both genuinely perform the action (arm a real split / write a real
+  chapter), so the read is a real read, not a decreed constant: it comes from
+  the output's own registered id, the one input libobs uses to decide which
+  procs a given output type carries.
+- `CreateRecordChapter` refuses unconditionally today because the recording
+  output is `ffmpeg_muxer`; making `add_chapter` true would require switching
+  to `mp4_output` (Hybrid MP4), which drops `split_file` — an architecture
+  decision out of scope for this entry (§5 of issue #166).
 
 > **List encoding on the wire.** libobs vendor handlers can only serialise
 > arrays as arrays of *objects* (`Utils::Json::ObsDataToJson` walks each
@@ -862,6 +892,7 @@ value — operator/env-controlled only.
 | `PULSAR_MIC_DEVICE_ID` | `pulsar-frontend-stub` | unset (source not created) | `wasapi_input_capture` device id (mixer channel 3) — opt-in, since mic devices are absent on CI/servers. |
 | `PULSAR_PROCESS_AUDIO_NAME` | `pulsar-frontend-stub` | unset (source not created) | Executable name for `wasapi_process_output_capture` (mixer channel 2, per-process loopback). Requires Windows 10 19041+ / recent win-wasapi; tolerated as unavailable otherwise. |
 | `PULSAR_RECORD_DIR` | `pulsar-frontend-stub` | `<cwd>/recordings` | Recording output directory, created lazily on first `recording_start`. Replay saves land here too. |
+| `PULSAR_RECORD_CONTAINER` | `pulsar-frontend-stub` | `mp4` | Recording container, `mp4`\|`mkv` (case-insensitive). Applied to the first file's extension and to every file `SplitRecordFile` produces afterwards, from the same value. Out of range ⇒ warning + default. Boot-fixed (issue #166). |
 | `PULSAR_REPLAY_MAX_TIME_SEC` | `pulsar-frontend-stub` | `30` | Replay buffer depth in seconds, `10..300`. Out of range ⇒ warning + default. Boot-fixed. |
 | `PULSAR_REPLAY_MAX_SIZE_MB` | `pulsar-frontend-stub` | `512` | Replay buffer RAM cap in MB, `16..8192`. Out of range ⇒ warning + default. Boot-fixed. |
 | `PULSAR_STINGER_ASSET` | `pulsar-frontend-stub` | `<cwd>/../../data/pulsar/stinger-demo.webm` | Local path to the stinger media asset (never leaf/network-derived, ADR 003 Amendment 2 §A2.1). |

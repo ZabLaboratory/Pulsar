@@ -244,6 +244,22 @@ export interface PulsarCapabilities {
   /** Output resolutions admitted for that canvas (ADR 027 Am.1). Empty when
    *  the manifest declares none. */
   outputScales: OutputScale[];
+  /** Recording container in effect (issue #166). `"mp4"` or `"mkv"`, chosen
+   *  once at spawn by `PULSAR_RECORD_CONTAINER`. `undefined` on a Pulsar that
+   *  predates the block. */
+  recordContainer?: string;
+  /** Containers this build admits for `recordContainer` (issue #166). Empty
+   *  when the manifest declares no inventory. */
+  recordContainers: string[];
+  /** Recording marker support actually available on the bound recording
+   *  output (issue #166, ADR Prism 028 §3.5 B6). `undefined` on a Pulsar that
+   *  predates the block — never synthesised as `{false, false}`. */
+  recordMarkers?: {
+    /** Whether `SplitRecordFile` can succeed. */
+    splitFile: boolean;
+    /** Whether `CreateRecordChapter` can succeed. */
+    addChapter: boolean;
+  };
   /** Regime per entry. A key is present only if the manifest declared it, so
    *  `undefined` means "not declared", never "live". */
   regimes: {
@@ -262,6 +278,8 @@ export interface PulsarCapabilities {
     audioSpeakerLayout?: CapabilityRegime;
     graphicsAdapters?: CapabilityRegime;
     outputScales?: CapabilityRegime;
+    recordContainer?: CapabilityRegime;
+    recordMarkers?: CapabilityRegime;
   };
 }
 

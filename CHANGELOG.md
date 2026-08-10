@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Selectable recording container + declared marker support** (#166,
+  ADR Prism 028 §3.5 B5/B6). `PULSAR_RECORD_CONTAINER` (`mp4` default, or
+  `mkv`) picks the recorder's container once at boot; the choice applies to
+  the first file's extension *and* every file `SplitRecordFile` produces
+  afterwards, from a single point of truth — a partial update would archive a
+  mix of containers mid-stream. `pulsar:GetCapabilities` now declares
+  `capabilities.record_container` (`boot-fixed`, read off the recording
+  output's own settings) and `capabilities.record_markers` (`read-only`,
+  `split_file`/`add_chapter`, read off the recording output's registered id
+  rather than probing the procs — probing would actually arm a split or write
+  a chapter on an active recording). `CreateRecordChapter` keeps refusing
+  unconditionally: the recording output is `ffmpeg_muxer`, which never
+  registers `add_chapter` (that lives on `mp4_output`/Hybrid MP4, a separate
+  architecture decision, out of scope here). `@clodocapeo/pulsar-client`:
+  `PulsarCapabilities.recordContainer` / `.recordContainers` / `.recordMarkers`.
 - **The monitoring device is now choosable, not just bound** (#173). v1.7.0
   made monitoring *work* by binding `"Default"`/`"default"` at boot; it left
   the operator on whatever Windows calls default, which in a régie is rarely

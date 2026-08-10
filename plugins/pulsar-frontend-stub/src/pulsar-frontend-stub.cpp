@@ -651,6 +651,13 @@ private:
 
     std::string recordDirectory; // resolved at setup() from env or default
 
+    // Recording container, resolved ONCE at setup() from PULSAR_RECORD_CONTAINER
+    // (issue #166). "mp4" or "mkv"; applied to both extension sites in
+    // obs_frontend_recording_start() and seeded into recordOutput's settings at
+    // setup() so GetCapabilities (pulsar-multi-stream) can read it before any
+    // recording has ever started.
+    std::string recordContainer = "mp4";
+
     // Replay buffer sizing (ADR Prism 024 §3.1). Resolved ONCE at setup() from
     // env, like every other PULSAR_* knob, and pushed into replayOutput's
     // settings -- the replay buffer holds already-encoded packets in RAM, so
@@ -1348,6 +1355,39 @@ bool PulsarFrontendAPI::setup()
     }
     blog(LOG_INFO, "[pulsar-frontend-stub] recordings will land under: %s", recordDirectory.c_str());
 
+    // Recording container selection (issue #166). PULSAR_RECORD_CONTAINER
+    // overrides the default "mp4"; the only other admitted value is "mkv"
+    // (comparison is case-insensitive). Resolved ONCE here -- like every
+    // other PULSAR_* knob -- and applied to BOTH extension sites in
+    // obs_frontend_recording_start(): the initial file's suffix (path) and
+    // the "extension" muxer setting that governs every file split_file
+    // produces afterwards. Treating them separately is exactly the failure
+    // this issue exists to close: a mixed-container archive whose first file
+    // is .mkv and whose split files stay .mp4.
+    if (const char *envContainer = std::getenv("PULSAR_RECORD_CONTAINER"); envContainer && *envContainer) {
+        std::string lower;
+        lower.reserve(std::strlen(envContainer));
+        for (const char *p = envContainer; *p; ++p)
+            lower += static_cast<char>(std::tolower(static_cast<unsigned char>(*p)));
+        if (lower == "mp4" || lower == "mkv") {
+            recordContainer = lower;
+        } else {
+            blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_RECORD_CONTAINER=%s rejected "
+                 "(mp4|mkv); using %s", envContainer, recordContainer.c_str());
+        }
+    }
+    blog(LOG_INFO, "[pulsar-frontend-stub] recording container: %s", recordContainer.c_str());
+    // Seed the container into recordOutput's own settings at boot, not only at
+    // the first recording_start, so GetCapabilities (pulsar-multi-stream) can
+    // read the effective value off the live output before any recording has
+    // ever run -- record_container is boot-fixed, so the truth must be
+    // established here, not lazily on first use.
+    if (recordOutput) {
+        OBSDataAutoRelease containerSeed = obs_data_create();
+        obs_data_set_string(containerSeed, "extension", recordContainer.c_str());
+        obs_output_update(recordOutput, containerSeed);
+    }
+
     // ---- ADR Prism 024 §3.1: replay-buffer output settings ----
     // The output was created with null settings, so every key below fell back
     // to replay_buffer_defaults (obs-ffmpeg-mux.c:1250-1257) -- including an
@@ -1751,9 +1791,10 @@ void PulsarFrontendAPI::obs_frontend_recording_start(void)
     if (!recordOutput || obs_output_active(recordOutput))
         return;
 
-    // Resolve a fresh timestamped MP4 path under recordDirectory and bind
-    // it to ffmpeg_muxer's settings just before start. mkdir-as-needed so
-    // a missing recordings/ folder doesn't fail silently inside libobs.
+    // Resolve a fresh timestamped path (container per recordContainer, issue
+    // #166) under recordDirectory and bind it to ffmpeg_muxer's settings just
+    // before start. mkdir-as-needed so a missing recordings/ folder doesn't
+    // fail silently inside libobs.
     std::error_code ec;
     std::filesystem::create_directories(recordDirectory, ec);
     if (ec) {
@@ -1772,11 +1813,11 @@ void PulsarFrontendAPI::obs_frontend_recording_start(void)
 #endif
     char stamp[64];
     std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tm);
-    std::filesystem::path mp4 = std::filesystem::path(recordDirectory) /
-                                ("pulsar-" + std::string(stamp) + ".mp4");
+    std::filesystem::path recordPath = std::filesystem::path(recordDirectory) /
+                                ("pulsar-" + std::string(stamp) + "." + recordContainer);
 
     OBSDataAutoRelease settings = obs_data_create();
-    obs_data_set_string(settings, "path", mp4.string().c_str());
+    obs_data_set_string(settings, "path", recordPath.string().c_str());
     // Issue #169. `path` names the FIRST file only. ffmpeg_muxer's manual split
     // (proc "split_file") is a no-op unless the `split_file` setting is on --
     // split_file_proc reports it back through `split_file_enabled` and returns
@@ -1793,9 +1834,14 @@ void PulsarFrontendAPI::obs_frontend_recording_start(void)
     obs_data_set_bool(settings, "split_file", true);
     obs_data_set_string(settings, "directory", recordDirectory.c_str());
     obs_data_set_string(settings, "format", "pulsar-%CCYY%MM%DD-%hh%mm%ss");
-    obs_data_set_string(settings, "extension", "mp4");
+    // Same recordContainer as `path` above -- this is the field generate_filename()
+    // actually reads for every file split_file produces AFTER the first one
+    // (obs-ffmpeg-mux.c:574-602). Setting it from anything other than
+    // recordContainer would split the archive across two containers mid-stream
+    // (issue #166).
+    obs_data_set_string(settings, "extension", recordContainer.c_str());
     obs_data_set_bool(settings, "allow_spaces", false);
-    // Empty muxer_settings -> ffmpeg picks defaults from extension (mp4 -> faststart on stop).
+    // Empty muxer_settings -> ffmpeg picks defaults from extension (mp4/mkv -> faststart on stop for mp4).
     obs_output_update(recordOutput, settings);
 
     emit(OBS_FRONTEND_EVENT_RECORDING_STARTING);
@@ -1804,7 +1850,7 @@ void PulsarFrontendAPI::obs_frontend_recording_start(void)
              obs_output_get_last_error(recordOutput));
         return;
     }
-    blog(LOG_INFO, "[pulsar-frontend-stub] recording -> %s", mp4.string().c_str());
+    blog(LOG_INFO, "[pulsar-frontend-stub] recording -> %s", recordPath.string().c_str());
 }
 
 void PulsarFrontendAPI::obs_frontend_recording_stop(void)
