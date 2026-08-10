@@ -32,6 +32,35 @@ aucune précaution supplémentaire.
 
 ---
 
+## Étape 0bis — Échec immédiat au boot, avant tout événement vendeur
+
+Un cas se qualifie **avant** l'Étape 1 : si le processus Pulsar n'a jamais atteint la
+sentinelle `PULSAR_READY` et que stderr porte ces deux lignes (durcissement N1, #201/PR
+#209, ADR-005 §5 R10) :
+
+```
+pulsar-dir-hardening: <dir>\obs-websocket is owned by another account; refusing to trust or re-harden it (fail closed, #201 N1); <dir>\obs-websocket
+pulsar-headless: could not create/verify a protected, owned <dir>\obs-websocket; refusing to boot (fail closed, #201 N1)
+```
+
+→ Un répertoire `obs-websocket/` préexistant, dans le répertoire d'installation
+per-utilisateur de Pulsar, est **possédé par un compte local autre que celui qui exécute
+`pulsar.exe`**. Depuis le durcissement N1, ce n'est plus une DACL simplement re-corrigée
+au boot : la propriété du répertoire fait échouer la vérification de propriétaire
+(`harden_directory_dacl`/`create_directory_hardened`) et le boot refuse en permanence de
+démarrer, à chaque tentative, tant que le répertoire n'a pas changé de main (comportement
+voulu, remède F3 — finding O4, clearance Bastion PR #209/issue #201).
+
+Prism ne voit qu'un code de sortie non nul sans ce détail : c'est le stderr de Pulsar,
+capturé avant `PULSAR_READY`, qui porte la cause exacte.
+
+**Geste opérateur** : supprimer le répertoire `obs-websocket/` avec les privilèges
+appropriés (compte propriétaire, ou administrateur) avant de relancer Pulsar — il sera
+recréé au prochain boot avec la DACL protégée user-only, propriété du compte qui exécute
+`pulsar.exe`.
+
+---
+
 ## Étape 1 — Qualifier depuis le verdict, jamais depuis le fichier
 
 Le fait qui répond à « le direct a-t-il démarré ? » n'est **jamais** dans le
