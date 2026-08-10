@@ -2096,20 +2096,28 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
     // rather than one nested "audio" object precisely because their regimes
     // differ, and a regime belongs to an entry, not to a family.
 
-    // Monitoring: LIVE. pulsar-headless now calls obs_set_audio_monitoring_device
-    // ("Default"/"default") once at boot, unconditionally, in reset_audio() --
-    // BEFORE obs-websocket registers a single request handler (main.cpp's boot
-    // order: reset_video -> reset_audio -> install frontend callbacks -> load
-    // modules). Any process able to answer GetCapabilities has therefore
-    // ALREADY had the device genuinely bound -- there is no longer a live
-    // window where libobs's own untouched "Default"/"default" seed (see the
-    // module doc above) is observable, so the seed-string exclusion this
-    // block used to apply
-    // (device counted as bound only when its id was NOT the literal "default"
-    // seed) would now misreport a real, explicit bind as absent forever --
-    // "default" is libobs's own dynamic-follow-the-OS-default id, the CORRECT
-    // choice for a headless service with no settings dialog of its own to
-    // pin one device, not a placeholder. `available` and `device_bound` are
+    // Monitoring: LIVE. pulsar-headless calls obs_set_audio_monitoring_device
+    // once at boot, unconditionally, in reset_audio() -- BEFORE obs-websocket
+    // registers a single request handler (main.cpp's boot order: reset_video
+    // -> reset_audio -> install frontend callbacks -> load modules). Any
+    // process able to answer GetCapabilities has therefore ALREADY had the
+    // device genuinely bound.
+    //
+    // The id bound is a RESOLVED CONCRETE endpoint id, not the literal
+    // "default" sentinel -- see resolve_default_render_device_id() in
+    // pulsar-headless/main.cpp for why: every WASAPI-backed ZabCapture
+    // source's own device_id also defaults to that same literal "default"
+    // string, and OBS_SOURCE_DO_NOT_SELF_MONITOR silently disables a
+    // source's monitor whenever its device_id string-matches the bound
+    // monitoring id -- a real feedback guard for a microphone, a false
+    // positive for every captured-app/desktop-audio source, and with no
+    // error surfaced (SetInputAudioMonitorType still reports success; only
+    // the antenna/stream mix, a separate code path, keeps the audio). So
+    // `device_id` reported here is normally a GUID string, e.g.
+    // `{0.0.0.00000000}.{guid}`, not "default" -- expected, not a bug. The
+    // "default" sentinel is used only as a fallback if resolution itself
+    // failed at boot (logged there), which still leaves this block's own
+    // check exactly as strict as before: `available` and `device_bound` are
     // ALWAYS emitted; the identity keys only when a device is genuinely
     // bound (still possible to be false: obs_audio_monitoring_available()
     // itself can be false on a platform build with no monitoring backend).
