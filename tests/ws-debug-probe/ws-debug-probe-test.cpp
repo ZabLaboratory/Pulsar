@@ -10,8 +10,19 @@
 // mirror in sync with obs-websocket.cpp:181-184 by hand -- there is no
 // automated link between the two.
 
-#include <cassert>
+#include <cstdio>
 #include <cstdlib>
+
+// assert() is a no-op under NDEBUG (RelWithDebInfo CI build): expr is never
+// evaluated, so this probe would silently "pass" everything. PULSAR_CHECK
+// always evaluates expr and fails hard, independent of NDEBUG (issue #220).
+#define PULSAR_CHECK(expr)                                                                  \
+	do {                                                                                  \
+		if (!(expr)) {                                                               \
+			fprintf(stderr, "CHECK FAILED: %s (%s:%d)\n", #expr, __FILE__, __LINE__); \
+			exit(EXIT_FAILURE);                                                  \
+		}                                                                             \
+	} while (0)
 
 struct FakeConfig {
 	bool DebugEnabled;
@@ -28,15 +39,15 @@ int main()
 	// _config == nullptr (before OBS finishes loading, or after unload):
 	// must fail CLOSED, not dump WebSocket payloads (stream key, ingest
 	// URL, browser-source token) at INFO level via blog_debug.
-	assert(IsDebugEnabledMirror(nullptr) == false);
+	PULSAR_CHECK(IsDebugEnabledMirror(nullptr) == false);
 
 	// _config present, DebugEnabled explicitly off: stays closed.
 	FakeConfig off{false};
-	assert(IsDebugEnabledMirror(&off) == false);
+	PULSAR_CHECK(IsDebugEnabledMirror(&off) == false);
 
 	// _config present, DebugEnabled explicitly on: behavior preserved.
 	FakeConfig on{true};
-	assert(IsDebugEnabledMirror(&on) == true);
+	PULSAR_CHECK(IsDebugEnabledMirror(&on) == true);
 
 	return EXIT_SUCCESS;
 }

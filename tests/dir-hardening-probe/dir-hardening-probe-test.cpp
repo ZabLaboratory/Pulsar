@@ -15,7 +15,6 @@
 
 #include "dir-hardening.h"
 
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +28,17 @@
 #include <windows.h>
 #include <aclapi.h>
 #endif
+
+// assert() is a no-op under NDEBUG (RelWithDebInfo CI build): expr is never
+// evaluated, so this probe would silently "pass" everything. PULSAR_CHECK
+// always evaluates expr and fails hard, independent of NDEBUG (issue #220).
+#define PULSAR_CHECK(expr)                                                                  \
+    do {                                                                                    \
+        if (!(expr)) {                                                                      \
+            std::fprintf(stderr, "CHECK FAILED: %s (%s:%d)\n", #expr, __FILE__, __LINE__);  \
+            std::exit(EXIT_FAILURE);                                                        \
+        }                                                                                    \
+    } while (0)
 
 namespace fs = std::filesystem;
 
@@ -44,7 +54,7 @@ fs::path make_scratch_root(const char *label)
     std::error_code ec;
     fs::remove_all(p, ec);
     fs::create_directories(p, ec);
-    assert(!ec);
+    PULSAR_CHECK(!ec);
     return p;
 }
 
@@ -56,18 +66,18 @@ void test_fresh_directory_gets_protected_single_ace_dacl()
     fs::path dir = root / "obs-websocket";
     std::string dirs = dir.string();
 
-    assert(pulsar_dir::create_directory_hardened(dirs, "test"));
+    PULSAR_CHECK(pulsar_dir::create_directory_hardened(dirs, "test"));
 
     HANDLE h = CreateFileA(dirs.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                             FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-    assert(h != INVALID_HANDLE_VALUE);
+    PULSAR_CHECK(h != INVALID_HANDLE_VALUE);
     PACL dacl = nullptr;
     PSECURITY_DESCRIPTOR sd = nullptr;
     DWORD rc = GetSecurityInfo(h, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &dacl, nullptr, &sd);
-    assert(rc == ERROR_SUCCESS && dacl != nullptr);
+    PULSAR_CHECK(rc == ERROR_SUCCESS && dacl != nullptr);
     // Exactly one ACE: the current user only, never unioned with an
     // inherited grant (SE_DACL_PROTECTED at creation time).
-    assert(dacl->AceCount == 1);
+    PULSAR_CHECK(dacl->AceCount == 1);
     if (sd)
         LocalFree(sd);
     CloseHandle(h);
@@ -83,8 +93,8 @@ void test_reboot_against_own_directory_succeeds()
     fs::path dir = root / "obs-websocket";
     std::string dirs = dir.string();
 
-    assert(pulsar_dir::create_directory_hardened(dirs, "boot-1"));
-    assert(pulsar_dir::create_directory_hardened(dirs, "boot-2"));
+    PULSAR_CHECK(pulsar_dir::create_directory_hardened(dirs, "boot-1"));
+    PULSAR_CHECK(pulsar_dir::create_directory_hardened(dirs, "boot-2"));
 
     { std::error_code cleanup_ec; fs::remove_all(root, cleanup_ec); }
 }
@@ -108,7 +118,7 @@ void test_reparse_point_is_refused()
         return;
     }
 
-    assert(!pulsar_dir::create_directory_hardened(junctions, "test"));
+    PULSAR_CHECK(!pulsar_dir::create_directory_hardened(junctions, "test"));
 
     { std::error_code cleanup_ec; fs::remove_all(root, cleanup_ec); }
 }
@@ -123,19 +133,19 @@ void test_temp_file_handle_is_writable_without_reopen()
 
     std::string tmp_path;
     HANDLE h = INVALID_HANDLE_VALUE;
-    assert(pulsar_dir::create_protected_temp_file(dirs, "test", tmp_path, h));
-    assert(h != INVALID_HANDLE_VALUE);
-    assert(!tmp_path.empty());
+    PULSAR_CHECK(pulsar_dir::create_protected_temp_file(dirs, "test", tmp_path, h));
+    PULSAR_CHECK(h != INVALID_HANDLE_VALUE);
+    PULSAR_CHECK(!tmp_path.empty());
 
     const char *payload = "{\"server_password\":\"probe-secret\"}";
     DWORD written = 0;
     BOOL ok = WriteFile(h, payload, static_cast<DWORD>(std::strlen(payload)), &written, nullptr);
     CloseHandle(h);
-    assert(ok && written == std::strlen(payload));
+    PULSAR_CHECK(ok && written == std::strlen(payload));
 
     std::ifstream in(tmp_path, std::ios::binary);
     std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    assert(content == payload);
+    PULSAR_CHECK(content == payload);
 
     { std::error_code cleanup_ec; fs::remove_all(root, cleanup_ec); }
 }
@@ -151,14 +161,14 @@ void test_verify_owned_by_current_token_on_our_own_file()
 
     std::string tmp_path;
     HANDLE h = INVALID_HANDLE_VALUE;
-    assert(pulsar_dir::create_protected_temp_file(dirs, "test", tmp_path, h));
+    PULSAR_CHECK(pulsar_dir::create_protected_temp_file(dirs, "test", tmp_path, h));
     const char *payload = "{}";
     DWORD written = 0;
     WriteFile(h, payload, static_cast<DWORD>(std::strlen(payload)), &written, nullptr);
     CloseHandle(h);
-    assert(MoveFileExA(tmp_path.c_str(), configs.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH));
+    PULSAR_CHECK(MoveFileExA(tmp_path.c_str(), configs.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH));
 
-    assert(pulsar_dir::verify_owned_by_current_token(configs, "test"));
+    PULSAR_CHECK(pulsar_dir::verify_owned_by_current_token(configs, "test"));
 
     { std::error_code cleanup_ec; fs::remove_all(root, cleanup_ec); }
 }
@@ -174,10 +184,10 @@ void test_sweep_removes_orphans_and_is_idempotent()
     fs::path orphan2 = root / "config.orphanbbbbbb.tmp";
     { std::ofstream(orphan1) << "leftover-password-1"; }
     { std::ofstream(orphan2) << "leftover-password-2"; }
-    assert(fs::exists(orphan1) && fs::exists(orphan2));
+    PULSAR_CHECK(fs::exists(orphan1) && fs::exists(orphan2));
 
     pulsar_dir::sweep_orphaned_temp_files(dirs, "test");
-    assert(!fs::exists(orphan1) && !fs::exists(orphan2));
+    PULSAR_CHECK(!fs::exists(orphan1) && !fs::exists(orphan2));
 
     // Idempotent: no orphans left, must not throw/crash.
     pulsar_dir::sweep_orphaned_temp_files(dirs, "test-empty");
