@@ -1,8 +1,8 @@
 # ADR 005 — Diagnosabilité d'un échec de go-live
 
-- **Status**: proposed
+- **Status**: accepted
 - **Date**: 2026-08-10
-- **Decided**: —
+- **Decided**: 2026-08-10
 - **Deciders**: @ClodoCapeo
 - **Author**: Atlas
 - **Supersedes**: —
