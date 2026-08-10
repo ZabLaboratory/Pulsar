@@ -20,7 +20,6 @@
 
 #include "log-handler.h"
 
-#include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -36,6 +35,17 @@
 #include <windows.h>
 #include <aclapi.h>
 #endif
+
+// assert() is a no-op under NDEBUG (RelWithDebInfo CI build): expr is never
+// evaluated, so this probe would silently "pass" everything. PULSAR_CHECK
+// always evaluates expr and fails hard, independent of NDEBUG (issue #220).
+#define PULSAR_CHECK(expr)                                                                  \
+    do {                                                                                    \
+        if (!(expr)) {                                                                      \
+            std::fprintf(stderr, "CHECK FAILED: %s (%s:%d)\n", #expr, __FILE__, __LINE__);  \
+            std::exit(EXIT_FAILURE);                                                        \
+        }                                                                                    \
+    } while (0)
 
 namespace fs = std::filesystem;
 
@@ -53,7 +63,7 @@ fs::path make_temp_dir(const char *label)
                  ("pulsar-log-handler-test-" + std::string(label) + "-" +
                   std::to_string(rng()));
     bool ok = pulsar_log::create_directory_with_current_user_acl(p.string());
-    assert(ok);
+    PULSAR_CHECK(ok);
     return p;
 }
 
@@ -73,7 +83,7 @@ void grant_everyone_access(const fs::path &dir)
     BYTE world_sid_buf[SECURITY_MAX_SID_SIZE];
     DWORD sz = sizeof(world_sid_buf);
     bool ok = CreateWellKnownSid(WinWorldSid, nullptr, world_sid_buf, &sz) != 0;
-    assert(ok);
+    PULSAR_CHECK(ok);
 
     EXPLICIT_ACCESSA ea{};
     ea.grfAccessPermissions = GENERIC_ALL;
@@ -85,14 +95,14 @@ void grant_everyone_access(const fs::path &dir)
 
     PACL acl = nullptr;
     DWORD res = SetEntriesInAclA(1, &ea, nullptr, &acl);
-    assert(res == ERROR_SUCCESS);
+    PULSAR_CHECK(res == ERROR_SUCCESS);
 
     std::string path_str = dir.string();
     res = SetNamedSecurityInfoA(const_cast<LPSTR>(path_str.c_str()), SE_FILE_OBJECT,
                                  DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                                  nullptr, nullptr, acl, nullptr);
     LocalFree(acl);
-    assert(res == ERROR_SUCCESS);
+    PULSAR_CHECK(res == ERROR_SUCCESS);
 }
 #endif
 
@@ -104,27 +114,27 @@ void test_format_line_matches_gabarit()
     // <ISO8601 UTC> <LEVEL> <session> <subsystem> | <message>
     static const std::regex gabarit(
         R"(^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z WARN  pulsar-headless \| hello world$)");
-    assert(std::regex_match(line, gabarit));
+    PULSAR_CHECK(std::regex_match(line, gabarit));
 
     // Non-empty session field lands between the two single spaces too.
     std::string with_session =
         pulsar_log::format_line(pulsar_log::Level::Error, "sess-abc", "libobs", "boom");
     static const std::regex gabarit_session(
         R"(^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z ERROR sess-abc libobs \| boom$)");
-    assert(std::regex_match(with_session, gabarit_session));
+    PULSAR_CHECK(std::regex_match(with_session, gabarit_session));
 }
 
 void test_derive_subsystem()
 {
     std::string rest;
     std::string tag = pulsar_log::derive_subsystem("[pulsar-multi-stream] adaptive armed", rest);
-    assert(tag == "pulsar-multi-stream");
-    assert(rest == "adaptive armed");
+    PULSAR_CHECK(tag == "pulsar-multi-stream");
+    PULSAR_CHECK(rest == "adaptive armed");
 
     std::string rest2;
     std::string tag2 = pulsar_log::derive_subsystem("no bracket prefix here", rest2);
-    assert(tag2 == "libobs");
-    assert(rest2 == "no bracket prefix here");
+    PULSAR_CHECK(tag2 == "libobs");
+    PULSAR_CHECK(rest2 == "no bracket prefix here");
 }
 
 void test_pattern_layer_url_and_query_params_unregistered()
@@ -133,38 +143,38 @@ void test_pattern_layer_url_and_query_params_unregistered()
     // the value was never registered -- the pattern layer stands alone.
     auto r1 = pulsar_log::redact_patterns(
         "connecting to rtmp://ingest.example/live/sk_live_abc123"); // pragma: allowlist secret
-    assert(r1.has_value());
-    assert(r1->find("sk_live_abc123") == std::string::npos);
-    assert(r1->find("rtmp://[REDACTED]") != std::string::npos);
+    PULSAR_CHECK(r1.has_value());
+    PULSAR_CHECK(r1->find("sk_live_abc123") == std::string::npos);
+    PULSAR_CHECK(r1->find("rtmp://[REDACTED]") != std::string::npos);
 
     auto r2 = pulsar_log::redact_patterns(
         "rtmps://ingest.example/app/other_secret_key"); // pragma: allowlist secret
-    assert(r2.has_value());
-    assert(r2->find("other_secret_key") == std::string::npos);
+    PULSAR_CHECK(r2.has_value());
+    PULSAR_CHECK(r2->find("other_secret_key") == std::string::npos);
 
     // Sensitive query params, several casings.
     auto r3 = pulsar_log::redact_patterns(
         "GET /source?Token=abc&Auth=def&sig=ghi"); // pragma: allowlist secret
-    assert(r3.has_value());
-    assert(r3->find("abc") == std::string::npos);
-    assert(r3->find("def") == std::string::npos);
-    assert(r3->find("ghi") == std::string::npos);
+    PULSAR_CHECK(r3.has_value());
+    PULSAR_CHECK(r3->find("abc") == std::string::npos);
+    PULSAR_CHECK(r3->find("def") == std::string::npos);
+    PULSAR_CHECK(r3->find("ghi") == std::string::npos);
 
     // token%3D encoded form.
     auto r4 = pulsar_log::redact_patterns(
         "source url ...token%3Dshowtoken123..."); // pragma: allowlist secret
-    assert(r4.has_value());
-    assert(r4->find("showtoken123") == std::string::npos);
+    PULSAR_CHECK(r4.has_value());
+    PULSAR_CHECK(r4->find("showtoken123") == std::string::npos);
 
     // key field, different casing of the field name (not the value).
     auto r5 = pulsar_log::redact_patterns(
         R"(destination settings: "Key": "flowkey987")"); // pragma: allowlist secret
-    assert(r5.has_value());
-    assert(r5->find("flowkey987") == std::string::npos);
+    PULSAR_CHECK(r5.has_value());
+    PULSAR_CHECK(r5->find("flowkey987") == std::string::npos);
 
     auto r6 = pulsar_log::redact_patterns("server_password=hunter2pw"); // pragma: allowlist secret
-    assert(r6.has_value());
-    assert(r6->find("hunter2pw") == std::string::npos);
+    PULSAR_CHECK(r6.has_value());
+    PULSAR_CHECK(r6->find("hunter2pw") == std::string::npos);
 }
 
 // ADR-005 F1 (issue #197): the five forms Bastion's rejeu of the pattern
@@ -176,42 +186,42 @@ void test_pattern_layer_covers_adr005_f1_forms()
 {
     auto r1 = pulsar_log::redact_patterns(
         "stream_key=live_abcDEF123secret"); // pragma: allowlist secret
-    assert(r1.has_value());
-    assert(r1->find("live_abcDEF123secret") == std::string::npos);
-    assert(r1->find("stream_key=[REDACTED]") != std::string::npos);
+    PULSAR_CHECK(r1.has_value());
+    PULSAR_CHECK(r1->find("live_abcDEF123secret") == std::string::npos);
+    PULSAR_CHECK(r1->find("stream_key=[REDACTED]") != std::string::npos);
 
     auto r2 = pulsar_log::redact_patterns(
         "streamKey=camelCaseSecret999"); // pragma: allowlist secret
-    assert(r2.has_value());
-    assert(r2->find("camelCaseSecret999") == std::string::npos);
+    PULSAR_CHECK(r2.has_value());
+    PULSAR_CHECK(r2->find("camelCaseSecret999") == std::string::npos);
 
     auto r3 = pulsar_log::redact_patterns(
         "destination created: key='quotedSecretValue42'"); // pragma: allowlist secret
-    assert(r3.has_value());
-    assert(r3->find("quotedSecretValue42") == std::string::npos);
+    PULSAR_CHECK(r3.has_value());
+    PULSAR_CHECK(r3->find("quotedSecretValue42") == std::string::npos);
 
     auto r4 = pulsar_log::redact_patterns(
         "connecting to srt://ingest.example:9998?streamid=srtSecretPath77"); // pragma: allowlist secret
-    assert(r4.has_value());
-    assert(r4->find("srtSecretPath77") == std::string::npos);
-    assert(r4->find("srt://[REDACTED]") != std::string::npos);
+    PULSAR_CHECK(r4.has_value());
+    PULSAR_CHECK(r4->find("srtSecretPath77") == std::string::npos);
+    PULSAR_CHECK(r4->find("srt://[REDACTED]") != std::string::npos);
 
     auto r5 = pulsar_log::redact_patterns(
         "GET /source?access_token=accessTokenSecret55"); // pragma: allowlist secret
-    assert(r5.has_value());
-    assert(r5->find("accessTokenSecret55") == std::string::npos);
+    PULSAR_CHECK(r5.has_value());
+    PULSAR_CHECK(r5->find("accessTokenSecret55") == std::string::npos);
 
     auto r6 = pulsar_log::redact_patterns(
         "Authorization: Bearer bearerTokenSecret.part-2"); // pragma: allowlist secret
-    assert(r6.has_value());
-    assert(r6->find("bearerTokenSecret.part-2") == std::string::npos);
+    PULSAR_CHECK(r6.has_value());
+    PULSAR_CHECK(r6->find("bearerTokenSecret.part-2") == std::string::npos);
 }
 
 void test_pattern_layer_leaves_ordinary_text_alone()
 {
     auto r = pulsar_log::redact_patterns("pulsar-headless: video 1920x1080 @ 60 fps");
-    assert(r.has_value());
-    assert(*r == "pulsar-headless: video 1920x1080 @ 60 fps");
+    PULSAR_CHECK(r.has_value());
+    PULSAR_CHECK(*r == "pulsar-headless: video 1920x1080 @ 60 fps");
 }
 
 void test_pattern_layer_abandons_oversized_line()
@@ -221,7 +231,7 @@ void test_pattern_layer_abandons_oversized_line()
     // cost on untrusted input, and it must never be written raw.
     std::string huge(64 * 1024, 'a');
     auto r = pulsar_log::redact_patterns(huge);
-    assert(!r.has_value());
+    PULSAR_CHECK(!r.has_value());
 }
 
 void test_registry_layer_bare_embedded_repeated()
@@ -236,22 +246,22 @@ void test_registry_layer_bare_embedded_repeated()
 
     // Bare, nude occurrence.
     auto bare = pulsar_log::redact_line("stream key accepted: " + kFixtureSecret, registry);
-    assert(bare.has_value());
-    assert(bare->find(kFixtureSecret) == std::string::npos);
-    assert(bare->find("[REDACTED]") != std::string::npos);
+    PULSAR_CHECK(bare.has_value());
+    PULSAR_CHECK(bare->find(kFixtureSecret) == std::string::npos);
+    PULSAR_CHECK(bare->find("[REDACTED]") != std::string::npos);
 
     // Embedded inside an otherwise-unstructured string (not caught by the
     // pattern layer's field/URL forms -- only the registry can catch this).
     auto embedded =
         pulsar_log::redact_line("dump: prefix-" + kFixtureSecret + "-suffix", registry);
-    assert(embedded.has_value());
-    assert(embedded->find(kFixtureSecret) == std::string::npos);
+    PULSAR_CHECK(embedded.has_value());
+    PULSAR_CHECK(embedded->find(kFixtureSecret) == std::string::npos);
 
     // Repeated twice on the same line -- both occurrences must go.
     auto repeated =
         pulsar_log::redact_line(kFixtureSecret + " seen again: " + kFixtureSecret, registry);
-    assert(repeated.has_value());
-    assert(repeated->find(kFixtureSecret) == std::string::npos);
+    PULSAR_CHECK(repeated.has_value());
+    PULSAR_CHECK(repeated->find(kFixtureSecret) == std::string::npos);
 
     // The two layers are exercised separately: pattern layer alone (empty
     // registry) does NOT know about this bare value -- it has no
@@ -261,8 +271,8 @@ void test_registry_layer_bare_embedded_repeated()
     // form around it, and nothing ever calling register_secret() for it.
     const std::string bare_line = "bare value " + kFixtureSecret + " with no field";
     auto pattern_only = pulsar_log::redact_patterns(bare_line);
-    assert(pattern_only.has_value());
-    assert(pattern_only->find(kFixtureSecret) != std::string::npos);
+    PULSAR_CHECK(pattern_only.has_value());
+    PULSAR_CHECK(pattern_only->find(kFixtureSecret) != std::string::npos);
 
     // Regression gate for the F1 fix: pulsar-multi-stream now calls
     // pulsar_log_register_secret (cross-DLL proc, main.cpp) the moment it
@@ -274,9 +284,9 @@ void test_registry_layer_bare_embedded_repeated()
     // the key is registered too late), this line leaks nude again and this
     // assertion fails.
     auto full_pipeline = pulsar_log::redact_line(bare_line, registry);
-    assert(full_pipeline.has_value());
-    assert(full_pipeline->find(kFixtureSecret) == std::string::npos);
-    assert(full_pipeline->find("[REDACTED]") != std::string::npos);
+    PULSAR_CHECK(full_pipeline.has_value());
+    PULSAR_CHECK(full_pipeline->find(kFixtureSecret) == std::string::npos);
+    PULSAR_CHECK(full_pipeline->find("[REDACTED]") != std::string::npos);
 }
 
 void test_registry_rejects_short_dedups_and_caps()
@@ -289,8 +299,8 @@ void test_registry_rejects_short_dedups_and_caps()
     static const std::string kShort = "short7c"; // pragma: allowlist secret, 7 chars
     registry.register_secret(kShort);
     auto short_line = pulsar_log::redact_line("value=" + kShort + " end", registry);
-    assert(short_line.has_value());
-    assert(short_line->find(kShort) != std::string::npos);
+    PULSAR_CHECK(short_line.has_value());
+    PULSAR_CHECK(short_line->find(kShort) != std::string::npos);
 
     // Re-registering the same value (e.g. CreateDestination called twice
     // for the same destination/key) must not grow the registry: register
@@ -301,8 +311,8 @@ void test_registry_rejects_short_dedups_and_caps()
     for (int i = 0; i < 300; ++i)
         registry.register_secret(kRepeated);
     auto repeated_line = pulsar_log::redact_line("k=" + kRepeated, registry);
-    assert(repeated_line.has_value());
-    assert(repeated_line->find(kRepeated) == std::string::npos);
+    PULSAR_CHECK(repeated_line.has_value());
+    PULSAR_CHECK(repeated_line->find(kRepeated) == std::string::npos);
 
     // Cap with FIFO eviction: push well past the registry's cap with
     // distinct secrets. The earliest one registered (before the dedup
@@ -318,12 +328,12 @@ void test_registry_rejects_short_dedups_and_caps()
     }
 
     auto oldest_line = pulsar_log::redact_line("k=" + kOldest, cap_registry);
-    assert(oldest_line.has_value());
-    assert(oldest_line->find(kOldest) != std::string::npos); // evicted, no longer redacted
+    PULSAR_CHECK(oldest_line.has_value());
+    PULSAR_CHECK(oldest_line->find(kOldest) != std::string::npos); // evicted, no longer redacted
 
     auto newest_line = pulsar_log::redact_line("k=" + last_secret, cap_registry);
-    assert(newest_line.has_value());
-    assert(newest_line->find(last_secret) == std::string::npos);
+    PULSAR_CHECK(newest_line.has_value());
+    PULSAR_CHECK(newest_line->find(last_secret) == std::string::npos);
 }
 
 void test_redact_line_abandons_when_pattern_layer_fails()
@@ -332,7 +342,7 @@ void test_redact_line_abandons_when_pattern_layer_fails()
     registry.register_secret("irrelevant"); // pragma: allowlist secret
     std::string huge(64 * 1024, 'x');
     auto r = pulsar_log::redact_line(huge, registry);
-    assert(!r.has_value());
+    PULSAR_CHECK(!r.has_value());
 }
 
 void test_rotation_stays_under_max_files()
@@ -345,7 +355,7 @@ void test_rotation_stays_under_max_files()
 
     {
         pulsar_log::LogFileSink sink(dir.string(), cfg);
-        assert(sink.opened());
+        PULSAR_CHECK(sink.opened());
         for (int i = 0; i < 30; ++i)
             sink.write_line("line " + std::to_string(i) + " padding padding padding");
     }
@@ -356,8 +366,8 @@ void test_rotation_stays_under_max_files()
         if (entry.path().extension() == ".log")
             ++log_file_count;
     }
-    assert(log_file_count <= cfg.max_files);
-    assert(log_file_count >= 1);
+    PULSAR_CHECK(log_file_count <= cfg.max_files);
+    PULSAR_CHECK(log_file_count >= 1);
 
     fs::remove_all(dir);
 }
@@ -378,14 +388,14 @@ void test_age_purge_fires_under_size_and_count_bounds()
     auto old_time = fs::file_time_type::clock::now() - std::chrono::hours(24 * 30);
     std::error_code time_ec;
     fs::last_write_time(stale, old_time, time_ec);
-    assert(!time_ec);
+    PULSAR_CHECK(!time_ec);
 
     {
         pulsar_log::LogFileSink sink(dir.string(), cfg);
-        assert(sink.opened());
+        PULSAR_CHECK(sink.opened());
     }
 
-    assert(!fs::exists(stale));
+    PULSAR_CHECK(!fs::exists(stale));
     fs::remove_all(dir);
 }
 
@@ -398,18 +408,18 @@ void test_acl_restricted_at_creation_and_widened_dir_refused()
     pulsar_log::RotationConfig cfg;
     {
         pulsar_log::LogFileSink sink(fresh.string(), cfg);
-        assert(sink.opened());
+        PULSAR_CHECK(sink.opened());
     }
-    assert(!pulsar_log::directory_is_more_permissive_than_current_user(fresh.string()));
+    PULSAR_CHECK(!pulsar_log::directory_is_more_permissive_than_current_user(fresh.string()));
 
     grant_everyone_access(fresh);
-    assert(pulsar_log::directory_is_more_permissive_than_current_user(fresh.string()));
+    PULSAR_CHECK(pulsar_log::directory_is_more_permissive_than_current_user(fresh.string()));
 
     // A LogFileSink pointed at the now-widened directory must refuse to
     // write and report why, rather than open the file anyway.
     pulsar_log::LogFileSink widened(fresh.string(), cfg);
-    assert(!widened.opened());
-    assert(!widened.error().empty());
+    PULSAR_CHECK(!widened.opened());
+    PULSAR_CHECK(!widened.error().empty());
 
     fs::remove_all(parent);
 #endif
@@ -427,17 +437,17 @@ void test_diagnostics_ring_counts_and_ring_content()
     ring.record(pulsar_log::Level::Debug, "debug line 1");
     ring.record(pulsar_log::Level::Info, "info line 2");
 
-    assert(ring.count(pulsar_log::Level::Info) == 2);
-    assert(ring.count(pulsar_log::Level::Warn) == 1);
-    assert(ring.count(pulsar_log::Level::Error) == 1);
-    assert(ring.count(pulsar_log::Level::Debug) == 1);
+    PULSAR_CHECK(ring.count(pulsar_log::Level::Info) == 2);
+    PULSAR_CHECK(ring.count(pulsar_log::Level::Warn) == 1);
+    PULSAR_CHECK(ring.count(pulsar_log::Level::Error) == 1);
+    PULSAR_CHECK(ring.count(pulsar_log::Level::Debug) == 1);
 
     // Only the two Warn/Error lines are in the ring -- Info/Debug never
     // enter it despite being counted.
     auto lines = ring.last_warn_error_lines(10);
-    assert(lines.size() == 2);
-    assert(lines[0] == "warn line 1");
-    assert(lines[1] == "error line 1");
+    PULSAR_CHECK(lines.size() == 2);
+    PULSAR_CHECK(lines[0] == "warn line 1");
+    PULSAR_CHECK(lines[1] == "error line 1");
 }
 
 // The ring itself never grows past its configured capacity -- oldest
@@ -451,9 +461,9 @@ void test_diagnostics_ring_bounded_eviction()
     ring.record(pulsar_log::Level::Warn, "warn 3");
 
     auto lines = ring.last_warn_error_lines(10);
-    assert(lines.size() == 2);
-    assert(lines[0] == "warn 2");
-    assert(lines[1] == "warn 3");
+    PULSAR_CHECK(lines.size() == 2);
+    PULSAR_CHECK(lines[0] == "warn 2");
+    PULSAR_CHECK(lines[1] == "warn 3");
 }
 
 // ADR §3.6.1: N is capped server-side no matter what the caller asks for,
@@ -466,7 +476,7 @@ void test_diagnostics_ring_n_clamped_to_server_cap_and_ring_size()
         ring.record(pulsar_log::Level::Error, "line " + std::to_string(i));
 
     // Asking for more than exist returns only what exists.
-    assert(ring.last_warn_error_lines(1000).size() == 5);
+    PULSAR_CHECK(ring.last_warn_error_lines(1000).size() == 5);
 
     for (int i = 5; i < static_cast<int>(pulsar_log::DiagnosticsRing::kServerMaxLines) + 20; ++i)
         ring.record(pulsar_log::Level::Error, "line " + std::to_string(i));
@@ -474,7 +484,7 @@ void test_diagnostics_ring_n_clamped_to_server_cap_and_ring_size()
     // Even though the ring's own capacity is larger, and the caller asks for
     // more still, the response never exceeds the server cap.
     auto lines = ring.last_warn_error_lines(pulsar_log::DiagnosticsRing::kServerMaxLines + 1000);
-    assert(lines.size() == pulsar_log::DiagnosticsRing::kServerMaxLines);
+    PULSAR_CHECK(lines.size() == pulsar_log::DiagnosticsRing::kServerMaxLines);
 }
 
 void test_unwritable_directory_degrades_with_named_error()
@@ -491,8 +501,8 @@ void test_unwritable_directory_degrades_with_named_error()
 
     pulsar_log::RotationConfig cfg;
     pulsar_log::LogFileSink sink(blocked.string(), cfg);
-    assert(!sink.opened());
-    assert(sink.error().find(blocked.string()) != std::string::npos);
+    PULSAR_CHECK(!sink.opened());
+    PULSAR_CHECK(sink.error().find(blocked.string()) != std::string::npos);
 
     fs::remove_all(parent);
 }
