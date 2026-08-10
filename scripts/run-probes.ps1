@@ -601,6 +601,26 @@ function New-FreePort {
 function New-SessionPassword {
     -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 22 | ForEach-Object { [char]$_ })
 }
+# Stop-Process only signals the pulsar.exe PID itself. pulsar-browser
+# (CEF) spawns GPU/renderer/utility HELPER processes as children of
+# that PID; TerminateProcess on the parent does not take them down,
+# and CEF's ProcessSingleton mechanism keeps a lock file in the
+# shared rundir's browser cache directory alive as long as any of
+# those orphans survive. Every probe before this one is the only
+# pulsar.exe running at any point in the suite with room to settle
+# between boots -- this is the first back-to-back boot of the SAME
+# rundir, so an orphaned helper from boot #1 can make boot #2 collide
+# with that lock and stall for most/all of its own READY wait budget,
+# consuming most of the CI job's fixed timeout (#181 CI timeout,
+# offline-probes hitting the nick-fields/retry 300s ceiling on both
+# attempts). `taskkill /T` kills the whole process tree so no CEF
+# child survives into the next boot.
+function Stop-PulsarProcessTree {
+    param([System.Diagnostics.Process] $Proc, [int] $WaitMs = 10000)
+    if (-not $Proc -or $Proc.HasExited) { return }
+    & taskkill /PID $Proc.Id /T /F 2>&1 | Out-Null
+    try { $Proc.WaitForExit($WaitMs) | Out-Null } catch {}
+}
 function Wait-PulsarReady {
     param($Proc, $StdoutLog, $TimeoutSec)
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -638,20 +658,21 @@ if (-not (Wait-PulsarReady -Proc $reseedProc1 -StdoutLog $reseedStdout1 -Timeout
     Write-Host "==> Reseed probe FAILED: boot #1 never reached READY"
     Show-LogTail -Path $reseedStdout1 -Tail 30
     Show-LogTail -Path $reseedStderr1 -Tail 30
-    if (-not $reseedProc1.HasExited) { Stop-Process -Id $reseedProc1.Id -Force }
+    Stop-PulsarProcessTree -Proc $reseedProc1
     exit 1
 }
 if (-not (Test-Path $reseedConfigPath)) {
     Write-Host "==> Reseed probe FAILED: $reseedConfigPath missing after boot #1"
-    Stop-Process -Id $reseedProc1.Id -Force; $reseedProc1.WaitForExit(5000) | Out-Null
+    Stop-PulsarProcessTree -Proc $reseedProc1 -WaitMs 5000
     exit 1
 }
 Write-Host "==> Reseed probe: boot #1 READY, config.json seeded"
 
 # Stop boot #1 WITHOUT deleting config.json -- the whole point is the
-# second boot finds its own prior file still on disk.
-Stop-Process -Id $reseedProc1.Id -Force
-$reseedProc1.WaitForExit(10000) | Out-Null
+# second boot finds its own prior file still on disk. Kill the whole
+# process tree (see Stop-PulsarProcessTree) so no orphaned CEF helper
+# survives to collide with boot #2's browser cache lock.
+Stop-PulsarProcessTree -Proc $reseedProc1
 
 $reseedPort2 = New-FreePort
 $reseedPwd2  = New-SessionPassword
@@ -671,7 +692,7 @@ if (-not (Wait-PulsarReady -Proc $reseedProc2 -StdoutLog $reseedStdout2 -Timeout
     Write-Host "==> Reseed probe FAILED: boot #2 never reached READY -- this is the V1 regression class (reseed starved/refused after boot #1 owned the file)"
     Show-LogTail -Path $reseedStdout2 -Tail 30
     Show-LogTail -Path $reseedStderr2 -Tail 30
-    if (-not $reseedProc2.HasExited) { Stop-Process -Id $reseedProc2.Id -Force }
+    Stop-PulsarProcessTree -Proc $reseedProc2
     exit 1
 }
 Write-Host "==> Reseed probe: boot #2 READY"
@@ -685,7 +706,7 @@ $reseedBadAces = $reseedAcl.Access | Where-Object {
 if (-not $reseedAcl.AreAccessRulesProtected -or $reseedBadAces) {
     Write-Host "==> Reseed probe FAILED: config.json DACL is not restricted to the current account after boot #2 (reseed)"
     Write-Host ($reseedAcl.Access | Format-Table IdentityReference, FileSystemRights, AccessControlType | Out-String)
-    Stop-Process -Id $reseedProc2.Id -Force; $reseedProc2.WaitForExit(5000) | Out-Null
+    Stop-PulsarProcessTree -Proc $reseedProc2 -WaitMs 5000
     exit 1
 }
 Write-Host "==> Reseed probe: DACL OK after boot #2 (restricted to $($reseedCurrentUser.Value))"
@@ -699,8 +720,7 @@ $reseedWsProbe = Join-Path $repoRoot "scripts/probe-websocket.py"
 Write-Host "==> Reseed probe: connecting to boot #2 with its reseeded credentials"
 & python $reseedWsProbe --connect-port $reseedPort2 --connect-password $reseedPwd2 --ready-timeout $ReadyTimeoutSec
 $reseedWsCode = $LASTEXITCODE
-Stop-Process -Id $reseedProc2.Id -Force
-$reseedProc2.WaitForExit(10000) | Out-Null
+Stop-PulsarProcessTree -Proc $reseedProc2
 if ($reseedWsCode -ne 0) {
     Write-Host "==> Reseed probe FAILED: reseeded credentials (boot #2) did not authenticate over the wire (exit $reseedWsCode)"
     exit 1
