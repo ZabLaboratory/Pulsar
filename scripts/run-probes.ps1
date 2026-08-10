@@ -850,6 +850,13 @@ if (-not $abortProc.HasExited) {
     $abortFailMsg = "pulsar.exe never exited within ${ReadyTimeoutSec}s -- it did not fail closed, it hung (or booted degraded) instead of aborting"
     Stop-PulsarProcessTree -Proc $abortProc
 } else {
+    # HasExited=true from the polling loop above does not guarantee ExitCode
+    # is synchronized yet -- WaitForExit() with no timeout blocks until the
+    # process handle is fully reaped and ExitCode is safe to read. Without
+    # it, ExitCode can read back $null here (interpolates as an empty
+    # string in the message below), silently passing the -ne 1 check that
+    # was supposed to close the #212 masking bug.
+    $abortProc.WaitForExit()
     $abortExitCode = $abortProc.ExitCode
     if ($abortExitCode -ne 1) {
         $abortFailMsg = "pulsar.exe exited $abortExitCode (expected exactly 1, the fail-closed abort path main() takes in pulsar-headless/main.cpp) with obs-websocket/ blocked -- anything else, including a crash code such as 0xC0000005 = -1073741819 as Int32 (non-zero, would have PASSED the old '-eq 0' check, exactly the #212 masking), means the fail-closed abort (#181 F2) did not fire as designed"
