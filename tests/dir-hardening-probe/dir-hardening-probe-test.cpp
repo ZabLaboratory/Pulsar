@@ -12,6 +12,18 @@
 // verification, and post-rename re-verification by handle -- plus N2
 // (no close/reopen TOCTOU on the temp file handle) and N3 (orphan
 // sweep).
+//
+// A2.RC2 (ADR-005 Amendment 2, issue #213): the reparse-point case
+// (gesture 2) hard-fails -- instead of silently skipping -- when
+// `mklink /J` is unavailable, and prints explicit "reparse"/"mklink"
+// diagnostics on every run so the CI log always shows whether the case
+// was actually exercised. Gestures 3 (different-owner refusal) and 4
+// (post-rename re-verification) each gained a real negative case,
+// simulated via SetNamedSecurityInfoA reassigning ownership to the
+// well-known SYSTEM SID (SeRestorePrivilege permitting) -- no second
+// Windows account needed. If SeRestorePrivilege is not held by the
+// runner's token, that negative case is documented as NOT RUN with an
+// explicit reason printed to stdout, never silently passed.
 
 #include "dir-hardening.h"
 
@@ -27,6 +39,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <aclapi.h>
+#include <sddl.h>
 #endif
 
 // assert() is a no-op under NDEBUG (RelWithDebInfo CI build): expr is never
@@ -56,6 +69,59 @@ fs::path make_scratch_root(const char *label)
     fs::create_directories(p, ec);
     PULSAR_CHECK(!ec);
     return p;
+}
+
+// Best-effort: reassigns the owner of `path` to the well-known SYSTEM
+// SID, so a negative test can observe a directory/file owned by a
+// principal other than our own token WITHOUT needing a second real
+// Windows account. Reassigning ownership to an arbitrary SID (one not
+// already carrying the SE_GROUP_OWNER attribute in our own token)
+// requires SeRestorePrivilege; on an unprivileged runner this fails,
+// and the caller must treat that as a documented "cannot be exercised
+// here", not a silent pass. `out_reason` is always set on failure.
+bool try_reassign_owner_to_system(const std::string &path, std::string &out_reason)
+{
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
+        out_reason = "OpenProcessToken(TOKEN_ADJUST_PRIVILEGES) failed (" + std::to_string(GetLastError()) + ")";
+        return false;
+    }
+
+    LUID luid{};
+    if (!LookupPrivilegeValueA(nullptr, SE_RESTORE_NAME, &luid)) {
+        out_reason = "LookupPrivilegeValueA(SeRestorePrivilege) failed (" + std::to_string(GetLastError()) + ")";
+        CloseHandle(token);
+        return false;
+    }
+
+    TOKEN_PRIVILEGES tp{};
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Luid = luid;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    AdjustTokenPrivileges(token, FALSE, &tp, sizeof(tp), nullptr, nullptr);
+    DWORD adjust_err = GetLastError();
+    CloseHandle(token);
+    if (adjust_err == ERROR_NOT_ALL_ASSIGNED) {
+        out_reason = "SeRestorePrivilege is not held by this runner's token (ERROR_NOT_ALL_ASSIGNED) -- "
+                     "reassigning ownership to a different principal requires it in the absence of a second "
+                     "real Windows account";
+        return false;
+    }
+
+    BYTE sid_buf[68]; // SECURITY_MAX_SID_SIZE
+    DWORD sid_size = sizeof(sid_buf);
+    if (!CreateWellKnownSid(WinLocalSystemSid, nullptr, sid_buf, &sid_size)) {
+        out_reason = "CreateWellKnownSid(WinLocalSystemSid) failed (" + std::to_string(GetLastError()) + ")";
+        return false;
+    }
+
+    DWORD rc = SetNamedSecurityInfoA(const_cast<char *>(path.c_str()), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
+                                      reinterpret_cast<PSID>(sid_buf), nullptr, nullptr, nullptr);
+    if (rc != ERROR_SUCCESS) {
+        out_reason = "SetNamedSecurityInfoA(owner=SYSTEM, " + path + ") failed (" + std::to_string(rc) + ")";
+        return false;
+    }
+    return true;
 }
 
 // 1st + 3rd named gestures: fresh creation carries a protected,
@@ -102,6 +168,12 @@ void test_reboot_against_own_directory_succeeds()
 // 2nd named gesture: a junction planted where the directory should be
 // is opened as the reparse point itself (FILE_FLAG_OPEN_REPARSE_POINT)
 // and refused, never transparently followed.
+//
+// A2.RC2 (#213): if `mklink /J` cannot plant the junction on this
+// runner, this is now a HARD FAILURE (explicit stderr diagnostic +
+// non-zero exit), never a silent skip that still reports "all
+// assertions passed" -- the CI log must show, via "reparse"/"mklink"
+// tokens, whether this case was actually exercised.
 void test_reparse_point_is_refused()
 {
     fs::path root = make_scratch_root("reparse");
@@ -112,13 +184,53 @@ void test_reparse_point_is_refused()
     std::string targets = target.string();
 
     std::string cmd = "cmd /c mklink /J \"" + junctions + "\" \"" + targets + "\" >nul 2>&1";
-    if (std::system(cmd.c_str()) != 0 || !fs::exists(junction)) {
-        std::fprintf(stdout, "dir-hardening-probe-test: mklink /J unavailable, skipping reparse-point case\n");
+    int rc = std::system(cmd.c_str());
+    bool junction_created = (rc == 0) && fs::exists(junction);
+    std::fprintf(stdout,
+                 "dir-hardening-probe-test: reparse-point gesture: mklink /J rc=%d junction_exists=%d\n", rc,
+                 junction_created ? 1 : 0);
+
+    if (!junction_created) {
+        std::fprintf(stderr,
+                     "dir-hardening-probe-test: FATAL -- mklink /J failed to plant a reparse point on this "
+                     "runner (rc=%d); the reparse-point refusal case (gesture 2, #201 N1) cannot be exercised "
+                     "here, and per A2.RC2 (#213) this is a hard failure, not a silent skip\n",
+                     rc);
+        { std::error_code cleanup_ec; fs::remove_all(root, cleanup_ec); }
+        std::exit(EXIT_FAILURE);
+    }
+
+    PULSAR_CHECK(!pulsar_dir::create_directory_hardened(junctions, "test"));
+    std::fprintf(stdout, "dir-hardening-probe-test: reparse-point gesture: junction refusal confirmed\n");
+
+    { std::error_code cleanup_ec; fs::remove_all(root, cleanup_ec); }
+}
+
+// 3rd named gesture, NEGATIVE case (#213): a preexisting obs-websocket/
+// directory owned by a DIFFERENT principal than our own token is
+// refused outright by create_directory_hardened, never silently
+// trusted or re-hardened. Simulated by reassigning ownership to the
+// well-known SYSTEM SID; if the runner's token lacks SeRestorePrivilege
+// this is documented as NOT RUN rather than skipped in silence.
+void test_directory_owned_by_other_principal_is_refused()
+{
+    fs::path root = make_scratch_root("otherowner");
+    fs::path dir = root / "obs-websocket";
+    std::string dirs = dir.string();
+    { std::error_code create_ec; fs::create_directories(dir, create_ec); PULSAR_CHECK(!create_ec); }
+
+    std::string reason;
+    if (!try_reassign_owner_to_system(dirs, reason)) {
+        std::fprintf(stdout,
+                     "dir-hardening-probe-test: NOT RUN -- different-owner refusal case (gesture 3, #201 N1, "
+                     "A2.RC2 #213) cannot be exercised on this runner: %s\n",
+                     reason.c_str());
         { std::error_code cleanup_ec; fs::remove_all(root, cleanup_ec); }
         return;
     }
 
-    PULSAR_CHECK(!pulsar_dir::create_directory_hardened(junctions, "test"));
+    PULSAR_CHECK(!pulsar_dir::create_directory_hardened(dirs, "test"));
+    std::fprintf(stdout, "dir-hardening-probe-test: different-owner gesture (3) refusal confirmed\n");
 
     { std::error_code cleanup_ec; fs::remove_all(root, cleanup_ec); }
 }
@@ -173,6 +285,46 @@ void test_verify_owned_by_current_token_on_our_own_file()
     { std::error_code cleanup_ec; fs::remove_all(root, cleanup_ec); }
 }
 
+// 4th named gesture, NEGATIVE case (#213): a config.json substituted
+// for one owned by a different principal between MoveFileExA
+// publishing it and the caller reading it back is DETECTED by
+// verify_owned_by_current_token -- the exact defense-in-depth window
+// that gesture exists to close. Substitution is simulated by
+// reassigning ownership of the just-published file to the well-known
+// SYSTEM SID; if the runner's token lacks SeRestorePrivilege this is
+// documented as NOT RUN rather than skipped in silence.
+void test_verify_detects_post_rename_substitution()
+{
+    fs::path root = make_scratch_root("substitution");
+    std::string dirs = root.string();
+    fs::path config = root / "config.json";
+    std::string configs = config.string();
+
+    std::string tmp_path;
+    HANDLE h = INVALID_HANDLE_VALUE;
+    PULSAR_CHECK(pulsar_dir::create_protected_temp_file(dirs, "test", tmp_path, h));
+    const char *payload = "{}";
+    DWORD written = 0;
+    WriteFile(h, payload, static_cast<DWORD>(std::strlen(payload)), &written, nullptr);
+    CloseHandle(h);
+    PULSAR_CHECK(MoveFileExA(tmp_path.c_str(), configs.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH));
+
+    std::string reason;
+    if (!try_reassign_owner_to_system(configs, reason)) {
+        std::fprintf(stdout,
+                     "dir-hardening-probe-test: NOT RUN -- post-rename substitution detection case (gesture 4, "
+                     "#201 N1, A2.RC2 #213) cannot be exercised on this runner: %s\n",
+                     reason.c_str());
+        { std::error_code cleanup_ec; fs::remove_all(root, cleanup_ec); }
+        return;
+    }
+
+    PULSAR_CHECK(!pulsar_dir::verify_owned_by_current_token(configs, "test"));
+    std::fprintf(stdout, "dir-hardening-probe-test: post-rename substitution gesture (4) detection confirmed\n");
+
+    { std::error_code cleanup_ec; fs::remove_all(root, cleanup_ec); }
+}
+
 // N3: config.*.tmp orphans are swept before a new one is allocated; a
 // directory with no orphans is left untouched (no crash, no-op).
 void test_sweep_removes_orphans_and_is_idempotent()
@@ -205,8 +357,10 @@ int main()
     test_fresh_directory_gets_protected_single_ace_dacl();
     test_reboot_against_own_directory_succeeds();
     test_reparse_point_is_refused();
+    test_directory_owned_by_other_principal_is_refused();
     test_temp_file_handle_is_writable_without_reopen();
     test_verify_owned_by_current_token_on_our_own_file();
+    test_verify_detects_post_rename_substitution();
     test_sweep_removes_orphans_and_is_idempotent();
 
     std::fprintf(stdout, "dir-hardening-probe-test: all assertions passed\n");
