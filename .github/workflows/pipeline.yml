@@ -478,7 +478,7 @@ jobs:
         with:
           name: pulsar-ctest-output
           path: |
-            ctest-junit.xml
+            build/ctest-junit.xml
             build/Testing/Temporary/LastTest.log
           if-no-files-found: warn
           retention-days: 14
