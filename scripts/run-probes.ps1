@@ -832,8 +832,44 @@ $abortStdout = Join-Path $repoRoot "build/probe-fatal-abort-stdout.log"
 $abortStderr = Join-Path $repoRoot "build/probe-fatal-abort-stderr.log"
 New-Item -ItemType Directory -Path (Split-Path $abortStdout) -Force | Out-Null
 
-$abortProc = Start-Process -FilePath $pulsar -WorkingDirectory $binDir -PassThru `
-    -RedirectStandardOutput $abortStdout -RedirectStandardError $abortStderr
+# Start-Process -PassThru is NOT used here (unlike the other spawns in
+# this file): combined with -RedirectStandardOutput/-RedirectStandardError
+# against a /SUBSYSTEM:WINDOWS child that never allocates a console (see
+# the comment near the Phase 2 spawn below), the returned Process object's
+# .ExitCode reads back $null forever -- even after HasExited=true and an
+# unbounded WaitForExit() (a real, documented Windows PowerShell 5.1
+# defect: PowerShell/PowerShell#3573). This IS the only spawn in the file
+# that reads .ExitCode (the other two Start-Process -PassThru calls only
+# ever check .HasExited, which is unaffected -- do not "fix" those, they
+# don't have this bug). System.Diagnostics.Process constructed directly
+# does not go through the cmdlet's redirection plumbing and does not hit
+# it. Direct-Process redirection is pipe-based, not OS-level file-handle
+# redirection the way Start-Process's is, so the drain has to be
+# async (OutputDataReceived + BeginOutputReadLine) -- a synchronous
+# .StandardOutput.ReadToEnd() would reintroduce exactly the userland
+# pipe-buffer deadlock hazard that comment warns about.
+$abortStdoutWriter = [System.IO.StreamWriter]::new($abortStdout, $false)
+$abortStderrWriter = [System.IO.StreamWriter]::new($abortStderr, $false)
+$abortStdoutWriter.AutoFlush = $true
+$abortStderrWriter.AutoFlush = $true
+
+$abortPsi = [System.Diagnostics.ProcessStartInfo]::new($pulsar)
+$abortPsi.WorkingDirectory = $binDir
+$abortPsi.UseShellExecute = $false
+$abortPsi.RedirectStandardOutput = $true
+$abortPsi.RedirectStandardError = $true
+
+$abortProc = [System.Diagnostics.Process]::new()
+$abortProc.StartInfo = $abortPsi
+$abortOutSub = Register-ObjectEvent -InputObject $abortProc -EventName OutputDataReceived -MessageData $abortStdoutWriter -Action {
+    if ($null -ne $EventArgs.Data) { $Event.MessageData.WriteLine($EventArgs.Data) }
+}
+$abortErrSub = Register-ObjectEvent -InputObject $abortProc -EventName ErrorDataReceived -MessageData $abortStderrWriter -Action {
+    if ($null -ne $EventArgs.Data) { $Event.MessageData.WriteLine($EventArgs.Data) }
+}
+$abortProc.Start() | Out-Null
+$abortProc.BeginOutputReadLine()
+$abortProc.BeginErrorReadLine()
 
 # This process must NEVER reach READY -- wait for EXIT instead, bounded
 # by the same timeout budget as a normal boot (the forced failure
@@ -850,11 +886,28 @@ if (-not $abortProc.HasExited) {
     $abortFailMsg = "pulsar.exe never exited within ${ReadyTimeoutSec}s -- it did not fail closed, it hung (or booted degraded) instead of aborting"
     Stop-PulsarProcessTree -Proc $abortProc
 } else {
+    # HasExited=true from the polling loop above does not guarantee ExitCode
+    # is synchronized yet -- WaitForExit() with no timeout blocks until the
+    # process handle is fully reaped and ExitCode is safe to read.
+    $abortProc.WaitForExit()
     $abortExitCode = $abortProc.ExitCode
-    if ($abortExitCode -eq 0) {
-        $abortFailMsg = "pulsar.exe exited 0 with obs-websocket/ blocked -- the fail-closed abort (#181 F2) did not fire, it booted degraded instead"
+    if ($abortExitCode -ne 1) {
+        $abortFailMsg = "pulsar.exe exited $abortExitCode (expected exactly 1, the fail-closed abort path main() takes in pulsar-headless/main.cpp) with obs-websocket/ blocked -- anything else, including a crash code such as 0xC0000005 = -1073741819 as Int32 (non-zero, would have PASSED the old '-eq 0' check, exactly the #212 masking), means the fail-closed abort (#181 F2) did not fire as designed"
     }
 }
+
+# Unhook the async readers and flush the writers BEFORE anything below
+# reads $abortStdout/$abortStderr back (Get-Content, Show-LogTail) -- the
+# writers are the only thing standing between the pipe data and those
+# files now that redirection is no longer OS-level.
+Unregister-Event -SourceIdentifier $abortOutSub.Name -ErrorAction SilentlyContinue
+Unregister-Event -SourceIdentifier $abortErrSub.Name -ErrorAction SilentlyContinue
+Remove-Job -Id $abortOutSub.Id -ErrorAction SilentlyContinue
+Remove-Job -Id $abortErrSub.Id -ErrorAction SilentlyContinue
+$abortStdoutWriter.Flush()
+$abortStdoutWriter.Close()
+$abortStderrWriter.Flush()
+$abortStderrWriter.Close()
 
 if (-not $abortFailMsg) {
     $abortStdoutText = Get-Content $abortStdout -Raw -ErrorAction SilentlyContinue
