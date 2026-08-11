@@ -34,6 +34,7 @@
 #include <fstream>
 #include <random>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -58,6 +59,16 @@ namespace fs = std::filesystem;
 #ifdef _WIN32
 
 namespace {
+
+// #226: A2.RC2 (#213) made the mklink-unavailable case (gesture 2) a
+// hard failure instead of a silent skip, but left gestures 3 and 4's
+// SeRestorePrivilege-gated NOT RUN paths (below) merely printing to
+// stdout and returning -- main() kept printing "all assertions passed"
+// unchanged regardless. A runner that loses SeRestorePrivilege would
+// silently stop exercising the different-owner and post-rename-
+// substitution refusals while CI stayed green. Every NOT RUN path
+// records itself here so main() can fail closed on a non-empty list.
+std::vector<std::string> g_not_run;
 
 fs::path make_scratch_root(const char *label)
 {
@@ -221,6 +232,7 @@ void test_directory_owned_by_other_principal_is_refused()
 
     std::string reason;
     if (!try_reassign_owner_to_system(dirs, reason)) {
+        g_not_run.push_back("gesture-3:different-owner-refusal");
         std::fprintf(stdout,
                      "dir-hardening-probe-test: NOT RUN -- different-owner refusal case (gesture 3, #201 N1, "
                      "A2.RC2 #213) cannot be exercised on this runner: %s\n",
@@ -311,6 +323,7 @@ void test_verify_detects_post_rename_substitution()
 
     std::string reason;
     if (!try_reassign_owner_to_system(configs, reason)) {
+        g_not_run.push_back("gesture-4:post-rename-substitution-detection");
         std::fprintf(stdout,
                      "dir-hardening-probe-test: NOT RUN -- post-rename substitution detection case (gesture 4, "
                      "#201 N1, A2.RC2 #213) cannot be exercised on this runner: %s\n",
@@ -362,6 +375,21 @@ int main()
     test_verify_owned_by_current_token_on_our_own_file();
     test_verify_detects_post_rename_substitution();
     test_sweep_removes_orphans_and_is_idempotent();
+
+    // #226: a NOT RUN gesture (SeRestorePrivilege missing on this
+    // runner) must turn this test RED, not leave "all assertions
+    // passed" printing unchanged while a security assertion silently
+    // never executed -- the same failure mode A2.RC2 (#213) already
+    // closed for the mklink-unavailable case, extended to gestures 3/4.
+    if (!g_not_run.empty()) {
+        for (const auto &name : g_not_run)
+            std::fprintf(stderr, "dir-hardening-probe-test: WARN gesture NOT RUN: %s\n", name.c_str());
+        std::fprintf(stderr,
+                     "dir-hardening-probe-test: FAIL -- %zu named gesture(s) could not be exercised on this "
+                     "runner; a security assertion that silently does not run must not report success\n",
+                     g_not_run.size());
+        return EXIT_FAILURE;
+    }
 
     std::fprintf(stdout, "dir-hardening-probe-test: all assertions passed\n");
 #else
