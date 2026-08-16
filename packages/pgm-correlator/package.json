@@ -1,0 +1,47 @@
+{
+  "name": "@clodocapeo/pgm-correlator",
+  "version": "0.1.0",
+  "description": "Observes Orion's LSDP identity stream and Pulsar's actual recorded output, and correlates them by time -- proves what went to the antenna, not what Orion successfully sent over the wire.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ZabLaboratory/Pulsar.git",
+    "directory": "packages/pgm-correlator"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@clodocapeo/pulsar-client": "^1.8.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
