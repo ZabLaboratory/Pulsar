@@ -14,7 +14,10 @@ export {
 export {
   deriveSeparationThreshold,
   passesThreshold,
+  checkMaterialSeparation,
   type SeparationThreshold,
+  type MaterialSeparationOptions,
+  type MaterialSeparationResult,
 } from "./threshold.js";
 export { startTestPageServer, type TestPageServer } from "./test-page-server.js";
 export {

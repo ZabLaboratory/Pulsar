@@ -71,3 +71,60 @@ export function deriveSeparationThreshold(
 export function passesThreshold(value: number, t: SeparationThreshold): boolean {
   return t.direction === "higher-is-healthy" ? value >= t.threshold : value <= t.threshold;
 }
+
+export interface MaterialSeparationOptions {
+  /** Minimum required healthyValue / (degradedMax floored by epsilon)
+   *  ratio. Default 10 -- one order of magnitude. Comfortably below every
+   *  margin actually observed against a real Pulsar/CEF recording
+   *  (spatial: black ~0 vs healthy ~48; temporal: ~4386x, healthy ~4.386
+   *  vs frozen ~0.001 -- see capture-pgm-compat's PR #233 review), so it
+   *  won't flag a healthy CEF encode's normal noise as a failure, while
+   *  still catching the case a bare `separated` boolean or a
+   *  single-sample `deriveSeparationThreshold` midpoint cannot: with one
+   *  sample per population, that midpoint sits between them BY
+   *  CONSTRUCTION, so `passesThreshold(healthyValue, ...)` is
+   *  tautologically true regardless of the healthy sample's absolute
+   *  magnitude -- it would stay green even if the healthy source itself
+   *  degraded (e.g. temporalDiffAvg collapsing from 4.386 to 0.002), as
+   *  long as it stayed marginally above the (equally collapsing)
+   *  threshold. */
+  minRatio?: number;
+  /** Floor added under the degraded population's max before dividing, so
+   *  a degraded value of exactly 0 (observed for a real solid-black
+   *  recording -- CEF's flat output compresses losslessly with x264 at
+   *  this bitrate, no residual noise) doesn't turn the ratio into a
+   *  division that trivially "passes" independent of whether
+   *  healthyValue is itself materially non-zero. 0.05 sits comfortably
+   *  above the near-zero real values observed for "black" (0.000) and
+   *  well below "frozen"'s real temporal value (0.001 is BELOW this --
+   *  intentional, frozen must still fail the temporal check) and every
+   *  healthy value observed (~4.386 temporal, ~48-81 spatial). */
+  epsilon?: number;
+}
+
+export interface MaterialSeparationResult {
+  healthyValue: number;
+  degradedMax: number;
+  ratio: number;
+  minRatio: number;
+  /** true only when healthyValue is at least minRatio times the
+   *  (epsilon-floored) degraded population's max -- an absolute,
+   *  data-independent bar, not a threshold derived from (and therefore
+   *  tautologically satisfied by) the very samples being judged. */
+  material: boolean;
+}
+
+export function checkMaterialSeparation(
+  healthyValue: number,
+  degradedValues: number[],
+  options: MaterialSeparationOptions = {},
+): MaterialSeparationResult {
+  if (degradedValues.length === 0) {
+    throw new Error("checkMaterialSeparation needs at least one degraded sample");
+  }
+  const minRatio = options.minRatio ?? 10;
+  const epsilon = options.epsilon ?? 0.05;
+  const degradedMax = Math.max(...degradedValues, epsilon);
+  const ratio = healthyValue / degradedMax;
+  return { healthyValue, degradedMax, ratio, minRatio, material: ratio >= minRatio };
+}

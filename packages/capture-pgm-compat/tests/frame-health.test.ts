@@ -30,7 +30,7 @@ import { spawn } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { measureFrameHealth } from "../src/frame-health.js";
-import { deriveSeparationThreshold, passesThreshold } from "../src/threshold.js";
+import { deriveSeparationThreshold, passesThreshold, checkMaterialSeparation } from "../src/threshold.js";
 
 function buildFixture(args: string[], outPath: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -131,6 +131,19 @@ describe("measureFrameHealth -- real ffmpeg fixtures for the three named scenari
     expect(passesThreshold(black.temporalDiffAvg, temporalThreshold)).toBe(false);
     expect(passesThreshold(frozen.temporalDiffAvg, temporalThreshold)).toBe(false);
 
+    // `separated` alone is necessary but not sufficient: with one sample
+    // per population, deriveSeparationThreshold's midpoint sits between
+    // them BY CONSTRUCTION, so the passesThreshold(healthy, ...) asserts
+    // above are tautologically true regardless of the healthy sample's
+    // absolute magnitude -- they'd stay green even if "healthy" itself
+    // degraded, as long as it stayed marginally above the (equally
+    // collapsing) threshold. checkMaterialSeparation requires an absolute,
+    // data-independent order-of-magnitude margin instead (PR #233 review).
+    expect(checkMaterialSeparation(healthy.spatialStddevAvg, [black.spatialStddevAvg]).material).toBe(true);
+    expect(
+      checkMaterialSeparation(healthy.temporalDiffAvg, [black.temporalDiffAvg, frozen.temporalDiffAvg]).material,
+    ).toBe(true);
+
     // The combined oracle (both axes must pass) is what #231's checkpoint
     // review required: spatial alone would wrongly accept "frozen";
     // temporal alone can't see "black" is ALSO spatially flat. Together
@@ -154,5 +167,42 @@ describe("deriveSeparationThreshold", () => {
   it("throws rather than silently deriving from an empty population", () => {
     expect(() => deriveSeparationThreshold([], [1])).toThrow();
     expect(() => deriveSeparationThreshold([1], [])).toThrow();
+  });
+});
+
+describe("checkMaterialSeparation", () => {
+  it("catches the exact tautology deriveSeparationThreshold's single-sample midpoint cannot: passesThreshold(healthy) is guaranteed true no matter how degraded 'healthy' itself is", () => {
+    // A "healthy" sample that has collapsed to nearly the degraded
+    // sample's own value (e.g. a real source going dark mid-recording) --
+    // separated is still (barely) true, and passesThreshold(healthy, t)
+    // is true BY CONSTRUCTION (midpoint of exactly these two numbers).
+    const barelyHealthy = 0.11;
+    const degraded = 0.1;
+    const t = deriveSeparationThreshold([barelyHealthy], [degraded]);
+    expect(t.separated).toBe(true);
+    expect(passesThreshold(barelyHealthy, t)).toBe(true); // tautological, proves nothing
+
+    // checkMaterialSeparation is not fooled: the ratio is ~1.1x, far
+    // below any reasonable order-of-magnitude bar.
+    const material = checkMaterialSeparation(barelyHealthy, [degraded]);
+    expect(material.ratio).toBeCloseTo(1.1, 1);
+    expect(material.material).toBe(false);
+  });
+
+  it("passes when the healthy sample is genuinely an order of magnitude above the degraded population", () => {
+    const material = checkMaterialSeparation(4.386, [0.0, 0.001]);
+    expect(material.material).toBe(true);
+  });
+
+  it("floors the degraded population at epsilon so a degraded value of exactly 0 doesn't trivially pass on a near-zero healthy value", () => {
+    const material = checkMaterialSeparation(0.2, [0], { epsilon: 0.05, minRatio: 10 });
+    // 0.2 / 0.05 = 4x -- below the 10x bar despite the degraded sample
+    // being literally zero.
+    expect(material.degradedMax).toBe(0.05);
+    expect(material.material).toBe(false);
+  });
+
+  it("throws rather than silently deriving from an empty degraded population", () => {
+    expect(() => checkMaterialSeparation(10, [])).toThrow();
   });
 });

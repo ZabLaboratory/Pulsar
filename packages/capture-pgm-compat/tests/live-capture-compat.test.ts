@@ -26,7 +26,7 @@ import { extractVisualEvents } from "@clodocapeo/pgm-correlator";
 
 import { runLiveCaptureSession, type Scenario } from "../src/live-capture-session.js";
 import { measureFrameHealth, type HealthMeasurement } from "../src/frame-health.js";
-import { deriveSeparationThreshold, passesThreshold } from "../src/threshold.js";
+import { deriveSeparationThreshold, passesThreshold, checkMaterialSeparation } from "../src/threshold.js";
 
 const ENABLED = process.env.PULSAR_LIVE_CAPTURE_COMPAT === "1";
 
@@ -101,6 +101,35 @@ describe.skipIf(!ENABLED)("real Pulsar/CEF capture <-> PGM compatibility (opt-in
       console.log("SPATIAL_THRESHOLD", JSON.stringify(spatialThreshold, null, 2));
       // eslint-disable-next-line no-console
       console.log("TEMPORAL_THRESHOLD", JSON.stringify(temporalThreshold, null, 2));
+
+      // separated=true is necessary but NOT sufficient: with one sample
+      // per population, deriveSeparationThreshold's midpoint sits between
+      // them BY CONSTRUCTION, so passesThreshold(healthy, ...) below would
+      // be tautologically true even if the healthy source itself
+      // degraded, as long as it stayed marginally above the (equally
+      // collapsing) threshold -- the CEF false-positive reintroduced at
+      // the oracle level (PR #233 review). Assert it explicitly rather
+      // than only computing it.
+      expect(spatialThreshold.separated).toBe(true);
+      expect(temporalThreshold.separated).toBe(true);
+
+      // Materiality floor: healthy must be a real order of magnitude
+      // above the degraded population it's compared against, not merely
+      // "above a threshold derived from itself". See
+      // checkMaterialSeparation's docstring for the ratio/epsilon
+      // rationale (10x default, ~440x margin below the smallest real
+      // separation observed for this axis in development).
+      const spatialSeparation = checkMaterialSeparation(healthy.spatialStddevAvg, [black.spatialStddevAvg]);
+      const temporalSeparation = checkMaterialSeparation(healthy.temporalDiffAvg, [
+        black.temporalDiffAvg,
+        frozen.temporalDiffAvg,
+      ]);
+      // eslint-disable-next-line no-console
+      console.log("SPATIAL_MATERIAL_SEPARATION", JSON.stringify(spatialSeparation, null, 2));
+      // eslint-disable-next-line no-console
+      console.log("TEMPORAL_MATERIAL_SEPARATION", JSON.stringify(temporalSeparation, null, 2));
+      expect(spatialSeparation.material).toBe(true);
+      expect(temporalSeparation.material).toBe(true);
 
       const isHealthy = (m: HealthMeasurement) =>
         passesThreshold(m.spatialStddevAvg, spatialThreshold) && passesThreshold(m.temporalDiffAvg, temporalThreshold);
