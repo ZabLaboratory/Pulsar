@@ -483,6 +483,78 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # ── Stage 3d : capture <-> PGM compatibility (opt-in, real CEF) ──
+  #
+  # #234 -- #231 left this suite (packages/capture-pgm-compat, opt-in via
+  # PULSAR_LIVE_CAPTURE_COMPAT=1) unexercised by any CI job: it had only
+  # ever run on the porteur's own machine. It's the only proof in this
+  # repo that a FROZEN source -- spatially indistinguishable from a
+  # healthy one (measured: spatialStddevAvg 50.986 vs 48.200) -- gets
+  # caught at all, and only on the temporal axis (0.002 vs 4.271). A
+  # silent drift on that axis would otherwise reach main undetected.
+  #
+  # Reuses build's pulsar-rundir artefact exactly like offline-probes: a
+  # real pulsar.exe with CEF (obs-browser), so no separate ~150MB binary
+  # download via pulsar-bundle-full's own postinstall
+  # (PULSAR_BUNDLE_SKIP_POSTINSTALL=1) -- PULSAR_BUNDLE_FULL_BINARIES_PATH
+  # points spawn() straight at the artefact's rundir instead.
+  #
+  # Whether CEF renders correctly on a windows-2022 GitHub-hosted runner
+  # (no GPU, no interactive desktop session) is exactly what this job
+  # measures, not something assumed going in -- see the oracle's own
+  # material-separation assertions in
+  # packages/capture-pgm-compat/tests/live-capture-compat.test.ts. If it
+  # doesn't render, this job goes red for a real reason, and that result
+  # gets documented, not routed around (#234).
+  capture-pgm-compat:
+    name: capture <-> PGM compatibility (real CEF)
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download pulsar-rundir
+        uses: actions/download-artifact@v4
+        with:
+          name: pulsar-rundir
+          path: .
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup ffmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: release
+
+      - name: Install npm workspaces
+        # The real pulsar.exe + CEF runtime is already on disk from the
+        # pulsar-rundir artefact downloaded above -- pulsar-bundle-full's
+        # own binaries/ download would just be redundant weight, not a
+        # different pulsar.exe.
+        env:
+          PULSAR_BUNDLE_SKIP_POSTINSTALL: '1'
+        shell: pwsh
+        run: npm install --no-audit --no-fund
+
+      - name: Build workspace deps (topo order)
+        shell: pwsh
+        run: |
+          npm run build -w @clodocapeo/pulsar-client
+          npm run build -w @clodocapeo/pgm-correlator
+          npm run build -w @clodocapeo/pulsar-bundle-full
+
+      - name: Run capture <-> PGM compatibility suite (real CEF)
+        env:
+          PULSAR_LIVE_CAPTURE_COMPAT: '1'
+          PULSAR_BUNDLE_FULL_BINARIES_PATH: ${{ github.workspace }}/upstream/build_x64/rundir/RelWithDebInfo
+        shell: pwsh
+        run: npm run test -w @clodocapeo/capture-pgm-compat
+
   # ── Stage 3c : live broadcast (Twitch + record + diagnostic) ─────
   #
   # OFF the routine path since #132 (porteur decision : CI wall-clock).
