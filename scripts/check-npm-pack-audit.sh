@@ -20,6 +20,7 @@ set -euo pipefail
 
 PKG_DIRS=(
   packages/pulsar-client
+  packages/pgm-correlator
   packages/pulsar-bundle
   packages/pulsar-bundle-full
 )

@@ -86,6 +86,7 @@ Pulsar/
 │   └── pulsar-browser/         fork of obs-browser (full bundle only)
 ├── packages/         npm packages
 │   ├── pulsar-client/          MIT, no native deps
+│   ├── pgm-correlator/         MIT, no native deps -- PGM/Orion-identity time correlation (#230)
 │   ├── pulsar-bundle/          GPL, ships pulsar.exe (light)
 │   └── pulsar-bundle-full/     GPL, ships pulsar.exe (with CEF)
 ├── scripts/          build, package, probes, CI orchestration

@@ -837,12 +837,18 @@ jobs:
       - name: Build npm packages (topo order)
         run: |
           npm run build -w @clodocapeo/pulsar-client
+          npm run build -w @clodocapeo/pgm-correlator
           npm run build -w @clodocapeo/pulsar-bundle
           npm run build -w @clodocapeo/pulsar-bundle-full
 
+      # pgm-correlator's tests shell out to a real ffmpeg/ffprobe (a
+      # synthetic-but-real fixture, not a live PGM claim -- see its
+      # README). GitHub-hosted ubuntu-latest runners ship ffmpeg
+      # preinstalled; no extra setup step needed.
       - name: Test npm packages
         run: |
           npm run test -w @clodocapeo/pulsar-client
+          npm run test -w @clodocapeo/pgm-correlator
           npm run test -w @clodocapeo/pulsar-bundle
           npm run test -w @clodocapeo/pulsar-bundle-full
 

@@ -73,6 +73,11 @@ __pycache__/
 artefacts/
 probe-output.log
 
+# PGM correlation session artefacts (packages/pgm-correlator) -- real
+# recordings and per-session JSONL/summary output, never committed
+# (same rule as any other live-broadcast probe output above).
+_live_records/
+
 # Local agent constitution (untracked, kept locally)
 /CLAUDE.md
 
