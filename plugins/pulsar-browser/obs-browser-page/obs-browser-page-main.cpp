@@ -75,7 +75,7 @@ static void shutdown_check_thread(DWORD parent_pid, DWORD main_thread_id)
 	CloseHandle(parent);
 }
 
-int CALLBACK WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
+int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 {
 	PROCESS_POWER_THROTTLING_STATE PowerThrottling;
 	PowerThrottling.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
@@ -86,7 +86,9 @@ int CALLBACK WinMain(HINSTANCE, HINSTANCE, LPSTR, int)
 
 	std::thread shutdown_check;
 
-	CefMainArgs mainArgs(nullptr);
+	// Pass the real helper module instance to CEF. A null instance prevents
+	// the CEF subprocess bootstrap from attaching to the helper executable.
+	CefMainArgs mainArgs(hInstance);
 #if CHROME_VERSION_BUILD < 5615
 	if (!SetHighDPIv2Scaling())
 		CefEnableHighDPISupport();

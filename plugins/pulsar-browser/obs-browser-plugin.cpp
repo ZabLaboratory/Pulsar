@@ -279,7 +279,11 @@ static void BrowserInit(void)
 	path += "//pulsar-browser-page";
 #ifdef _WIN32
 	path += ".exe";
-	CefMainArgs args;
+	// CEF's Windows bootstrap needs the host module instance. The default
+	// constructor leaves this null, which makes CefInitialize fail after the
+	// plugin is loaded dynamically by pulsar.exe (the browser_source then
+	// exists but never paints).
+	CefMainArgs args(GetModuleHandleW(nullptr));
 #else
 	/* On non-windows platforms, ie macOS, we'll want to pass thru flags to
 	 * CEF */
