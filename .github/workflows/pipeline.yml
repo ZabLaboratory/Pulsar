@@ -234,11 +234,20 @@ jobs:
           if [ ${#patches[@]} -eq 0 ]; then
             echo "::notice::no patches to lint"; exit 0
           fi
+          root_patches=()
+          obs_browser_patches=()
+          for p in "${patches[@]}"; do
+            if [[ "$p" == *obs-browser* ]]; then
+              obs_browser_patches+=("$p")
+            else
+              root_patches+=("$p")
+            fi
+          done
           pinned=$(git submodule status --cached upstream | awk '{print $1}' | sed 's/^[+-]*//')
           cd upstream
           git reset --hard "$pinned"
           git clean -fdx
-          for p in "${patches[@]}"; do
+          for p in "${root_patches[@]}"; do
             full="../$p"
             echo "::group::git am $p"
             if ! git am --3way "$full"; then
@@ -248,6 +257,22 @@ jobs:
             fi
             echo "::endgroup::"
           done
+          if [ ${#obs_browser_patches[@]} -gt 0 ]; then
+            obs_browser_pinned=$(git submodule status --cached plugins/obs-browser | awk '{print $1}' | sed 's/^[+-]*//')
+            pushd plugins/obs-browser
+            git reset --hard "$obs_browser_pinned"
+            for p in "${obs_browser_patches[@]}"; do
+              full="../../../$p"
+              echo "::group::git am $p in obs-browser"
+              if ! git am --3way "$full"; then
+                git am --abort || true
+                echo "::error::Nested patch $p does not apply on obs-browser pinned SHA."
+                exit 1
+              fi
+              echo "::endgroup::"
+            done
+            popd
+          fi
 
       - name: Plugin metadata (CMakeLists + README per plugin)
         run: |
