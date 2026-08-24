@@ -43,3 +43,5 @@ for p in ../patches/*.patch; do git am "$p"; done
 If a patch becomes obsolete (upstream merged it, or the feature moved
 to a Pulsar plugin), delete the file and renumber subsequent patches
 only if the gap is awkward. Sequence gaps are fine.
+
+Patches whose filename contains `obs-browser` target the nested `upstream/plugins/obs-browser` submodule. The build script and CI apply those patches inside that pinned submodule after applying the root OBS patches; they must not be pushed to the upstream OBS repository.
