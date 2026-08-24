@@ -320,6 +320,17 @@ void on_set_capture_source(obs_data_t *req, obs_data_t *res, void *)
         return;
     }
 
+    // Adding a browser source mutates the scene graph, but it does not repair a
+    // stale libobs output-source binding. Reassert both invariants at the same
+    // boundary: the managed item is visible and channel 0 renders the exact
+    // frontend scene that received it. Without this, CEF can paint the source
+    // while the program mix continues encoding the previous/empty scene.
+    obs_sceneitem_set_visible(item, true);
+    obs_set_output_source(0, scene_src);
+    blog(LOG_INFO,
+         "[pulsar-scene-source] program output rebound to scene '%s' after capture-source add",
+         obs_source_get_name(scene_src));
+
     // Stash the snapshot so GetCaptureSource can report it.
     {
         std::lock_guard<std::mutex> lk(g_state_mtx);

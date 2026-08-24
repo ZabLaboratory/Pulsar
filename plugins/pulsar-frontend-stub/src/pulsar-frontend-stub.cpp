@@ -738,6 +738,7 @@ private:
     obs_output_t *recordOutput = nullptr;
     obs_output_t *replayOutput = nullptr;
     obs_output_t *virtualcamOutput = nullptr;
+    obs_output_t *programReturnOutput = nullptr;
 
     // ADR-005 §3.5 / #186: attempt lifecycle for pulsar:OutputAttemptSettled,
     // one pair per output this binary owns directly (multi-stream's own
@@ -1150,6 +1151,21 @@ bool PulsarFrontendAPI::setup()
     virtualcamOutput = obs_output_create("virtualcam_output", "PulsarVCam", nullptr, nullptr);
     if (virtualcamOutput)
         hookOutputSignals(virtualcamOutput, OnVCamStart, OnVCamStop);
+
+    // The source virtual camera above is intentionally not the program return:
+    // Prism scenes use it as an input camera. Keep a second native output for
+    // the cockpit so the cockpit never captures its own source-mode camera.
+    programReturnOutput = obs_output_create("program_return_output", "PulsarProgramReturn", nullptr, nullptr);
+    if (programReturnOutput) {
+        if (obs_output_get_flags(programReturnOutput) == 0) {
+            obs_output_release(programReturnOutput);
+            programReturnOutput = obs_output_create("program_return_output", "PulsarProgramReturn", nullptr, nullptr);
+        }
+        if (programReturnOutput) {
+            obs_output_set_media(programReturnOutput, obs_get_video(), obs_get_audio());
+            blog(LOG_WARNING, "[pulsar-frontend-stub] program return output ready (PulsarProgramReturn)");
+        }
+    }
 
     // Streaming service placeholder -- NEUTRAL by construction (#136).
     //
@@ -1576,6 +1592,7 @@ void PulsarFrontendAPI::teardown()
     stop_output_and_wait(recordOutput, "record");
     stop_output_and_wait(replayOutput, "replay");
     stop_output_and_wait(virtualcamOutput, "virtualcam");
+    stop_output_and_wait(programReturnOutput, "program-return");
 
     // Unbind every main mixer channel (video on 0, audio on 1/2/3) before
     // releasing the underlying sources. Otherwise libobs keeps refs past
@@ -1636,6 +1653,10 @@ void PulsarFrontendAPI::teardown()
         }
         obs_output_release(virtualcamOutput);
         virtualcamOutput = nullptr;
+    }
+    if (programReturnOutput) {
+        obs_output_release(programReturnOutput);
+        programReturnOutput = nullptr;
     }
     if (vcamView) {
         obs_view_remove(vcamView);
