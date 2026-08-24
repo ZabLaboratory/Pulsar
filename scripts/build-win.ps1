@@ -194,6 +194,8 @@ $patches = @()
 if (Test-Path $patchesDir) {
     $patches = Get-ChildItem $patchesDir -Filter '*.patch' -File | Sort-Object Name
 }
+$rootPatches = @($patches | Where-Object { $_.Name -notlike '*obs-browser*' })
+$obsBrowserPatches = @($patches | Where-Object { $_.Name -like '*obs-browser*' })
 
 # Recorded submodule SHA - read from the index via --cached so the
 # value is the immutable pin recorded in Pulsar's tree, not the
@@ -210,7 +212,8 @@ $recordedSha = $Matches[1]
 Write-Host ""
 Write-Host "--- Applying Pulsar patches ---"
 Write-Host "Pinned upstream commit: $recordedSha"
-Write-Host "Patches found:          $($patches.Count)"
+Write-Host "Root patches found:     $($rootPatches.Count)"
+Write-Host "OBS-browser patches:    $($obsBrowserPatches.Count)"
 
 Push-Location $upstream
 try {
@@ -221,7 +224,7 @@ try {
     & git reset --hard $recordedSha | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not reset upstream/ to $recordedSha" }
 
-    foreach ($patch in $patches) {
+    foreach ($patch in $rootPatches) {
         Write-Host "  applying $($patch.Name)"
         & git am --keep-non-patch $patch.FullName
         if ($LASTEXITCODE -ne 0) {
@@ -231,6 +234,37 @@ try {
     }
 } finally {
     Pop-Location
+}
+
+# obs-browser is a nested upstream submodule and cannot be changed by a
+# superproject gitlink patch. Apply patches explicitly inside that pinned
+# submodule after the root OBS patches have been applied.
+if ($obsBrowserPatches.Count -gt 0) {
+    $obsBrowser = Join-Path $upstream 'plugins/obs-browser'
+    $obsBrowserStatus = & git -C $upstream submodule status --cached -- plugins/obs-browser
+    if ($LASTEXITCODE -ne 0) { throw "Could not read obs-browser submodule status" }
+    if ($obsBrowserStatus -notmatch '^[ +-]([0-9a-f]+)') {
+        throw "Could not parse obs-browser SHA from: $obsBrowserStatus"
+    }
+    $obsBrowserRecordedSha = $Matches[1]
+    Push-Location $obsBrowser
+    try {
+        if (Test-Path '.git/rebase-apply') {
+            & git am --abort 2>$null
+        }
+        & git reset --hard $obsBrowserRecordedSha | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Could not reset obs-browser to $obsBrowserRecordedSha" }
+        foreach ($patch in $obsBrowserPatches) {
+            Write-Host "  applying $($patch.Name) in obs-browser"
+            & git am --keep-non-patch $patch.FullName
+            if ($LASTEXITCODE -ne 0) {
+                & git am --abort 2>$null
+                throw "Failed to apply $($patch.Name) in obs-browser -- see error above"
+            }
+        }
+    } finally {
+        Pop-Location
+    }
 }
 
 if ($Clean) {
