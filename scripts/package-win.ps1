@@ -132,7 +132,12 @@ $baseStrippedPlugins = @(
     'decklink-captions',
     'decklink-output-ui',
     'frontend-tools',
-    'obs-libfdk'
+    'obs-libfdk',
+    # Pulsar ships the forked pulsar-browser plugin. Never leave the
+    # upstream obs-browser loader beside it: both register browser_source,
+    # and load order then becomes nondeterministic (CEF reason 63/crash).
+    'obs-browser',
+    'obs-browser-page'
 )
 
 # Stripped only in the 'light' variant. In 'full' these stay so Prism
@@ -140,7 +145,6 @@ $baseStrippedPlugins = @(
 # sources for HTML overlays, native text sources, and VLC-backed media
 # sources.
 $lightOnlyStrippedPlugins = @(
-    'obs-browser',     # CEF runtime, ~200 MB
     'obs-text',        # GDI+ text source
     'text-freetype2',  # freetype-backed text source (companion to obs-text)
     'vlc-video',       # VLC media source
@@ -311,6 +315,11 @@ Built from https://github.com/ZabLaboratory/Pulsar (commit captured
 in build metadata).
 "@
 $readme | Set-Content -Encoding utf8 (Join-Path $dist 'README.txt')
+# Prism's local runtime manager uses this stamp to attest a fallback bundle
+# before it may be selected over a cached release. Without it, an unpacked
+# full bundle is treated as unverified and Prism silently falls back to the
+# same-version cache, which can omit newly built local outputs.
+$version | Set-Content -Encoding ascii (Join-Path $dist '.version-stamp')
 
 # --- Summary --------------------------------------------------------------
 $total = (Get-ChildItem $dist -Recurse -File | Measure-Object -Property Length -Sum)

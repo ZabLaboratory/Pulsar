@@ -70,13 +70,15 @@ void BrowserApp::OnBeforeCommandLineProcessing(const CefString &, CefRefPtr<CefC
 	if (!command_line->HasSwitch("no-sandbox"))
 		command_line->AppendSwitch("no-sandbox");
 
-	if (!shared_texture_available) {
-		bool enableGPU = command_line->HasSwitch("enable-gpu");
-		CefString type = command_line->GetSwitchValue("type");
-
-		if (!enableGPU && type.empty()) {
-			command_line->AppendSwitch("disable-gpu-compositing");
-		}
+	// Headless Pulsar keeps CEF on its software renderer by default. This
+	// avoids starting a GPU subprocess that cannot present into OBS and
+	// crashes with reason 63 on machines without a usable D3D device. The
+	// explicit --enable-gpu switch remains available for operators that have
+	// validated the shared-texture path on their machine.
+	bool enableGPU = command_line->HasSwitch("enable-gpu");
+	if (!enableGPU) {
+		command_line->AppendSwitch("disable-gpu");
+		command_line->AppendSwitch("disable-gpu-compositing");
 	}
 
 	if (command_line->HasSwitch("disable-features")) {

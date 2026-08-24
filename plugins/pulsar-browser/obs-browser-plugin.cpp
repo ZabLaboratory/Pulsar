@@ -24,6 +24,7 @@
 #include <obs-module.h>
 #include <obs.hpp>
 #include <functional>
+#include <cstdlib>
 #include <sstream>
 #include <thread>
 #include <mutex>
@@ -762,14 +763,13 @@ bool obs_module_load(void)
 	obs_frontend_add_event_callback(handle_obs_frontend_event, nullptr);
 
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
-	// PULSAR: with a hidden Win32 window owning a valid GDI session
-	// (created by pulsar-headless main before obs_startup), CEF's GPU
-	// subprocess can spin up its own D3D11 device normally. Honour the
-	// `BrowserHWAccel` private_data flag like upstream — true by
-	// default because hardware accel is the production path on a
-	// machine with a real GPU + valid GDI session.
-	OBSDataAutoRelease private_data = obs_get_private_data();
-	hwaccel = obs_data_get_bool(private_data, "BrowserHWAccel");
+	// PULSAR: software rendering is the deterministic default for the
+	// embedded headless runtime. A shared texture flag without a usable
+	// D3D device makes CEF spawn a GPU process that exits with reason 63.
+	// Operators can opt into the shared-texture path after validating the
+	// machine with PULSAR_BROWSER_GPU=1.
+	const char *gpu_opt_in = std::getenv("PULSAR_BROWSER_GPU");
+	hwaccel = gpu_opt_in && (strcmp(gpu_opt_in, "1") == 0 || strcmp(gpu_opt_in, "true") == 0);
 	if (hwaccel) {
 		check_hwaccel_support();
 	}
