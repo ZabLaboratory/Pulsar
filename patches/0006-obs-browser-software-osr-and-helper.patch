@@ -1,0 +1,127 @@
+From 4141cd05546e774943683158610af644db29126a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 24 Aug 2026 17:44:23 +0200
+Subject: [PATCH] fix(browser): keep software OSR deterministic in Pulsar
+
+Disable Chromium GPU paths unless explicitly enabled, preserve software OnPaint textures when accelerated sharing is unavailable, and resolve the Pulsar helper executable name. This patch is scoped to the Pulsar vendored build and is not pushed to the upstream OBS repository.
+
+Agent-Role: Eleven
+
+Agent-Thread: local-campaign-20260824
+
+Work-Unit: pulsar-obs-browser-patch
+
+Evidence: offline full probes; real CEF capture probe
+---
+ browser-app.cpp        | 24 ++++++++++++++++++------
+ browser-client.cpp     | 12 ++++++++++--
+ obs-browser-plugin.cpp |  5 ++++-
+ 3 files changed, 32 insertions(+), 9 deletions(-)
+
+diff --git a/browser-app.cpp b/browser-app.cpp
+index 5d2c4dc..c88acc5 100644
+--- a/browser-app.cpp
++++ b/browser-app.cpp
+@@ -58,6 +58,13 @@ void BrowserApp::OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_li
+ #ifdef _WIN32
+ 	std::string pid = std::to_string(GetCurrentProcessId());
+ 	command_line->AppendSwitchWithValue("parent_pid", pid);
++	if (!command_line->HasSwitch("enable-gpu")) {
++		// Apply the OSR software policy to every CEF child, including the GPU
++		// process. On CEF 127 the browser-process hook alone is not sufficient
++		// the child command line already carries a GPU configuration.
++		command_line->AppendSwitch("disable-gpu");
++		command_line->AppendSwitch("disable-gpu-compositing");
++	}
+ #else
+ 	(void)command_line;
+ #endif
+@@ -65,13 +72,18 @@ void BrowserApp::OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_li
+ 
+ void BrowserApp::OnBeforeCommandLineProcessing(const CefString &, CefRefPtr<CefCommandLine> command_line)
+ {
+-	if (!shared_texture_available) {
+-		bool enableGPU = command_line->HasSwitch("enable-gpu");
+-		CefString type = command_line->GetSwitchValue("type");
+-
+-		if (!enableGPU && type.empty()) {
++	bool enableGPU = command_line->HasSwitch("enable-gpu");
++	CefString type = command_line->GetSwitchValue("type");
++
++	if (!enableGPU && type.empty()) {
++		// The bundled Pulsar runtime uses CEF in OSR mode. Even when the
++		// platform reports shared-texture support, CEF 127 can still start a
++		// GPU process that terminates with Reason 63 on Windows/HAGS setups.
++		// Keep the browser-source path deterministic and software-backed;
++		// libobs itself remains D3D11-backed at the authored 1920x1080 size.
++		command_line->AppendSwitch("disable-gpu");
++		if (!shared_texture_available)
+ 			command_line->AppendSwitch("disable-gpu-compositing");
+-		}
+ 	}
+ 
+ 	if (command_line->HasSwitch("disable-features")) {
+diff --git a/browser-client.cpp b/browser-client.cpp
+index bf7baad..7708509 100644
+--- a/browser-client.cpp
++++ b/browser-client.cpp
+@@ -318,7 +318,6 @@ void BrowserClient::OnPaint(CefRefPtr<CefBrowser>, PaintElementType type, const
+ 	if (!valid()) {
+ 		return;
+ 	}
+-
+ 	if (bs->width != width || bs->height != height) {
+ 		obs_enter_graphics();
+ 		bs->DestroyTextures();
+@@ -380,6 +379,13 @@ void BrowserClient::OnAcceleratedPaint(CefRefPtr<CefBrowser>, PaintElementType t
+ 		// TODO Overlay texture on top of bs->texture
+ 		return;
+ 	}
++	// CEF can still emit accelerated callbacks when the window requested shared
++	// textures but OBS could not actually open one (for example with CEF GPU
++	// disabled). OnPaint is the valid software fallback in that case. The old
++	// path destroyed that software texture here and then replaced it with a null
++	// shared handle, leaving the browser source permanently black.
++	if (!sharing_available)
++		return;
+ 
+ 	if (!valid()) {
+ 		return;
+@@ -473,6 +479,9 @@ void BrowserClient::OnAcceleratedPaint2(CefRefPtr<CefBrowser>, PaintElementType
+ 		return;
+ 	}
+ 
++	if (!sharing_available)
++		return;
++
+ 	if (!valid()) {
+ 		return;
+ 	}
+@@ -611,7 +620,6 @@ void BrowserClient::OnLoadEnd(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
+ 	if (!valid()) {
+ 		return;
+ 	}
+-
+ 	if (frame->IsMain() && bs->css.length()) {
+ 		std::string uriEncodedCSS = CefURIEncode(bs->css, false).ToString();
+ 
+diff --git a/obs-browser-plugin.cpp b/obs-browser-plugin.cpp
+index 95a168c..cb3e3f3 100644
+--- a/obs-browser-plugin.cpp
++++ b/obs-browser-plugin.cpp
+@@ -272,7 +272,10 @@ static void BrowserInit(void)
+ {
+ 	string path = obs_get_module_binary_path(obs_current_module());
+ 	path = path.substr(0, path.find_last_of('/') + 1);
+-	path += "//obs-browser-page";
++	// The bundled Pulsar package renames the OBS helper and plugin to avoid
++	// colliding with an installed OBS runtime. Keep the subprocess lookup in
++	// sync with that distribution name.
++	path += "//pulsar-browser-page";
+ #ifdef _WIN32
+ 	path += ".exe";
+ 	CefMainArgs args;
+-- 
+2.54.0.windows.1
+
