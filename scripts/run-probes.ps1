@@ -632,7 +632,10 @@ function New-SessionPassword {
 function Stop-PulsarProcessTree {
     param([System.Diagnostics.Process] $Proc, [int] $WaitMs = 10000)
     if (-not $Proc -or $Proc.HasExited) { return }
-    & taskkill /PID $Proc.Id /T /F 2>&1 | Out-Null
+    # The process can exit between HasExited and taskkill (especially after
+    # a clean websocket shutdown). Treat that race as already-clean rather
+    # than converting taskkill's diagnostic stderr into a probe failure.
+    try { & taskkill /PID $Proc.Id /T /F 2>$null | Out-Null } catch {}
     try { $Proc.WaitForExit($WaitMs) | Out-Null } catch {}
 }
 # Get-Acl requires the Microsoft.PowerShell.Security module to autoload;
@@ -1001,6 +1004,20 @@ if (-not $ready) {
     exit 1
 }
 Log-Phase "==> PULSAR_READY received"
+
+# Connect-only probes historically read the source-tree config path. Keep
+# that compatibility path synchronized when the runner is pointed at an
+# external packaged bundle (for example dist/pulsar-*-full), otherwise the
+# probes would inspect a stale build config instead of the live process they
+# just started.
+$probeConfigPath = Join-Path $repoRoot "upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs-websocket/config.json"
+$actualConfigPath = [System.IO.Path]::GetFullPath((Join-Path $configDir "config.json"))
+$legacyConfigPath = [System.IO.Path]::GetFullPath($probeConfigPath)
+if ($actualConfigPath -ne $legacyConfigPath) {
+    $probeConfigDir = Split-Path -Parent $probeConfigPath
+    New-Item -ItemType Directory -Path $probeConfigDir -Force | Out-Null
+    Copy-Item -Force -LiteralPath $actualConfigPath -Destination $probeConfigPath
+}
 
 # --------------------------------------------------------------------
 # Phase 2 (ACL) -- config.json DACL hardening regression, Bastion
