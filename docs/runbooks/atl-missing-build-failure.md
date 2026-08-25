@@ -1,7 +1,8 @@
 # Runbook — Build failure: ATL headers missing (C1083)
 
 **Applies to:** local Windows build without the VS2022 "C++ ATL" workload.
-**Fixed by:** commit `d634d35` (PR #43, `patches/0002`, `scripts/build-win.ps1`).
+**Fixed by:** commit `d634d35` (PR #43), now integrated in the pinned upstream,
+plus `scripts/build-win.ps1`.
 
 ---
 
@@ -64,12 +65,13 @@ The MSVC "C++ ATL" component (`Microsoft.VisualStudio.Component.VC.ATL`) is **no
 
 The fix is already in place. Two artifacts implement it:
 
-**`patches/0002-build-gate-ATL-dependent-plugins-behind-PULSAR_HAVE_ATL.patch`**
+**Pinned `upstream/plugins/CMakeLists.txt`**
 Wraps the three plugin registrations in `plugins/CMakeLists.txt` behind
 `if(PULSAR_HAVE_ATL) ... else()`. The `else()` branch registers each plugin
 as a disabled stub via `target_disable()` so CMake reports them in
 `OBS_MODULES_DISABLED` instead of failing configure. The CMake option
-defaults to `ON`.
+defaults to `ON`. The former `patches/0002-*` file was removed after this
+change became part of the signed upstream revision.
 
 **`scripts/build-win.ps1` — `Test-AtlAvailable` function**
 Runs before the configure step. Uses `vswhere` to enumerate installed VS

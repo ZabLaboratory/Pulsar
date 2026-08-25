@@ -46,11 +46,11 @@ step below, and skipping it leaves the situation unchanged in production.
    as it is — the "no SDK payload" half holds either way. In
    `check_dist()`, the `full`-variant presence assertion becomes an absence
    assertion, and the `light` absence assertion simply stays true.
-3. Keep `patches/0003-nv-filters-pin-sdk-loads-to-validated-directory.patch`
-   and `tests/nv-probe/`. The module still **builds**; only the packaging
-   changes. Dropping the hardening at the same time would leave a build in
-   which the old bare-name loads are back, and any consumer building from
-   source — or any existing install — gets them.
+3. Keep the pinned upstream NVIDIA loader hardening and `tests/nv-probe/`.
+   The former `patches/0003-*` change now lives directly in the signed
+   upstream revision. The module still **builds**; only the packaging changes.
+   Reverting that upstream hardening at the same time would restore bare-name
+   loads for source builds and existing installs.
 4. `docs/PROTOCOL.md` — `capabilities.nv_filters` keeps being published.
    It is a probe of the host machine, not of the bundle, and with the module
    stripped it is precisely what tells a consumer why the filters vanished.
