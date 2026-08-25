@@ -295,18 +295,20 @@ or copy a digest from another archive.
 ## Repository layout
 
 ~~~text
-Pulsar/§uçâç\ºw^~)Şvéİyø§yĞ upstream/                  OBS source submodule
-ºw^~)Şvéİyø§yÛ§uçâç@ patches/                   numbered upstream patches
-ºw^~)Şvéİyø§yÛ§uçâç@ plugins/                   headless, websocket, streams and scene source§uçâç\ºw^~)Şvéİyø§yĞ packages/                  client, bundles and internal proof tooling
-éİyø§yÛ§uçâç@ºw^~)Şt scripts/                   build, package and probe automation§uçâç\ºw^~)Şvéİyø§yĞ docs/                      protocol, embedding and development contracts
-éİyø§yÛ§uçâç@ºw^~)Şt .github/workflows/         CI, live proof and release pipeline
+Pulsar/
++-- upstream/                  OBS source submodule
++-- patches/                   numbered upstream patches
++-- plugins/                   headless, websocket, streams and scene source
++-- packages/                  client, bundles and internal proof tooling
++-- scripts/                   build, package and probe automation
++-- docs/                      protocol, embedding and development contracts
++-- .github/workflows/         CI, live proof and release pipeline
 ~~~
-
 ## Scope and non-goals
 
 - Windows x64 is the supported runtime target.
-- Pulsar does not replace Prism, Orion, Solar, ZabCanvas, ZabTruth, ZabRanking,
-  Quasar or ZabCam.
+- Pulsar is not a scene authoring application, data service, authentication
+  service or control station. Prism is the product layer that embeds it.
 - Current first-class destination kinds are twitch, rtmp_custom and vod_local.
 - Resolution, FPS and encoder family are not switchable during a live session.
 - The typed client does not auto-reconnect; the host decides the retry policy.
