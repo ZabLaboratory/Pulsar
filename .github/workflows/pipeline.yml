@@ -999,6 +999,15 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm publish -w @clodocapeo/pulsar-client     --access public
-          npm publish -w @clodocapeo/pulsar-bundle      --access public
-          npm publish -w @clodocapeo/pulsar-bundle-full --access public
+          publish_if_missing() {
+            package_name="$1"
+            package_version="$(npm pkg get version -w "$package_name" | tr -d '"[:space:]')"
+            if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
+              echo "${package_name}@${package_version} already exists; keeping the immutable npm release"
+              return 0
+            fi
+            npm publish -w "$package_name" --access public
+          }
+          publish_if_missing @clodocapeo/pulsar-client
+          publish_if_missing @clodocapeo/pulsar-bundle
+          publish_if_missing @clodocapeo/pulsar-bundle-full
