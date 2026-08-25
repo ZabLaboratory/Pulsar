@@ -1001,7 +1001,8 @@ jobs:
         run: |
           publish_if_missing() {
             package_name="$1"
-            package_version="$(npm pkg get version -w "$package_name" | tr -d '"[:space:]')"
+            package_dir="${package_name##*/}"
+            package_version="$(node -p "require('./packages/${package_dir}/package.json').version")"
             if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
               echo "${package_name}@${package_version} already exists; keeping the immutable npm release"
               return 0
