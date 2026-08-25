@@ -4,7 +4,13 @@
 // See README.md for a full example.
 
 export { PulsarClient } from "./client.js";
-export { PulsarVendorError, PulsarNotConnectedError } from "./errors.js";
+export {
+  PulsarVendorError,
+  PulsarNotConnectedError,
+  PulsarRuntimeError,
+  type PulsarPrismErrorEnvelope,
+} from "./errors.js";
+export type { PulsarPrismLogEvent } from "./types.js";
 export { TypedEventEmitter } from "./events.js";
 export type {
   AdaptiveState,

@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PulsarClient } from "@clodocapeo/pulsar-client";
+import { PulsarClient, PulsarRuntimeError, type PulsarPrismLogEvent } from "@clodocapeo/pulsar-client";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,6 +32,9 @@ export interface SpawnOptions {
 
   /** Optional log forwarder. Receives one stdout/stderr line at a time. */
   onLog?: (stream: "stdout" | "stderr", line: string) => void;
+
+  /** Optional structured projection of runtime lifecycle/native log lines. */
+  onPrismLog?: (event: PulsarPrismLogEvent) => void;
 
   /** Test-only escape hatch: spawn a different executable instead of
    *  the bundled pulsar.exe. The launched process must still print the
@@ -87,6 +90,18 @@ const IDLE_MARKER = "ready, idling";
  *   await pulsar.shutdown();
  */
 export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedPulsar> {
+  const emitRuntimeError = (code: string, message: string, details: Record<string, unknown> = {}): void => {
+    opts.onPrismLog?.({
+      schemaVersion: 1,
+      severity: "error",
+      domain: "service",
+      source: "pulsar.runtime",
+      code,
+      message,
+      context: { action: "spawn" },
+      details,
+    });
+  };
   const binariesPath = opts.binariesPath ?? DEFAULT_BINARIES;
   const cwd = join(binariesPath, "bin", "64bit");
   const configPath = join(cwd, "obs-websocket", "config.json");
@@ -102,10 +117,13 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedPulsar> {
     exe = join(cwd, "pulsar.exe");
     args = [];
     if (!existsSync(exe)) {
-      throw new Error(
+      emitRuntimeError("PULSAR_BINARY_UNAVAILABLE", `pulsar.exe not found at ${exe}.`, { binaryPath: exe });
+      throw new PulsarRuntimeError(
+        "PULSAR_BINARY_UNAVAILABLE",
         `pulsar.exe not found at ${exe}. ` +
           `Run \`npm install\` to trigger the postinstall download, ` +
           `or set binariesPath to a local checkout.`,
+        { action: "spawn", binaryPath: exe },
       );
     }
   }
@@ -128,12 +146,25 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedPulsar> {
   });
 
   const watchdog = setTimeout(() => {
-    rejectReady(new Error(`pulsar.exe did not signal ready within ${readyTimeout}ms`));
+    emitRuntimeError("PULSAR_READY_TIMEOUT", `pulsar.exe did not signal ready within ${readyTimeout}ms`, {
+      timeoutMs: readyTimeout,
+    });
+    rejectReady(new PulsarRuntimeError("PULSAR_READY_TIMEOUT", `pulsar.exe did not signal ready within ${readyTimeout}ms`, { action: "spawn", timeoutMs: readyTimeout }));
   }, readyTimeout);
 
   const handleLine = (stream: "stdout" | "stderr", line: string) => {
     if (line.length === 0) return;
     if (opts.onLog) opts.onLog(stream, line);
+    opts.onPrismLog?.({
+      schemaVersion: 1,
+      severity: /error|fail|fatal|refus|declin|unavail/i.test(line) ? "error" : /warn|skip|partial/i.test(line) ? "warning" : "info",
+      domain: "service",
+      source: "pulsar.process",
+      code: "PULSAR_PROCESS_LOG",
+      message: redactNativeLine(line),
+      context: { stream },
+      details: {},
+    });
     // pulsar-headless prints exactly:
     //   "pulsar-headless: libobs <version> ready, idling (Ctrl+C to exit)"
     // when boot is complete.
@@ -150,7 +181,11 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedPulsar> {
 
   child.on("exit", (code, signal) => {
     clearTimeout(watchdog);
-    rejectReady(new Error(`pulsar.exe exited prematurely (code=${code}, signal=${signal})`));
+    emitRuntimeError("PULSAR_PROCESS_EXITED", `pulsar.exe exited prematurely (code=${code}, signal=${signal})`, {
+      exitCode: code,
+      signal,
+    });
+    rejectReady(new PulsarRuntimeError("PULSAR_PROCESS_EXITED", `pulsar.exe exited prematurely (code=${code}, signal=${signal})`, { action: "spawn", exitCode: code, signal }));
   });
 
   await ready;
@@ -159,13 +194,17 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedPulsar> {
   // ready marker, the file is guaranteed to exist with port + password.
   if (!existsSync(configPath)) {
     child.kill();
-    throw new Error(`obs-websocket config not found at ${configPath} (boot incomplete?)`);
+    emitRuntimeError("PULSAR_CONFIG_MISSING", `obs-websocket config not found at ${configPath} (boot incomplete?)`, {
+      configPath,
+    });
+    throw new PulsarRuntimeError("PULSAR_CONFIG_MISSING", `obs-websocket config not found at ${configPath} (boot incomplete?)`, { action: "spawn" });
   }
   const config = JSON.parse(readFileSync(configPath, "utf8")) as ObsWebSocketConfig;
   const port = config.server_port ?? 4455;
   const password = config.server_password;
 
   const client = new PulsarClient();
+  client.on("prismLog", (event) => opts.onPrismLog?.(event));
   await client.connect({
     url: `ws://127.0.0.1:${port}`,
     ...(password !== undefined ? { password } : {}),
@@ -223,4 +262,10 @@ function attachLineReader(
   out.on("end", () => {
     if (buf.length > 0) onLine(buf.replace(/\r$/, ""));
   });
+}
+
+function redactNativeLine(line: string): string {
+  return line
+    .replace(/(password|token|secret|stream[-_ ]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=[redacted]")
+    .slice(0, 512);
 }

@@ -16,7 +16,7 @@ export class RecordNamespace {
   constructor(private readonly client: PulsarClient) {}
 
   async start(): Promise<void> {
-    await this.client.obs.call("StartRecord");
+    await this.client.call("StartRecord");
   }
 
   /**
@@ -27,6 +27,15 @@ export class RecordNamespace {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.client.off("recordStateChanged", listener);
+        this.client.reportPrism({
+          severity: "error",
+          domain: "broadcast",
+          source: "pulsar.record",
+          code: "OPERATION_TIMEOUT",
+          message: "Pulsar recording stop timed out",
+          context: { action: "StopRecord" },
+          details: { timeoutMs },
+        });
         reject(new Error(`RecordNamespace.stop timed out after ${timeoutMs}ms`));
       }, timeoutMs);
 
@@ -35,11 +44,22 @@ export class RecordNamespace {
         clearTimeout(timer);
         this.client.off("recordStateChanged", listener);
         if (e.outputPath) resolve(e.outputPath);
-        else reject(new Error("RecordStateChanged STOPPED without outputPath"));
+        else {
+          this.client.reportPrism({
+            severity: "error",
+            domain: "broadcast",
+            source: "pulsar.record",
+            code: "ACTION_FAILED",
+            message: "Pulsar recording stopped without an output path",
+            context: { action: "StopRecord" },
+            details: {},
+          });
+          reject(new Error("RecordStateChanged STOPPED without outputPath"));
+        }
       };
       this.client.on("recordStateChanged", listener);
 
-      this.client.obs.call("StopRecord").catch((err) => {
+      this.client.call("StopRecord").catch((err) => {
         clearTimeout(timer);
         this.client.off("recordStateChanged", listener);
         reject(err);
@@ -48,15 +68,15 @@ export class RecordNamespace {
   }
 
   async pause(): Promise<void> {
-    await this.client.obs.call("PauseRecord");
+    await this.client.call("PauseRecord");
   }
 
   async resume(): Promise<void> {
-    await this.client.obs.call("ResumeRecord");
+    await this.client.call("ResumeRecord");
   }
 
   async isActive(): Promise<boolean> {
-    const resp = await this.client.obs.call("GetRecordStatus");
+    const resp = await this.client.call("GetRecordStatus");
     return Boolean((resp as { outputActive: boolean }).outputActive);
   }
 }

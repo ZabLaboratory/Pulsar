@@ -29,15 +29,15 @@ export class StreamNamespace {
   constructor(private readonly client: PulsarClient) {}
 
   async start(): Promise<void> {
-    await this.client.obs.call("StartStream");
+    await this.client.call("StartStream");
   }
 
   async stop(): Promise<void> {
-    await this.client.obs.call("StopStream");
+    await this.client.call("StopStream");
   }
 
   async isActive(): Promise<boolean> {
-    const resp = await this.client.obs.call("GetStreamStatus");
+    const resp = await this.client.call("GetStreamStatus");
     return Boolean((resp as { outputActive: boolean }).outputActive);
   }
 }

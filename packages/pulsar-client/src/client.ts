@@ -1,7 +1,7 @@
-import OBSWebSocket from "obs-websocket-js";
+import OBSWebSocket, { type OBSRequestTypes } from "obs-websocket-js";
 
 import { TypedEventEmitter } from "./events.js";
-import { PulsarNotConnectedError, PulsarVendorError } from "./errors.js";
+import { PulsarNotConnectedError, PulsarVendorError, type PulsarPrismErrorEnvelope } from "./errors.js";
 import { DestinationsNamespace } from "./destinations.js";
 import { VideoNamespace } from "./video.js";
 import { CapabilitiesNamespace } from "./capabilities.js";
@@ -124,18 +124,126 @@ export class PulsarClient extends TypedEventEmitter {
   /** Connect to a running Pulsar (or any obs-websocket v5 server). */
   async connect(options: ConnectOptions = {}): Promise<void> {
     const url = options.url ?? "ws://127.0.0.1:4455";
-    const subs = options.eventSubscriptions ?? 0x7ff;
-    await this.obs.connect(url, options.password, {
-      eventSubscriptions: subs,
-      rpcVersion: 1,
+    this.emitPrism({
+      severity: "debug",
+      domain: "service",
+      source: "pulsar.client",
+      code: "ACTION_STARTED",
+      message: "Pulsar connection started",
+      context: { action: "connect" },
+      details: { host: maskHost(url) },
     });
-    this.connected = true;
+    const subs = options.eventSubscriptions ?? 0x7ff;
+    try {
+      await this.obs.connect(url, options.password, {
+        eventSubscriptions: subs,
+        rpcVersion: 1,
+      });
+      this.connected = true;
+      this.emitPrism({
+        severity: "info",
+        domain: "service",
+        source: "pulsar.client",
+        code: "SERVICE_READY",
+        message: "Pulsar is ready",
+        context: { action: "connect" },
+        details: { host: maskHost(url) },
+      });
+    } catch (error) {
+      this.emitPrism({
+        severity: "error",
+        domain: "service",
+        source: "pulsar.client",
+        code: "SERVICE_UNAVAILABLE",
+        message: "Pulsar connection failed",
+        context: { action: "connect" },
+        details: { errorType: error instanceof Error ? error.name : typeof error },
+      });
+      throw error;
+    }
   }
 
   async disconnect(): Promise<void> {
-    if (!this.connected) return;
-    await this.obs.disconnect();
+    if (!this.connected) {
+      this.emitPrism({
+        severity: "info",
+        domain: "service",
+        source: "pulsar.client",
+        code: "ACTION_NOOP",
+        message: "Pulsar was already disconnected",
+        context: { action: "disconnect" },
+        details: {},
+      });
+      return;
+    }
+    try {
+      await this.obs.disconnect();
+    } catch (error) {
+      this.emitPrism({
+        severity: "error",
+        domain: "service",
+        source: "pulsar.client",
+        code: "ACTION_FAILED",
+        message: "Pulsar disconnect failed",
+        context: { action: "disconnect" },
+        details: { errorType: error instanceof Error ? error.name : typeof error },
+      });
+      throw error;
+    }
     this.connected = false;
+    this.emitPrism({
+      severity: "info",
+      domain: "service",
+      source: "pulsar.client",
+      code: "SERVICE_STOPPED",
+      message: "Pulsar disconnected",
+      context: { action: "disconnect" },
+      details: {},
+    });
+  }
+
+  /** Call a standard obs-websocket request with the same lifecycle logging as
+   * the Pulsar vendor namespace. Typed namespaces use this seam so a failed
+   * OBS action cannot disappear as an unstructured rejected promise. */
+  async call<TResponse = unknown>(requestType: string, requestData?: object): Promise<TResponse> {
+    if (!this.connected) {
+      const error = new PulsarNotConnectedError();
+      this.emitPrism(error.prism);
+      throw error;
+    }
+    this.emitPrism({
+      severity: "debug",
+      domain: "broadcast",
+      source: "pulsar.obs",
+      code: "ACTION_STARTED",
+      message: "Pulsar OBS action started",
+      context: { action: requestType },
+      details: {},
+    });
+    try {
+      const response = (await this.obs.call(requestType as keyof OBSRequestTypes, requestData as never)) as TResponse;
+      this.emitPrism({
+        severity: "info",
+        domain: "broadcast",
+        source: "pulsar.obs",
+        code: "ACTION_SUCCEEDED",
+        message: "Pulsar OBS action completed",
+        context: { action: requestType },
+        details: {},
+      });
+      return response;
+    } catch (error) {
+      this.emitPrism({
+        severity: "error",
+        domain: "broadcast",
+        source: "pulsar.obs",
+        code: "ACTION_FAILED",
+        message: "Pulsar OBS action failed",
+        context: { action: requestType },
+        details: { errorType: error instanceof Error ? error.name : typeof error },
+      });
+      throw error;
+    }
   }
 
   isConnected(): boolean {
@@ -153,7 +261,21 @@ export class PulsarClient extends TypedEventEmitter {
     requestType: string,
     requestData?: TReq,
   ): Promise<TRes> {
-    if (!this.connected) throw new PulsarNotConnectedError();
+    if (!this.connected) {
+      const error = new PulsarNotConnectedError();
+      this.emitPrism(error.prism);
+      throw error;
+    }
+
+    this.emitPrism({
+      severity: "debug",
+      domain: "broadcast",
+      source: "pulsar.vendor",
+      code: "ACTION_STARTED",
+      message: "Pulsar vendor action started",
+      context: { action: requestType },
+      details: {},
+    });
 
     const callPayload: { vendorName: string; requestType: string; requestData?: TReq } = {
       vendorName: VENDOR,
@@ -162,12 +284,78 @@ export class PulsarClient extends TypedEventEmitter {
     if (requestData !== undefined) {
       callPayload.requestData = requestData;
     }
-    const resp = await this.obs.call("CallVendorRequest", callPayload as never);
+    let resp: unknown;
+    try {
+      resp = await this.obs.call("CallVendorRequest", callPayload as never);
+    } catch (error) {
+      this.emitPrism({
+        severity: "error",
+        domain: "broadcast",
+        source: "pulsar.vendor",
+        code: "ACTION_FAILED",
+        message: "Pulsar vendor action failed",
+        context: { action: requestType },
+        details: { errorType: error instanceof Error ? error.name : typeof error },
+      });
+      throw error;
+    }
     const inner = ((resp as unknown as { responseData?: TRes }).responseData ?? {}) as TRes;
     if (typeof inner.error === "string" && inner.error.length > 0) {
-      throw new PulsarVendorError(requestType, inner.error);
+      const raw = inner as TRes & Record<string, unknown>;
+      const envelope: Partial<PulsarPrismErrorEnvelope> = {};
+      if (typeof raw.code === "string") envelope.code = raw.code;
+      if (typeof raw.message === "string") envelope.message = raw.message;
+      if (raw.severity === "error" || raw.severity === "warning") envelope.severity = raw.severity;
+      if (isPrismDomain(raw.domain)) envelope.domain = raw.domain;
+      if (typeof raw.source === "string") envelope.source = raw.source;
+      if (isRecord(raw.context)) envelope.context = raw.context;
+      if (isRecord(raw.details)) envelope.details = raw.details;
+      if (typeof raw.requestId === "string") envelope.requestId = raw.requestId;
+      const error = new PulsarVendorError(requestType, inner.error, envelope);
+      this.emitPrism(error.prism);
+      throw error;
     }
+    this.emitPrism({
+      severity: "info",
+      domain: "broadcast",
+      source: "pulsar.vendor",
+      code: "ACTION_SUCCEEDED",
+      message: "Pulsar vendor action completed",
+      context: { action: requestType },
+      details: {},
+    });
     return inner;
+  }
+
+  reportPrism(event: Omit<import("./types.js").PulsarPrismLogEvent, "schemaVersion">): void {
+    this.emit("prismLog", { schemaVersion: 1, ...event });
+  }
+
+  private emitPrism(event: Omit<import("./types.js").PulsarPrismLogEvent, "schemaVersion">): void {
+    this.reportPrism(event);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPrismDomain(value: unknown): value is PulsarPrismErrorEnvelope["domain"] {
+  return (
+    value === "scene" ||
+    value === "broadcast" ||
+    value === "service" ||
+    value === "system" ||
+    value === "operator"
+  );
+}
+
+function maskHost(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.hostname}${url.port ? `:${url.port}` : ""}`;
+  } catch {
+    return "invalid-url";
   }
 }
 

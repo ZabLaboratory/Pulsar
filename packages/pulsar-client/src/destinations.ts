@@ -32,6 +32,15 @@ export class DestinationsNamespace {
     >("CreateDestination", createDestinationToWire(input));
     if (!resp.id) {
       // Server didn't error out but also didn't return an id -- defensive.
+      this.client.reportPrism({
+        severity: "error",
+        domain: "broadcast",
+        source: "pulsar.destinations",
+        code: "ACTION_FAILED",
+        message: "Pulsar did not return a destination id",
+        context: { action: "CreateDestination" },
+        details: {},
+      });
       throw new Error("CreateDestination returned no id");
     }
     // The list-after-create race-window is irrelevant here because the
@@ -39,6 +48,15 @@ export class DestinationsNamespace {
     const all = await this.list();
     const created = all.find((d) => d.id === resp.id);
     if (!created) {
+      this.client.reportPrism({
+        severity: "error",
+        domain: "broadcast",
+        source: "pulsar.destinations",
+        code: "ACTION_FAILED",
+        message: "Pulsar destination could not be read back",
+        context: { action: "CreateDestination" },
+        details: { destinationId: resp.id },
+      });
       throw new Error(`CreateDestination returned id ${resp.id} but it's not in GetDestinations`);
     }
     return created;

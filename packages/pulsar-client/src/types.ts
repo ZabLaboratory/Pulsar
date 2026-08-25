@@ -396,8 +396,21 @@ export interface ConnectOptions {
   eventSubscriptions?: number;
 }
 
+export interface PulsarPrismLogEvent {
+  schemaVersion: 1;
+  severity: "error" | "warning" | "info" | "debug";
+  domain: "scene" | "broadcast" | "service" | "system" | "operator";
+  source: string;
+  code: string;
+  message: string;
+  context: Record<string, unknown>;
+  details: Record<string, unknown>;
+  requestId?: string;
+}
+
 /** Mapping of typed event names to their payloads. */
 export interface PulsarEventMap {
+  prismLog: PulsarPrismLogEvent;
   bitrateAdjusted: BitrateAdjustedEvent;
   recordStateChanged: RecordStateChangedEvent;
   streamStateChanged: StreamStateChangedEvent;
