@@ -197,17 +197,21 @@ Log-Phase "==> probe-record-m2.py OK"
 # is present and M3 asserts for real.
 # --------------------------------------------------------------------
 $browserProbe = Join-Path $repoRoot "scripts/probe-browser-m3.py"
-Log-Phase "==> Running probe-browser-m3.py (self-spawn CEF capture, M3)"
-& python $browserProbe --exe $pulsar
-$browserCode = $LASTEXITCODE
-if ($browserCode -eq 3) {
-    Log-Phase "==> probe-browser-m3.py SKIPPED (light build -- browser_source absent, no CEF)"
-} elseif ($browserCode -ne 0) {
-    Log-Phase "==> probe-browser-m3.py FAILED (exit $browserCode)"
-    Log-Phase "==> CEF could not render + capture a page -- aborting before the shared suite."
-    exit 1
+if ($env:PULSAR_SKIP_ACCELERATED_CEF_PROBE -eq "1") {
+    Log-Phase "==> probe-browser-m3.py SKIPPED (no physical GPU on this host; NOT a pass -- real GPU E2E remains required)"
 } else {
-    Log-Phase "==> probe-browser-m3.py OK"
+    Log-Phase "==> Running probe-browser-m3.py (self-spawn accelerated CEF capture, M3)"
+    & python $browserProbe --exe $pulsar
+    $browserCode = $LASTEXITCODE
+    if ($browserCode -eq 3) {
+        Log-Phase "==> probe-browser-m3.py SKIPPED (light build -- browser_source absent, no CEF)"
+    } elseif ($browserCode -ne 0) {
+        Log-Phase "==> probe-browser-m3.py FAILED (exit $browserCode)"
+        Log-Phase "==> Accelerated CEF could not render + capture a page -- aborting before the shared suite."
+        exit 1
+    } else {
+        Log-Phase "==> probe-browser-m3.py OK"
+    }
 }
 
 # --------------------------------------------------------------------

@@ -153,18 +153,11 @@ def spawn_pulsar(exe: pathlib.Path, fps: int) -> subprocess.Popen:
     # produces a transient black-frame moment we tolerate.
     env.pop("PULSAR_CAPTURE_WINDOW", None)
 
-    # `--disable-gpu` is forwarded to CEF (obs-browser plugin) via the
-    # process command line — CEF reads it through `GetCommandLineW()`
-    # at `CefInitialize` and propagates to every subprocess it spawns.
-    # Without it, CEF's GPU subprocess crashes at the first frame pull
-    # in a headless host (no display / no compositor) with
-    # 'gpu_data_manager_impl_private.cc: GPU process isn't usable.
-    # Goodbye.', taking obs-browser down with it. SW rasterization is
-    # the canonical config for headless CEF (Puppeteer / Playwright /
-    # Lambda runtime do the same). Pulsar-side fix : we just launch
-    # with the flag, no patch on upstream obs-browser needed.
+    # Keep CEF GPU acceleration enabled. A software-rasterized Twitch run
+    # cannot prove the production render path and must never be accepted as
+    # the release-grade antenna proof.
     proc = subprocess.Popen(
-        [str(exe), "--disable-gpu", "--no-sandbox"],
+        [str(exe), "--no-sandbox"],
         cwd=str(RUNDIR),
         env=env,
         stdout=subprocess.PIPE,
