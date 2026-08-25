@@ -1,338 +1,334 @@
 # Pulsar
 
-[![npm pulsar-client](https://img.shields.io/npm/v/%40clodocapeo%2Fpulsar-client?label=%40clodocapeo%2Fpulsar-client&logo=npm&color=cb3837)](https://www.npmjs.com/package/@clodocapeo/pulsar-client)
-[![npm pulsar-bundle](https://img.shields.io/npm/v/%40clodocapeo%2Fpulsar-bundle?label=%40clodocapeo%2Fpulsar-bundle&logo=npm&color=cb3837)](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle)
-[![npm pulsar-bundle-full](https://img.shields.io/npm/v/%40clodocapeo%2Fpulsar-bundle-full?label=%40clodocapeo%2Fpulsar-bundle-full&logo=npm&color=cb3837)](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle-full)
 [![GitHub release](https://img.shields.io/github/v/release/ZabLaboratory/Pulsar?logo=github)](https://github.com/ZabLaboratory/Pulsar/releases/latest)
 [![Pipeline](https://github.com/ZabLaboratory/Pulsar/actions/workflows/pipeline.yml/badge.svg)](https://github.com/ZabLaboratory/Pulsar/actions/workflows/pipeline.yml)
-[![Prism runtime release](https://img.shields.io/badge/Prism-local%20runtime-0f766e)](https://github.com/ZabLaboratory/Pulsar/releases/latest)
-[![Licence GPL-2.0-or-later](https://img.shields.io/badge/licence-GPL--2.0--or--later-blue)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-windows--x64-0078d4)](#install)
-[![libobs 32.1.2](https://img.shields.io/badge/libobs-32.1.2-7c8f9f)](https://github.com/obsproject/obs-studio/releases/tag/32.1.2)
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078d4)](#requirements)
+[![Client license](https://img.shields.io/badge/client%20license-MIT-2ea44f)](packages/pulsar-client/LICENSE)
+[![Runtime license](https://img.shields.io/badge/runtime%20license-GPL--2.0--or--later-blue)](LICENSE)
 
-> **Headless broadcast engine for embedding.** A fork of OBS Studio shaped into a service: no UI, no installer, no operator workflow. Boots, listens on a localhost WebSocket, and answers obs-websocket v5 + a `pulsar:*` vendor namespace. Your application drives it.
+> Headless broadcast runtime for embedding.
 
-Pulsar takes the encoder pipeline, capture stack, audio graph, scene compositor, and plugin model that make OBS Studio the de-facto broadcast engine, strips the desktop application around it, and exposes the result as a typed Node API. Every capability the OBS UI surfaces — multi-source scenes, x264 / NVENC / QSV / AV1 encoders, RTMP / SRT / HLS / WHIP outputs, WASAPI / CoreAudio audio capture, GPU-composited transitions, browser overlays, native game capture via DLL injection, recording — is reachable over the wire.
+Pulsar is a Windows x64 fork of OBS Studio built as a service rather than a
+desktop application. It starts pulsar.exe, exposes obs-websocket v5 on a
+loopback WebSocket, and adds typed vendor APIs for destinations, encoder
+settings, adaptive bitrate and live scene capture.
 
-It is built for products that need broadcast capabilities without inheriting OBS as a user-facing application: control stations, operator desktops, headless servers, automation rigs, Electron hosts. You ship `pulsar.exe` next to your binary, spawn it at boot, talk to it like any other service.
+Pulsar is only the media plane. It does not author ZabCanvas scenes, run Orion
+or Solar, or resolve ZabTruth/ZabRanking data. Prism owns those control-plane
+concerns and sends Pulsar a local scene URL to capture.
 
-### Prism local runtime release
+## Version and releases
 
-Pulsar v2 is the local media-plane runtime used by Prism. A Pulsar release
-tag publishes the Windows full bundle plus
-`prism-pulsar-runtime-manifest.json`, which contains the artifact URL and its
-SHA-256 digest. Prism verifies and caches that bundle during startup before
-Cockpit handoff, so scene switches and on-air output do not download Pulsar.
-The runtime remains a separate process connected over loopback WebSocket;
-Prism does not link libobs or disable GPU acceleration.
+The source version is stored in [VERSION](VERSION). The current source line and
+the three published npm packages are version 2.0.0.
 
----
+A release tag runs the release-grade pipeline in
+[.github/workflows/pipeline.yml](.github/workflows/pipeline.yml):
 
-## What it does
+1. Build the Windows headless runtime and light/full distributions.
+2. Run binary, license, protocol and offline probe gates.
+3. Run the real Twitch broadcast probe and produce encoded-output evidence.
+4. Attach the full zip, MP4, diagnostic JSON and
+   prism-pulsar-runtime-manifest.json to the GitHub release.
+5. Publish immutable npm package versions when they do not already exist.
 
-| Capability | Detail |
+Prism consumes the full manifest, verifies its SHA-256 digest and caches the
+verified bundle locally. Pulsar must already be ready before a live scene
+switch; the switch must not download or build the runtime.
+
+- [Latest release](https://github.com/ZabLaboratory/Pulsar/releases/latest)
+- [Prism embedding contract](docs/PRISM-EMBEDDING.md)
+- [Protocol reference](docs/PROTOCOL.md)
+- [Consumer audit](CONSUMER-AUDIT.md)
+
+## Supported surface
+
+| Area | Current behavior |
 |---|---|
-| **Headless service** | `pulsar.exe` boots libobs with a minimal Qt platform (no display surface). Binds a session-random WebSocket on `127.0.0.1`, prints a session JWT on stdout for the host to pick up. No installer, no tray icon, no window. |
-| **obs-websocket v5 baseline** | 155 of the v5 standard requests work out of the box. Stream Deck, Streamer.bot, Companion, Aitum, every existing OBS automation plugs in unchanged. |
-| **Pulsar vendor namespace** | `pulsar:*` requests on top of v5 for capabilities the baseline does not model: multi-destination first-class, adaptive bitrate control, per-process audio capture, live encoder retuning, recording paths. |
-| **Multi-destination native** | One encoder pair fans out to N outputs (`encode-once / fan-out-N`). Twitch, RTMP custom and local MP4 are first-class destination kinds — not third-party plugin extensions. Add a destination, start it, stop it, all over the wire. |
-| **Adaptive bitrate** | Background worker samples `obs_output_get_frames_dropped` every 2s, scales bitrate within `[floor, target]`, emits `pulsar:BitrateAdjusted` events. Bandwidth-aware streaming without a babysitter. |
-| **1080p60 by default** | Configurable via `PULSAR_FPS` (24 / 30 / 48 / 60 / 120) and `PULSAR_RESOLUTION` (`<W>x<H>` up to 8K). x264 + AAC encoders pre-tuned: CBR 6000 / 160 kbps, keyint 2s, preset `veryfast`, profile `high`, tune `zerolatency`. Live-tunable via `pulsar:SetVideoSettings`. |
-| **WASAPI audio graph** | Microphone (channel 3), desktop loopback (channel 1), per-process loopback for app/Meet capture (channel 2, opt-in). Independent levels, mute, monitoring per channel. |
-| **Window capture** | Windows Graphics Capture under the hood, addressable by `Title:ClassName:Process.exe`. Works against any composited window — including Chromium / Electron renderers. |
-| **Game capture via DLL injection** *(full bundle)* | The same `graphics-hook32/64.dll` + `inject-helper` + `get-graphics-offsets` chain OBS Studio uses. Captures DirectX 9 / 10 / 11 / 12, OpenGL, Vulkan applications by hooking the present chain. |
-| **Browser sources via CEF** *(full bundle)* | `obs-browser` plus the Chromium Embedded Framework runtime. HTML / CSS / JS overlays running in a real Chromium, composited GPU-side, controllable from the host. |
-| **Native text + VLC sources** *(full bundle)* | `obs-text` (FreeType-rendered text sources) and `vlc-video` (libVLC-backed media playback). |
-| **Recording pipeline** | `ffmpeg_muxer` MP4 writer with auto-timestamped paths under `<cwd>/recordings/`. Concurrent with streaming — same encoders, no double-encoding. |
-| **Process boundary preserved** | The single IPC channel is the loopback WebSocket. No FFI, no shared memory, no native bindings. The host application never links libobs — its licence is unaffected. |
+| Process | One headless pulsar.exe process. No OBS desktop UI or host-side FFI. |
+| IPC | Session-authenticated obs-websocket v5 over a loopback WebSocket. |
+| Video | 1920x1080 at 60 FPS by default. Resolution and FPS are boot-fixed. |
+| Encoder | H.264 family selected at boot: x264, nvenc, qsv, amf or auto. Missing hardware falls back to x264 with a warning. |
+| Live tuning | Video bitrate can be changed through pulsar:SetVideoSettings. Resolution, FPS and encoder family cannot be changed live. |
+| Audio | AAC, configurable track count and per-track bitrate, plus WASAPI input and monitoring controls. |
+| Destinations | twitch, rtmp_custom and vod_local. One encoder pair is shared across destinations. |
+| Scene capture | Managed browser_source capture through the pulsar-scene vendor namespace. |
+| Browser runtime | The full Windows bundle includes obs-browser and CEF for HTML/CSS/JS scene capture. |
+| Recording | Legacy v5 recording output and vod_local destination, with separate lifecycles. |
+| Adaptive bitrate | Optional dropped-frame worker that adjusts video bitrate between floor and target. |
+| GPU | GPU acceleration is preserved. NVENC and accelerated CEF require matching hardware and real hardware proof. |
 
-End-to-end validated against a live Twitch ingest: 1080p60 frames + audio pushed for 30s on commodity bandwidth, no drops, audio confirmed via ffprobe (`codec=aac, channels=2, sample_rate=48000`).
+Pulsar does not claim that every OBS UI feature or third-party OBS plugin is
+available. The supported surface is the protocol, vendor namespaces and bundle
+contents built by this repository.
 
----
+## NPM packages
 
-## Live broadcast proof
+| Package | Contents |
+|---|---|
+| [@clodocapeo/pulsar-client](https://www.npmjs.com/package/@clodocapeo/pulsar-client) | Typed TypeScript client only; no native runtime. |
+| [@clodocapeo/pulsar-bundle](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle) | Client plus lean Windows runtime. |
+| [@clodocapeo/pulsar-bundle-full](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle-full) | Client plus full Windows runtime, obs-browser/CEF, text and VLC support. |
 
-The live-broadcast job inside the [`pipeline.yml` workflow](.github/workflows/pipeline.yml) on a clean `windows-2022` runner — it builds Pulsar from source, spawns `pulsar.exe`, opens a hand-coded HTML/CSS/JS scene through CEF + `browser_source` (Apple-keynote intro, telemetry HUD bound to live `pulsar:GetAdaptiveState` data, Web Audio sound design), and pushes a real broadcast to Twitch using the project's stream key. Throughout, an in-process `StartRecord` writes the same broadcast to a local MP4 — same encoders, same source, same frames the Twitch ingest receives. The MP4 is then re-encoded with `ffmpeg -c:v libx264 -preset fast -crf 23` (typically 5–20× smaller than the source CBR 6 Mbps) and uploaded.
+The two bundle packages expose the same spawn() API. Prism uses the full bundle
+for browser-rendered scenes.
 
-| Trigger | Duration | Where the MP4 lands |
-|---|---|---|
-| Push to a feature branch | — | not run since #132 (CI wall-clock) |
-| Push to `main` (post-PR merge) | — | not run since #132 (CI wall-clock) |
-| Push tag `v*.*.*` | **10 min** release-grade | workflow artefact + GitHub Pages **+ GitHub Release** asset (download) |
-| `workflow_dispatch` (manual) | configurable | workflow artefact |
+## Quick start
 
-What you can play below is the broadcast produced for the **latest release-grade run** (tag `v*.*.*`, or a manual `workflow_dispatch`). The MP4 is published to GitHub Pages on every release-grade run so it streams inline in the player below — no download required. Since #132 the broadcast no longer runs per commit, so the player refreshes at release time rather than on every push to `main`.
+~~~bash
+npm install @clodocapeo/pulsar-bundle-full
+~~~
 
-<video src="https://zablaboratory.github.io/Pulsar/pulsar-live-broadcast-proof.mp4" controls preload="metadata" width="720">
-  Your browser doesn't support inline MP4 playback.
-  <a href="https://zablaboratory.github.io/Pulsar/pulsar-live-broadcast-proof.mp4">Stream the proof MP4 directly</a>.
-</video>
-
-[➡️ Stream inline (GitHub Pages)](https://zablaboratory.github.io/Pulsar/pulsar-live-broadcast-proof.mp4) · [download from latest release](https://github.com/ZabLaboratory/Pulsar/releases/latest/download/pulsar-live-broadcast-proof.mp4) · [browse all pipeline runs](https://github.com/ZabLaboratory/Pulsar/actions/workflows/pipeline.yml)
-
-The probe asserts on the metric side too: `GetDestinations[id].active == true` every 5 s, `GetAdaptiveState.samples` strictly increasing, frame drop ratio < 5 %. The MP4 is the visible byproduct; the gate is the assertion suite.
-
----
-
-## Quick start — go live in 50 lines
-
-The `live.mjs` script below boots Pulsar, creates a Twitch destination, starts streaming, and parks until you `Ctrl-C`. That is the full surface for "stream this to Twitch from a Node app".
-
-```js
+~~~js
 // live.mjs
-import { spawn } from "@clodocapeo/pulsar-bundle";
+import { spawn } from "@clodocapeo/pulsar-bundle-full";
 
-const key = process.env.TWITCH_KEY;
-if (!key) {
-  console.error("TWITCH_KEY env var required");
-  process.exit(1);
-}
+const key = process.env.TWITCH_STREAM_KEY;
+if (!key) throw new Error("TWITCH_STREAM_KEY is required");
 
-console.log("[live] spawning pulsar...");
 const pulsar = await spawn({
   readyTimeoutMs: 60_000,
   onLog: (stream, line) => {
-    if (
-      line.includes("rtmp stream") ||
-      line.includes("Connection to") ||
-      line.includes("Connecting to") ||
-      line.includes("error") ||
-      line.toLowerCase().includes("fail")
-    ) {
-      console.log(`  [pulsar/${stream}] ${line}`);
+    if (/error|fail|connect|rtmp/i.test(line)) {
+      console.log("[pulsar/" + stream + "] " + line);
     }
   },
 });
 
-console.log(`[live] pulsar ready -- libobs ${pulsar.libobsVersion}, ws :${pulsar.port}`);
-
-const dest = await pulsar.client.destinations.create({
-  name: "smoke-test",
+const destination = await pulsar.client.destinations.create({
+  name: "Twitch",
   kind: "twitch",
   key,
 });
-console.log(`[live] destination created -- id=${dest.id}, kind=${dest.kind}`);
-console.log(`[live] pinned URL: ${dest.url}`);
 
-const started = await pulsar.client.destinations.start(dest.id);
-if (!started) {
-  console.error("[live] start failed");
+if (!await pulsar.client.destinations.start(destination.id)) {
   await pulsar.shutdown();
-  process.exit(2);
+  throw new Error("Twitch destination did not start");
 }
-console.log("[live] *** LIVE on Twitch ***");
 
-let shuttingDown = false;
-const shutdown = async (sig) => {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  console.log(`\n[live] ${sig} received, stopping...`);
-  await pulsar.client.destinations.stop(dest.id);
-  await pulsar.client.destinations.remove(dest.id);
+console.log("Twitch destination started");
+
+const shutdown = async () => {
+  await pulsar.client.destinations.stop(destination.id);
+  await pulsar.client.destinations.remove(destination.id);
   await pulsar.shutdown();
-  process.exit(0);
 };
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT",  () => shutdown("SIGINT"));
 
-await new Promise(() => {}); // park
-```
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+~~~
 
-```bash
-npm install @clodocapeo/pulsar-bundle
-TWITCH_KEY=live_xxx node live.mjs
-```
+~~~bash
+TWITCH_STREAM_KEY=live_xxx node live.mjs
+~~~
 
-That is it. `spawn()` returns a connected, typed client. `destinations.create()` / `start()` / `stop()` / `remove()` is the entire multi-destination surface. The `onLog` hook surfaces libobs's stdout/stderr if you need to look inside.
+For Prism, the renderer must not recreate this lifecycle. Prism starts Pulsar,
+receives PULSAR_READY, connects over loopback, and keeps preview and on-air
+destinations independent.
 
----
+## Runtime handshake
 
-## npm packages
+After initialization Pulsar prints exactly one readiness line:
 
-Three packages, one project. Pick the one that matches your use case.
+~~~text
+PULSAR_READY ws=ws://127.0.0.1:<port> password=<session-password>
+~~~
 
-| Package | Ships | Platform | Tarball | Postinstall | Use when |
-|---|---|---|---|---|---|
-| [`@clodocapeo/pulsar-client`](https://www.npmjs.com/package/@clodocapeo/pulsar-client) | Typed TS wrapper over obs-websocket v5 + `pulsar:*` vendor namespace. ESM, no native deps. | any (Node ≥ 18) | ~ 18 kB | none | You already have a Pulsar (or any v5 server) running and just want to talk to it. Browser tools, CLI utilities, test harnesses. |
-| [`@clodocapeo/pulsar-bundle`](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle) | The above + `pulsar.exe` and stripped runtime + `spawn()` API. | windows-x64 | ~ 5 kB | ~ 40 MB zip | You want streaming + recording + window/display capture + WASAPI audio. Lean payload, no browser sources. |
-| [`@clodocapeo/pulsar-bundle-full`](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle-full) | The above + `obs-browser` + CEF runtime + `obs-text` + `vlc-video`. | windows-x64 | ~ 5 kB | ~ 150 MB zip | You need HTML overlays, native game capture, text sources or VLC-backed media. Composed scene workflows. |
+The host reads the line without logging the password, connects with those
+credentials, treats missing readiness as startup failure, and waits for clean
+process exit during shutdown. PULSAR_PORT and PULSAR_PASSWORD exist for
+controlled test harnesses; production hosts should let Pulsar generate them.
 
-`pulsar-bundle` and `pulsar-bundle-full` expose **the exact same `spawn()` API** — they differ only in the binary payload downloaded at install time. Switching from one to the other is a `package.json` rename, no code change.
+See [docs/PRISM-EMBEDDING.md](docs/PRISM-EMBEDDING.md).
 
-```ts
-// identical:
-import { spawn } from "@clodocapeo/pulsar-bundle";
-import { spawn } from "@clodocapeo/pulsar-bundle-full";
-```
+## Client and vendor APIs
 
----
+pulsar-client exposes obs, destinations, video, adaptive, record, stream and
+audio namespaces.
 
-## Architecture
+The vendor namespaces are separate:
 
-```
-                       ┌────────────────────────────────────────────────┐
-                       │  pulsar.exe   (single Win32 process, headless) │
-                       │                                                │
-                       │   QApplication("minimal")  (no display, no UI) │
-                       │   ↓                                            │
-                       │   libobs core   D3D11 compositor offscreen     │
-                       │   ↓                                            │
-                       │   pulsar-frontend-stub  obs_frontend_callbacks │
-                       │       scene Default + window/game/browser src  │
-                       │       audio: wasapi mic + desktop + process    │
-                       │       encoders: x264 + aac (shared)            │
-                       │   ↓                                            │
-                       │   pulsar-multi-stream.dll                      │
-                       │       destinations registry, encoder fan-out,  │
-                       │       adaptive bitrate worker                  │
-                       │   ↓                                            │
-                       │   pulsar-websocket.dll  (forked obs-websocket) │
-                       │       v5 handshake + pulsar:* vendor namespace │
-                       └─────────────────────┬──────────────────────────┘
-                                             │ WebSocket :random loopback
-                                             │ (obs-websocket v5 + pulsar:*)
-                                             ▼
-       ┌─────────────────────────────────────┴─────────────────────────────────────┐
-       │                                                                           │
-   Your Node host                Stream Deck                Companion / Aitum / etc.
-   @clodocapeo/pulsar-bundle     obs-websocket plugin       any v5 client
-```
+- pulsar: destinations, video settings and adaptive bitrate.
+- pulsar-scene: managed browser-source capture.
 
-The single IPC channel is the obs-websocket on loopback. **No FFI, no shared memory, no native bindings** between Pulsar and any host application — the process boundary preserves the host's licence under the GPL-2.0 inherited from libobs (mere aggregation, not derivative work).
+The separate pulsar-scene name is required because obs-websocket permits only
+one registration per vendor name. Scene capture is a v5 CallVendorRequest with
+vendorName pulsar-scene.
 
-A typical deployment: the host process spawns `pulsar.exe` at boot, captures the JWT on stdout, opens a WebSocket on the printed port, drives it for the rest of the session, and shuts it down on exit. From the operator's perspective there is one application; from the OS's perspective there are two processes communicating over localhost.
+Destination kinds:
 
----
+- twitch ignores the input URL and pins a TLS Twitch ingest.
+- rtmp_custom requires an rtmp:// or rtmps:// URL and a non-empty key.
+- vod_local requires a fully resolved output path and does not add a timestamp.
 
-## Why a fork
+Use the typed Twitch destination for Twitch. StartStream remains for v5
+compatibility but is not the recommended Twitch path.
 
-OBS Studio is the broadcast engine. It is not a library, not an SDK, not a service — it is a desktop application around libobs that solves the operator problem extremely well. Programmatic use cases — Streamlabs Desktop, Streamer.bot, Aitum, broadcast control stations, automation rigs — each work around the desktop framing with their own bridges, patches, or partial forks. Pulsar consolidates that work into a project designed from day one to be embedded:
+## Scene capture
 
-- **Headless first.** Service mode is the default. The Qt UI from upstream is excluded at build time, not deleted from the source tree — rebases stay tractable.
-- **Multi-destination native.** Twitch + RTMP custom + VOD local as first-class entities, addressable through one API call. Not "one stream output plus replay buffer plus a third-party multi-rtmp plugin".
-- **Stable rebases on upstream.** `upstream/` is a git submodule pinned to a tagged OBS release; our changes live in numbered patches under `patches/` (applied at build) and Pulsar-owned plugins under `plugins/`. Tracking new OBS releases is a submodule bump + maybe a patch refresh.
-- **Strict process boundary.** Hosts don't link Pulsar in. The WebSocket-only IPC keeps everyone's licences clean.
-- **Two distribution sizes.** Lean (40 MB) for hosts that compose scenes themselves and just need encoders + capture + outputs. Full (150 MB) for hosts that need browser sources / game capture / VLC media.
+Prism renders Solar in a local scene server and asks Pulsar to capture it:
 
----
+~~~json
+{
+  "vendorName": "pulsar-scene",
+  "requestType": "SetCaptureSource",
+  "requestData": {
+    "kind": "browser_source",
+    "url": "http://127.0.0.1:<scene-port>/scene",
+    "width": 1920,
+    "height": 1080,
+    "fps": 60,
+    "reroute_audio": false
+  }
+}
+~~~
 
-## Use cases
+Pulsar removes older Pulsar-managed capture items from known scenes so a stale
+CEF page cannot survive a switch. The browser source stays alive while Solar
+changes the rendered scene inside the page.
 
-The shape of "headless OBS over WebSocket" fits any application that needs broadcast capabilities without becoming OBS:
+The full bundle is required. Without obs-browser/CEF,
+SetCaptureSource returns browser_source_unavailable. See
+[plugins/pulsar-scene-source/README.md](plugins/pulsar-scene-source/README.md).
 
-- **Broadcast control stations.** Operator desktops that drive multi-stream live productions — esports, talk shows, tournaments — with custom UI tailored to the production rather than OBS's general-purpose surface. Scenes live in the host application; Pulsar handles the encode and the outputs.
-- **Composed-scene workflows.** Hosts that compose the canvas in HTML/Chromium and feed it to broadcast — scoreboards, telemetry overlays, dynamic graphics, animation engines. The full bundle ships `obs-browser` so the same DOM tree the operator sees is what gets encoded.
-- **Multi-stream productions.** Encode once, fan out to Twitch + a private RTMP for a co-host + a local MP4 archive — without paying the encoder cost three times. Multi-destination is a first-class API, not a plugin.
-- **Automation rigs.** CI-driven broadcast checks, scheduled streams, headless recording on a server. No display, no Qt, no DPI scaling problems.
-- **Electron / desktop hosts.** Embed Pulsar as a child process; ship one product to your users; preserve your codebase's licence via the WebSocket boundary.
+## Boot configuration
 
----
+Restart Pulsar to change these values.
 
-## Repo layout
+| Variable | Default | Purpose |
+|---|---:|---|
+| PULSAR_RESOLUTION | 1920x1080 | Output canvas size. |
+| PULSAR_FPS | 60 | 24, 30, 48, 60 or 120 FPS. |
+| PULSAR_VIDEO_ENCODER | x264 | x264, nvenc, qsv, amf or auto. |
+| PULSAR_VIDEO_BITRATE | 6000 | Video bitrate, 200-50000 kbps. |
+| PULSAR_VIDEO_RATE_CONTROL | CBR | H.264 rate control. |
+| PULSAR_VIDEO_PROFILE | high | baseline, main or high. |
+| PULSAR_VIDEO_KEYINT_SEC | 2 | Keyframe interval, 0-20 seconds. |
+| PULSAR_AUDIO_BITRATE | 160 | AAC bitrate, 32-512 kbps. |
+| PULSAR_AUDIO_TRACKS | 1 | Audio track count, 1-6. |
+| PULSAR_CAPTURE_WINDOW | unset | Window target in <title>:<class>:<exe>; unset produces black frames. |
+| PULSAR_RECORD_DIR | <cwd>/recordings | Singleton recording directory. |
+| PULSAR_ADAPTIVE_BITRATE | enabled | Set to off to disable the worker. |
+| PULSAR_NATIVE_STINGER | disabled | Experimental native stinger path. |
+| PULSAR_BROWSER_GPU | runtime dependent | CEF browser GPU path used by the accelerated probe. |
 
-```
-Pulsar/
-├── upstream/                git submodule -> obsproject/obs-studio @ 32.1.2
-├── patches/                 numbered .patch files applied to upstream/ at build
-├── plugins/
-│   ├── pulsar-headless/     pulsar.exe entry point, libobs init + idle loop
-│   ├── pulsar-frontend-stub/  static lib: obs_frontend_callbacks vtable +
-│   │                          scene/encoder/output bring-up
-│   ├── pulsar-websocket/    vendored fork of obs-websocket v5 (forms/ stripped)
-│   └── pulsar-multi-stream/ destinations + adaptive bitrate plugin
-├── packages/
-│   ├── pulsar-client/         npm @clodocapeo/pulsar-client (TS source)
-│   ├── pulsar-bundle/         npm @clodocapeo/pulsar-bundle (lean: encoders + capture)
-│   └── pulsar-bundle-full/    npm @clodocapeo/pulsar-bundle-full (+ CEF + game capture)
-├── scripts/
-│   ├── build-win.ps1        upstream + plugins build pipeline
-│   ├── package-win.ps1      strip + zip into dist/pulsar-windows-x64-vX.Y.Z[-full]/
-│   ├── probe-events.py      phase-5 events sanity check
-│   ├── probe-record.py      phase-6/9/12a record probe (asserts fps + bitrate + AAC)
-│   ├── probe-multi-stream.py  phase-7 vendor API probe
-│   └── probe-adaptive.py    phase-12b adaptive worker orchestration probe
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── PROTOCOL.md           v5 + pulsar:* vendor reference
-│   ├── PRISM-EMBEDDING.md    consumer-side spawn / handshake / lifecycle contract
-│   └── DEVELOPMENT.md
-├── .github/workflows/
-│   └── pipeline.yml         single workflow, 9 jobs (lint, build, binary-gate,
-│                            offline-probes, live-broadcast, publish-gh-pages,
-│                            package, release-attach, npm-publish). One build,
-│                            shared artefact across the gates.
-├── CMakeLists.txt           top-level entry; adds plugins, reads VERSION
-├── VERSION                  single source of truth (consumed by C++ + npm + scripts)
-└── CHANGELOG.md
-```
-
----
+Invalid or unavailable encoder choices fall back to x264 with a warning.
+Pulsar does not disable GPU acceleration to make a test pass.
 
 ## Build from source
 
-Windows x64 only, MSVC toolchain.
+### Requirements
 
-```powershell
-git clone --recurse-submodules https://github.com/ZabLaboratory/Pulsar
-cd Pulsar
-.\scripts\build-win.ps1                    # configure + build upstream + plugins
-.\scripts\package-win.ps1 -Zip             # lean zip into dist/
-.\scripts\package-win.ps1 -Zip -Full       # full zip (with CEF) into dist/
-```
+- Windows x64.
+- Visual Studio 2022 with C++ desktop workload and MSVC.
+- CMake, PowerShell and Git with submodule support.
+- Node.js 22.
+- Python 3.11.
+- FFmpeg for media inspection and live evidence probes.
 
-`build-win.ps1` is idempotent: it resets `upstream/` to the recorded SHA, replays patches with `git am`, runs upstream's `windows-x64` CMake preset (which auto-fetches obs-deps + Qt6 + CEF), then builds the Pulsar plugins on top. First run is ~25–30 min on a typical machine; incremental rebuilds are seconds.
+~~~powershell
+git submodule update --init --recursive
+npm ci
+.\scripts\build-win.ps1 -Full
+~~~
 
-See `docs/DEVELOPMENT.md` for tooling prerequisites (CMake ≥ 3.28, Visual Studio 2022 BuildTools, git LFS not required).
+CI uses the runtime directory:
 
----
+~~~text
+upstream/build_x64/rundir/RelWithDebInfo/
+~~~
 
-## Roadmap
+Create distributions:
 
-| Phase | Scope | Status |
-|---|---|---|
-| 0–4 | Bootstrap, build pipeline, headless service, Qt-minimal QApp, obs-websocket fork | shipped |
-| 5 | `pulsar-frontend-stub` — obs_frontend_callbacks vtable | shipped |
-| 6 | Record pipeline (window_capture + x264 + ffmpeg_muxer MP4) | shipped |
-| 7 | `pulsar-multi-stream` — destinations vendor API (rtmp_custom, vod_local, twitch) | shipped |
-| 9 | WASAPI audio sources (mic, desktop, per-process loopback) | shipped |
-| 12 | 1080p60 default + bitrate config + adaptive worker | shipped |
-| 12.5 | Packaging script + GitHub Release pipeline | shipped |
-| 13a | `@clodocapeo/pulsar-client` (typed TS wrapper) | shipped & published |
-| 13b | `@clodocapeo/pulsar-bundle` (lean binary + spawn API) | shipped & published |
-| 14 | `@clodocapeo/pulsar-bundle-full` (CEF + game capture + text + VLC) | shipped & published |
-| Deferred | YouTube Live destination + OAuth | needs Google Cloud project |
-| Deferred | macOS / Linux builds | Windows-only for current consumers |
+~~~powershell
+.\scripts\package-win.ps1 -Variant light -Zip
+.\scripts\package-win.ps1 -Variant full -Zip
+~~~
 
----
+Use -SkipBuild only when the runtime was built from the same source revision.
 
-## Licence
+## Validation and proof
 
-GPL-2.0-or-later, inherited from libobs and non-negotiable for anything linking Pulsar's binaries (= every plugin under `plugins/` and the upstream OBS modules). The `packages/pulsar-client/` TypeScript wrapper is MIT (no GPL link), since it speaks to Pulsar over WebSocket only — process boundary breaks GPL propagation.
+~~~powershell
+npm run lint
+npm run build
+npm test
+.\scripts\run-probes.ps1
+~~~
 
-See [`LICENSE`](LICENSE) and the GPL-2.0 text in `upstream/COPYING`.
+The offline probes cover readiness, WebSocket authentication, sources, scenes,
+destinations, recording, adaptive bitrate, encoder contracts and failures.
 
-### Embedding Pulsar in another application — read this first
+Real CEF/PGM compatibility is opt-in and needs a real binary. Accelerated
+coverage needs a physical GPU:
 
-The "process boundary breaks GPL propagation" line above is **not magic**. It works only if four invariants are honoured by the consumer (Prism today, any future Pulsar-bundling app tomorrow). Each invariant being broken is enough to retroactively re-license every consumer that has shipped against the breach.
+~~~powershell
+$env:PULSAR_LIVE_CAPTURE_COMPAT = "1"
+$env:PULSAR_BUNDLE_FULL_BINARIES_PATH = "D:\path\to\upstream\build_x64\rundir\RelWithDebInfo"
+npm run test -w @clodocapeo/capture-pgm-compat
+~~~
 
-Three documents you must read before bundling Pulsar :
+A hosted runner without a physical GPU is not proof of NVENC or accelerated
+CEF. The release-grade Twitch pipeline records the encoded output and attaches
+diagnostic.json and pulsar-live-broadcast-proof.mp4. A CEF screenshot or
+successful WebSocket call is not antenna proof.
 
-- ➡️ **[`LICENSE-INVARIANTS.md`](LICENSE-INVARIANTS.md)** — the non-negotiable contract : the four invariants, the tempting designs to refuse on sight, the watchdog point on the npm wrapper.
-- ➡️ **[`docs/PRISM-EMBEDDING.md`](docs/PRISM-EMBEDDING.md)** — the consumer-side spawn / handshake / lifecycle contract. Mandatory `cwd`, `PULSAR_PORT` / `PULSAR_PASSWORD` env knobs, `PULSAR_READY` stdout sentinel parsing, shutdown protocol. Read this before writing the spawn helper.
-- ➡️ **[`CONSUMER-AUDIT.md`](CONSUMER-AUDIT.md)** — the empirical checklist your consumer repo must enforce in CI. Every claim is a runnable script, every script has a pass/fail signal. Includes a copy-pasteable bash script + GitHub Actions workflow for static + binary-linkage checks (Windows / macOS / Linux). **If you have not run the scripts, you have not passed the audit.**
+## Release manifest
 
-Pulsar's own CI enforces the source-side and binary-side invariants on every push and PR. Everything lives in the single [`pipeline.yml`](.github/workflows/pipeline.yml) workflow — one build, multiple gates that share its artefact.
+CI generates and attaches prism-pulsar-runtime-manifest.json:
 
-| Job (in `pipeline.yml`) | Trigger | What it gates |
-|---|---|---|
-| `lint` | every PR + push to main | source-grep (no `__declspec(dllexport)` / `napi_*` / `node-gyp` / `prism` / `electron`), patches apply cleanly, plugins carry metadata, npm tarball content audit |
-| `build` | every PR + push to main | full Windows build via `scripts/build-win.ps1 -Full`, uploads `pulsar-rundir` artefact consumed by the rest |
-| `binary-gate` | every PR + push to main | `scripts/check-binary-exports.ps1` over `pulsar.exe`, `pulsar-browser-page.exe`, and every plugin DLL (only the OBS module ABI symbols allowed) |
-| `offline-probes` | every PR + push to main | ctest run (`scripts/run-probes.ps1`) — websocket handshake, source kinds, events, adaptive bitrate, recording |
-| `live-broadcast` | tag `v*.*.*` push + `workflow_dispatch` only (see #132) | end-to-end Twitch broadcast probe with diagnostic JSON + MP4 recording |
-| `publish-gh-pages` | push to main + tag | publishes the broadcast MP4 to GitHub Pages so the README inline player streams the latest run |
-| `package` | tag `v*.*.*` push | runs `scripts/package-win.ps1 -Zip` for both light + full variants |
-| `release-attach` | tag `v*.*.*` push | `softprops/action-gh-release` with the zips + MP4 + diagnostic JSON attached |
-| `npm-publish` | tag `v*.*.*` push | publishes the three packages (`pulsar-client`, `pulsar-bundle`, `pulsar-bundle-full`) to npm |
+~~~json
+{
+  "schema_version": "prism.component.release.v1",
+  "component": "pulsar",
+  "version": "2.0.0",
+  "release_tag": "v...",
+  "artifact_name": "pulsar-windows-x64-full-v2.0.0.zip",
+  "artifact_url": "https://github.com/ZabLaboratory/Pulsar/releases/download/v.../pulsar-windows-x64-full-v2.0.0.zip",
+  "artifact_sha256": "..."
+}
+~~~
 
-The four invariants (process boundary / WebSocket-only IPC / no FFI / no copy-paste) are enforced **on Pulsar's side** by `lint` + `binary-gate`. The boundary on YOUR side (the consumer that bundles Pulsar) is yours to enforce — that's what `CONSUMER-AUDIT.md` is for.
+The release tag and digest are generated by CI. Do not hand-edit this manifest
+or copy a digest from another archive.
+
+## Repository layout
+
+~~~text
+Pulsar/�u���\�w^~)�v��y��y� upstream/                  OBS source submodule
+�w^~)�v��y��yۧu���@ patches/                   numbered upstream patches
+�w^~)�v��y��yۧu���@ plugins/                   headless, websocket, streams and scene source�u���\�w^~)�v��y��y� packages/                  client, bundles and internal proof tooling
+��y��yۧu���@�w^~)�t scripts/                   build, package and probe automation�u���\�w^~)�v��y��y� docs/                      protocol, embedding and development contracts
+��y��yۧu���@�w^~)�t .github/workflows/         CI, live proof and release pipeline
+~~~
+
+## Scope and non-goals
+
+- Windows x64 is the supported runtime target.
+- Pulsar does not replace Prism, Orion, Solar, ZabCanvas, ZabTruth, ZabRanking,
+  Quasar or ZabCam.
+- Current first-class destination kinds are twitch, rtmp_custom and vod_local.
+- Resolution, FPS and encoder family are not switchable during a live session.
+- The typed client does not auto-reconnect; the host decides the retry policy.
+- The native stinger path is experimental and disabled by default.
+
+## License
+
+The Pulsar runtime and OBS-derived plugins are GPL-2.0-or-later. The TypeScript
+client is MIT because it communicates over WebSocket and does not link libobs.
+
+Consumers bundling the runtime must follow
+[LICENSE-INVARIANTS.md](LICENSE-INVARIANTS.md) and
+[CONSUMER-AUDIT.md](CONSUMER-AUDIT.md).
+
+## Further documentation
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+- [docs/PROTOCOL.md](docs/PROTOCOL.md)
+- [docs/PRISM-EMBEDDING.md](docs/PRISM-EMBEDDING.md)
+- [plugins/pulsar-multi-stream/README.md](plugins/pulsar-multi-stream/README.md)
+- [plugins/pulsar-scene-source/README.md](plugins/pulsar-scene-source/README.md)
+- [packages/pulsar-client/README.md](packages/pulsar-client/README.md)
+- [packages/pulsar-bundle/README.md](packages/pulsar-bundle/README.md)
+- [packages/pulsar-bundle-full/README.md](packages/pulsar-bundle-full/README.md)
