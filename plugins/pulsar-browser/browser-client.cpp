@@ -388,6 +388,10 @@ void BrowserClient::OnAcceleratedPaint(CefRefPtr<CefBrowser>, PaintElementType t
 		// TODO Overlay texture on top of bs->texture
 		return;
 	}
+	// Preserve the valid software OnPaint texture when CEF emits an
+	// accelerated callback even though no shared texture can be opened.
+	if (!sharing_available)
+		return;
 
 	if (!valid()) {
 		return;
@@ -480,6 +484,8 @@ void BrowserClient::OnAcceleratedPaint2(CefRefPtr<CefBrowser>, PaintElementType 
 		// TODO Overlay texture on top of bs->texture
 		return;
 	}
+	if (!sharing_available)
+		return;
 
 	if (!valid()) {
 		return;

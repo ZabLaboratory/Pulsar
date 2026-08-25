@@ -70,39 +70,54 @@ void BrowserApp::OnBeforeCommandLineProcessing(const CefString &, CefRefPtr<CefC
 	if (!command_line->HasSwitch("no-sandbox"))
 		command_line->AppendSwitch("no-sandbox");
 
-	// Headless Pulsar keeps CEF on its software renderer by default. This
-	// avoids starting a GPU subprocess that cannot present into OBS and
-	// crashes with reason 63 on machines without a usable D3D device. The
-	// explicit --enable-gpu switch remains available for operators that have
-	// validated the shared-texture path on their machine.
-	bool enableGPU = command_line->HasSwitch("enable-gpu");
-	if (!enableGPU) {
-		command_line->AppendSwitch("disable-gpu");
-		command_line->AppendSwitch("disable-gpu-compositing");
-	}
-
 	if (command_line->HasSwitch("disable-features")) {
 		// Don't override existing, as this can break OSR
 		std::string disableFeatures = command_line->GetSwitchValue("disable-features");
 		disableFeatures += ",HardwareMediaKeyHandling";
 #ifdef _WIN32
-		disableFeatures += ",EnableWindowsGamingInputDataFetcher";
+		disableFeatures += ",EnableWindowsGamingInputDataFetcher,WebRtcHideLocalIpsWithMdns";
 #endif
 		disableFeatures += ",WebBluetooth";
 		command_line->AppendSwitchWithValue("disable-features", disableFeatures);
 	} else {
 		command_line->AppendSwitchWithValue("disable-features", "WebBluetooth,"
 #ifdef _WIN32
-									"EnableWindowsGamingInputDataFetcher,"
+									"EnableWindowsGamingInputDataFetcher,WebRtcHideLocalIpsWithMdns,"
 #endif
 									"HardwareMediaKeyHandling");
 	}
 
 	command_line->AppendSwitchWithValue("autoplay-policy", "no-user-gesture-required");
+#ifdef _WIN32
+	// Solar's peer viewer exchanges host candidates on the execution machine.
+	// CEF's default mDNS masking produces .local candidates that the publisher
+	// cannot resolve, leaving the browser source black while Electron Preview
+	// remains healthy. Match Prism's explicit WebRTC policy for this renderer.
+	command_line->AppendSwitchWithValue("force-webrtc-ip-handling-policy",
+						"default_public_and_private_interfaces");
+	command_line->AppendSwitchWithValue("webrtc-ip-handling-policy",
+						"default_public_and_private_interfaces");
+#endif
 #ifdef __APPLE__
 	command_line->AppendSwitch("use-mock-keychain");
 #elif !defined(_WIN32)
 	command_line->AppendSwitchWithValue("ozone-platform", wayland ? "wayland" : "x11");
+#endif
+}
+
+void BrowserApp::OnContextInitialized()
+{
+#ifdef _WIN32
+	// CEF is an embedder, not Chrome: command-line policy alone is not a
+	// deterministic request-context contract. Apply the same preference used by
+	// Prism's Electron webContents on the browser-process UI thread.
+	CefRefPtr<CefRequestContext> context = CefRequestContext::GetGlobalContext();
+	if (!context)
+		return;
+	CefRefPtr<CefValue> policy = CefValue::Create();
+	policy->SetString("default_public_and_private_interfaces");
+	CefString error;
+	context->SetPreference("webrtc.ip_handling_policy", policy, error);
 #endif
 }
 

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.4] - 2026-08-25
+
+### Fixed
+
+- Preserve Chromium/CEF GPU acceleration for Solar offscreen rendering instead
+  of forcing `--disable-gpu` and `--disable-gpu-compositing`; D3D11 shared
+  textures remain the primary browser-source path.
+- Keep the last valid software frame when an accelerated-paint callback cannot
+  open a shared texture, avoiding a black frame without disabling acceleration.
+- Apply the local WebRTC candidate policy to both the CEF command line and the
+  global request context so peer cameras resolve inside Pulsar browser sources.
+- Advance the embedded OBS/Pulsar upstream to the signed local-runtime merge
+  that registers Program Return and the required runtime modules.
+
 ## [1.8.0] - 2026-08-10
 
 ### Added

@@ -16,7 +16,7 @@ The upstream obs-browser plugin assumes OBS Studio's Qt UI host : an attached di
 | File | Change |
 |---|---|
 | `obs-browser-page/obs-browser-page-main.cpp` | Drop the `NvOptimusEnablement` / `AmdPowerXpressRequestHighPerformance` `__declspec(dllexport)` declarations. Windows now picks the integrated GPU (or falls back to SW). Same posture as Puppeteer / Playwright headless. |
-| `browser-app.cpp` | `OnBeforeCommandLineProcessing` unconditionally appends `--disable-gpu` and `--no-sandbox` to the CEF command line. SW rasterization + sandboxless = canonical headless server-side CEF config. |
+| `browser-app.cpp` | `OnBeforeCommandLineProcessing` appends `--no-sandbox` while preserving CEF GPU acceleration. Shared D3D11 textures remain the primary offscreen-rendering path. |
 | `browser-client.cpp` | `OnTooltip` becomes a no-op returning `false` (CEF falls back to its native default — no tooltip surface in headless). Qt includes wrapped in `#ifdef ENABLE_BROWSER_QT_LOOP` (which we never define). |
 | `obs-browser-source.cpp` | Same Qt-include guarding. |
 | `CMakeLists.txt` | Rewritten Pulsar-style : no OBS macros, direct linkage against libobs/obs-frontend-api, **zero Qt linkage** (no `find_package(Qt6)`, no `Qt6::*` in `target_link_libraries`). The runtime emits `pulsar-browser.dll` + `pulsar-browser-page.exe` into the libobs plugin / bin dirs ; `scripts/build-win.ps1` deletes the upstream `obs-browser.dll` + `obs-browser-page.exe` before our build so libobs picks up our binaries instead. |
@@ -44,7 +44,7 @@ When upstream OBS Studio bumps obs-browser, the rebase is :
 1. `cp -r upstream/plugins/obs-browser/* plugins/pulsar-browser/` (overwrites the fork)
 2. Re-apply this README's bullet list of changes (small, mechanical) :
    - drop NvOptimusEnablement / AmdPowerXpressRequestHighPerformance exports
-   - add `--disable-gpu` / `--no-sandbox` switches in `OnBeforeCommandLineProcessing`
+   - add the required `--no-sandbox` switch in `OnBeforeCommandLineProcessing` without disabling GPU acceleration
    - guard `<QApplication>` / `<QThread>` / `<QToolTip>` includes with `#ifdef ENABLE_BROWSER_QT_LOOP`
    - make `OnTooltip` a no-op returning false outside `ENABLE_BROWSER_QT_LOOP`
    - keep the Pulsar `CMakeLists.txt` (don't re-copy upstream's)
