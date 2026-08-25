@@ -5,6 +5,7 @@
 [![npm pulsar-bundle-full](https://img.shields.io/npm/v/%40clodocapeo%2Fpulsar-bundle-full?label=%40clodocapeo%2Fpulsar-bundle-full&logo=npm&color=cb3837)](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle-full)
 [![GitHub release](https://img.shields.io/github/v/release/ZabLaboratory/Pulsar?logo=github)](https://github.com/ZabLaboratory/Pulsar/releases/latest)
 [![Pipeline](https://github.com/ZabLaboratory/Pulsar/actions/workflows/pipeline.yml/badge.svg)](https://github.com/ZabLaboratory/Pulsar/actions/workflows/pipeline.yml)
+[![Prism runtime release](https://img.shields.io/badge/Prism-local%20runtime-0f766e)](https://github.com/ZabLaboratory/Pulsar/releases/latest)
 [![Licence GPL-2.0-or-later](https://img.shields.io/badge/licence-GPL--2.0--or--later-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-windows--x64-0078d4)](#install)
 [![libobs 32.1.2](https://img.shields.io/badge/libobs-32.1.2-7c8f9f)](https://github.com/obsproject/obs-studio/releases/tag/32.1.2)
@@ -14,6 +15,16 @@
 Pulsar takes the encoder pipeline, capture stack, audio graph, scene compositor, and plugin model that make OBS Studio the de-facto broadcast engine, strips the desktop application around it, and exposes the result as a typed Node API. Every capability the OBS UI surfaces — multi-source scenes, x264 / NVENC / QSV / AV1 encoders, RTMP / SRT / HLS / WHIP outputs, WASAPI / CoreAudio audio capture, GPU-composited transitions, browser overlays, native game capture via DLL injection, recording — is reachable over the wire.
 
 It is built for products that need broadcast capabilities without inheriting OBS as a user-facing application: control stations, operator desktops, headless servers, automation rigs, Electron hosts. You ship `pulsar.exe` next to your binary, spawn it at boot, talk to it like any other service.
+
+### Prism local runtime release
+
+Pulsar v2 is the local media-plane runtime used by Prism. A Pulsar release
+tag publishes the Windows full bundle plus
+`prism-pulsar-runtime-manifest.json`, which contains the artifact URL and its
+SHA-256 digest. Prism verifies and caches that bundle during startup before
+Cockpit handoff, so scene switches and on-air output do not download Pulsar.
+The runtime remains a separate process connected over loopback WebSocket;
+Prism does not link libobs or disable GPU acceleration.
 
 ---
 

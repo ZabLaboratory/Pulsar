@@ -886,6 +886,26 @@ jobs:
           name: pulsar-live-broadcast-proof
           path: artefacts
 
+      - name: Create Prism runtime release manifest
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          base="$(printf '%s' "$TAG" | sed -E 's/^v([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
+          asset="pulsar-windows-x64-full-v${base}.zip"
+          path="artefacts/${asset}"
+          test -f "$path"
+          digest="sha256:$(sha256sum "$path" | cut -d' ' -f1)"
+          jq -n \
+            --arg version "$base" \
+            --arg tag "$TAG" \
+            --arg name "$asset" \
+            --arg digest "$digest" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${asset}" \
+            '{schema_version:"prism.component.release.v1",component:"pulsar",version:$version,release_tag:$tag,artifact_name:$name,artifact_url:$url,artifact_sha256:$digest}' \
+            > artefacts/prism-pulsar-runtime-manifest.json
+
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
@@ -894,6 +914,7 @@ jobs:
             artefacts/pulsar-live-broadcast-proof.mp4
             artefacts/pulsar-live-broadcast-proof-*.mp4
             artefacts/diagnostic.json
+            artefacts/prism-pulsar-runtime-manifest.json
           fail_on_unmatched_files: true
 
   # ── Stage 7 : npm packages publish (tag only, parallel to build) ─
@@ -942,7 +963,8 @@ jobs:
           set -e
           v=$(cat VERSION | tr -d '[:space:]')
           tag='${{ github.ref_name }}'
-          [ "$tag" = "v$v" ] || { echo "::error::tag $tag does not match VERSION (v$v)"; exit 1; }
+          base="$(printf '%s' "$tag" | sed -E 's/^v([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
+          [ "$base" = "$v" ] || { echo "::error::tag $tag does not match VERSION (v$v)"; exit 1; }
 
       - name: Install npm workspaces
         # PULSAR_BUNDLE_SKIP_POSTINSTALL skips the binary download in

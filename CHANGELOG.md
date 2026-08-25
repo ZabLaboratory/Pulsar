@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Publish the local Pulsar runtime and full bundle as Pulsar 2.0.0.
 - Keep launch/prewarm activation pinned to the verified release artifact digest.
 
+
+### Release diff summary
+
+- Range: `v1.8.3..v2.0.0`.
+- Complete ancestry: 6 commits.
+- Diffstat: 22 files changed, 211 insertions(+), 1181 deletions(-)
+
+### Complete commit inventory
+
+- `f996309` 2026-08-25 - fix(runtime): preserve GPU CEF rendering
+- `31315dd` 2026-08-25 - build(upstream): retire integrated patches
+- `e70fdad` 2026-08-25 - fix(ci): require hardware for accelerated CEF proofs
+- `1911b3b` 2026-08-25 - fix(ci): pin resolvable FFmpeg for GPU gates
+- `71cd08a` 2026-08-25 - ci: use available FFmpeg release
+- `cddbf47` 2026-08-25 - release(pulsar): 2.0.0
 ## [Unreleased]
 
 ## [1.8.4] - 2026-08-25
