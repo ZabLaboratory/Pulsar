@@ -564,9 +564,9 @@ jobs:
         run: ./scripts/detect-hardware-gpu.ps1 -GithubOutput $env:GITHUB_OUTPUT
 
       - name: Setup ffmpeg
-        uses: AnimMouse/setup-ffmpeg@v1.2.5
+        uses: FedericoCarboni/setup-ffmpeg@v3
         with:
-          version: 7.1.1
+          ffmpeg-version: 6.1.0
 
       - name: Install npm workspaces
         # The real pulsar.exe + CEF runtime is already on disk from the
@@ -665,9 +665,9 @@ jobs:
           pip install websockets
 
       - name: Setup ffmpeg
-        uses: AnimMouse/setup-ffmpeg@v1.2.5
+        uses: FedericoCarboni/setup-ffmpeg@v3
         with:
-          version: 7.1.1
+          ffmpeg-version: 6.1.0
 
       - name: Run Twitch live-broadcast probe
         env:
@@ -932,9 +932,9 @@ jobs:
           registry-url: 'https://registry.npmjs.org/'
 
       - name: Setup ffmpeg
-        uses: AnimMouse/setup-ffmpeg@v1.2.5
+        uses: FedericoCarboni/setup-ffmpeg@v3
         with:
-          version: 7.1.1
+          ffmpeg-version: 6.1.0
 
       - name: Verify tag matches VERSION
         if: startsWith(github.ref, 'refs/tags/v')

@@ -241,17 +241,21 @@ if ($env:PULSAR_SKIP_ACCELERATED_CEF_PROBE -eq "1") {
 # retire grace window).
 # --------------------------------------------------------------------
 $wclProbe = Join-Path $repoRoot "scripts/probe-webpage-control-level.py"
-Log-Phase "==> Running probe-webpage-control-level.py (self-spawn control level + lifecycle, #158)"
-& python $wclProbe --exe $pulsar
-$wclCode = $LASTEXITCODE
-if ($wclCode -eq 3) {
-    Log-Phase "==> probe-webpage-control-level.py SKIPPED (light build -- browser_source absent, no CEF)"
-} elseif ($wclCode -ne 0) {
-    Log-Phase "==> probe-webpage-control-level.py FAILED (exit $wclCode)"
-    Log-Phase "==> A third-party page can reach OBS state, or a retired page is still running -- aborting before the shared suite."
-    exit 1
+if ($env:PULSAR_SKIP_ACCELERATED_CEF_PROBE -eq "1") {
+    Log-Phase "==> probe-webpage-control-level.py SKIPPED (no physical GPU on this host; NOT a pass -- source guard and real GPU E2E remain required)"
 } else {
-    Log-Phase "==> probe-webpage-control-level.py OK"
+    Log-Phase "==> Running probe-webpage-control-level.py (self-spawn control level + lifecycle, #158)"
+    & python $wclProbe --exe $pulsar
+    $wclCode = $LASTEXITCODE
+    if ($wclCode -eq 3) {
+        Log-Phase "==> probe-webpage-control-level.py SKIPPED (light build -- browser_source absent, no CEF)"
+    } elseif ($wclCode -ne 0) {
+        Log-Phase "==> probe-webpage-control-level.py FAILED (exit $wclCode)"
+        Log-Phase "==> A third-party page can reach OBS state, or a retired page is still running -- aborting before the shared suite."
+        exit 1
+    } else {
+        Log-Phase "==> probe-webpage-control-level.py OK"
+    }
 }
 
 # --------------------------------------------------------------------
