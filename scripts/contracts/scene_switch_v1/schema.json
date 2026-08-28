@@ -1,0 +1,353 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ZabLaboratory/Pulsar/blob/main/scripts/contracts/scene_switch_v1/schema.json",
+  "title": "Pulsar scene switch contract v1",
+  "description": "The transport contract for deterministic Preview preparation and frame-boundary Take commits.",
+  "oneOf": [
+    { "$ref": "#/$defs/PrepareCommand" },
+    { "$ref": "#/$defs/TakeCommand" },
+    { "$ref": "#/$defs/AbortCommand" },
+    { "$ref": "#/$defs/PrepareAcceptedEvent" },
+    { "$ref": "#/$defs/PreviewReadyEvent" },
+    { "$ref": "#/$defs/TakeAcceptedEvent" },
+    { "$ref": "#/$defs/TakeCommittedEvent" },
+    { "$ref": "#/$defs/TakeAbortedEvent" },
+    { "$ref": "#/$defs/CommandRejectedEvent" }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sceneId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nonNegativeInteger": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "laneId": {
+      "type": "string",
+      "enum": ["A", "B"]
+    },
+    "roleMap": {
+      "type": "object",
+      "required": ["on_air", "preview"],
+      "properties": {
+        "on_air": { "$ref": "#/$defs/laneId" },
+        "preview": { "$ref": "#/$defs/laneId" }
+      },
+      "additionalProperties": false
+    },
+    "revisions": {
+      "type": "object",
+      "required": ["program", "preview", "role_map"],
+      "properties": {
+        "program": { "$ref": "#/$defs/nonNegativeInteger" },
+        "preview": { "$ref": "#/$defs/nonNegativeInteger" },
+        "role_map": { "$ref": "#/$defs/nonNegativeInteger" }
+      },
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "required": ["lane_id", "scene_id"],
+      "properties": {
+        "lane_id": { "$ref": "#/$defs/laneId" },
+        "scene_id": { "$ref": "#/$defs/sceneId" }
+      },
+      "additionalProperties": false
+    },
+    "commandCommon": {
+      "type": "object",
+      "required": [
+        "contract",
+        "schema_version",
+        "message_type",
+        "command_type",
+        "command_id",
+        "intent_id",
+        "runtime_instance_id",
+        "expected_revisions"
+      ],
+      "properties": {
+        "contract": { "const": "pulsar.scene-switch.v1" },
+        "schema_version": { "const": 1 },
+        "message_type": { "const": "command" },
+        "command_type": {
+          "type": "string",
+          "enum": ["Prepare", "Take", "Abort"]
+        },
+        "command_id": { "$ref": "#/$defs/id" },
+        "intent_id": { "$ref": "#/$defs/id" },
+        "runtime_instance_id": { "$ref": "#/$defs/id" },
+        "expected_revisions": { "$ref": "#/$defs/revisions" },
+        "expected_server_seq": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    },
+    "PrepareCommand": {
+      "allOf": [
+        { "$ref": "#/$defs/commandCommon" },
+        {
+          "type": "object",
+          "required": ["command_type", "target", "timeout_ms"],
+          "properties": {
+            "command_type": { "const": "Prepare" },
+            "target": { "$ref": "#/$defs/target" },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "TakeCommand": {
+      "allOf": [
+        { "$ref": "#/$defs/commandCommon" },
+        {
+          "type": "object",
+          "required": ["command_type", "prepared_command_id", "timeout_ms"],
+          "properties": {
+            "command_type": { "const": "Take" },
+            "prepared_command_id": { "$ref": "#/$defs/id" },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "AbortCommand": {
+      "allOf": [
+        { "$ref": "#/$defs/commandCommon" },
+        {
+          "type": "object",
+          "required": ["command_type", "take_command_id", "reason"],
+          "properties": {
+            "command_type": { "const": "Abort" },
+            "take_command_id": { "$ref": "#/$defs/id" },
+            "reason": {
+              "type": "string",
+              "enum": ["operator", "timeout", "shutdown", "superseded"]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "eventCommon": {
+      "type": "object",
+      "required": [
+        "contract",
+        "schema_version",
+        "message_type",
+        "event_type",
+        "command_id",
+        "intent_id",
+        "runtime_instance_id",
+        "server_seq",
+        "state",
+        "previous_revisions",
+        "revisions",
+        "role_map",
+        "observed_at_monotonic_ns",
+        "payload_sha256"
+      ],
+      "properties": {
+        "contract": { "const": "pulsar.scene-switch.v1" },
+        "schema_version": { "const": 1 },
+        "message_type": { "const": "event" },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "PrepareAccepted",
+            "PreviewReady",
+            "TakeAccepted",
+            "TakeCommitted",
+            "TakeAborted",
+            "CommandRejected"
+          ]
+        },
+        "command_id": { "$ref": "#/$defs/id" },
+        "intent_id": { "$ref": "#/$defs/id" },
+        "runtime_instance_id": { "$ref": "#/$defs/id" },
+        "server_seq": { "$ref": "#/$defs/positiveInteger" },
+        "state": {
+          "type": "string",
+          "enum": ["ready", "preparing", "preview_ready", "take_accepted"]
+        },
+        "previous_revisions": { "$ref": "#/$defs/revisions" },
+        "revisions": { "$ref": "#/$defs/revisions" },
+        "role_map": { "$ref": "#/$defs/roleMap" },
+        "previous_role_map": { "$ref": "#/$defs/roleMap" },
+        "observed_at_monotonic_ns": { "$ref": "#/$defs/nonNegativeInteger" },
+        "payload_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "PrepareAcceptedEvent": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCommon" },
+        {
+          "type": "object",
+          "required": ["event_type", "state", "target_lane_id", "target_scene_id", "deadline_monotonic_ns"],
+          "properties": {
+            "event_type": { "const": "PrepareAccepted" },
+            "state": { "const": "preparing" },
+            "target_lane_id": { "$ref": "#/$defs/laneId" },
+            "target_scene_id": { "$ref": "#/$defs/sceneId" },
+            "deadline_monotonic_ns": { "$ref": "#/$defs/positiveInteger" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "PreviewReadyEvent": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCommon" },
+        {
+          "type": "object",
+          "required": [
+            "event_type",
+            "state",
+            "target_lane_id",
+            "target_scene_id",
+            "first_frame_id",
+            "first_pts_ns"
+          ],
+          "properties": {
+            "event_type": { "const": "PreviewReady" },
+            "state": { "const": "preview_ready" },
+            "target_lane_id": { "$ref": "#/$defs/laneId" },
+            "target_scene_id": { "$ref": "#/$defs/sceneId" },
+            "first_frame_id": { "$ref": "#/$defs/nonNegativeInteger" },
+            "first_pts_ns": { "$ref": "#/$defs/nonNegativeInteger" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "TakeAcceptedEvent": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCommon" },
+        {
+          "type": "object",
+          "required": ["event_type", "state", "take_command_id", "target_lane_id", "target_scene_id", "freeze_until_monotonic_ns"],
+          "properties": {
+            "event_type": { "const": "TakeAccepted" },
+            "state": { "const": "take_accepted" },
+            "take_command_id": { "$ref": "#/$defs/id" },
+            "target_lane_id": { "$ref": "#/$defs/laneId" },
+            "target_scene_id": { "$ref": "#/$defs/sceneId" },
+            "freeze_until_monotonic_ns": { "$ref": "#/$defs/positiveInteger" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "TakeCommittedEvent": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCommon" },
+        {
+          "type": "object",
+          "required": [
+            "event_type",
+            "state",
+            "take_command_id",
+            "target_lane_id",
+            "target_scene_id",
+            "source_lane_id",
+            "frame_id",
+            "pts_ns",
+            "program_lane_id",
+            "preview_lane_id"
+          ],
+          "properties": {
+            "event_type": { "const": "TakeCommitted" },
+            "state": { "const": "ready" },
+            "take_command_id": { "$ref": "#/$defs/id" },
+            "target_lane_id": { "$ref": "#/$defs/laneId" },
+            "target_scene_id": { "$ref": "#/$defs/sceneId" },
+            "source_lane_id": { "$ref": "#/$defs/laneId" },
+            "frame_id": { "$ref": "#/$defs/nonNegativeInteger" },
+            "pts_ns": { "$ref": "#/$defs/nonNegativeInteger" },
+            "program_lane_id": { "$ref": "#/$defs/laneId" },
+            "preview_lane_id": { "$ref": "#/$defs/laneId" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "TakeAbortedEvent": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCommon" },
+        {
+          "type": "object",
+          "required": ["event_type", "state", "take_command_id", "reason"],
+          "properties": {
+            "event_type": { "const": "TakeAborted" },
+            "state": { "const": "ready" },
+            "take_command_id": { "$ref": "#/$defs/id" },
+            "reason": {
+              "type": "string",
+              "enum": ["operator", "timeout", "shutdown", "superseded"]
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "CommandRejectedEvent": {
+      "allOf": [
+        { "$ref": "#/$defs/eventCommon" },
+        {
+          "type": "object",
+          "required": ["event_type", "error_code", "error_message", "error_details"],
+          "properties": {
+            "event_type": { "const": "CommandRejected" },
+            "error_code": {
+              "type": "string",
+              "enum": [
+                "SCHEMA_INVALID",
+                "RUNTIME_MISMATCH",
+                "REVISION_STALE",
+                "SERVER_SEQ_STALE",
+                "IDEMPOTENCY_CONFLICT",
+                "PREVIEW_FROZEN",
+                "PREVIEW_LANE_MISMATCH",
+                "PREVIEW_NOT_READY",
+                "PREPARE_NOT_FOUND",
+                "TAKE_NOT_PENDING",
+                "TAKE_INTENT_CONFLICT",
+                "TIMEOUT",
+                "ABORTED"
+              ]
+            },
+            "error_message": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "error_details": { "type": "object" },
+            "expected_revisions": { "$ref": "#/$defs/revisions" },
+            "expected_server_seq": { "$ref": "#/$defs/nonNegativeInteger" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}
