@@ -250,6 +250,35 @@ The vendor handlers are written in C++ against `obs_data_t`, which uses
 camelCase at its boundary (`packages/pulsar-client/src/wire.ts`); raw
 clients see snake_case on the wire.
 
+### Deterministic scene switching (`pulsar.scene-switch.v1`)
+
+The scene-switch contract is a versioned, transport-neutral command/event
+envelope. Its canonical schema, reference state machine, fixtures, and
+contract tests live in
+[`scripts/contracts/scene_switch_v1/`](../scripts/contracts/scene_switch_v1/). A future
+vendor adapter may carry these objects through `CallVendorRequest`, but it
+must preserve the fields and ordering rules; the contract does not replace or
+alter any obs-websocket v5 request.
+
+The normative lifecycle is:
+
+```text
+Prepare → PrepareAccepted → PreviewReady(first_frame_id, first_pts_ns)
+       → Take → TakeAccepted → TakeCommitted(frame_id, pts_ns)
+                                  └─ or TakeAborted(reason)
+```
+
+Every command is correlated by `command_id`, `intent_id`, and
+`runtime_instance_id`, guarded by `expected_revisions` (`program`, `preview`,
+`role_map`) and optionally `expected_server_seq`. Every event carries the
+before/after revisions, role map, monotone `server_seq`, monotone observation
+timestamp, and canonical payload digest. `TakeAccepted` freezes the future
+Preview until commit or abort; a retry with the same command ID and canonical
+payload replays the original event without a second commit. A changed payload
+or stale revision is rejected with a stable error code and no route/surface
+mutation. `TakeCommitted` is the sole event that carries the frame-boundary
+frame ID/PTS evidence required to correlate the actual on-air cut.
+
 ### Requests
 
 | Request | Purpose | Request fields | Response fields |
