@@ -74,6 +74,11 @@ public:
     const std::string &owner_runtime_id() const { return owner_runtime_id_; }
     const std::string &holder_runtime_id() const { return holder_runtime_id_; }
     const std::filesystem::path &path() const { return path_; }
+    // For a runtime-directory lease this is the path resolved from the
+    // retained directory handle, not the caller's reparse/case/8.3 spelling.
+    // Callers must use it for operational cwd-relative resources after the
+    // lease is acquired. Other lease kinds expose an empty path.
+    const std::filesystem::path &operational_path() const { return operational_path_; }
     const std::filesystem::path &metadata_path() const { return metadata_path_; }
     const std::string &authority_name() const { return authority_name_; }
 
@@ -81,6 +86,7 @@ private:
     void move_from(ExclusiveLease &&other) noexcept;
 
     std::filesystem::path path_;
+    std::filesystem::path operational_path_;
     std::filesystem::path metadata_path_;
     std::string owner_runtime_id_;
     std::string holder_runtime_id_;

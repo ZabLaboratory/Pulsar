@@ -160,6 +160,20 @@ bool RuntimeState::initialize()
         return false;
     }
 
+    // The lease resolves the requested directory through the retained kernel
+    // handle. From this point on, every cwd-relative resource must use that
+    // handle-derived path; re-resolving identity.runtime_dir could follow a
+    // junction which was retargeted after acquisition.
+    if (runtime_dir_lease.operational_path().empty()) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=runtime_dir_operational_path_unavailable "
+                     "id=%s requested=%s\n",
+                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str());
+        release();
+        return false;
+    }
+    identity.runtime_dir = runtime_dir_lease.operational_path();
+
     if (!pulsar_runtime::set_process_environment("PULSAR_RUNTIME_INSTANCE_ID",
                                                  identity.instance_id) ||
         !pulsar_runtime::set_process_environment("PULSAR_RUNTIME_DIR",

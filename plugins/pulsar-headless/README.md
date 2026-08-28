@@ -27,6 +27,10 @@ Case variants, junctions/symlinks and available 8.3 aliases therefore contend
 for the same physical directory lease. The handle is retained without delete
 sharing while the lease is held; reparse-point, DACL or file-identity failures
 are reported as hard startup errors rather than falling back to a lexical path.
+After acquisition, the bootstrap uses the final path obtained from that same
+handle for `PULSAR_RUNTIME_DIR` and process cwd. The caller's requested spelling
+is diagnostic only, so retargeting a junction cannot move config, logs or
+recordings to another directory during activation.
 
 ## Responsibility surface
 

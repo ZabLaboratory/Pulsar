@@ -20,6 +20,7 @@
 #include <system_error>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -190,10 +191,41 @@ bool file_id_is_nonzero(const FILE_ID_128 &file_id)
     return false;
 }
 
+fs::path final_path_from_handle(HANDLE handle, std::string &error)
+{
+    // VOLUME_NAME_DOS yields a stable \\?\\ DOS/UNC spelling instead of
+    // replaying the caller's case, junction, or 8.3 alias.  The handle remains
+    // open for the lease lifetime, so the returned path is only used after the
+    // identity check and never re-resolved through the original alias.
+    DWORD capacity = 512;
+    for (;;) {
+        std::vector<wchar_t> buffer(capacity);
+        const DWORD length = GetFinalPathNameByHandleW(
+            handle, buffer.data(), capacity, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        if (length == 0) {
+            error = "runtime_directory_final_path_failed_win32_" +
+                    std::to_string(GetLastError());
+            return {};
+        }
+        if (length < capacity)
+            return fs::path(std::wstring(buffer.data(), length));
+
+        // Windows extended paths are bounded by 32,767 characters.  Refuse a
+        // provider which reports an unrepresentable path instead of falling
+        // back to the mutable lexical spelling.
+        if (length >= 32767) {
+            error = "runtime_directory_final_path_too_long";
+            return {};
+        }
+        capacity = length + 1;
+    }
+}
+
 std::string physical_directory_key(const fs::path &path, HANDLE &directory_handle,
-                                   std::string &error)
+                                   fs::path &physical_directory, std::string &error)
 {
     directory_handle = nullptr;
+    physical_directory.clear();
     // Runtime-directory leases are represented by <runtime-dir>/.runtime.lock;
     // the physical identity belongs to the controlled directory, not to the
     // marker file which may not exist yet.
@@ -235,6 +267,11 @@ std::string physical_directory_key(const fs::path &path, HANDLE &directory_handl
                                                           sizeof(file_id_info));
     if (extended_ok && file_id_info.VolumeSerialNumber != 0 &&
         file_id_is_nonzero(file_id_info.FileId)) {
+        physical_directory = final_path_from_handle(handle, error);
+        if (physical_directory.empty()) {
+            CloseHandle(handle);
+            return {};
+        }
         std::ostringstream identity;
         identity << "volume-" << std::hex << std::setfill('0') << std::setw(16)
                  << static_cast<std::uint64_t>(file_id_info.VolumeSerialNumber) << "-file-";
@@ -252,6 +289,11 @@ std::string physical_directory_key(const fs::path &path, HANDLE &directory_handl
         (static_cast<std::uint64_t>(basic_info.nFileIndexHigh) << 32) |
         static_cast<std::uint64_t>(basic_info.nFileIndexLow);
     if (basic_info.dwVolumeSerialNumber != 0 && legacy_file_id != 0) {
+        physical_directory = final_path_from_handle(handle, error);
+        if (physical_directory.empty()) {
+            CloseHandle(handle);
+            return {};
+        }
         std::ostringstream identity;
         identity << "volume-" << std::hex << std::setfill('0') << std::setw(8)
                  << static_cast<std::uint64_t>(basic_info.dwVolumeSerialNumber) << "-file-"
@@ -270,8 +312,9 @@ std::string physical_directory_key(const fs::path &path, HANDLE &directory_handl
 
 std::string authority_key(const fs::path &path, std::string_view owner,
                           std::string_view resource_kind, std::string &error,
-                          void **directory_handle)
+                          void **directory_handle, fs::path &operational_path)
 {
+    operational_path.clear();
     if (resource_kind == "runtime-instance")
         return "runtime-instance:" + std::string(owner);
     if (resource_kind == "directshow-legacy-alias")
@@ -279,7 +322,7 @@ std::string authority_key(const fs::path &path, std::string_view owner,
 #ifdef _WIN32
     if (resource_kind == "runtime-directory") {
         HANDLE handle = nullptr;
-        const std::string physical = physical_directory_key(path, handle, error);
+        const std::string physical = physical_directory_key(path, handle, operational_path, error);
         if (physical.empty())
             return {};
         *directory_handle = handle;
@@ -288,8 +331,10 @@ std::string authority_key(const fs::path &path, std::string_view owner,
 #else
     (void)directory_handle;
 #endif
-    if (resource_kind == "runtime-directory")
+    if (resource_kind == "runtime-directory") {
+        operational_path = path.parent_path();
         return "runtime-directory:" + normalized_path_string(path);
+    }
     return "path:" + std::string(resource_kind) + ":" + normalized_path_string(path);
 }
 
@@ -460,6 +505,7 @@ ExclusiveLease &ExclusiveLease::operator=(ExclusiveLease &&other) noexcept
 void ExclusiveLease::move_from(ExclusiveLease &&other) noexcept
 {
     path_ = std::move(other.path_);
+    operational_path_ = std::move(other.operational_path_);
     metadata_path_ = std::move(other.metadata_path_);
     owner_runtime_id_ = std::move(other.owner_runtime_id_);
     holder_runtime_id_ = std::move(other.holder_runtime_id_);
@@ -481,6 +527,7 @@ void ExclusiveLease::move_from(ExclusiveLease &&other) noexcept
     fd_ = other.fd_;
     other.fd_ = -1;
 #endif
+    other.operational_path_.clear();
     other.held_ = false;
     other.result_ = LeaseResult::Released;
 }
@@ -490,6 +537,7 @@ bool ExclusiveLease::acquire(const fs::path &path, std::string_view owner_runtim
 {
     release();
     path_ = path;
+    operational_path_.clear();
     metadata_path_.clear();
     owner_runtime_id_ = std::string(owner_runtime_id);
     holder_runtime_id_.clear();
@@ -509,9 +557,10 @@ bool ExclusiveLease::acquire(const fs::path &path, std::string_view owner_runtim
     }
 
     void *directory_handle = nullptr;
+    fs::path operational_path;
     std::string key_error;
     const std::string key = authority_key(path_, owner_runtime_id_, resource_kind_, key_error,
-                                          &directory_handle);
+                                          &directory_handle, operational_path);
     if (key.empty()) {
         result_ = LeaseResult::Error;
         reason_ = key_error.empty() ? "authority_key_failed" : key_error;
@@ -520,6 +569,7 @@ bool ExclusiveLease::acquire(const fs::path &path, std::string_view owner_runtim
 #ifdef _WIN32
     directory_handle_ = directory_handle;
 #endif
+    operational_path_ = std::move(operational_path);
     metadata_path_ = canonical_metadata_path(key);
 #ifdef _WIN32
     authority_name_ = authority_name_for(key, owner_runtime_id_, resource_kind_);
@@ -679,6 +729,7 @@ void ExclusiveLease::release()
             fd_ = -1;
         }
 #endif
+        operational_path_.clear();
         return;
     }
 
@@ -709,6 +760,7 @@ void ExclusiveLease::release()
     ::close(fd_);
     fd_ = -1;
 #endif
+    operational_path_.clear();
     held_ = false;
     result_ = LeaseResult::Released;
 }

@@ -346,6 +346,76 @@ void test_runtime_directory_physical_identity(const fs::path &root)
         PULSAR_CHECK(RemoveDirectoryW(reparse_alias.wstring().c_str()) != 0);
     }
 
+    // The lease must carry the physical path forward to activation. Retarget
+    // the caller-visible junction after acquisition and verify that the
+    // handle-derived path and a simulated cwd activation remain on A, while a
+    // separate claimant through the retargeted alias sees only B.
+    const fs::path retarget_alias = root / "physical-runtime-retarget-alias";
+    const fs::path retarget_target = root / "physical-runtime-retarget-target";
+    fs::create_directories(retarget_target, ec);
+    PULSAR_CHECK(!ec);
+    std::string retarget_kind;
+    DWORD retarget_error = ERROR_SUCCESS;
+    if (!create_directory_alias(retarget_alias, physical, retarget_kind, retarget_error)) {
+        std::fprintf(stdout,
+                     "runtime-directory-retarget: SKIP initial_create_failed_win32=%lu\n",
+                     static_cast<unsigned long>(retarget_error));
+    } else {
+        bool retarget_alias_present = true;
+        ExclusiveLease retarget_lease;
+        PULSAR_CHECK(retarget_lease.acquire(retarget_alias / ".runtime.lock",
+                                            "retarget-runtime-a", "runtime-directory"));
+        PULSAR_CHECK(!retarget_lease.operational_path().empty());
+        std::error_code equivalent_error;
+        PULSAR_CHECK(fs::equivalent(retarget_lease.operational_path(), physical,
+                                    equivalent_error));
+        PULSAR_CHECK(!equivalent_error);
+
+        PULSAR_CHECK(RemoveDirectoryW(retarget_alias.wstring().c_str()) != 0);
+        retarget_alias_present = false;
+        std::string retarget_target_kind;
+        DWORD retarget_target_error = ERROR_SUCCESS;
+        if (!create_directory_alias(retarget_alias, retarget_target, retarget_target_kind,
+                                    retarget_target_error)) {
+            std::fprintf(stdout,
+                         "runtime-directory-retarget: SKIP retarget_create_failed_win32=%lu\n",
+                         static_cast<unsigned long>(retarget_target_error));
+        } else {
+            retarget_alias_present = true;
+            equivalent_error.clear();
+            PULSAR_CHECK(fs::equivalent(retarget_lease.operational_path(), physical,
+                                        equivalent_error));
+            PULSAR_CHECK(!equivalent_error);
+
+            const fs::path original_cwd = fs::current_path();
+            std::error_code cwd_error;
+            fs::current_path(retarget_lease.operational_path(), cwd_error);
+            PULSAR_CHECK(!cwd_error);
+            equivalent_error.clear();
+            PULSAR_CHECK(fs::equivalent(fs::current_path(), physical, equivalent_error));
+            PULSAR_CHECK(!equivalent_error);
+            fs::current_path(original_cwd, cwd_error);
+            PULSAR_CHECK(!cwd_error);
+
+            ExclusiveLease retarget_target_lease;
+            PULSAR_CHECK(retarget_target_lease.acquire(
+                retarget_alias / ".runtime.lock", "retarget-runtime-b", "runtime-directory"));
+            PULSAR_CHECK(fs::equivalent(retarget_target_lease.operational_path(), retarget_target,
+                                        equivalent_error));
+            PULSAR_CHECK(!equivalent_error);
+            std::fprintf(stdout,
+                         "runtime-directory-retarget: initial=%s target=%s operational_a=1 "
+                         "cwd_a=1 alias_b_allowed=1\n",
+                         retarget_kind.c_str(), retarget_target_kind.c_str());
+            retarget_target_lease.release();
+        }
+        retarget_lease.release();
+        if (retarget_alias_present)
+            PULSAR_CHECK(RemoveDirectoryW(retarget_alias.wstring().c_str()) != 0);
+    }
+    fs::remove_all(retarget_target, ec);
+    PULSAR_CHECK(!ec);
+
     // 8.3 names are optional per-volume.  When present, they must identify
     // the same physical directory; otherwise record a typed environmental SKIP.
     const fs::path long_name = root / "runtime-directory-with-eight-dot-three-alias";
