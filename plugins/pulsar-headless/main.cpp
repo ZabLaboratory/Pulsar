@@ -829,6 +829,43 @@ void load_modules()
     obs_post_load_modules();
 }
 
+// A successful obs_module_load() is not enough for the embedding contract:
+// obs-websocket may reject its persistent-data directory, or its listen()
+// call may fail while libobs continues loading optional modules.  The host
+// must never publish PULSAR_READY for such a process.  The websocket plugin
+// exposes this state through the global proc handler so the check remains
+// independent of its private C++ object and still distinguishes a bind
+// failure from an ordinary optional-module warning.
+bool websocket_server_ready(std::string &reason)
+{
+    if (!obs_get_module("obs-websocket")) {
+        reason = "obs_websocket_module_not_loaded";
+        return false;
+    }
+
+    proc_handler_t *global_ph = obs_get_proc_handler();
+    if (!global_ph) {
+        reason = "obs_websocket_proc_handler_unavailable";
+        return false;
+    }
+
+    calldata_t cd;
+    calldata_init(&cd);
+    const bool called = proc_handler_call(global_ph, "pulsar_websocket_is_listening", &cd);
+    const bool success = calldata_bool(&cd, "success");
+    const bool listening = calldata_bool(&cd, "listening");
+    calldata_free(&cd);
+    if (!called || !success) {
+        reason = "obs_websocket_listening_state_unavailable";
+        return false;
+    }
+    if (!listening) {
+        reason = "obs_websocket_bind_failed";
+        return false;
+    }
+    return true;
+}
+
 // V1 session boundary: each spawn gets its own port + password, never
 // trusting the persisted config.json. PULSAR_PORT and PULSAR_PASSWORD
 // override the defaults; if either is empty, we pick safe values
@@ -1112,6 +1149,18 @@ int main(int argc, char **argv)
     }
 
     load_modules();
+
+    std::string websocket_error;
+    if (!websocket_server_ready(websocket_error)) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=websocket_not_ready id=%s reason=%s\n",
+                     runtime_state->identity.instance_id.c_str(), websocket_error.c_str());
+        // The frontend callback table was installed before module loading;
+        // pair its teardown with obs_shutdown on this fail-closed path too.
+        pulsar_frontend_shutdown();
+        obs_shutdown();
+        return 1;
+    }
 
     // FINISHED_LOADING is the trigger obs-websocket waits for before
     // accepting requests/events on the wire. Emit it once modules are

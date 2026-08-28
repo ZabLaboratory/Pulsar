@@ -28,9 +28,13 @@ for the same physical directory lease. The handle is retained without delete
 sharing while the lease is held; reparse-point, DACL or file-identity failures
 are reported as hard startup errors rather than falling back to a lexical path.
 After acquisition, the bootstrap uses the final path obtained from that same
-handle for `PULSAR_RUNTIME_DIR` and process cwd. The caller's requested spelling
-is diagnostic only, so retargeting a junction cannot move config, logs or
-recordings to another directory during activation.
+handle for `PULSAR_RUNTIME_DIR` and process cwd. Drive-letter and UNC forms are
+converted from the API's extended spelling before passing them to libobs/Qt;
+unsupported forms fail closed rather than falling back to the caller's mutable
+spelling. The caller's requested spelling is diagnostic only, so retargeting a
+junction cannot move config, logs or recordings to another directory during
+activation. `PULSAR_READY` is emitted only after obs-websocket is loaded and its
+configured listener reports active.
 
 ## Responsibility surface
 

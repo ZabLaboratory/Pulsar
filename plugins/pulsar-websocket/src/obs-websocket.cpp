@@ -77,6 +77,24 @@ static void pulsar_is_loopback_only_cb(void * /*priv_data*/, calldata_t *cd)
 	calldata_set_bool(cd, "success", true);
 }
 
+// The headless host must not publish PULSAR_READY until the module has both
+// loaded and bound its configured endpoint.  `obs_module_post_load()` starts
+// the server synchronously, but its void callback gives the host no direct
+// status channel when listen() fails.  Keep this small proc on the same global
+// handler as the loopback predicate so the host can distinguish a loaded
+// module from a listening server without linking to this DLL's C++ object.
+static void pulsar_is_listening_cb(void * /*priv_data*/, calldata_t *cd)
+{
+	WebSocketServerPtr server = _webSocketServer;
+	if (!server) {
+		calldata_set_bool(cd, "listening", false);
+		calldata_set_bool(cd, "success", false);
+		return;
+	}
+	calldata_set_bool(cd, "listening", server->IsListening());
+	calldata_set_bool(cd, "success", true);
+}
+
 bool obs_module_load(void)
 {
 	blog(LOG_INFO, "[obs_module_load] you can haz websockets (Version: %s | RPC Version: %d)", OBS_WEBSOCKET_VERSION,
@@ -105,6 +123,8 @@ bool obs_module_load(void)
 	proc_handler_add(obs_get_proc_handler(),
 			 "bool pulsar_websocket_is_loopback_only(out bool loopback)", &pulsar_is_loopback_only_cb,
 			 nullptr);
+	proc_handler_add(obs_get_proc_handler(),
+			 "bool pulsar_websocket_is_listening(out bool listening)", &pulsar_is_listening_cb, nullptr);
 
 	// Initialize the event handler
 	_eventHandler = std::make_shared<EventHandler>();

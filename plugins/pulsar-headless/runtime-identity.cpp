@@ -197,6 +197,15 @@ fs::path final_path_from_handle(HANDLE handle, std::string &error)
     // replaying the caller's case, junction, or 8.3 alias.  The handle remains
     // open for the lease lifetime, so the returned path is only used after the
     // identity check and never re-resolved through the original alias.
+    //
+    // libobs and third-party modules still consume this value as a normal
+    // Win32/Qt path.  In particular, obs-websocket's persistent-data migration
+    // treats the extended prefix as a root and attempts to create `\\`, which
+    // disables the module before the host can accept WebSocket connections.
+    // Convert only the two documented DOS forms back to their ordinary spelling
+    // while retaining the handle as the authority.  Unknown device/volume
+    // spellings are rejected rather than sent to a path parser that may
+    // silently resolve them somewhere else.
     DWORD capacity = 512;
     for (;;) {
         std::vector<wchar_t> buffer(capacity);
@@ -207,8 +216,46 @@ fs::path final_path_from_handle(HANDLE handle, std::string &error)
                     std::to_string(GetLastError());
             return {};
         }
-        if (length < capacity)
-            return fs::path(std::wstring(buffer.data(), length));
+        if (length < capacity) {
+            std::wstring value(buffer.data(), length);
+            constexpr std::wstring_view extended_prefix = L"\\\\?\\";
+            if (value.rfind(extended_prefix, 0) == 0) {
+                if (value.size() >= 8 && value.compare(4, 4, L"UNC\\") == 0) {
+                    // `\\?\\UNC\\server\\share\\...` is the extended
+                    // spelling of `\\\\server\\share\\...`.
+                    value = L"\\\\" + value.substr(8);
+                } else if (value.size() >= 7 &&
+                           ((value[4] >= L'A' && value[4] <= L'Z') ||
+                            (value[4] >= L'a' && value[4] <= L'z')) &&
+                           value[5] == L':' && value[6] == L'\\') {
+                    // `\\?\\C:\\...` is the extended spelling of
+                    // `C:\\...`, which remains stable because the retained
+                    // no-delete-share handle is the authority.
+                    value.erase(0, extended_prefix.size());
+                } else {
+                    error = "runtime_directory_final_path_unsupported_prefix";
+                    return {};
+                }
+            }
+
+            const bool drive_path = value.size() >= 3 &&
+                                    ((value[0] >= L'A' && value[0] <= L'Z') ||
+                                     (value[0] >= L'a' && value[0] <= L'z')) &&
+                                    value[1] == L':' && value[2] == L'\\';
+            const bool unc_path = value.rfind(L"\\\\", 0) == 0;
+            if (!drive_path && !unc_path) {
+                error = "runtime_directory_final_path_not_win32";
+                return {};
+            }
+            // The ordinary spelling is required by the Qt/libobs consumers
+            // used during bootstrap.  Do not silently fall back to the
+            // mutable lexical path when it cannot be represented by them.
+            if (value.size() >= MAX_PATH) {
+                error = "runtime_directory_final_path_requires_extended";
+                return {};
+            }
+            return fs::path(value);
+        }
 
         // Windows extended paths are bounded by 32,767 characters.  Refuse a
         // provider which reports an unrepresentable path instead of falling
@@ -219,6 +266,7 @@ fs::path final_path_from_handle(HANDLE handle, std::string &error)
         }
         capacity = length + 1;
     }
+
 }
 
 std::string physical_directory_key(const fs::path &path, HANDLE &directory_handle,

@@ -284,6 +284,13 @@ void test_runtime_directory_physical_identity(const fs::path &root)
     ExclusiveLease first;
     PULSAR_CHECK(first.acquire(physical / ".runtime.lock", "physical-runtime-a",
                                "runtime-directory"));
+    // The handle-derived path is the operational input to libobs/Qt as well
+    // as the path used for cwd activation.  The extended `\\?\\` spelling is
+    // valid to Win32 file APIs but is not accepted by every module that parses
+    // a config root; production must normalize it without returning to the
+    // mutable caller spelling.
+    PULSAR_CHECK(first.operational_path().wstring().rfind(L"\\\\?\\", 0) ==
+                 std::wstring::npos);
 
     // A different physical directory remains independently usable.
     ExclusiveLease distinct_lease;
