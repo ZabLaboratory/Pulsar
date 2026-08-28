@@ -13,7 +13,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import threading
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -230,7 +230,9 @@ def test_integral_json_numbers_are_normalized_and_draft_compatible() -> None:
     validator.validate(normalized)
 
     machine = SceneSwitchMachine("runtime-001")
-    accepted = machine.dispatch(value, now_monotonic_ns=1.0)
+    # Keep the JSON-decoded integral float at runtime; the cast only documents
+    # this deliberate schema-boundary case to mypy without changing production.
+    accepted = machine.dispatch(value, now_monotonic_ns=cast(int, 1.0))
     validator.validate(accepted)
     assert type(accepted["server_seq"]) is int
     assert type(accepted["deadline_monotonic_ns"]) is int
