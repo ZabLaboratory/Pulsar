@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,5 +99,69 @@ describe("spawn()", () => {
     await handle.shutdown();
     await handle.shutdown();
     expect(handle.client.isConnected()).toBe(false);
+  });
+
+  it("gives concurrent children distinct runtime identities and config namespaces", async () => {
+    const handles = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        spawn({
+          binariesPath: tmp,
+          launchCommand: { exe: process.execPath, args: [FAKE_PULSAR] },
+        }),
+      ),
+    );
+
+    expect(new Set(handles.map((handle) => handle.runtimeInstanceId)).size).toBe(4);
+    expect(new Set(handles.map((handle) => handle.runtimeDir)).size).toBe(4);
+    expect(handles.every((handle) => handle.port > 0)).toBe(true);
+
+    const generatedRuntimeDirs = handles.map((handle) => handle.runtimeDir);
+    await Promise.all(handles.map((handle) => handle.shutdown()));
+    expect(generatedRuntimeDirs.every((dir) => !existsSync(dir))).toBe(true);
+  });
+
+  it("rejects an invalid runtime identity before starting a child", async () => {
+    const lines: string[] = [];
+    await expect(
+      spawn({
+        binariesPath: tmp,
+        env: { PULSAR_RUNTIME_INSTANCE_ID: "../escape" },
+        launchCommand: { exe: process.execPath, args: [FAKE_PULSAR] },
+        onLog: (_stream, line) => lines.push(line),
+      }),
+    ).rejects.toMatchObject({
+      name: "PulsarRuntimeError",
+      prism: { code: "PULSAR_RUNTIME_ID_INVALID" },
+    });
+    expect(lines).toHaveLength(0);
+  });
+
+  it("does not remove a caller-owned runtime directory", async () => {
+    const runtimeDir = join(tmp, "caller-runtime");
+    const handle = await spawn({
+      binariesPath: tmp,
+      env: { PULSAR_RUNTIME_DIR: runtimeDir },
+      launchCommand: { exe: process.execPath, args: [FAKE_PULSAR] },
+    });
+
+    expect(handle.runtimeDir).toBe(resolve(runtimeDir));
+    await handle.shutdown();
+    expect(existsSync(runtimeDir)).toBe(true);
+  });
+
+  it("cleans a generated namespace when boot times out", async () => {
+    const runtimeRoot = join(tmp, "runtime-root");
+    await expect(
+      spawn({
+        binariesPath: tmp,
+        env: { PULSAR_RUNTIME_ROOT: runtimeRoot },
+        launchCommand: { exe: process.execPath, args: ["-e", "setInterval(() => {}, 1000)" ] },
+        readyTimeoutMs: 100,
+      }),
+    ).rejects.toMatchObject({
+      name: "PulsarRuntimeError",
+      prism: { code: "PULSAR_READY_TIMEOUT" },
+    });
+    expect(readdirSync(runtimeRoot)).toHaveLength(0);
   });
 });

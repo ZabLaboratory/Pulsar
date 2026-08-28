@@ -274,6 +274,13 @@ std::string default_log_dir()
 {
     if (const char *e = std::getenv("PULSAR_LOG_DIR"); e && *e)
         return e;
+    // #243: the headless bootstrap publishes a validated, exclusively held
+    // runtime directory before installing this sink. Keep the default log
+    // path inside that namespace so concurrent Pulsar processes never append
+    // to one machine-wide pulsar.log. An explicit PULSAR_LOG_DIR remains a
+    // caller-owned override and is intentionally not rewritten here.
+    if (const char *runtime = std::getenv("PULSAR_RUNTIME_DIR"); runtime && *runtime)
+        return (fs::path(runtime) / "logs").string();
 #ifdef _WIN32
     if (const char *local = std::getenv("LOCALAPPDATA"); local && *local) {
         fs::path p(local);

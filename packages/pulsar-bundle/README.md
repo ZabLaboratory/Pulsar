@@ -22,6 +22,7 @@ instead — same `spawn()` API, larger payload (CEF runtime).
 - [`spawn()` API](#spawn-api)
 - [Spawn options](#spawn-options)
 - [Boot environment variables](#boot-environment-variables)
+- [Concurrent runtimes](#concurrent-runtimes)
 - [Lifecycle](#lifecycle)
 - [Talking to the running pulsar](#talking-to-the-running-pulsar)
 - [Bundling for distribution](#bundling-for-distribution)
@@ -158,6 +159,12 @@ interface SpawnedPulsar {
    *  (e.g. "32.1.2-1-g8c23ba721-pulsar"). */
   libobsVersion: string;
 
+  /** Validated identity of this isolated Pulsar process. */
+  runtimeInstanceId: string;
+
+  /** Process-local cwd/config/log/recording namespace. */
+  runtimeDir: string;
+
   /** Disconnect the WS client and terminate pulsar.exe. Resolves once
    *  the process has exited. Idempotent — call as many times as you
    *  like, only the first one does work. */
@@ -231,21 +238,19 @@ The two env vars you almost always want to set:
 ```ts
 import { randomBytes } from "node:crypto";
 
-const sessionPassword = randomBytes(16).toString("base64url");
-const sessionPort     = await pickFreePort(); // see PRISM-EMBEDDING.md
-
 const pulsar = await spawn({
   env: {
-    PULSAR_PORT:     String(sessionPort),
-    PULSAR_PASSWORD: sessionPassword,
+    // Optional: pin credentials when an external supervisor owns them.
+    PULSAR_PASSWORD: randomBytes(16).toString("base64url"),
   },
 });
 ```
 
-If you don't pin them, Pulsar generates a fresh random password each
-session and uses port 4455 by default. The password ends up in
-`<binaries>/bin/64bit/obs-websocket/config.json`, which `spawn()`
-reads after the boot marker.
+If you don't pin them, `spawn()` allocates a free loopback port for each
+child and Pulsar generates a fresh random password. The password ends up in
+`<runtimeDir>/obs-websocket/config.json`, which `spawn()` reads after the boot
+marker. The generated runtime directory is removed after a clean or failed
+shutdown; an explicitly supplied `PULSAR_RUNTIME_DIR` remains caller-owned.
 
 ### `readyTimeoutMs`
 
@@ -279,8 +284,12 @@ via `opts.env`.
 
 | Var | Type | Default | Purpose |
 |---|---|---|---|
-| `PULSAR_PORT` | port | `4455` | obs-websocket port. Pin to avoid collisions with stock OBS / a second Pulsar instance. |
+| `PULSAR_RUNTIME_INSTANCE_ID` | identifier | generated per spawn | Stable `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` identity used by runtime logs, leases and dedicated DirectShow mappings. |
+| `PULSAR_RUNTIME_DIR` | path | generated private directory | Working directory and namespace for config, logs and recordings. Explicit paths are caller-owned and are never removed by `spawn()`. |
+| `PULSAR_RUNTIME_ROOT` | path | system temp directory (bundle) | Parent for generated runtime directories. The native executable also uses it as the shared lease root when supplied. |
+| `PULSAR_PORT` | port | free loopback port | obs-websocket port. `spawn()` allocates one per child when omitted, empty or `0`; an explicit value pins it. |
 | `PULSAR_PASSWORD` | string | random 22-char URL-safe | obs-websocket auth password. Pin via `randomBytes(...)` per session. |
+| `PULSAR_LEGACY_ALIAS` | `required`\|`dedicated`\|`off` | opportunistic | Claim the historical DirectShow aliases, refuse boot if unavailable, or force dedicated names. Other values keep opportunistic compatibility. |
 | `PULSAR_FPS` | int | `60` | Output frame rate. Common: 24 / 30 / 48 / 60 / 120. |
 | `PULSAR_RESOLUTION` | `<W>x<H>` | `1920x1080` | Output canvas size. Up to 8K. |
 | `PULSAR_VIDEO_BITRATE` | kbps | `6000` | x264 / NVENC bitrate. Range 200..50000. |
@@ -291,7 +300,7 @@ via `opts.env`.
 | `PULSAR_RECORD_AUDIO_TRACKS` | list | `1` | Tracks the recording output carries. |
 | `PULSAR_REPLAY_AUDIO_TRACKS` | list | `1` | Tracks the replay buffer carries. |
 | `PULSAR_CAPTURE_WINDOW` | `<title>:<class>:<exe>` | unset (no window source) | Window descriptor for `window_capture`. Find it via `obs.call("GetSourceFilterList")` after a one-shot enumerate, or with [Spy++](https://learn.microsoft.com/en-us/visualstudio/debugger/introducing-spy-increment) for a manual lookup. |
-| `PULSAR_RECORD_DIR` | path | `<cwd>/recordings/` | Output dir for the singleton recorder + the auto-named file. |
+| `PULSAR_RECORD_DIR` | path | `<runtimeDir>/recordings/` | Output dir for the singleton recorder + the auto-named file. An explicit path remains caller-owned. |
 | `PULSAR_RECORD_CONTAINER` | `mp4`\|`mkv` | `mp4` | Recording container, case-insensitive; unknown values warn and keep `mp4`. Boot-fixed (issue #166). |
 | `PULSAR_DESKTOP_AUDIO_DEVICE_ID` | device id | system default | Pin desktop loopback device. |
 | `PULSAR_MIC_DEVICE_ID` | device id | system default | Pin mic device. |
@@ -301,6 +310,27 @@ via `opts.env`.
 Anything else you set on `opts.env` is passed through to the child
 process unchanged (e.g. `OBS_LOG_LEVEL=DEBUG` for verbose libobs
 logging).
+
+## Concurrent runtimes
+
+Every `spawn()` call receives a private runtime directory and a validated
+`runtimeInstanceId`. The executable keeps OS-backed identity and cwd leases
+before loading libobs; a second process cannot silently reuse the same
+identity or explicit runtime directory. The default WebSocket port, config,
+logs and recordings therefore do not collide when several Pulsar processes
+are started concurrently.
+
+The historical DirectShow aliases are a compatibility singleton. One runtime
+may hold them; other runtimes are logged as `alias_lease=refused` and continue
+with instance-specific mapping names. Set `PULSAR_LEGACY_ALIAS=required` when
+the caller must own the old names, or `PULSAR_LEGACY_ALIAS=dedicated` / `off`
+to avoid claiming them. The returned `runtimeInstanceId` is the value an
+external DirectShow consumer must receive as `PULSAR_RUNTIME_INSTANCE_ID`,
+together with `PULSAR_DIRECTSHOW_LEGACY_ALIAS=0`, to open a dedicated mapping.
+
+The native logs expose `PULSAR_RUNTIME_INSTANCE`, `PULSAR_RUNTIME_COLLISION`
+and `PULSAR_LEGACY_ALIAS` records with the identity, paths and lease outcome;
+these records are the correlation points for a supervisor or audit trail.
 
 ## Lifecycle
 
@@ -316,20 +346,22 @@ await pulsar.shutdown();               // (2) clean shutdown
 ### Boot (`spawn()`)
 
 1. Resolve the binary path (default = bundled, or `binariesPath`).
-2. `child_process.spawn(exe, [], { cwd, env, stdio, windowsHide: true })`.
-   - `cwd` is set to `<binariesPath>/bin/64bit` (mandatory — libobs
-     resolves data paths relative to the working directory).
+2. `child_process.spawn(exe, [], { cwd: runtimeDir, env, stdio, windowsHide: true })`.
+   - `exe` is resolved from `<binariesPath>/bin/64bit` while `cwd` is a
+     generated private runtime directory. The native bootstrap resolves OBS
+     modules/data from the executable and uses `cwd` for process-local state.
    - `windowsHide: true` is set even though `pulsar.exe` is built
      `/SUBSYSTEM:WINDOWS` (no console alloc). It costs nothing and
      makes intent explicit on older Windows / certain antivirus
      drivers.
 3. Stream stdout / stderr into a line reader; forward to `onLog`.
 4. Watch for `pulsar-headless: libobs <ver> ready, idling`.
-5. Read `<cwd>/obs-websocket/config.json` to recover the seeded
+5. Read `<runtimeDir>/obs-websocket/config.json` to recover the seeded
    `server_port` + `server_password`.
 6. Construct a `PulsarClient`, connect to `ws://127.0.0.1:<port>`
    with the recovered password, complete the v5 Identify handshake.
-7. Resolve `{ client, child, port, libobsVersion, shutdown }`.
+7. Resolve `{ client, child, port, libobsVersion, runtimeInstanceId,
+   runtimeDir, shutdown }`.
 
 ### Shutdown (`shutdown()`)
 
@@ -472,13 +504,13 @@ Most common causes, in order:
 1. **Antivirus quarantine.** A freshly-extracted `pulsar.exe` can
    trigger heuristics on Defender / corporate AV. Whitelist the
    `binaries/` directory or pre-extract before the first run.
-2. **Wrong `cwd`** (only possible with manual `binariesPath`). The
-   built-in `spawn()` always sets `cwd` correctly; if you reach
-   inside `child` to reuse the binary, make sure you `cwd` to the
-   `bin/64bit/` directory.
-3. **Port conflict.** Stock OBS Studio with the obs-websocket plugin
-   also defaults to 4455. Pin a free port via `PULSAR_PORT` or use
-   the `pickFreePort()` pattern.
+2. **Runtime directory unavailable.** The built-in `spawn()` creates a
+   private directory. If you supply `PULSAR_RUNTIME_DIR`, make sure its
+   parent is writable and that no other process is using the same identity or
+   explicit directory.
+3. **Port conflict.** `spawn()` asks the OS for a free loopback port by
+   default. A conflict usually means an explicitly pinned `PULSAR_PORT` is
+   already in use; remove the override or choose another port.
 4. **Loaded system / cold cache.** Bump `readyTimeoutMs` to 60_000.
 
 The `onLog` callback receives every boot line — capture them and look
@@ -505,9 +537,9 @@ The seeded password didn't match what obs-websocket persisted. Two
 known causes:
 
 1. A stale `obs-websocket/config.json` from a prior run — Pulsar
-   rewrites it before plugin load, but on a corrupted filesystem you
-   might see drift. Delete `binaries/bin/64bit/obs-websocket/config.json`
-   and re-spawn.
+   rewrites the file inside the per-spawn runtime directory before plugin
+   load. If a caller-owned runtime directory is corrupted, remove only its
+   `obs-websocket/config.json` after stopping its owner, then re-spawn.
 2. You set `PULSAR_PASSWORD=""` (empty string) on `opts.env`. Pulsar
    treats empty as "generate a random password" and the bundle then
    reads what was generated — your `""` is ignored. Either pass a
@@ -520,9 +552,10 @@ Look at the boot log captured via `onLog`. The most common patterns:
 - `code=-1073740940` (`0xC0000374`) — heap corruption. File a bug
   with the boot log.
 - `code=3221225477` (`0xC0000005`) — access violation. Same — file a bug.
-- `code=1` with `Failed to find file 'default.effect'` — `cwd` is
-  wrong. Don't override `binariesPath` to point at a directory that
-  doesn't have `bin/64bit/` + `data/` + `obs-plugins/64bit/`.
+- `code=1` with `Failed to find file 'default.effect'` — the bundle's
+  executable-relative `data/` tree is missing or the binary was built without
+  the #243 libobs data-path patch. Ensure `binariesPath` contains
+  `bin/64bit/` + `data/` + `obs-plugins/64bit/` from the matching bundle.
 
 ## Versioning
 
