@@ -13,11 +13,17 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <random>
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 #define PULSAR_CHECK(expr)                                                                  \
     do {                                                                                    \
@@ -79,14 +85,22 @@ void test_four_namespaces_and_same_runtime_collision(const fs::path &root)
         for (std::size_t j = i + 1; j < resource_paths.size(); ++j)
             PULSAR_CHECK(resource_paths[i] != resource_paths[j]);
 
+    for (std::size_t i = 0; i < locks.size(); ++i)
+        for (std::size_t j = i + 1; j < locks.size(); ++j)
+            PULSAR_CHECK(locks[i]->authority_name() != locks[j]->authority_name());
+    for (std::size_t i = 0; i < directory_locks.size(); ++i)
+        for (std::size_t j = i + 1; j < directory_locks.size(); ++j)
+            PULSAR_CHECK(directory_locks[i]->authority_name() != directory_locks[j]->authority_name());
+
     // A second process using the same instance directory cannot silently
     // share its config/log/recording namespace.
     ExclusiveLease collision;
     PULSAR_CHECK(!collision.acquire(root / "probe-runtime-0" / "instance.lock",
-                                    "probe-runtime-0-second", "runtime-instance"));
+                                    "probe-runtime-0", "runtime-instance"));
     PULSAR_CHECK(collision.result() == pulsar_runtime::LeaseResult::Refused);
     PULSAR_CHECK(collision.reason().find("already_held") == 0);
     PULSAR_CHECK(collision.holder_runtime_id() == "probe-runtime-0");
+    PULSAR_CHECK(collision.authority_name() == locks.front()->authority_name());
 
     std::fprintf(stdout,
                  "runtime-inventory: instances=4 unique_resources=%zu same_instance=refused\n",
@@ -100,7 +114,7 @@ void test_four_namespaces_and_same_runtime_collision(const fs::path &root)
     // Recovery after a clean release is explicit and deterministic.
     ExclusiveLease recovered;
     PULSAR_CHECK(recovered.acquire(root / "probe-runtime-0" / "instance.lock",
-                                   "probe-runtime-0-recovered", "runtime-instance"));
+                                   "probe-runtime-0", "runtime-instance"));
     PULSAR_CHECK(recovered.renew());
     recovered.release();
     PULSAR_CHECK(!recovered.held());
@@ -135,27 +149,155 @@ void test_shared_explicit_directory_collision(const fs::path &root)
     std::fprintf(stdout, "runtime-directory-recovery: release=1 reacquire=1\n");
 }
 
+void test_cross_root_authorities(const fs::path &root)
+{
+    const fs::path root_a = root / "cross-root-a";
+    const fs::path root_b = root / "cross-root-b";
+    std::error_code ec;
+    fs::create_directories(root_a, ec);
+    PULSAR_CHECK(!ec);
+    fs::create_directories(root_b, ec);
+    PULSAR_CHECK(!ec);
+
+    // The runtime ID is the namespace identity, not a property of the
+    // caller-selected state root.  Two roots must therefore contend for the
+    // same canonical authority.
+    ExclusiveLease first;
+    PULSAR_CHECK(first.acquire(root_a / "instance.lock", "cross-root-runtime",
+                               "runtime-instance"));
+    ExclusiveLease second;
+    PULSAR_CHECK(!second.acquire(root_b / "instance.lock", "cross-root-runtime",
+                                 "runtime-instance"));
+    PULSAR_CHECK(second.result() == pulsar_runtime::LeaseResult::Refused);
+    PULSAR_CHECK(second.reason().find("already_held") == 0);
+    PULSAR_CHECK(second.holder_runtime_id() == "cross-root-runtime");
+    PULSAR_CHECK(second.authority_name() == first.authority_name());
+    PULSAR_CHECK(second.metadata_path() == first.metadata_path());
+
+#ifdef _WIN32
+    PULSAR_CHECK(first.authority_name() == "Local\\Pulsar.Runtime.cross-root-runtime");
+    PULSAR_CHECK(first.metadata_path() != root_a / "instance.lock");
+    PULSAR_CHECK(first.metadata_path() != root_b / "instance.lock");
+#endif
+
+    first.release();
+    PULSAR_CHECK(second.acquire(root_b / "instance.lock", "cross-root-runtime",
+                                "runtime-instance"));
+    second.release();
+    std::fprintf(stdout,
+                 "cross-root-runtime: same_id_refused=1 authority=%s metadata_shared=1 reacquire=1\n",
+                 first.authority_name().c_str());
+}
+
 void test_alias_singleton_and_concurrent_claimants(const fs::path &root)
 {
-    const fs::path alias_path = root / "leases" / "directshow-program-preview.lock";
+    const fs::path alias_path = root / "leases-a" / "directshow-program-preview.lock";
+    const fs::path alias_path_b = root / "leases-b" / "directshow-program-preview.lock";
     std::error_code ec;
     fs::create_directories(alias_path.parent_path(), ec);
     PULSAR_CHECK(!ec);
+    fs::create_directories(alias_path_b.parent_path(), ec);
+    PULSAR_CHECK(!ec);
+
+    // Exercise the actual resolver inputs as well as the lease primitive:
+    // PULSAR_LEGACY_ALIAS_LEASE_ROOT may point at either root, but it must
+    // remain diagnostic state and cannot partition the fixed alias authority.
+    PULSAR_CHECK(pulsar_runtime::set_process_environment("PULSAR_RUNTIME_INSTANCE_ID",
+                                                        "alias-root-a"));
+    PULSAR_CHECK(pulsar_runtime::set_process_environment("PULSAR_RUNTIME_ROOT",
+                                                        (root / "runtime-a").string()));
+    PULSAR_CHECK(pulsar_runtime::set_process_environment("PULSAR_LEGACY_ALIAS_LEASE_ROOT",
+                                                        alias_path.parent_path().string()));
+    pulsar_runtime::RuntimeIdentity identity_a;
+    std::string identity_error;
+    PULSAR_CHECK(pulsar_runtime::resolve_identity(identity_a, identity_error));
+    PULSAR_CHECK(identity_a.legacy_alias_lease_path == alias_path);
+
+    PULSAR_CHECK(pulsar_runtime::set_process_environment("PULSAR_RUNTIME_INSTANCE_ID",
+                                                        "alias-root-b"));
+    PULSAR_CHECK(pulsar_runtime::set_process_environment("PULSAR_RUNTIME_ROOT",
+                                                        (root / "runtime-b").string()));
+    PULSAR_CHECK(pulsar_runtime::set_process_environment("PULSAR_LEGACY_ALIAS_LEASE_ROOT",
+                                                        alias_path_b.parent_path().string()));
+    pulsar_runtime::RuntimeIdentity identity_b;
+    PULSAR_CHECK(pulsar_runtime::resolve_identity(identity_b, identity_error));
+    PULSAR_CHECK(identity_b.legacy_alias_lease_path == alias_path_b);
+    PULSAR_CHECK(identity_a.legacy_alias_lease_path != identity_b.legacy_alias_lease_path);
 
     ExclusiveLease first;
-    PULSAR_CHECK(first.acquire(alias_path, "probe-runtime-0", "directshow-legacy-alias"));
+    PULSAR_CHECK(first.acquire(identity_a.legacy_alias_lease_path, "probe-runtime-0",
+                               "directshow-legacy-alias"));
     PULSAR_CHECK(first.renew());
 
+#ifdef _WIN32
+    PULSAR_CHECK(first.authority_name() == "Local\\Pulsar.DirectShowProgramPreview");
+#endif
+
     ExclusiveLease second;
-    PULSAR_CHECK(!second.acquire(alias_path, "probe-runtime-1", "directshow-legacy-alias"));
+    PULSAR_CHECK(!second.acquire(identity_b.legacy_alias_lease_path, "probe-runtime-1",
+                                 "directshow-legacy-alias"));
     PULSAR_CHECK(second.result() == pulsar_runtime::LeaseResult::Refused);
     PULSAR_CHECK(second.reason().find("already_held") == 0);
     PULSAR_CHECK(second.holder_runtime_id() == "probe-runtime-0");
+    PULSAR_CHECK(second.authority_name() == first.authority_name());
+    PULSAR_CHECK(second.metadata_path() == first.metadata_path());
     std::fprintf(stdout, "legacy-alias: holder=probe-runtime-0 claimant=probe-runtime-1 refusal=%s\n",
                  second.reason().c_str());
 
+#ifdef _WIN32
+    // The caller-selected alias path is diagnostic state only.  Replacing
+    // that path while the lease is held must not create a second authority.
+    {
+        std::ofstream diagnostic(alias_path, std::ios::binary | std::ios::trunc);
+        PULSAR_CHECK(diagnostic.good());
+        diagnostic << "diagnostic-marker\n";
+    }
+    const fs::path diagnostic_replacement = alias_path.parent_path() /
+                                             ("replaced-" +
+                                              std::to_string(GetCurrentProcessId()) + ".lock");
+    DeleteFileW(diagnostic_replacement.wstring().c_str());
+    PULSAR_CHECK(MoveFileExW(alias_path.wstring().c_str(), diagnostic_replacement.wstring().c_str(),
+                             MOVEFILE_REPLACE_EXISTING));
+    {
+        std::ofstream recreated(alias_path, std::ios::binary | std::ios::trunc);
+        PULSAR_CHECK(recreated.good());
+        recreated << "recreated-diagnostic-marker\n";
+    }
+    ExclusiveLease replacement_claim;
+    PULSAR_CHECK(!replacement_claim.acquire(alias_path, "probe-runtime-2",
+                                            "directshow-legacy-alias"));
+    PULSAR_CHECK(replacement_claim.result() == pulsar_runtime::LeaseResult::Refused);
+    PULSAR_CHECK(replacement_claim.holder_runtime_id() == "probe-runtime-0");
+    DeleteFileW(alias_path.wstring().c_str());
+    DeleteFileW(diagnostic_replacement.wstring().c_str());
+
+    // The metadata file is observable state, never the authority itself.  It
+    // is held without FILE_SHARE_DELETE, so a rename attempt cannot replace
+    // the inode under an active lease.  The named mutex remains authoritative
+    // even if an external filesystem operation is attempted after release.
+    const fs::path replacement =
+        first.metadata_path().parent_path() /
+        ("replacement-" + std::to_string(GetCurrentProcessId()) + ".lock");
+    DeleteFileW(replacement.wstring().c_str());
+    const BOOL renamed = MoveFileExW(first.metadata_path().wstring().c_str(),
+                                     replacement.wstring().c_str(), MOVEFILE_REPLACE_EXISTING);
+    const DWORD rename_error = renamed ? ERROR_SUCCESS : GetLastError();
+    if (renamed)
+        DeleteFileW(replacement.wstring().c_str());
+    PULSAR_CHECK(!renamed);
+    const BOOL deleted = DeleteFileW(first.metadata_path().wstring().c_str());
+    const DWORD delete_error = deleted ? ERROR_SUCCESS : GetLastError();
+    PULSAR_CHECK(!deleted);
+    std::fprintf(stdout,
+                 "legacy-alias-replacement: diagnostic_recreate_refused=1 "
+                 "metadata_rename_blocked=1 metadata_delete_blocked=1 "
+                 "rename_error=%lu delete_error=%lu\n",
+                 static_cast<unsigned long>(rename_error), static_cast<unsigned long>(delete_error));
+#endif
+
     first.release();
-    PULSAR_CHECK(second.acquire(alias_path, "probe-runtime-1", "directshow-legacy-alias"));
+    PULSAR_CHECK(second.acquire(identity_b.legacy_alias_lease_path, "probe-runtime-1",
+                                "directshow-legacy-alias"));
     second.release();
     std::fprintf(stdout, "legacy-alias-recovery: release=1 reacquire=1\n");
 
@@ -182,7 +324,7 @@ void test_alias_singleton_and_concurrent_claimants(const fs::path &root)
                 std::this_thread::yield();
 
             ExclusiveLease alias;
-            if (alias.acquire(alias_path, id, "directshow-legacy-alias")) {
+            if (alias.acquire(alias_path_b, id, "directshow-legacy-alias")) {
                 alias_holders.fetch_add(1, std::memory_order_relaxed);
                 std::this_thread::sleep_for(std::chrono::milliseconds(30));
                 alias.release();
@@ -204,6 +346,64 @@ void test_alias_singleton_and_concurrent_claimants(const fs::path &root)
     std::fprintf(stdout, "legacy-alias-concurrency: claimants=4 holders=%d refusals=%d\n",
                  alias_holders.load(), alias_refusals.load());
 }
+
+#ifdef _WIN32
+void test_abandoned_authority_recovery(const fs::path &root)
+{
+    constexpr wchar_t authority_name[] = L"Local\\Pulsar.Runtime.probe-abandoned";
+    HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    PULSAR_CHECK(ready != nullptr);
+
+    std::atomic<HANDLE> raw_handle{nullptr};
+    std::atomic<HANDLE> keeper_handle{nullptr};
+    std::atomic<bool> worker_ok{false};
+    std::thread orphan([&] {
+        HANDLE raw = CreateMutexW(nullptr, FALSE, authority_name);
+        if (!raw) {
+            SetEvent(ready);
+            return;
+        }
+        raw_handle.store(raw, std::memory_order_release);
+        const DWORD wait_result = WaitForSingleObject(raw, 0);
+        if (wait_result != WAIT_OBJECT_0 && wait_result != WAIT_ABANDONED) {
+            SetEvent(ready);
+            CloseHandle(raw);
+            raw_handle.store(nullptr, std::memory_order_release);
+            return;
+        }
+        worker_ok.store(true, std::memory_order_release);
+        SetEvent(ready);
+
+        // The duplicated handle in the parent keeps the named object alive
+        // while this owning thread exits without ReleaseMutex.  The next
+        // claimant must observe WAIT_ABANDONED and recover the authority.
+        while (keeper_handle.load(std::memory_order_acquire) == nullptr)
+            std::this_thread::yield();
+        CloseHandle(raw);
+    });
+
+    PULSAR_CHECK(WaitForSingleObject(ready, INFINITE) == WAIT_OBJECT_0);
+    PULSAR_CHECK(worker_ok.load(std::memory_order_acquire));
+    HANDLE raw = raw_handle.load(std::memory_order_acquire);
+    PULSAR_CHECK(raw != nullptr);
+    HANDLE keeper = nullptr;
+    PULSAR_CHECK(DuplicateHandle(GetCurrentProcess(), raw, GetCurrentProcess(), &keeper, 0, FALSE,
+                                 DUPLICATE_SAME_ACCESS));
+    keeper_handle.store(keeper, std::memory_order_release);
+    orphan.join();
+
+    ExclusiveLease recovered;
+    PULSAR_CHECK(recovered.acquire(root / "abandoned" / "instance.lock", "probe-abandoned",
+                                   "runtime-instance"));
+    PULSAR_CHECK(recovered.held());
+    PULSAR_CHECK(recovered.reason() == "abandoned_recovered");
+    PULSAR_CHECK(recovered.renew());
+    recovered.release();
+    CloseHandle(keeper);
+    CloseHandle(ready);
+    std::fprintf(stdout, "abandoned-recovery: kernel_mutex=1 recovered=1 renewed=1\n");
+}
+#endif
 
 void test_identity_validation_and_port()
 {
@@ -260,7 +460,11 @@ int main()
     test_identity_resolution(root);
     test_four_namespaces_and_same_runtime_collision(root);
     test_shared_explicit_directory_collision(root);
+    test_cross_root_authorities(root);
     test_alias_singleton_and_concurrent_claimants(root);
+#ifdef _WIN32
+    test_abandoned_authority_recovery(root);
+#endif
 
     std::error_code ec;
     fs::remove_all(root, ec);

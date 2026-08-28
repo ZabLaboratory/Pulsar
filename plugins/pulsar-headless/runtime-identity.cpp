@@ -14,9 +14,11 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <sstream>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 
 #ifdef _WIN32
@@ -120,12 +122,113 @@ std::string metadata_value(const std::string &metadata, const char *key)
 
 std::string read_metadata(const fs::path &path)
 {
+#ifdef _WIN32
+    const std::wstring wide_path = path.wstring();
+    HANDLE handle = CreateFileW(wide_path.c_str(), GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
+        return {};
+
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(handle, &size) || size.QuadPart <= 0 || size.QuadPart > (1 << 20)) {
+        CloseHandle(handle);
+        return {};
+    }
+
+    std::string out(static_cast<std::size_t>(size.QuadPart), '\0');
+    DWORD read = 0;
+    const bool success = ReadFile(handle, out.data(), static_cast<DWORD>(out.size()), &read,
+                                  nullptr) != 0;
+    CloseHandle(handle);
+    if (!success)
+        return {};
+    out.resize(read);
+    return out;
+#else
     std::ifstream input(path, std::ios::binary);
     if (!input)
         return {};
     std::ostringstream out;
     out << input.rdbuf();
     return out.str();
+#endif
+}
+
+std::string stable_hash(std::string_view value)
+{
+    // FNV-1a is deliberately used instead of std::hash: authority names and
+    // metadata paths must remain identical across processes and toolchains.
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char byte : value) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+
+    std::ostringstream out;
+    out << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return out.str();
+}
+
+std::string normalized_path_string(const fs::path &path)
+{
+    std::error_code ec;
+    fs::path absolute = fs::absolute(path, ec);
+    if (ec)
+        absolute = path;
+    return absolute.lexically_normal().generic_string();
+}
+
+std::string authority_key(const fs::path &path, std::string_view owner,
+                          std::string_view resource_kind)
+{
+    if (resource_kind == "runtime-instance")
+        return "runtime-instance:" + std::string(owner);
+    if (resource_kind == "directshow-legacy-alias")
+        return "directshow-legacy-alias";
+    if (resource_kind == "runtime-directory")
+        return "runtime-directory:" + normalized_path_string(path);
+    return "path:" + std::string(resource_kind) + ":" + normalized_path_string(path);
+}
+
+#ifdef _WIN32
+
+std::uint32_t current_session_id()
+{
+    DWORD session_id = 0;
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &session_id))
+        return 0;
+    return static_cast<std::uint32_t>(session_id);
+}
+
+std::string authority_name_for(const std::string &key, std::string_view owner,
+                               std::string_view resource_kind)
+{
+    if (resource_kind == "runtime-instance")
+        return "Local\\Pulsar.Runtime." + std::string(owner);
+    if (resource_kind == "directshow-legacy-alias")
+        return "Local\\Pulsar.DirectShowProgramPreview";
+    return "Local\\Pulsar.Authority." + stable_hash(key);
+}
+
+std::wstring ascii_wide(std::string_view value)
+{
+    std::wstring wide;
+    wide.reserve(value.size());
+    for (const unsigned char byte : value)
+        wide.push_back(static_cast<wchar_t>(byte));
+    return wide;
+}
+
+#endif
+
+fs::path canonical_metadata_path(const std::string &key)
+{
+    fs::path root = default_state_root() / "authorities";
+#ifdef _WIN32
+    root /= "session-" + std::to_string(current_session_id());
+#endif
+    return root / (stable_hash(key) + ".lock");
 }
 
 std::string lease_metadata(const std::string &owner, const std::string &kind)
@@ -140,19 +243,53 @@ std::string lease_metadata(const std::string &owner, const std::string &kind)
 
 #ifdef _WIN32
 
-// Windows file-region locks also block reads of the locked bytes. Keep the
-// metadata at the beginning of the retained lock file and take ownership of
-// a byte beyond it so a contending process can still report the holder.
-constexpr DWORD kLockOffset = 4096;
-
 HANDLE as_handle(void *value)
 {
     return reinterpret_cast<HANDLE>(value);
 }
 
-OVERLAPPED *as_overlapped(void *value)
+struct LocalAuthorityOwner {
+    DWORD thread_id = 0;
+    std::string runtime_id;
+};
+
+std::mutex &local_authority_mutex()
 {
-    return reinterpret_cast<OVERLAPPED *>(value);
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::unordered_map<std::string, LocalAuthorityOwner> &local_authority_owners()
+{
+    static std::unordered_map<std::string, LocalAuthorityOwner> owners;
+    return owners;
+}
+
+bool locally_reentrant_authority(const std::string &authority_name,
+                                 std::string &holder_runtime_id)
+{
+    const DWORD thread_id = GetCurrentThreadId();
+    std::lock_guard<std::mutex> guard(local_authority_mutex());
+    const auto it = local_authority_owners().find(authority_name);
+    if (it == local_authority_owners().end() || it->second.thread_id != thread_id)
+        return false;
+    holder_runtime_id = it->second.runtime_id;
+    return true;
+}
+
+void remember_local_authority(const std::string &authority_name, std::string_view owner_runtime_id)
+{
+    std::lock_guard<std::mutex> guard(local_authority_mutex());
+    local_authority_owners()[authority_name] =
+        LocalAuthorityOwner{GetCurrentThreadId(), std::string(owner_runtime_id)};
+}
+
+void forget_local_authority(const std::string &authority_name, DWORD thread_id)
+{
+    std::lock_guard<std::mutex> guard(local_authority_mutex());
+    const auto it = local_authority_owners().find(authority_name);
+    if (it != local_authority_owners().end() && it->second.thread_id == thread_id)
+        local_authority_owners().erase(it);
 }
 
 bool write_windows_file(HANDLE handle, const std::string &body)
@@ -221,17 +358,21 @@ ExclusiveLease &ExclusiveLease::operator=(ExclusiveLease &&other) noexcept
 void ExclusiveLease::move_from(ExclusiveLease &&other) noexcept
 {
     path_ = std::move(other.path_);
+    metadata_path_ = std::move(other.metadata_path_);
     owner_runtime_id_ = std::move(other.owner_runtime_id_);
     holder_runtime_id_ = std::move(other.holder_runtime_id_);
     resource_kind_ = std::move(other.resource_kind_);
+    authority_name_ = std::move(other.authority_name_);
     reason_ = std::move(other.reason_);
     result_ = other.result_;
     held_ = other.held_;
 #ifdef _WIN32
-    handle_ = other.handle_;
-    overlapped_ = other.overlapped_;
-    other.handle_ = nullptr;
-    other.overlapped_ = nullptr;
+    authority_handle_ = other.authority_handle_;
+    metadata_handle_ = other.metadata_handle_;
+    authority_thread_id_ = other.authority_thread_id_;
+    other.authority_handle_ = nullptr;
+    other.metadata_handle_ = nullptr;
+    other.authority_thread_id_ = 0;
 #else
     fd_ = other.fd_;
     other.fd_ = -1;
@@ -245,9 +386,11 @@ bool ExclusiveLease::acquire(const fs::path &path, std::string_view owner_runtim
 {
     release();
     path_ = path;
+    metadata_path_.clear();
     owner_runtime_id_ = std::string(owner_runtime_id);
     holder_runtime_id_.clear();
     resource_kind_ = std::string(resource_kind);
+    authority_name_.clear();
     reason_.clear();
 
     if (path_.empty()) {
@@ -261,49 +404,101 @@ bool ExclusiveLease::acquire(const fs::path &path, std::string_view owner_runtim
         return false;
     }
 
+    const std::string key = authority_key(path_, owner_runtime_id_, resource_kind_);
+    metadata_path_ = canonical_metadata_path(key);
 #ifdef _WIN32
-    const std::wstring wide_path = path.wstring();
-    HANDLE handle = CreateFileW(wide_path.c_str(), GENERIC_READ | GENERIC_WRITE,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (handle == INVALID_HANDLE_VALUE) {
+    authority_name_ = authority_name_for(key, owner_runtime_id_, resource_kind_);
+#else
+    authority_name_ = key;
+#endif
+
+    std::error_code directory_error;
+    fs::create_directories(metadata_path_.parent_path(), directory_error);
+    if (directory_error) {
         result_ = LeaseResult::Error;
-        reason_ = "open_failed";
+        reason_ = "metadata_directory_failed";
         return false;
     }
 
-    auto overlap = std::make_unique<OVERLAPPED>();
-    *overlap = OVERLAPPED{};
-    overlap->Offset = kLockOffset;
-    if (!LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0,
-                    overlap.get())) {
-        const std::string metadata = read_metadata(path);
-        holder_runtime_id_ = metadata_value(metadata, "runtime_instance_id");
-        reason_ = holder_runtime_id_.empty() ? "already_held" : "already_held_by_" + holder_runtime_id_;
-        CloseHandle(handle);
+#ifdef _WIN32
+    // The Local namespace matches the DirectShow mapping names. The default
+    // security descriptor inherits the creator token's DACL: all runtime
+    // processes under the same principal/session can contend, while a
+    // different principal receives an access error rather than a second lease.
+    const std::wstring wide_authority = ascii_wide(authority_name_);
+    HANDLE authority = CreateMutexW(nullptr, FALSE, wide_authority.c_str());
+    if (!authority) {
+        result_ = LeaseResult::Error;
+        reason_ = GetLastError() == ERROR_ACCESS_DENIED ? "authority_access_denied"
+                                                        : "authority_create_failed";
+        return false;
+    }
+
+    // A Windows mutex is recursive for its owning thread.  Keep a small
+    // process-local guard so two ExclusiveLease objects on the same thread
+    // cannot turn that API detail into a second logical holder.  Other
+    // threads and processes still contend through the named mutex below.
+    std::string local_holder;
+    if (locally_reentrant_authority(authority_name_, local_holder)) {
+        holder_runtime_id_ = local_holder;
+        CloseHandle(authority);
         result_ = LeaseResult::Refused;
+        reason_ = "already_held_by_" + holder_runtime_id_;
         return false;
     }
 
-    handle_ = handle;
-    overlapped_ = overlap.release();
+    const DWORD wait_result = WaitForSingleObject(authority, 0);
+    if (wait_result != WAIT_OBJECT_0 && wait_result != WAIT_ABANDONED) {
+        const std::string metadata = read_metadata(metadata_path_);
+        holder_runtime_id_ = metadata_value(metadata, "runtime_instance_id");
+        if (wait_result == WAIT_TIMEOUT) {
+            reason_ = holder_runtime_id_.empty() ? "already_held"
+                                                 : "already_held_by_" + holder_runtime_id_;
+            CloseHandle(authority);
+            result_ = LeaseResult::Refused;
+        } else {
+            CloseHandle(authority);
+            result_ = LeaseResult::Error;
+            reason_ = "authority_wait_failed";
+        }
+        return false;
+    }
+
+    const std::wstring wide_metadata_path = metadata_path_.wstring();
+    HANDLE metadata = CreateFileW(wide_metadata_path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+                                   FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (metadata == INVALID_HANDLE_VALUE) {
+        ReleaseMutex(authority);
+        CloseHandle(authority);
+        result_ = LeaseResult::Error;
+        reason_ = "metadata_open_failed";
+        return false;
+    }
+
+    authority_handle_ = authority;
+    metadata_handle_ = metadata;
+    authority_thread_id_ = GetCurrentThreadId();
     held_ = true;
     holder_runtime_id_ = owner_runtime_id_;
-    if (!write_windows_file(handle, lease_metadata(owner_runtime_id_, resource_kind_))) {
+    remember_local_authority(authority_name_, owner_runtime_id_);
+    if (wait_result == WAIT_ABANDONED)
+        reason_ = "abandoned_recovered";
+    if (!write_windows_file(metadata, lease_metadata(owner_runtime_id_, resource_kind_))) {
         reason_ = "metadata_write_failed";
         release();
         result_ = LeaseResult::Error;
         return false;
     }
 #else
-    fd_ = ::open(path.c_str(), O_RDWR | O_CREAT, 0600);
+    fd_ = ::open(metadata_path_.c_str(), O_RDWR | O_CREAT, 0600);
     if (fd_ < 0) {
         result_ = LeaseResult::Error;
         reason_ = "open_failed";
         return false;
     }
     if (flock(fd_, LOCK_EX | LOCK_NB) != 0) {
-        const std::string metadata = read_metadata(path);
+        const std::string metadata = read_metadata(metadata_path_);
         holder_runtime_id_ = metadata_value(metadata, "runtime_instance_id");
         reason_ = holder_runtime_id_.empty() ? "already_held" : "already_held_by_" + holder_runtime_id_;
         ::close(fd_);
@@ -332,7 +527,7 @@ bool ExclusiveLease::renew()
 
     const std::string metadata = lease_metadata(owner_runtime_id_, resource_kind_);
 #ifdef _WIN32
-    const bool success = write_windows_file(as_handle(handle_), metadata);
+    const bool success = write_windows_file(as_handle(metadata_handle_), metadata);
 #else
     const bool success = write_posix_file(fd_, metadata);
 #endif
@@ -345,10 +540,15 @@ void ExclusiveLease::release()
 {
     if (!held_) {
 #ifdef _WIN32
-        if (overlapped_) {
-            delete as_overlapped(overlapped_);
-            overlapped_ = nullptr;
+        if (metadata_handle_) {
+            CloseHandle(as_handle(metadata_handle_));
+            metadata_handle_ = nullptr;
         }
+        if (authority_handle_) {
+            CloseHandle(as_handle(authority_handle_));
+            authority_handle_ = nullptr;
+        }
+        authority_thread_id_ = 0;
 #else
         if (fd_ >= 0) {
             ::close(fd_);
@@ -359,18 +559,22 @@ void ExclusiveLease::release()
     }
 
 #ifdef _WIN32
-    HANDLE handle = as_handle(handle_);
-    OVERLAPPED *overlap = as_overlapped(overlapped_);
-    // Clearing metadata before unlocking prevents a future claimant from
-    // observing an old owner during the tiny hand-over window.  The new owner
-    // still writes fresh metadata only after it owns the kernel lock.
-    write_windows_file(handle, std::string());
-    if (overlap)
-        UnlockFileEx(handle, 0, 1, 0, overlap);
-    CloseHandle(handle);
-    delete overlap;
-    handle_ = nullptr;
-    overlapped_ = nullptr;
+    HANDLE authority = as_handle(authority_handle_);
+    HANDLE metadata = as_handle(metadata_handle_);
+    // Clearing metadata before releasing the named mutex prevents a future
+    // claimant from observing an old owner during the hand-over window. The
+    // metadata handle deliberately does not share DELETE: rename/delete is
+    // blocked while held, and even if a stale file is replaced after release,
+    // the named mutex remains the sole authority.
+    write_windows_file(metadata, std::string());
+    CloseHandle(metadata);
+    metadata_handle_ = nullptr;
+    const BOOL released = ReleaseMutex(authority);
+    if (released)
+        forget_local_authority(authority_name_, authority_thread_id_);
+    CloseHandle(authority);
+    authority_handle_ = nullptr;
+    authority_thread_id_ = 0;
 #else
     write_posix_file(fd_, std::string());
     flock(fd_, LOCK_UN);

@@ -135,9 +135,11 @@ bool RuntimeState::initialize()
     if (!instance_lease.acquire(identity.instance_lease_path, identity.instance_id,
                                 "runtime-instance")) {
         std::fprintf(stderr,
-                     "PULSAR_RUNTIME_COLLISION id=%s dir=%s reason=%s owner=%s\n",
+                     "PULSAR_RUNTIME_COLLISION id=%s dir=%s reason=%s owner=%s authority=%s metadata=%s\n",
                      identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
-                     instance_lease.reason().c_str(), instance_lease.holder_runtime_id().c_str());
+                     instance_lease.reason().c_str(), instance_lease.holder_runtime_id().c_str(),
+                     instance_lease.authority_name().c_str(),
+                     instance_lease.metadata_path().string().c_str());
         return false;
     }
 
@@ -148,10 +150,12 @@ bool RuntimeState::initialize()
     if (!runtime_dir_lease.acquire(identity.runtime_dir_lease_path, identity.instance_id,
                                    "runtime-directory")) {
         std::fprintf(stderr,
-                     "PULSAR_RUNTIME_COLLISION id=%s dir=%s reason=%s owner=%s\n",
+                     "PULSAR_RUNTIME_COLLISION id=%s dir=%s reason=%s owner=%s authority=%s metadata=%s\n",
                      identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
                      runtime_dir_lease.reason().c_str(),
-                     runtime_dir_lease.holder_runtime_id().c_str());
+                     runtime_dir_lease.holder_runtime_id().c_str(),
+                     runtime_dir_lease.authority_name().c_str(),
+                     runtime_dir_lease.metadata_path().string().c_str());
         release();
         return false;
     }
@@ -190,11 +194,13 @@ bool RuntimeState::initialize()
                           ? "refused"
                           : "error";
         std::fprintf(stderr,
-                     "PULSAR_LEGACY_ALIAS lease=%s id=%s path=%s reason=%s owner=%s\n",
+                     "PULSAR_LEGACY_ALIAS lease=%s id=%s path=%s reason=%s owner=%s authority=%s metadata=%s\n",
                      alias_state.c_str(), identity.instance_id.c_str(),
                      identity.legacy_alias_lease_path.string().c_str(),
                      legacy_alias_lease.reason().c_str(),
-                     legacy_alias_lease.holder_runtime_id().c_str());
+                     legacy_alias_lease.holder_runtime_id().c_str(),
+                     legacy_alias_lease.authority_name().c_str(),
+                     legacy_alias_lease.metadata_path().string().c_str());
         if (required) {
             std::fprintf(stderr,
                          "PULSAR_RUNTIME_ERROR code=legacy_alias_required id=%s\n",
@@ -243,18 +249,28 @@ bool RuntimeState::initialize()
     std::fprintf(stderr,
                  "PULSAR_RUNTIME_INSTANCE id=%s dir=%s instance_lock=acquired "
                  "instance_lock_path=%s runtime_dir_lock=acquired runtime_dir_lock_path=%s "
-                 "legacy_alias=%s alias_lease=%s alias_path=%s\n",
+                 "instance_authority=%s instance_metadata=%s runtime_dir_authority=%s "
+                 "runtime_dir_metadata=%s legacy_alias=%s alias_lease=%s alias_path=%s "
+                 "alias_authority=%s alias_metadata=%s\n",
                  identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
                  identity.instance_lease_path.string().c_str(),
-                 identity.runtime_dir_lease_path.string().c_str(), legacy_alias ? "1" : "0",
-                 alias_state.c_str(),
-                 identity.legacy_alias_lease_path.string().c_str());
+                 identity.runtime_dir_lease_path.string().c_str(),
+                 instance_lease.authority_name().c_str(), instance_lease.metadata_path().string().c_str(),
+                 runtime_dir_lease.authority_name().c_str(),
+                 runtime_dir_lease.metadata_path().string().c_str(), legacy_alias ? "1" : "0",
+                 alias_state.c_str(), identity.legacy_alias_lease_path.string().c_str(),
+                 legacy_alias_lease.authority_name().c_str(),
+                 legacy_alias_lease.metadata_path().string().c_str());
     if (disabled)
-        std::fprintf(stderr, "PULSAR_LEGACY_ALIAS lease=disabled id=%s path=%s\n",
-                     identity.instance_id.c_str(), identity.legacy_alias_lease_path.string().c_str());
+        std::fprintf(stderr, "PULSAR_LEGACY_ALIAS lease=disabled id=%s path=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.legacy_alias_lease_path.string().c_str(),
+                     legacy_alias_lease.authority_name().c_str(),
+                     legacy_alias_lease.metadata_path().string().c_str());
     else if (legacy_alias)
-        std::fprintf(stderr, "PULSAR_LEGACY_ALIAS lease=acquired id=%s path=%s\n",
-                     identity.instance_id.c_str(), identity.legacy_alias_lease_path.string().c_str());
+        std::fprintf(stderr, "PULSAR_LEGACY_ALIAS lease=acquired id=%s path=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.legacy_alias_lease_path.string().c_str(),
+                     legacy_alias_lease.authority_name().c_str(),
+                     legacy_alias_lease.metadata_path().string().c_str());
     return true;
 }
 
@@ -270,18 +286,26 @@ bool RuntimeState::renew()
 void RuntimeState::release()
 {
     if (legacy_alias_lease.held()) {
-        std::fprintf(stderr, "PULSAR_LEGACY_ALIAS lease=released id=%s path=%s\n",
-                     identity.instance_id.c_str(), identity.legacy_alias_lease_path.string().c_str());
+        std::fprintf(stderr, "PULSAR_LEGACY_ALIAS lease=released id=%s path=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.legacy_alias_lease_path.string().c_str(),
+                     legacy_alias_lease.authority_name().c_str(),
+                     legacy_alias_lease.metadata_path().string().c_str());
         legacy_alias_lease.release();
     }
     if (runtime_dir_lease.held()) {
-        std::fprintf(stderr, "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=%s dir=%s\n",
-                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str());
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=%s dir=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
+                     runtime_dir_lease.authority_name().c_str(),
+                     runtime_dir_lease.metadata_path().string().c_str());
         runtime_dir_lease.release();
     }
     if (instance_lease.held()) {
-        std::fprintf(stderr, "PULSAR_RUNTIME_INSTANCE lease=released id=%s dir=%s\n",
-                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str());
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_INSTANCE lease=released id=%s dir=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
+                     instance_lease.authority_name().c_str(),
+                     instance_lease.metadata_path().string().c_str());
         instance_lease.release();
     }
 }
@@ -1013,10 +1037,14 @@ int main(int argc, char **argv)
     }
 
     blog(LOG_INFO,
-         "[pulsar-runtime] instance_id=%s runtime_dir=%s legacy_alias=%s alias_lease=%s",
+         "[pulsar-runtime] instance_id=%s runtime_dir=%s legacy_alias=%s alias_lease=%s "
+         "instance_authority=%s runtime_dir_authority=%s alias_authority=%s",
          runtime_state->identity.instance_id.c_str(),
          runtime_state->identity.runtime_dir.string().c_str(),
-         runtime_state->legacy_alias ? "1" : "0", runtime_state->alias_state.c_str());
+         runtime_state->legacy_alias ? "1" : "0", runtime_state->alias_state.c_str(),
+         runtime_state->instance_lease.authority_name().c_str(),
+         runtime_state->runtime_dir_lease.authority_name().c_str(),
+         runtime_state->legacy_alias_lease.authority_name().c_str());
 
     if (!reset_video()) {
         obs_shutdown();

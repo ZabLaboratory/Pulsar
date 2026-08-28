@@ -2,9 +2,10 @@
 //
 // This translation unit deliberately has no libobs or Qt dependency.  The
 // headless executable uses it before obs_startup(), and the same code is built
-// by the standalone runtime-isolation probe. Leases are kernel/file locks,
-// not best-effort markers: they are released by the operating system when a
-// process exits, including an unclean exit.
+// by the standalone runtime-isolation probe. On Windows, ownership is held by
+// named Local-session mutexes; on POSIX, the fallback is an advisory file
+// lock. In both cases the lease is kernel-backed rather than a best-effort
+// marker and is recovered by the operating system after an unclean exit.
 #pragma once
 
 #include <cstdint>
@@ -30,10 +31,11 @@ enum class LeaseResult {
     Released,
 };
 
-// An exclusive, crash-safe lease over one named resource.  The lock file is
-// intentionally retained after a clean release so a subsequent claimant can
-// reuse it; the kernel lock itself is the ownership primitive and stale text
-// is overwritten only after a new lock has been acquired.
+// An exclusive, crash-safe lease over one named resource.  The metadata file
+// is intentionally retained after a clean release so a subsequent claimant
+// can reuse it; on Windows it is observability only and the named mutex is the
+// ownership primitive. Stale text is overwritten only after a new lock has
+// been acquired.
 class ExclusiveLease {
 public:
     ExclusiveLease() = default;
@@ -45,9 +47,11 @@ public:
     ExclusiveLease(ExclusiveLease &&other) noexcept;
     ExclusiveLease &operator=(ExclusiveLease &&other) noexcept;
 
-    // `path` must name a file below a caller-owned lease directory.  The
-    // parent directory is created by the caller so path errors remain
-    // observable and are never silently redirected elsewhere.
+    // `path` is retained as the caller-visible metadata path.  On Windows,
+    // ownership is held by a canonical Local-session named mutex derived from
+    // `resource_kind` and the validated owner/path, so replacing this file
+    // cannot create a second authority.  On POSIX the canonical lock file is
+    // used as the kernel advisory-lock fallback.
     bool acquire(const std::filesystem::path &path, std::string_view owner_runtime_id,
                  std::string_view resource_kind);
 
@@ -68,21 +72,26 @@ public:
     const std::string &owner_runtime_id() const { return owner_runtime_id_; }
     const std::string &holder_runtime_id() const { return holder_runtime_id_; }
     const std::filesystem::path &path() const { return path_; }
+    const std::filesystem::path &metadata_path() const { return metadata_path_; }
+    const std::string &authority_name() const { return authority_name_; }
 
 private:
     void move_from(ExclusiveLease &&other) noexcept;
 
     std::filesystem::path path_;
+    std::filesystem::path metadata_path_;
     std::string owner_runtime_id_;
     std::string holder_runtime_id_;
     std::string resource_kind_;
+    std::string authority_name_;
     std::string reason_;
     LeaseResult result_ = LeaseResult::Released;
     bool held_ = false;
 
 #ifdef _WIN32
-    void *handle_ = nullptr; // HANDLE, kept opaque in the public header
-    void *overlapped_ = nullptr; // OVERLAPPED, owned by the implementation
+    void *authority_handle_ = nullptr; // HANDLE, kept opaque in the public header
+    void *metadata_handle_ = nullptr; // HANDLE, kept opaque in the public header
+    std::uint32_t authority_thread_id_ = 0;
 #else
     int fd_ = -1;
 #endif

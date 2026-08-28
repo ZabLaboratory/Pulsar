@@ -11,10 +11,15 @@ that `pulsar-websocket` translates into protocol events.
 The service bootstrap resolves a validated `PULSAR_RUNTIME_INSTANCE_ID`
 before Qt/libobs startup, creates a private runtime namespace and acquires
 OS-backed identity and cwd leases. Defaults for WebSocket config, logs and
-recordings are rooted below that namespace. The compatibility DirectShow
-aliases are protected by a singleton lease; non-holders use instance-specific
+recordings are rooted below that namespace. On Windows, identity and alias
+authority is held by canonical `Local`-session named mutexes aligned with the
+DirectShow mapping namespace; retained files are metadata/diagnostics only.
+`PULSAR_RUNTIME_ROOT` and `PULSAR_LEGACY_ALIAS_LEASE_ROOT` select caller-visible
+state paths but cannot partition the authority. The compatibility DirectShow
+aliases are protected by one singleton lease; non-holders use instance-specific
 mappings and remain observable through `PULSAR_RUNTIME_INSTANCE`,
-`PULSAR_RUNTIME_COLLISION` and `PULSAR_LEGACY_ALIAS` log records.
+`PULSAR_RUNTIME_COLLISION` and `PULSAR_LEGACY_ALIAS` log records, including the
+canonical authority and metadata identities.
 
 ## Responsibility surface
 
