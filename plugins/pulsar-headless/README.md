@@ -21,6 +21,13 @@ mappings and remain observable through `PULSAR_RUNTIME_INSTANCE`,
 `PULSAR_RUNTIME_COLLISION` and `PULSAR_LEGACY_ALIAS` log records, including the
 canonical authority and metadata identities.
 
+On Windows, the cwd lease resolves the created runtime directory through a
+directory handle and uses its volume serial plus file ID as the authority key.
+Case variants, junctions/symlinks and available 8.3 aliases therefore contend
+for the same physical directory lease. The handle is retained without delete
+sharing while the lease is held; reparse-point, DACL or file-identity failures
+are reported as hard startup errors rather than falling back to a lexical path.
+
 ## Responsibility surface
 
 - `obs_startup` / `obs_shutdown` lifecycle.

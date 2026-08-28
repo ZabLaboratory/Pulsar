@@ -3,9 +3,11 @@
 // This translation unit deliberately has no libobs or Qt dependency.  The
 // headless executable uses it before obs_startup(), and the same code is built
 // by the standalone runtime-isolation probe. On Windows, ownership is held by
-// named Local-session mutexes; on POSIX, the fallback is an advisory file
-// lock. In both cases the lease is kernel-backed rather than a best-effort
-// marker and is recovered by the operating system after an unclean exit.
+// named Local-session mutexes; runtime-directory leases additionally retain a
+// no-delete-share directory handle whose volume/file identity is used in the
+// authority key. On POSIX, the fallback is an advisory file lock. In both
+// cases the lease is kernel-backed rather than a best-effort marker and is
+// recovered by the operating system after an unclean exit.
 #pragma once
 
 #include <cstdint>
@@ -91,6 +93,7 @@ private:
 #ifdef _WIN32
     void *authority_handle_ = nullptr; // HANDLE, kept opaque in the public header
     void *metadata_handle_ = nullptr; // HANDLE, kept opaque in the public header
+    void *directory_handle_ = nullptr; // HANDLE, retained to protect the physical cwd
     std::uint32_t authority_thread_id_ = 0;
 #else
     int fd_ = -1;

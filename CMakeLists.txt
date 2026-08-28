@@ -130,8 +130,8 @@ if(WIN32)
     # #243 -- runtime identity, crash-safe instance lock and the singleton
     # DirectShow legacy-alias lease. This links the production utility rather
     # than a test mirror and exercises four concurrent namespaces, canonical
-    # cross-root authorities, rename hardening, and acquire/refusal/release/
-    # abandoned-recovery of both lock classes.
+    # cross-root/physical-directory authorities, alias hardening, and
+    # acquire/refusal/release/abandoned-recovery of both lock classes.
     add_subdirectory(tests/runtime-isolation-probe)
 
     # #182 -- regression gate for the pulsar:OutputFailed reason_class

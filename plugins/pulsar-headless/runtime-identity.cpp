@@ -179,13 +179,115 @@ std::string normalized_path_string(const fs::path &path)
     return absolute.lexically_normal().generic_string();
 }
 
+#ifdef _WIN32
+
+bool file_id_is_nonzero(const FILE_ID_128 &file_id)
+{
+    for (const BYTE byte : file_id.Identifier) {
+        if (byte != 0)
+            return true;
+    }
+    return false;
+}
+
+std::string physical_directory_key(const fs::path &path, HANDLE &directory_handle,
+                                   std::string &error)
+{
+    directory_handle = nullptr;
+    // Runtime-directory leases are represented by <runtime-dir>/.runtime.lock;
+    // the physical identity belongs to the controlled directory, not to the
+    // marker file which may not exist yet.
+    const fs::path directory_path = path.parent_path();
+    if (directory_path.empty()) {
+        error = "runtime_directory_parent_missing";
+        return {};
+    }
+    const std::wstring wide_path = directory_path.wstring();
+
+    // Do not request FILE_FLAG_OPEN_REPARSE_POINT: a junction/symlink is
+    // intentionally resolved to its target.  A failure to resolve the
+    // reparse point or to pass the DACL check is a hard error, never a silent
+    // fallback to the lexical path.
+    HANDLE handle = CreateFileW(wide_path.c_str(), FILE_READ_ATTRIBUTES,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        const DWORD code = GetLastError();
+        error = "runtime_directory_open_failed_win32_" + std::to_string(code);
+        return {};
+    }
+
+    BY_HANDLE_FILE_INFORMATION basic_info{};
+    if (!GetFileInformationByHandle(handle, &basic_info)) {
+        const DWORD code = GetLastError();
+        CloseHandle(handle);
+        error = "runtime_directory_attributes_failed_win32_" + std::to_string(code);
+        return {};
+    }
+    if ((basic_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        CloseHandle(handle);
+        error = "runtime_directory_not_directory";
+        return {};
+    }
+
+    FILE_ID_INFO file_id_info{};
+    const BOOL extended_ok = GetFileInformationByHandleEx(handle, FileIdInfo, &file_id_info,
+                                                          sizeof(file_id_info));
+    if (extended_ok && file_id_info.VolumeSerialNumber != 0 &&
+        file_id_is_nonzero(file_id_info.FileId)) {
+        std::ostringstream identity;
+        identity << "volume-" << std::hex << std::setfill('0') << std::setw(16)
+                 << static_cast<std::uint64_t>(file_id_info.VolumeSerialNumber) << "-file-";
+        for (const BYTE byte : file_id_info.FileId.Identifier)
+            identity << std::setw(2) << static_cast<unsigned int>(byte);
+        directory_handle = handle;
+        return identity.str();
+    }
+
+    // Older filesystems and some remote providers do not implement FileIdInfo
+    // even though the legacy handle information is stable.  Use that API only
+    // when it gives a non-zero volume/file identity; otherwise fail closed.
+    const DWORD extended_error = extended_ok ? ERROR_INVALID_DATA : GetLastError();
+    const std::uint64_t legacy_file_id =
+        (static_cast<std::uint64_t>(basic_info.nFileIndexHigh) << 32) |
+        static_cast<std::uint64_t>(basic_info.nFileIndexLow);
+    if (basic_info.dwVolumeSerialNumber != 0 && legacy_file_id != 0) {
+        std::ostringstream identity;
+        identity << "volume-" << std::hex << std::setfill('0') << std::setw(8)
+                 << static_cast<std::uint64_t>(basic_info.dwVolumeSerialNumber) << "-file-"
+                 << std::setw(16) << legacy_file_id;
+        directory_handle = handle;
+        return identity.str();
+    }
+
+    CloseHandle(handle);
+    error = "runtime_directory_identity_unavailable_win32_" +
+            std::to_string(extended_error);
+    return {};
+}
+
+#endif
+
 std::string authority_key(const fs::path &path, std::string_view owner,
-                          std::string_view resource_kind)
+                          std::string_view resource_kind, std::string &error,
+                          void **directory_handle)
 {
     if (resource_kind == "runtime-instance")
         return "runtime-instance:" + std::string(owner);
     if (resource_kind == "directshow-legacy-alias")
         return "directshow-legacy-alias";
+#ifdef _WIN32
+    if (resource_kind == "runtime-directory") {
+        HANDLE handle = nullptr;
+        const std::string physical = physical_directory_key(path, handle, error);
+        if (physical.empty())
+            return {};
+        *directory_handle = handle;
+        return "runtime-directory-physical:" + physical;
+    }
+#else
+    (void)directory_handle;
+#endif
     if (resource_kind == "runtime-directory")
         return "runtime-directory:" + normalized_path_string(path);
     return "path:" + std::string(resource_kind) + ":" + normalized_path_string(path);
@@ -369,9 +471,11 @@ void ExclusiveLease::move_from(ExclusiveLease &&other) noexcept
 #ifdef _WIN32
     authority_handle_ = other.authority_handle_;
     metadata_handle_ = other.metadata_handle_;
+    directory_handle_ = other.directory_handle_;
     authority_thread_id_ = other.authority_thread_id_;
     other.authority_handle_ = nullptr;
     other.metadata_handle_ = nullptr;
+    other.directory_handle_ = nullptr;
     other.authority_thread_id_ = 0;
 #else
     fd_ = other.fd_;
@@ -404,7 +508,18 @@ bool ExclusiveLease::acquire(const fs::path &path, std::string_view owner_runtim
         return false;
     }
 
-    const std::string key = authority_key(path_, owner_runtime_id_, resource_kind_);
+    void *directory_handle = nullptr;
+    std::string key_error;
+    const std::string key = authority_key(path_, owner_runtime_id_, resource_kind_, key_error,
+                                          &directory_handle);
+    if (key.empty()) {
+        result_ = LeaseResult::Error;
+        reason_ = key_error.empty() ? "authority_key_failed" : key_error;
+        return false;
+    }
+#ifdef _WIN32
+    directory_handle_ = directory_handle;
+#endif
     metadata_path_ = canonical_metadata_path(key);
 #ifdef _WIN32
     authority_name_ = authority_name_for(key, owner_runtime_id_, resource_kind_);
@@ -417,6 +532,7 @@ bool ExclusiveLease::acquire(const fs::path &path, std::string_view owner_runtim
     if (directory_error) {
         result_ = LeaseResult::Error;
         reason_ = "metadata_directory_failed";
+        release();
         return false;
     }
 
@@ -431,6 +547,7 @@ bool ExclusiveLease::acquire(const fs::path &path, std::string_view owner_runtim
         result_ = LeaseResult::Error;
         reason_ = GetLastError() == ERROR_ACCESS_DENIED ? "authority_access_denied"
                                                         : "authority_create_failed";
+        release();
         return false;
     }
 
@@ -444,6 +561,7 @@ bool ExclusiveLease::acquire(const fs::path &path, std::string_view owner_runtim
         CloseHandle(authority);
         result_ = LeaseResult::Refused;
         reason_ = "already_held_by_" + holder_runtime_id_;
+        release();
         return false;
     }
 
@@ -461,6 +579,7 @@ bool ExclusiveLease::acquire(const fs::path &path, std::string_view owner_runtim
             result_ = LeaseResult::Error;
             reason_ = "authority_wait_failed";
         }
+        release();
         return false;
     }
 
@@ -473,6 +592,7 @@ bool ExclusiveLease::acquire(const fs::path &path, std::string_view owner_runtim
         CloseHandle(authority);
         result_ = LeaseResult::Error;
         reason_ = "metadata_open_failed";
+        release();
         return false;
     }
 
@@ -544,6 +664,10 @@ void ExclusiveLease::release()
             CloseHandle(as_handle(metadata_handle_));
             metadata_handle_ = nullptr;
         }
+        if (directory_handle_) {
+            CloseHandle(as_handle(directory_handle_));
+            directory_handle_ = nullptr;
+        }
         if (authority_handle_) {
             CloseHandle(as_handle(authority_handle_));
             authority_handle_ = nullptr;
@@ -575,6 +699,10 @@ void ExclusiveLease::release()
     CloseHandle(authority);
     authority_handle_ = nullptr;
     authority_thread_id_ = 0;
+    if (directory_handle_) {
+        CloseHandle(as_handle(directory_handle_));
+        directory_handle_ = nullptr;
+    }
 #else
     write_posix_file(fd_, std::string());
     flock(fd_, LOCK_UN);

@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -49,6 +50,77 @@ fs::path scratch_root()
     PULSAR_CHECK(!ec);
     return root;
 }
+
+#ifdef _WIN32
+
+bool create_directory_alias(const fs::path &link, const fs::path &target,
+                            std::string &kind, DWORD &error)
+{
+    // Junctions do not require the symbolic-link privilege and are therefore
+    // the primary adversarial alias used by this probe.  The shell is invoked
+    // with only test-generated temporary paths and a hidden window; failure
+    // is reported as a typed SKIP rather than treated as a product fallback.
+    wchar_t shell_buffer[32768]{};
+    const DWORD shell_length =
+        GetEnvironmentVariableW(L"ComSpec", shell_buffer, sizeof(shell_buffer) / sizeof(wchar_t));
+    const std::wstring shell = shell_length > 0 && shell_length < (sizeof(shell_buffer) / sizeof(wchar_t))
+                                   ? std::wstring(shell_buffer, shell_length)
+                                   : L"C:\\Windows\\System32\\cmd.exe";
+    std::wstring command = L"\"" + shell + L"\" /d /c mklink /J \"" + link.wstring() +
+                           L"\" \"" + target.wstring() + L"\" >nul 2>&1";
+    std::vector<wchar_t> mutable_command(command.begin(), command.end());
+    mutable_command.push_back(L'\0');
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (CreateProcessW(shell.c_str(), mutable_command.data(), nullptr, nullptr, FALSE,
+                       CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) {
+        WaitForSingleObject(process.hProcess, INFINITE);
+        DWORD exit_code = ERROR_GEN_FAILURE;
+        GetExitCodeProcess(process.hProcess, &exit_code);
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+        if (exit_code == 0) {
+            kind = "junction";
+            error = ERROR_SUCCESS;
+            return true;
+        }
+        error = exit_code;
+    } else {
+        error = GetLastError();
+    }
+
+    DWORD symlink_flags = SYMBOLIC_LINK_FLAG_DIRECTORY;
+#ifdef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+    symlink_flags |= SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+#endif
+    if (CreateSymbolicLinkW(link.wstring().c_str(), target.wstring().c_str(), symlink_flags)) {
+        kind = "symlink";
+        error = ERROR_SUCCESS;
+        return true;
+    }
+    error = GetLastError();
+    return false;
+}
+
+std::wstring short_path_for(const fs::path &path)
+{
+    const std::wstring wide_path = path.wstring();
+    DWORD capacity = MAX_PATH;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        std::vector<wchar_t> buffer(capacity);
+        const DWORD length = GetShortPathNameW(wide_path.c_str(), buffer.data(), capacity);
+        if (length == 0)
+            return {};
+        if (length < capacity)
+            return std::wstring(buffer.data(), length);
+        capacity = length + 1;
+    }
+    return {};
+}
+
+#endif
 
 void test_four_namespaces_and_same_runtime_collision(const fs::path &root)
 {
@@ -188,6 +260,123 @@ void test_cross_root_authorities(const fs::path &root)
                  "cross-root-runtime: same_id_refused=1 authority=%s metadata_shared=1 reacquire=1\n",
                  first.authority_name().c_str());
 }
+
+#ifdef _WIN32
+void test_runtime_directory_physical_identity(const fs::path &root)
+{
+    ExclusiveLease missing;
+    PULSAR_CHECK(!missing.acquire(root / "missing-runtime" / ".runtime.lock",
+                                 "missing-runtime", "runtime-directory"));
+    PULSAR_CHECK(missing.result() == pulsar_runtime::LeaseResult::Error);
+    PULSAR_CHECK(missing.reason().find("runtime_directory_") == 0);
+    std::fprintf(stdout, "runtime-directory-errors: missing_rejected=1 reason=%s\n",
+                 missing.reason().c_str());
+
+    const fs::path physical = root / "physical-runtime-with-long-name";
+    const fs::path case_alias = root / "PHYSICAL-RUNTIME-WITH-LONG-NAME";
+    const fs::path distinct = root / "physical-runtime-distinct";
+    std::error_code ec;
+    fs::create_directories(physical, ec);
+    PULSAR_CHECK(!ec);
+    fs::create_directories(distinct, ec);
+    PULSAR_CHECK(!ec);
+
+    ExclusiveLease first;
+    PULSAR_CHECK(first.acquire(physical / ".runtime.lock", "physical-runtime-a",
+                               "runtime-directory"));
+
+    // A different physical directory remains independently usable.
+    ExclusiveLease distinct_lease;
+    PULSAR_CHECK(distinct_lease.acquire(distinct / ".runtime.lock", "physical-runtime-b",
+                                        "runtime-directory"));
+    PULSAR_CHECK(distinct_lease.authority_name() != first.authority_name());
+
+    // Windows case folding must not create a second cwd authority.
+    ExclusiveLease case_claim;
+    PULSAR_CHECK(!case_claim.acquire(case_alias / ".runtime.lock", "physical-runtime-c",
+                                     "runtime-directory"));
+    PULSAR_CHECK(case_claim.result() == pulsar_runtime::LeaseResult::Refused);
+    PULSAR_CHECK(case_claim.reason().find("already_held") == 0);
+    PULSAR_CHECK(case_claim.authority_name() == first.authority_name());
+    PULSAR_CHECK(case_claim.metadata_path() == first.metadata_path());
+    std::fprintf(stdout,
+                 "runtime-directory-physical: case_refused=1 distinct_allowed=1 authority=%s\n",
+                 first.authority_name().c_str());
+
+    distinct_lease.release();
+    first.release();
+    PULSAR_CHECK(case_claim.acquire(case_alias / ".runtime.lock", "physical-runtime-c",
+                                    "runtime-directory"));
+    case_claim.release();
+
+    // A junction/symlink is resolved by the production handle open.  If the
+    // runner disallows creating either reparse form, retain a typed SKIP; the
+    // production path still fails closed on an unresolvable reparse point.
+    const fs::path reparse_alias = root / "physical-runtime-reparse-alias";
+    std::string alias_kind;
+    DWORD alias_error = ERROR_SUCCESS;
+    if (!create_directory_alias(reparse_alias, physical, alias_kind, alias_error)) {
+        std::fprintf(stdout,
+                     "runtime-directory-reparse: SKIP create_failed_win32=%lu\n",
+                     static_cast<unsigned long>(alias_error));
+    } else {
+        ExclusiveLease reparse_first;
+        PULSAR_CHECK(reparse_first.acquire(physical / ".runtime.lock", "reparse-runtime-a",
+                                           "runtime-directory"));
+        ExclusiveLease reparse_claim;
+        PULSAR_CHECK(!reparse_claim.acquire(reparse_alias / ".runtime.lock",
+                                            "reparse-runtime-b", "runtime-directory"));
+        if (reparse_claim.result() == pulsar_runtime::LeaseResult::Refused) {
+            PULSAR_CHECK(reparse_claim.reason().find("already_held") == 0);
+            PULSAR_CHECK(reparse_claim.authority_name() == reparse_first.authority_name());
+            PULSAR_CHECK(reparse_claim.metadata_path() == reparse_first.metadata_path());
+        } else {
+            PULSAR_CHECK(reparse_claim.result() == pulsar_runtime::LeaseResult::Error);
+            PULSAR_CHECK(reparse_claim.reason().find("runtime_directory_") == 0);
+        }
+        std::fprintf(stdout, "runtime-directory-reparse: kind=%s result=%s reason=%s\n",
+                     alias_kind.c_str(),
+                     reparse_claim.result() == pulsar_runtime::LeaseResult::Refused ? "refused"
+                                                                                     : "rejected",
+                     reparse_claim.reason().c_str());
+        reparse_first.release();
+        PULSAR_CHECK(reparse_claim.acquire(reparse_alias / ".runtime.lock", "reparse-runtime-b",
+                                           "runtime-directory"));
+        reparse_claim.release();
+        PULSAR_CHECK(RemoveDirectoryW(reparse_alias.wstring().c_str()) != 0);
+    }
+
+    // 8.3 names are optional per-volume.  When present, they must identify
+    // the same physical directory; otherwise record a typed environmental SKIP.
+    const fs::path long_name = root / "runtime-directory-with-eight-dot-three-alias";
+    fs::create_directories(long_name, ec);
+    PULSAR_CHECK(!ec);
+    const std::wstring short_name = short_path_for(long_name);
+    if (short_name.empty() || _wcsicmp(short_name.c_str(), long_name.wstring().c_str()) == 0) {
+        std::fprintf(stdout, "runtime-directory-8dot3: SKIP unavailable\n");
+    } else {
+        ExclusiveLease long_claim;
+        PULSAR_CHECK(long_claim.acquire(long_name / ".runtime.lock", "short-runtime-a",
+                                        "runtime-directory"));
+        ExclusiveLease short_claim;
+        PULSAR_CHECK(!short_claim.acquire(fs::path(short_name) / ".runtime.lock",
+                                          "short-runtime-b", "runtime-directory"));
+        PULSAR_CHECK(short_claim.result() == pulsar_runtime::LeaseResult::Refused);
+        PULSAR_CHECK(short_claim.reason().find("already_held") == 0);
+        PULSAR_CHECK(short_claim.authority_name() == long_claim.authority_name());
+        PULSAR_CHECK(short_claim.metadata_path() == long_claim.metadata_path());
+        std::fprintf(stdout, "runtime-directory-8dot3: refused=1\n");
+        long_claim.release();
+        PULSAR_CHECK(short_claim.acquire(fs::path(short_name) / ".runtime.lock",
+                                         "short-runtime-b", "runtime-directory"));
+        short_claim.release();
+    }
+
+    std::error_code cleanup_error;
+    fs::remove_all(reparse_alias, cleanup_error);
+    fs::remove_all(long_name, cleanup_error);
+}
+#endif
 
 void test_alias_singleton_and_concurrent_claimants(const fs::path &root)
 {
@@ -461,6 +650,9 @@ int main()
     test_four_namespaces_and_same_runtime_collision(root);
     test_shared_explicit_directory_collision(root);
     test_cross_root_authorities(root);
+#ifdef _WIN32
+    test_runtime_directory_physical_identity(root);
+#endif
     test_alias_singleton_and_concurrent_claimants(root);
 #ifdef _WIN32
     test_abandoned_authority_recovery(root);
