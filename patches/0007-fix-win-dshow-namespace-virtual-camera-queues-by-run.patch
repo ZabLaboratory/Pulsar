@@ -37,7 +37,7 @@ index 3420581b1..6f722d9ab 100644
  
  using namespace DShow;
  
-@@ -14,8 +17,49 @@ extern volatile long locks;
+@@ -14,8 +17,50 @@ extern volatile long locks;
  
  /* ========================================================================= */
  
@@ -75,8 +75,9 @@ index 3420581b1..6f722d9ab 100644
 +		return legacy_name;
 +
 +	wchar_t wide_id[65] = {0};
-+	if (!os_utf8_to_wcs(runtime_id, 0, wide_id, sizeof(wide_id) / sizeof(wide_id[0])))
-+		return legacy_name;
++	/* IDs are validated as ASCII above; avoid a libobs link from this DLL. */
++	for (size_t i = 0; runtime_id[i] != '\0'; ++i)
++		wide_id[i] = (wchar_t)(unsigned char)runtime_id[i];
 +
 +	wchar_t name[256] = {0};
 +	_snwprintf_s(name, sizeof(name) / sizeof(name[0]), _TRUNCATE,
@@ -89,7 +90,7 @@ index 3420581b1..6f722d9ab 100644
  {
  	thread_start = CreateEvent(nullptr, true, false, nullptr);
  	thread_stop = CreateEvent(nullptr, true, false, nullptr);
-@@ -47,7 +91,7 @@ VCamFilter::VCamFilter(bool program_return) : OutputFilter(),
+@@ -47,7 +92,7 @@ VCamFilter::VCamFilter(bool program_return) : OutputFilter(),
  	uint32_t new_obs_cy = obs_cy;
  	uint64_t new_obs_interval = obs_interval;
  
@@ -98,7 +99,7 @@ index 3420581b1..6f722d9ab 100644
  	if (vq) {
  		if (video_queue_state(vq) == SHARED_QUEUE_STATE_READY) {
  			video_queue_get_info(vq, &new_obs_cx, &new_obs_cy, &new_obs_interval);
-@@ -211,7 +255,7 @@ void VCamFilter::Frame(uint64_t ts)
+@@ -211,7 +256,7 @@ void VCamFilter::Frame(uint64_t ts)
  	   filter output! */
  
  	if (!vq) {
@@ -132,7 +133,7 @@ diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
 index 58b0d6c8b..5d416f4a6 100644
 --- a/plugins/win-dshow/virtualcam.c
 +++ b/plugins/win-dshow/virtualcam.c
-@@ -1,22 +1,66 @@
+@@ -1,22 +1,64 @@
  #include <obs-module.h>
  #include <util/platform.h>
  #include <string.h>
@@ -193,18 +194,16 @@ index 58b0d6c8b..5d416f4a6 100644
 +	}
 +
 +	wchar_t wide_id[65] = {0};
-+	if (!os_utf8_to_wcs(runtime_id, 0, wide_id, sizeof(wide_id) / sizeof(wide_id[0]))) {
-+		wcsncpy(destination, legacy_name, capacity - 1);
-+		destination[capacity - 1] = 0;
-+		return;
-+	}
++	/* IDs are validated as ASCII above; avoid a libobs link from this DLL. */
++	for (size_t i = 0; runtime_id[i] != '\0'; ++i)
++		wide_id[i] = (wchar_t)(unsigned char)runtime_id[i];
 +
 +	_snwprintf_s(destination, capacity, _TRUNCATE, L"Local\\Pulsar.%ls.%ls", wide_id,
 +			     program_return ? L"ProgramReturnVideo" : L"VirtualCamVideo");
  }
  
  static const char *virtualcam_name(void *unused)
-@@ -36,7 +80,7 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+@@ -36,7 +78,7 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
  {
  	struct virtualcam_data *vcam = (struct virtualcam_data *)bzalloc(sizeof(*vcam));
  	vcam->output = output;
@@ -213,7 +212,7 @@ index 58b0d6c8b..5d416f4a6 100644
  
  	UNUSED_PARAMETER(settings);
  	return vcam;
-@@ -56,7 +100,7 @@ static bool virtualcam_start(void *data)
+@@ -56,7 +98,7 @@ static bool virtualcam_start(void *data)
  	char res[64];
  	snprintf(res, sizeof(res), "%dx%dx%lld", (int)width, (int)height, (long long)interval);
  
@@ -222,7 +221,7 @@ index 58b0d6c8b..5d416f4a6 100644
  		char *res_file = os_get_config_path_ptr("obs-virtualcam.txt");
  		os_quick_write_utf8_file_safe(res_file, res, strlen(res), false, "tmp", NULL);
  		bfree(res_file);
-@@ -64,7 +108,9 @@ static bool virtualcam_start(void *data)
+@@ -64,7 +106,9 @@ static bool virtualcam_start(void *data)
  
  	vcam->vq = video_queue_create_named(width, height, interval, vcam->queue_name);
  	if (!vcam->vq) {
@@ -233,7 +232,7 @@ index 58b0d6c8b..5d416f4a6 100644
  		return false;
  	}
  
-@@ -76,7 +122,12 @@ static bool virtualcam_start(void *data)
+@@ -76,7 +120,12 @@ static bool virtualcam_start(void *data)
  
  	os_atomic_set_bool(&vcam->active, true);
  	os_atomic_set_bool(&vcam->stopping, false);
@@ -249,4 +248,3 @@ index 58b0d6c8b..5d416f4a6 100644
  }
 -- 
 2.54.0.windows.1
-
