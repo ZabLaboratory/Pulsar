@@ -28,12 +28,14 @@
 #include "dir-hardening.h"
 #include "log-handler.h"
 #include "pulsar-frontend-stub.h"
+#include "runtime-identity.h"
 
 #include <QtCore/QByteArray>
 #include <QtWidgets/QApplication>
 
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -58,6 +60,269 @@
 namespace {
 
 std::atomic<bool> g_running(true);
+
+// #243: one process owns one runtime namespace. The identity and cwd locks
+// protect config/log/recording and other process-local resources; the third
+// lock is the compatibility lease for the historical DirectShow
+// Program/Preview aliases. All are kernel-backed and therefore recover when
+// the process exits unexpectedly.
+struct RuntimeState {
+    pulsar_runtime::RuntimeIdentity identity;
+    pulsar_runtime::ExclusiveLease instance_lease;
+    pulsar_runtime::ExclusiveLease runtime_dir_lease;
+    pulsar_runtime::ExclusiveLease legacy_alias_lease;
+    bool legacy_alias = false;
+    std::string alias_state = "disabled";
+
+    bool initialize();
+    bool renew();
+    void release();
+};
+
+std::string lower_ascii(std::string value)
+{
+    for (char &c : value)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return value;
+}
+
+bool port_is_valid(const char *value)
+{
+    if (!value || !*value)
+        return false;
+    char *end = nullptr;
+    const long parsed = std::strtol(value, &end, 10);
+    return end && *end == '\0' && parsed > 0 && parsed < 65536;
+}
+
+bool RuntimeState::initialize()
+{
+    std::string error;
+    if (!pulsar_runtime::resolve_identity(identity, error)) {
+        std::fprintf(stderr, "PULSAR_RUNTIME_ERROR code=invalid_identity reason=%s\n",
+                     error.c_str());
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(identity.runtime_dir, ec);
+    if (ec || !std::filesystem::is_directory(identity.runtime_dir, ec) || ec) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=runtime_dir_unavailable id=%s dir=%s reason=%s\n",
+                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
+                     ec ? ec.message().c_str() : "not_a_directory");
+        return false;
+    }
+    std::filesystem::create_directories(identity.instance_lease_path.parent_path(), ec);
+    if (ec) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=instance_lease_dir_unavailable id=%s dir=%s reason=%s\n",
+                     identity.instance_id.c_str(),
+                     identity.instance_lease_path.parent_path().string().c_str(),
+                     ec.message().c_str());
+        return false;
+    }
+    std::filesystem::create_directories(identity.legacy_alias_lease_path.parent_path(), ec);
+    if (ec) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=lease_dir_unavailable id=%s dir=%s reason=%s\n",
+                     identity.instance_id.c_str(),
+                     identity.legacy_alias_lease_path.parent_path().string().c_str(),
+                     ec.message().c_str());
+        return false;
+    }
+
+    if (!instance_lease.acquire(identity.instance_lease_path, identity.instance_id,
+                                "runtime-instance")) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_COLLISION id=%s dir=%s reason=%s owner=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
+                     instance_lease.reason().c_str(), instance_lease.holder_runtime_id().c_str(),
+                     instance_lease.authority_name().c_str(),
+                     instance_lease.metadata_path().string().c_str());
+        return false;
+    }
+
+    // The identity lease catches reuse of one runtime_instance_id. The
+    // directory lease catches the complementary misconfiguration where two
+    // different IDs are pointed at one explicit caller-owned cwd. Both are
+    // required before any cwd-relative config/log/recording is touched.
+    if (!runtime_dir_lease.acquire(identity.runtime_dir_lease_path, identity.instance_id,
+                                   "runtime-directory")) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_COLLISION id=%s dir=%s reason=%s owner=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
+                     runtime_dir_lease.reason().c_str(),
+                     runtime_dir_lease.holder_runtime_id().c_str(),
+                     runtime_dir_lease.authority_name().c_str(),
+                     runtime_dir_lease.metadata_path().string().c_str());
+        release();
+        return false;
+    }
+
+    // The lease resolves the requested directory through the retained kernel
+    // handle. From this point on, every cwd-relative resource must use that
+    // handle-derived path; re-resolving identity.runtime_dir could follow a
+    // junction which was retargeted after acquisition.
+    if (runtime_dir_lease.operational_path().empty()) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=runtime_dir_operational_path_unavailable "
+                     "id=%s requested=%s\n",
+                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str());
+        release();
+        return false;
+    }
+    identity.runtime_dir = runtime_dir_lease.operational_path();
+
+    if (!pulsar_runtime::set_process_environment("PULSAR_RUNTIME_INSTANCE_ID",
+                                                 identity.instance_id) ||
+        !pulsar_runtime::set_process_environment("PULSAR_RUNTIME_DIR",
+                                                 identity.runtime_dir.string())) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=environment_publish_failed id=%s\n",
+                     identity.instance_id.c_str());
+        release();
+        return false;
+    }
+
+    // A caller may explicitly disable the historical aliases, or require
+    // them. The default is an opportunistic claim: exactly one process gets
+    // the fixed names and every other process is made usable with a dedicated
+    // mapping rather than silently sharing the first process's queue.
+    const std::string alias_policy = lower_ascii(
+        std::getenv("PULSAR_LEGACY_ALIAS") ? std::getenv("PULSAR_LEGACY_ALIAS") : "");
+    const bool disabled = alias_policy == "0" || alias_policy == "false" ||
+                          alias_policy == "off" || alias_policy == "disabled" ||
+                          alias_policy == "dedicated";
+    const bool required = alias_policy == "required" || alias_policy == "strict";
+
+    if (disabled) {
+        alias_state = "disabled";
+    } else if (legacy_alias_lease.acquire(identity.legacy_alias_lease_path,
+                                          identity.instance_id,
+                                          "directshow-legacy-alias")) {
+        legacy_alias = true;
+        alias_state = "acquired";
+    } else {
+        alias_state = legacy_alias_lease.result() == pulsar_runtime::LeaseResult::Refused
+                          ? "refused"
+                          : "error";
+        std::fprintf(stderr,
+                     "PULSAR_LEGACY_ALIAS lease=%s id=%s path=%s reason=%s owner=%s authority=%s metadata=%s\n",
+                     alias_state.c_str(), identity.instance_id.c_str(),
+                     identity.legacy_alias_lease_path.string().c_str(),
+                     legacy_alias_lease.reason().c_str(),
+                     legacy_alias_lease.holder_runtime_id().c_str(),
+                     legacy_alias_lease.authority_name().c_str(),
+                     legacy_alias_lease.metadata_path().string().c_str());
+        if (required) {
+            std::fprintf(stderr,
+                         "PULSAR_RUNTIME_ERROR code=legacy_alias_required id=%s\n",
+                         identity.instance_id.c_str());
+            release();
+            return false;
+        }
+    }
+
+    if (!pulsar_runtime::set_process_environment("PULSAR_DIRECTSHOW_LEGACY_ALIAS",
+                                                 legacy_alias ? "1" : "0")) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=directshow_policy_publish_failed id=%s\n",
+                     identity.instance_id.c_str());
+        release();
+        return false;
+    }
+
+    if (!port_is_valid(std::getenv("PULSAR_PORT"))) {
+        const std::uint16_t port = pulsar_runtime::pick_free_loopback_port();
+        if (port == 0 || !pulsar_runtime::set_process_environment(
+                              "PULSAR_PORT", std::to_string(port))) {
+            std::fprintf(stderr,
+                         "PULSAR_RUNTIME_ERROR code=port_allocation_failed id=%s\n",
+                         identity.instance_id.c_str());
+            release();
+            return false;
+        }
+        std::fprintf(stderr, "PULSAR_RUNTIME_PORT id=%s port=%u source=auto\n",
+                     identity.instance_id.c_str(), static_cast<unsigned>(port));
+    }
+
+    // All cwd-relative resources (the WebSocket config, default recordings,
+    // and any legacy path in a plugin that has not yet been namespaced) now
+    // resolve below this validated, exclusively held directory.
+    std::filesystem::current_path(identity.runtime_dir, ec);
+    if (ec) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=chdir_failed id=%s dir=%s reason=%s\n",
+                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
+                     ec.message().c_str());
+        release();
+        return false;
+    }
+
+    std::fprintf(stderr,
+                 "PULSAR_RUNTIME_INSTANCE id=%s dir=%s instance_lock=acquired "
+                 "instance_lock_path=%s runtime_dir_lock=acquired runtime_dir_lock_path=%s "
+                 "instance_authority=%s instance_metadata=%s runtime_dir_authority=%s "
+                 "runtime_dir_metadata=%s legacy_alias=%s alias_lease=%s alias_path=%s "
+                 "alias_authority=%s alias_metadata=%s\n",
+                 identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
+                 identity.instance_lease_path.string().c_str(),
+                 identity.runtime_dir_lease_path.string().c_str(),
+                 instance_lease.authority_name().c_str(), instance_lease.metadata_path().string().c_str(),
+                 runtime_dir_lease.authority_name().c_str(),
+                 runtime_dir_lease.metadata_path().string().c_str(), legacy_alias ? "1" : "0",
+                 alias_state.c_str(), identity.legacy_alias_lease_path.string().c_str(),
+                 legacy_alias_lease.authority_name().c_str(),
+                 legacy_alias_lease.metadata_path().string().c_str());
+    if (disabled)
+        std::fprintf(stderr, "PULSAR_LEGACY_ALIAS lease=disabled id=%s path=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.legacy_alias_lease_path.string().c_str(),
+                     legacy_alias_lease.authority_name().c_str(),
+                     legacy_alias_lease.metadata_path().string().c_str());
+    else if (legacy_alias)
+        std::fprintf(stderr, "PULSAR_LEGACY_ALIAS lease=acquired id=%s path=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.legacy_alias_lease_path.string().c_str(),
+                     legacy_alias_lease.authority_name().c_str(),
+                     legacy_alias_lease.metadata_path().string().c_str());
+    return true;
+}
+
+bool RuntimeState::renew()
+{
+    bool ok = instance_lease.renew();
+    ok = runtime_dir_lease.renew() && ok;
+    if (legacy_alias)
+        ok = legacy_alias_lease.renew() && ok;
+    return ok;
+}
+
+void RuntimeState::release()
+{
+    if (legacy_alias_lease.held()) {
+        std::fprintf(stderr, "PULSAR_LEGACY_ALIAS lease=released id=%s path=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.legacy_alias_lease_path.string().c_str(),
+                     legacy_alias_lease.authority_name().c_str(),
+                     legacy_alias_lease.metadata_path().string().c_str());
+        legacy_alias_lease.release();
+    }
+    if (runtime_dir_lease.held()) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=%s dir=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
+                     runtime_dir_lease.authority_name().c_str(),
+                     runtime_dir_lease.metadata_path().string().c_str());
+        runtime_dir_lease.release();
+    }
+    if (instance_lease.held()) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_INSTANCE lease=released id=%s dir=%s authority=%s metadata=%s\n",
+                     identity.instance_id.c_str(), identity.runtime_dir.string().c_str(),
+                     instance_lease.authority_name().c_str(),
+                     instance_lease.metadata_path().string().c_str());
+        instance_lease.release();
+    }
+}
 
 // Session credentials negotiated at boot, exposed to the parent
 // process via the PULSAR_READY stdout sentinel.
@@ -564,6 +829,43 @@ void load_modules()
     obs_post_load_modules();
 }
 
+// A successful obs_module_load() is not enough for the embedding contract:
+// obs-websocket may reject its persistent-data directory, or its listen()
+// call may fail while libobs continues loading optional modules.  The host
+// must never publish PULSAR_READY for such a process.  The websocket plugin
+// exposes this state through the global proc handler so the check remains
+// independent of its private C++ object and still distinguishes a bind
+// failure from an ordinary optional-module warning.
+bool websocket_server_ready(std::string &reason)
+{
+    if (!obs_get_module("obs-websocket")) {
+        reason = "obs_websocket_module_not_loaded";
+        return false;
+    }
+
+    proc_handler_t *global_ph = obs_get_proc_handler();
+    if (!global_ph) {
+        reason = "obs_websocket_proc_handler_unavailable";
+        return false;
+    }
+
+    calldata_t cd;
+    calldata_init(&cd);
+    const bool called = proc_handler_call(global_ph, "pulsar_websocket_is_listening", &cd);
+    const bool success = calldata_bool(&cd, "success");
+    const bool listening = calldata_bool(&cd, "listening");
+    calldata_free(&cd);
+    if (!called || !success) {
+        reason = "obs_websocket_listening_state_unavailable";
+        return false;
+    }
+    if (!listening) {
+        reason = "obs_websocket_bind_failed";
+        return false;
+    }
+    return true;
+}
+
 // V1 session boundary: each spawn gets its own port + password, never
 // trusting the persisted config.json. PULSAR_PORT and PULSAR_PASSWORD
 // override the defaults; if either is empty, we pick safe values
@@ -635,11 +937,11 @@ bool seed_websocket_config()
     // (with no recognizable field/URL form) via a debug dump.
     g_secret_registry.register_secret(g_session_password);
 
-    // obs-websocket persists its config under <cwd>/obs-websocket/
-    // when running headless (no profile path). pulsar.exe is always
-    // spawned with cwd=bin/64bit (documented in PRISM-EMBEDDING.md),
-    // so that resolves to bin/64bit/obs-websocket/config.json --
-    // exactly where the plugin will look during obs_module_load.
+    // obs-websocket persists its config under <module_config_path>/
+    // obs-websocket/ when running headless. #243 changes both the process cwd
+    // and obs_startup(module_config_path) to the validated runtime directory,
+    // so this resolves to <runtime>/obs-websocket/config.json and cannot be
+    // shared by concurrent instances.
     const char *dir = "obs-websocket";
     const char *path = "obs-websocket/config.json";
 
@@ -753,6 +1055,13 @@ int main(int argc, char **argv)
     wire_stdio_for_windows_subsystem();
 #endif
 
+    // #243: resolve and lock the complete process namespace before Qt/libobs
+    // can create any config, log, recording, socket or DirectShow resource.
+    // This also publishes the validated runtime identity to the upstream
+    // win-dshow patch through the process environment.
+    auto runtime_state = std::make_unique<RuntimeState>();
+    if (!runtime_state->initialize())
+        return 1;
     // Force the offscreen Qt platform so QApplication can construct
     // without a display server / platform plugin DLL. obs-websocket
     // (and other libobs plugins) link against Qt6 and assume a
@@ -772,10 +1081,21 @@ int main(int argc, char **argv)
     // captured by our durable, redacted log handler.
     install_pulsar_log_handler();
 
-    if (!obs_startup("en-US", nullptr, nullptr)) {
+    const std::string module_config_path = runtime_state->identity.runtime_dir.string();
+    if (!obs_startup("en-US", module_config_path.c_str(), nullptr)) {
         blog(LOG_ERROR, "[pulsar-headless] obs_startup failed");
         return 1;
     }
+
+    blog(LOG_INFO,
+         "[pulsar-runtime] instance_id=%s runtime_dir=%s legacy_alias=%s alias_lease=%s "
+         "instance_authority=%s runtime_dir_authority=%s alias_authority=%s",
+         runtime_state->identity.instance_id.c_str(),
+         runtime_state->identity.runtime_dir.string().c_str(),
+         runtime_state->legacy_alias ? "1" : "0", runtime_state->alias_state.c_str(),
+         runtime_state->instance_lease.authority_name().c_str(),
+         runtime_state->runtime_dir_lease.authority_name().c_str(),
+         runtime_state->legacy_alias_lease.authority_name().c_str());
 
     if (!reset_video()) {
         obs_shutdown();
@@ -830,6 +1150,18 @@ int main(int argc, char **argv)
 
     load_modules();
 
+    std::string websocket_error;
+    if (!websocket_server_ready(websocket_error)) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=websocket_not_ready id=%s reason=%s\n",
+                     runtime_state->identity.instance_id.c_str(), websocket_error.c_str());
+        // The frontend callback table was installed before module loading;
+        // pair its teardown with obs_shutdown on this fail-closed path too.
+        pulsar_frontend_shutdown();
+        obs_shutdown();
+        return 1;
+    }
+
     // FINISHED_LOADING is the trigger obs-websocket waits for before
     // accepting requests/events on the wire. Emit it once modules are
     // post-loaded.
@@ -857,7 +1189,14 @@ int main(int argc, char **argv)
                 obs_get_version_string());
     std::fflush(stdout);
 
+    auto next_lease_renew = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (g_running.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now() >= next_lease_renew) {
+            if (!runtime_state->renew())
+                blog(LOG_ERROR, "[pulsar-runtime] lease metadata renewal failed; "
+                                "kernel ownership retained and no alias takeover is allowed");
+            next_lease_renew = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
@@ -866,5 +1205,6 @@ int main(int argc, char **argv)
     pulsar_frontend_shutdown();
     obs_shutdown();
 
+    runtime_state->release();
     return 0;
 }

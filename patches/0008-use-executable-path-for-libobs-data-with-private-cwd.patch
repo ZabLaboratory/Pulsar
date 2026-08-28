@@ -1,0 +1,52 @@
+From 4f57d5f73c53b2d71eeb88ef2b51d8ff5f08ee30 Mon Sep 17 00:00:00 2001
+From: Keeper <keeper-by-clodocapeo[bot]>
+Date: Fri, 28 Aug 2026 20:20:00 +0200
+Subject: [PATCH] fix(win32): resolve libobs data from executable with private cwd
+
+The Pulsar headless bootstrap now gives each process a private working
+directory for config, logs and recordings. Keep libobs's packaged data lookup
+anchored to the executable so default.effect and the other core assets remain
+available after that isolation change.
+
+Agent-Role: Keeper
+Agent-Thread: /root/keeper_pul_dl_02
+Work-Unit: ZabLaboratory/Pulsar#243
+Issue: 243
+ADR-Revision: draft-r2-dual-lane-20260828
+Evidence: runtime-isolation-probe; executable-path data lookup review
+---
+ libobs/obs-windows.c | 17 +++++++++++------
+ 1 file changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/libobs/obs-windows.c b/libobs/obs-windows.c
+index a816471a1..08e3a8782 100644
+--- a/libobs/obs-windows.c
++++ b/libobs/obs-windows.c
+@@ -54,13 +54,22 @@ void add_default_module_paths(void)
+ 	bfree(module_data);
+ }
+ 
+-/* on windows, points to [base directory]/data/libobs */
++/* On Windows, resolve the libobs data root from the executable rather than
++ * the process cwd.  The headless Pulsar bootstrap deliberately gives each
++ * instance a private cwd for config/log/recording isolation, while the
++ * packaged data tree remains next to the executable. */
+ char *find_libobs_data_file(const char *file)
+ {
++	char *data_root = os_get_executable_path_ptr("../../data/libobs/");
++	if (!data_root)
++		return NULL;
++
+ 	struct dstr path;
+-	dstr_init(&path);
++	dstr_init_copy(&path, data_root);
++	bfree(data_root);
++	dstr_cat(&path, file);
+ 
+-	if (check_path(file, "../../data/libobs/", &path))
++	if (os_file_exists(path.array))
+ 		return path.array;
+ 
+ 	dstr_free(&path);
+-- 
+2.54.0.windows.1

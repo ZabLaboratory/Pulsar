@@ -147,26 +147,34 @@ omissions documented in `scripts/package-win.ps1`.
    so direct invocation from cmd.exe / PowerShell still prints to the
    operator's terminal. Spawned with piped stdio, the inherited pipes
    take precedence and AttachConsole is a no-op.
-2. A `QApplication` is constructed with `QT_QPA_PLATFORM=minimal` (no
+2. The bootstrap resolves a validated `runtime_instance_id`, creates its
+   private runtime directory, acquires OS-backed identity and cwd leases, and
+   opportunistically acquires the singleton DirectShow legacy-alias lease. A
+   second claimant remains usable through namespaced mappings and emits a
+   correlated refusal record.
+3. A `QApplication` is constructed with `QT_QPA_PLATFORM=minimal` (no
    display, no platform plugin DLL).
-3. `obs_startup()` initialises libobs.
-4. `seed_websocket_config()` writes `<cwd>/obs-websocket/config.json`
-   from `PULSAR_PORT` + `PULSAR_PASSWORD` env vars (or defaults: 4455
-   + a fresh 22-char URL-safe random string). This happens *before*
+4. `obs_startup()` initialises libobs with the runtime directory as its
+   module-config path.
+5. `seed_websocket_config()` writes `<runtime-dir>/obs-websocket/config.json`
+   from `PULSAR_PORT` + `PULSAR_PASSWORD` env vars (or defaults: an
+   allocated loopback port + a fresh 22-char URL-safe random string). This happens *before*
    plugins load so `obs-websocket.dll`'s config loader reads the
    seeded values rather than a stale on-disk copy from a prior run.
-5. `obs_load_all_modules()` loads ~25 OBS plugins + the Pulsar plugins.
-6. `pulsar-frontend-stub` brings up the scene graph: a `Default` scene
+6. `obs_load_all_modules()` loads ~25 OBS plugins + the Pulsar plugins.
+7. `pulsar-frontend-stub` brings up the scene graph: a `Default` scene
    with WASAPI mic + desktop capture + (optional) window capture, an
    x264 video encoder + AAC audio encoder, a singleton `PulsarStream`
    rtmp_output, a singleton `PulsarRecord` ffmpeg_muxer.
-7. `pulsar-multi-stream` initialises its registry + adaptive bitrate
+8. `pulsar-multi-stream` initialises its registry + adaptive bitrate
    worker.
-8. `pulsar-websocket` binds the configured port on `127.0.0.1` (and
+9. `pulsar-websocket` binds the configured port on `127.0.0.1` (and
    `::1`) and starts accepting v5 handshakes.
-9. `pulsar-headless` prints the sentinel:
+10. `pulsar-headless` prints the sentinel:
    `PULSAR_READY ws=ws://127.0.0.1:<port> password=<pw>`
-10. The idle loop polls a graceful-shutdown atomic every 100 ms.
+11. The idle loop polls a graceful-shutdown atomic every 100 ms and renews
+     the identity/cwd/alias lease metadata. On shutdown, libobs is stopped
+     before all leases are released.
     `Ctrl-C` (in a real terminal) or `WM_CLOSE` (from a parent
     process's `taskkill` / `child.kill()`) flips the flag; the loop
     exits and `obs_shutdown()` runs to completion.
@@ -177,11 +185,17 @@ A consumer (Prism today, others later) must:
 
 - Bundle the chosen variant under `resources/pulsar/`, preserving the
   rundir layout (`bin/64bit/`, `obs-plugins/64bit/`, `data/`).
-- Spawn `bin/64bit/pulsar.exe` with **`cwd=bin/64bit`** (mandatory —
-  libobs walks `..\..\data\libobs\*.effect` to find core shaders).
+- Resolve the executable from `bin/64bit/pulsar.exe`, but give each process
+  a private runtime cwd and pass a validated `PULSAR_RUNTIME_INSTANCE_ID`.
+  The native bootstrap resolves OBS modules/data from the executable and
+  uses the runtime cwd for config, logs and recordings.
 - Pass `PULSAR_PORT` + `PULSAR_PASSWORD` env vars to pin per-session
-  credentials; or omit them and parse what Pulsar generates from the
-  READY sentinel.
+  credentials when required; otherwise the bundle allocates a free loopback
+  port and parses the generated values from the READY sentinel.
+- Treat the returned runtime identity as the correlation key. If an external
+  DirectShow consumer needs a non-holder's dedicated mapping, launch it with
+  the same `PULSAR_RUNTIME_INSTANCE_ID` and
+  `PULSAR_DIRECTSHOW_LEGACY_ALIAS=0`.
 - Read stdout line-by-line until `^PULSAR_READY ` arrives; extract
   `url` + `password`; open the obs-websocket v5 session.
 - Hold the connection open for the lifetime of broadcast work.

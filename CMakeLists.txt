@@ -127,6 +127,13 @@ if(WIN32)
     # translation unit (see tests/dir-hardening-probe/dir-hardening-probe-test.cpp).
     add_subdirectory(tests/dir-hardening-probe)
 
+    # #243 -- runtime identity, crash-safe instance lock and the singleton
+    # DirectShow legacy-alias lease. This links the production utility rather
+    # than a test mirror and exercises four concurrent namespaces, canonical
+    # cross-root/physical-directory authorities, alias hardening, and
+    # acquire/refusal/release/abandoned-recovery of both lock classes.
+    add_subdirectory(tests/runtime-isolation-probe)
+
     # #182 -- regression gate for the pulsar:OutputFailed reason_class
     # classifier (ADR-005 §3.4). No pulsar.exe, no libobs/Qt: a pure
     # function of (is_local_output, code, last_error).

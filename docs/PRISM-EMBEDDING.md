@@ -78,8 +78,10 @@ data paths relative to `pulsar.exe`.
 // Pseudocode -- Electron main-process side.
 
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const RESOURCES   = join(app.getAppPath(), '..', 'resources', 'pulsar');
 const PULSAR_BIN  = join(RESOURCES, 'bin', '64bit');
@@ -88,15 +90,18 @@ const PULSAR_EXE  = join(PULSAR_BIN, 'pulsar.exe');
 // Fresh credentials per Prism launch. Pulsar will pick them up via
 // env vars and seed obs-websocket/config.json before plugins load.
 const sessionPassword = randomBytes(16).toString('base64url');
-const sessionPort     = 4455;  // pin or pick a free port; see below.
+const runtimeInstanceId = `prism-${randomUUID().replaceAll('-', '')}`;
+const runtimeDir = mkdtempSync(join(tmpdir(), `pulsar-${runtimeInstanceId}-`));
 
 const child = spawn(PULSAR_EXE, [], {
-  cwd: PULSAR_BIN,                       // <-- MANDATORY: libobs resolves
-                                         //     data/ paths relative to cwd.
+  // The executable stays in the bundle; process-local state lives here.
+  // The native bootstrap resolves OBS modules/data from PULSAR_EXE.
+  cwd: runtimeDir,
   env: {
     ...process.env,
-    PULSAR_PORT:     String(sessionPort),
     PULSAR_PASSWORD: sessionPassword,
+    PULSAR_RUNTIME_INSTANCE_ID: runtimeInstanceId,
+    PULSAR_RUNTIME_DIR: runtimeDir,
     // Optional V1 knobs:
     // PULSAR_FPS:           '60',
     // PULSAR_RESOLUTION:    '1920x1080',
@@ -116,20 +121,27 @@ const child = spawn(PULSAR_EXE, [], {
 });
 ```
 
-### Mandatory `cwd`
+### Runtime directory and executable paths
 
-`pulsar.exe` MUST be spawned with `cwd` set to its containing
-directory (`bin/64bit/`). libobs walks `..\..\data\libobs\*.effect` to
-find its core shaders; any other working directory yields:
+The executable MUST still be resolved from the bundle's `bin/64bit/`
+directory so the Windows loader and libobs module scanner find the packaged
+DLLs. Its process `cwd` is now a private runtime directory, not the binary
+directory. Pulsar passes that directory to `obs_startup()` as the module
+configuration root and uses it for config, logs and recordings. A generated
+directory can be removed after the child exits; an explicitly supplied
+`PULSAR_RUNTIME_DIR` remains Prism-owned.
+
+Starting multiple children with the same runtime directory or
+`PULSAR_RUNTIME_INSTANCE_ID` is refused by the OS-backed cwd/identity leases:
 
 ```
-error: Failed to find file 'default.effect' in libobs data directory
-pulsar-headless: obs_reset_video failed (-1)
+PULSAR_RUNTIME_COLLISION id=... dir=... reason=already_held_by_... owner=...
 ```
 
-This is the same constraint OBS Studio classique enforces. Documented
-once, easy to follow, easy to forget — automate the cwd in your spawn
-helper and never look back.
+Use the returned identity as the correlation key for Prism logs and any
+external DirectShow consumer. The bundled `spawn()` helper creates this
+namespace and exposes `runtimeInstanceId` and `runtimeDir` directly; prefer it
+over reproducing the manual setup above.
 
 ### `windowsHide` is recommended but not strictly required
 
@@ -150,10 +162,11 @@ pipes take precedence and the AttachConsole call is a no-op.
 
 ### Picking a port
 
-`PULSAR_PORT` defaults to `4455`. If Prism may run alongside an OBS
-Studio install (which also defaults to 4455), or alongside a second
-Prism instance, pick a free port in the ephemeral range and pass it
-explicitly. Common pattern:
+The bundled `spawn()` helper allocates a free loopback port for each child
+when `PULSAR_PORT` is omitted, empty or `0`. Manual launchers can use the
+same pattern, or pass an explicitly reserved port when an external supervisor
+owns port assignment. An explicit port is still subject to the normal bind
+race and the WebSocket bind result remains authoritative. Common pattern:
 
 ```ts
 import { createServer } from 'node:net';
@@ -169,7 +182,21 @@ function pickFreePort(): Promise<number> {
 }
 ```
 
-Then pass `PULSAR_PORT: String(await pickFreePort())`.
+Then pass `PULSAR_PORT: String(await pickFreePort())` in the manual launch
+environment. Do not reuse one pinned port for concurrent Pulsar children.
+
+### DirectShow compatibility lease
+
+The historical DirectShow aliases are a singleton compatibility surface. The
+first runtime that starts with the default policy claims them; another runtime
+continues with a namespaced mapping and logs `alias_lease=refused`. Set
+`PULSAR_LEGACY_ALIAS=required` when a child must own the historical aliases,
+or `PULSAR_LEGACY_ALIAS=dedicated` / `off` to force a namespaced mapping.
+
+For a non-holder, launch the external DirectShow consumer with the same
+`PULSAR_RUNTIME_INSTANCE_ID` and `PULSAR_DIRECTSHOW_LEGACY_ALIAS=0`. This
+keeps the consumer on that runtime's mapping instead of accidentally opening
+the compatibility singleton.
 
 ## 4. The READY handshake
 
@@ -300,7 +327,7 @@ check has pass/fail signal. CI must run those checks on every PR.
 | Step | Action |
 |---|---|
 | Bundle | Drop `pulsar-windows-x64-<variant>-v<x>/` into `resources/pulsar/`. |
-| Spawn | `bin/64bit/pulsar.exe`, `cwd=bin/64bit/`, env `PULSAR_PORT` + `PULSAR_PASSWORD`. |
+| Spawn | `bin/64bit/pulsar.exe`, private runtime `cwd`, env `PULSAR_RUNTIME_INSTANCE_ID` + `PULSAR_RUNTIME_DIR`; optionally pin `PULSAR_PORT` + `PULSAR_PASSWORD`. |
 | Wait | Read stdout until `PULSAR_READY ws=<url> password=<pw>` arrives (≤60s). |
 | Connect | Open WebSocket v5 to `<url>`, authenticate with `<pw>`. |
 | Use | Send v5 requests + Pulsar vendor extensions (`pulsar:*`). |

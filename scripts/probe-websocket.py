@@ -90,6 +90,12 @@ READY_RE = re.compile(r"^PULSAR_READY ws=(\S+) password=(\S+)$")
 SHUTDOWN_GRACE_S = 8.0
 
 
+def redact_boot_line(line: str) -> str:
+    """Keep boot diagnostics useful without echoing session credentials."""
+    line = re.sub(r"(password=)\S+", r"\1<redacted>", line)
+    return re.sub(r'("server_password"\s*:\s*)"[^"]*"', r'\1"<redacted>"', line)
+
+
 def pick_free_port() -> int:
     """Bind :0 on loopback to let the OS hand us a free ephemeral port,
     then release it. A tiny TOCTOU window exists between release and
@@ -194,7 +200,8 @@ class PulsarProcess:
 
     def _diag(self) -> str:
         tail = self._lines[-40:]
-        body = "\n".join(f"  | {ln}" for ln in tail) if tail else "  | (no output captured)"
+        body = ("\n".join(f"  | {redact_boot_line(ln)}" for ln in tail)
+                if tail else "  | (no output captured)")
         return f"--- pulsar stdout/stderr (last {len(tail)} lines) ---\n{body}"
 
     def shutdown(self, grace: float = SHUTDOWN_GRACE_S) -> None:
@@ -383,6 +390,10 @@ def main() -> int:
         rc = 130
     except Exception as exc:  # noqa: BLE001 — top-level probe diagnostic
         print(f"FAIL: {exc}")
+        # A post-READY failure is where a misleading sentinel, failed bind,
+        # or module teardown otherwise loses the only useful server-side
+        # evidence.  `_diag()` masks both sentinel and JSON credentials.
+        print(pulsar._diag())
         rc = 1
     finally:
         pulsar.shutdown()

@@ -247,8 +247,9 @@ for the full reference; it covers:
 - The `SpawnOptions` shape (`binariesPath`, `env`, `readyTimeoutMs`,
   `onLog`)
 - The `SpawnedPulsar` handle (`client`, `child`, `port`,
-  `libobsVersion`, `shutdown()`)
+  `libobsVersion`, `runtimeInstanceId`, `runtimeDir`, `shutdown()`)
 - Boot environment variables (the full `PULSAR_*` matrix)
+- Concurrent runtime isolation and the DirectShow legacy-alias lease
 - Lifecycle (boot / shutdown / crash recovery)
 
 Everything below is specific to the full bundle.

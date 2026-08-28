@@ -59,6 +59,12 @@ $repoRoot = Resolve-Path "$PSScriptRoot/.."
 $binDir   = Join-Path $repoRoot "$RundirRoot/bin/64bit"
 $pulsar   = Join-Path $binDir "pulsar.exe"
 
+# Let every self-spawned probe receive its own generated runtime namespace.
+# The shared/reseed phases below opt into an explicit build-directory runtime
+# only because the legacy probes inspect that config path and its DACL.
+$env:PULSAR_RUNTIME_DIR = $null
+$env:PULSAR_RUNTIME_INSTANCE_ID = $null
+
 if (-not (Test-Path $pulsar)) {
     Write-Error "pulsar.exe not found at $pulsar -- build it first via scripts/build-win.ps1"
     exit 1
@@ -612,6 +618,13 @@ Log-Phase "==> probe-audio-multitrack.py OK"
 # WebSocket connection -- not a file-content assumption.
 # --------------------------------------------------------------------
 Log-Phase "==> Reseed regression probe: booting pulsar.exe twice without wiping config.json (#181 F4)"
+
+# The reseed assertion intentionally boots twice against the same explicit
+# runtime directory. Keep the identity stable so the instance lease and the
+# config path represent one caller-owned CI namespace; all probes before this
+# point used generated private directories.
+$env:PULSAR_RUNTIME_INSTANCE_ID = "ci-reseed-$PID"
+$env:PULSAR_RUNTIME_DIR = $binDir
 
 function New-FreePort {
     $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
