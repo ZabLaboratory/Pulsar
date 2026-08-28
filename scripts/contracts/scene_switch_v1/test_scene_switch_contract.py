@@ -8,9 +8,11 @@ the physical dual-lane implementation lands.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 import json
 from pathlib import Path
+import threading
 from typing import Any
 
 import pytest
@@ -121,6 +123,32 @@ def ready_machine() -> SceneSwitchMachine:
     return machine
 
 
+def _run_concurrently(calls: list[Callable[[], dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Start all calls together and fail deterministically on thread errors."""
+
+    start = threading.Barrier(len(calls) + 1)
+    results: list[dict[str, Any] | None] = [None] * len(calls)
+    errors: list[BaseException | None] = [None] * len(calls)
+
+    def worker(index: int, call: Callable[[], dict[str, Any]]) -> None:
+        try:
+            start.wait(timeout=5)
+            results[index] = call()
+        except BaseException as exc:  # pragma: no cover - asserted by the caller
+            errors[index] = exc
+
+    threads = [threading.Thread(target=worker, args=(index, call)) for index, call in enumerate(calls)]
+    for thread in threads:
+        thread.start()
+    start.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "concurrent contract call did not complete"
+    assert errors == [None] * len(calls), errors
+    assert all(result is not None for result in results)
+    return [result for result in results if result is not None]
+
+
 def test_schema_and_examples_are_versioned_and_validate() -> None:
     schema = json.loads((_HERE / "schema.json").read_text(encoding="utf-8"))
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
@@ -144,10 +172,20 @@ def test_schema_and_examples_are_versioned_and_validate() -> None:
         lambda c: c["expected_revisions"].update(program=1.5),
         lambda c: c["expected_revisions"].update(preview=True),
         lambda c: c["target"].update(lane_id="C"),
+        lambda c: c.update(schema_version=True),
         lambda c: c.update(schema_version=2),
         lambda c: c.update(command_id="bad id"),
     ],
-    ids=["unknown-field", "bool-timeout", "float-revision", "bool-revision", "unknown-lane", "unknown-version", "bad-id"],
+    ids=[
+        "unknown-field",
+        "bool-timeout",
+        "float-revision",
+        "bool-revision",
+        "unknown-lane",
+        "bool-schema-version",
+        "unknown-version",
+        "bad-id",
+    ],
 )
 def test_command_validation_is_strict(mutator: Any) -> None:
     value = prepare_command()
@@ -155,6 +193,84 @@ def test_command_validation_is_strict(mutator: Any) -> None:
     with pytest.raises(SceneSwitchValidationError) as exc:
         validate_command(value)
     assert exc.value.code == "SCHEMA_INVALID"
+
+
+def test_identifiers_obey_schema_length_and_strict_end_anchor() -> None:
+    for field in ("command_id", "intent_id", "runtime_instance_id"):
+        too_long = prepare_command()
+        too_long[field] = "a" * 129
+        with pytest.raises(SceneSwitchValidationError) as length_error:
+            validate_command(too_long)
+        assert length_error.value.code == "SCHEMA_INVALID"
+
+        trailing_newline = prepare_command()
+        trailing_newline[field] = "valid-id\n"
+        with pytest.raises(SceneSwitchValidationError) as newline_error:
+            validate_command(trailing_newline)
+        assert newline_error.value.code == "SCHEMA_INVALID"
+
+
+def test_integral_json_numbers_are_normalized_and_draft_compatible() -> None:
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = json.loads((_HERE / "schema.json").read_text(encoding="utf-8"))
+    validator = jsonschema.Draft202012Validator(schema)
+
+    value = prepare_command(timeout_ms=1)
+    value["schema_version"] = 1.0
+    value["expected_server_seq"] = 0.0
+    value["expected_revisions"] = {key: 0.0 for key in ("program", "preview", "role_map")}
+    value["timeout_ms"] = 1.0
+    validator.validate(value)
+
+    normalized = validate_command(value)
+    assert normalized["schema_version"] == 1
+    assert type(normalized["schema_version"]) is int
+    assert normalized["expected_server_seq"] == 0
+    assert type(normalized["timeout_ms"]) is int
+    validator.validate(normalized)
+
+    machine = SceneSwitchMachine("runtime-001")
+    accepted = machine.dispatch(value, now_monotonic_ns=1.0)
+    validator.validate(accepted)
+    assert type(accepted["server_seq"]) is int
+    assert type(accepted["deadline_monotonic_ns"]) is int
+
+    invalid = prepare_command(command_id="invalid-id\n")
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(invalid)
+
+    invalid_bool = prepare_command()
+    invalid_bool["schema_version"] = True
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(invalid_bool)
+
+    invalid_length = prepare_command(command_id="a" * 129)
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(invalid_length)
+
+
+def test_reference_outputs_validate_as_draft_2020_12_events() -> None:
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = json.loads((_HERE / "schema.json").read_text(encoding="utf-8"))
+    validator = jsonschema.Draft202012Validator(schema)
+
+    machine = ready_machine()
+    machine.dispatch(take_command(), now_monotonic_ns=1_200_000)
+    machine.commit_take("take-001", 501, 8_333_333_333, now_monotonic_ns=1_300_000)
+    for event in machine.events:
+        validator.validate(event)
+
+    timeout_machine = SceneSwitchMachine("runtime-001")
+    timeout_machine.dispatch(prepare_command(timeout_ms=1), now_monotonic_ns=1_000_000)
+    timeout_event = timeout_machine.poll(now_monotonic_ns=3_000_000)
+    assert timeout_event is not None
+    validator.validate(timeout_event)
+
+    take_timeout_machine = ready_machine()
+    take_timeout_machine.dispatch(take_command(timeout_ms=1), now_monotonic_ns=1_200_000)
+    take_timeout_event = take_timeout_machine.poll(now_monotonic_ns=3_000_000)
+    assert take_timeout_event is not None
+    validator.validate(take_timeout_event)
 
 
 def test_lifecycle_carries_correlation_revisions_and_commit_frame() -> None:
@@ -245,6 +361,49 @@ def test_duplicate_command_replays_original_without_second_commit_or_sequence() 
     assert machine.revisions == {"program": 1, "preview": 1, "role_map": 1}
 
 
+def test_concurrent_prepare_commands_are_serialized_exactly_once() -> None:
+    machine = SceneSwitchMachine("runtime-001")
+    prepare_20 = prepare_command("prepare-20", scene_id="scene-20")
+    prepare_10 = prepare_command("prepare-10", scene_id="scene-10")
+
+    results = _run_concurrently(
+        [
+            lambda: machine.dispatch(prepare_20, now_monotonic_ns=1_000_000),
+            lambda: machine.dispatch(prepare_10, now_monotonic_ns=1_000_000),
+        ]
+    )
+
+    accepted = [result for result in results if result["event_type"] == "PrepareAccepted"]
+    rejected = [result for result in results if result["event_type"] == "CommandRejected"]
+    assert len(accepted) == 1
+    assert len(rejected) == 1
+    assert rejected[0]["error_code"] == "REVISION_STALE"
+    assert [event["event_type"] for event in machine.events] == ["PrepareAccepted", "CommandRejected"]
+    assert machine.server_seq == 2
+    assert machine.revisions == {"program": 0, "preview": 1, "role_map": 0}
+    assert machine.snapshot()["lane_scenes"]["B"] == accepted[0]["target_scene_id"]
+
+
+def test_concurrent_commit_callbacks_are_serialized_exactly_once() -> None:
+    machine = ready_machine()
+    machine.dispatch(take_command(), now_monotonic_ns=1_200_000)
+
+    results = _run_concurrently(
+        [
+            lambda: machine.commit_take("take-001", 20, 20_000, now_monotonic_ns=1_300_000),
+            lambda: machine.commit_take("take-001", 10, 10_000, now_monotonic_ns=1_300_000),
+        ]
+    )
+
+    commits = [event for event in machine.events if event["event_type"] == "TakeCommitted"]
+    assert len(commits) == 1
+    assert all(result == commits[0] for result in results)
+    assert commits[0]["frame_id"] in {10, 20}
+    assert machine.server_seq == 4
+    assert machine.revisions == {"program": 1, "preview": 1, "role_map": 1}
+    assert machine.role_map == {"on_air": "B", "preview": "A"}
+
+
 def test_command_id_payload_mismatch_is_conflict_and_original_stays_authoritative() -> None:
     machine = SceneSwitchMachine("runtime-001")
     original = prepare_command()
@@ -258,6 +417,20 @@ def test_command_id_payload_mismatch_is_conflict_and_original_stays_authoritativ
     assert machine.snapshot()["revisions"] == accepted["revisions"]
     assert machine.snapshot()["lane_scenes"] == {"B": "scene-lower-third"}
     assert machine.dispatch(original, now_monotonic_ns=1_200_000) == accepted
+
+
+def test_command_idempotency_is_scoped_by_runtime_instance_id() -> None:
+    machine = SceneSwitchMachine("runtime-001")
+    foreign = prepare_command("shared-command")
+    foreign["runtime_instance_id"] = "runtime-002"
+    foreign_rejected = machine.dispatch(foreign, now_monotonic_ns=1_000_000)
+    assert foreign_rejected["error_code"] == "RUNTIME_MISMATCH"
+
+    local = prepare_command("shared-command", server_seq=machine.server_seq)
+    local_accepted = machine.dispatch(local, now_monotonic_ns=1_100_000)
+    assert local_accepted["event_type"] == "PrepareAccepted"
+    assert machine.revisions == {"program": 0, "preview": 1, "role_map": 0}
+    assert machine.dispatch(deepcopy(foreign), now_monotonic_ns=1_200_000) == foreign_rejected
 
 
 def test_stale_revisions_are_rejected_without_route_or_surface_mutation() -> None:
@@ -318,6 +491,85 @@ def test_timeout_and_abort_preserve_mapping_and_prevent_late_commit() -> None:
     assert machine.snapshot()["role_map"] == before["role_map"]
     assert machine.snapshot()["revisions"] == before["revisions"]
     assert machine.commit_take("take-001", 501, 8_333_333_333, now_monotonic_ns=1_300_000) == aborted
+
+
+def test_prepare_timeout_is_polled_once_and_cannot_be_replaced_silently() -> None:
+    machine = SceneSwitchMachine("runtime-001")
+    prepare = prepare_command(timeout_ms=1)
+    accepted = machine.dispatch(prepare, now_monotonic_ns=1_000_000)
+    before_expiration = machine.snapshot()
+
+    expired = machine.poll(now_monotonic_ns=3_000_000)
+    assert expired is not None
+    assert expired["event_type"] == "CommandRejected"
+    assert expired["error_code"] == "TIMEOUT"
+    assert expired["server_seq"] == accepted["server_seq"] + 1
+    assert machine.poll(now_monotonic_ns=4_000_000) is None
+    after_expiration = machine.snapshot()
+    assert after_expiration["state"] == "ready"
+    assert after_expiration["revisions"] == before_expiration["revisions"]
+    assert after_expiration["role_map"] == before_expiration["role_map"]
+    assert after_expiration["lane_scenes"] == before_expiration["lane_scenes"]
+    # The command response remains the original PrepareAccepted result; the
+    # timeout is a separate terminal lifecycle event retained for callbacks.
+    assert machine.dispatch(deepcopy(prepare), now_monotonic_ns=5_000_000) == accepted
+
+    assert machine.mark_preview_ready("prepare-001", 20, 20_000, now_monotonic_ns=5_000_000) == expired
+
+    replacement = prepare_command(
+        "prepare-after-timeout",
+        revisions=machine.revisions,
+        server_seq=machine.server_seq,
+        scene_id="scene-explicit-replacement",
+    )
+    replacement_accepted = machine.dispatch(replacement, now_monotonic_ns=5_000_000)
+    assert replacement_accepted["event_type"] == "PrepareAccepted"
+    assert machine.snapshot()["lane_scenes"]["B"] == "scene-explicit-replacement"
+
+
+def test_elapsed_prepare_expires_before_a_new_command_can_replace_it() -> None:
+    machine = SceneSwitchMachine("runtime-001")
+    accepted = machine.dispatch(prepare_command(timeout_ms=1), now_monotonic_ns=1_000_000)
+    replacement = prepare_command(
+        "prepare-after-expiry",
+        revisions=accepted["revisions"],
+        server_seq=accepted["server_seq"] + 1,
+        scene_id="scene-explicit-replacement",
+    )
+
+    replacement_accepted = machine.dispatch(replacement, now_monotonic_ns=3_000_000)
+    assert [event["event_type"] for event in machine.events] == [
+        "PrepareAccepted",
+        "CommandRejected",
+        "PrepareAccepted",
+    ]
+    timeout = machine.events[1]
+    assert timeout["error_code"] == "TIMEOUT"
+    assert replacement_accepted["event_type"] == "PrepareAccepted"
+    assert machine.snapshot()["lane_scenes"]["B"] == "scene-explicit-replacement"
+
+
+def test_preview_ready_is_immutable_and_exact_retries_are_idempotent() -> None:
+    machine = SceneSwitchMachine("runtime-001")
+    machine.dispatch(prepare_command(), now_monotonic_ns=1_000_000)
+    first = machine.mark_preview_ready("prepare-001", 20, 20_000, now_monotonic_ns=1_100_000)
+    assert machine.poll(now_monotonic_ns=3_100_000_000) is None
+    assert machine.state == "preview_ready"
+    same = machine.mark_preview_ready("prepare-001", 20, 20_000, now_monotonic_ns=1_200_000)
+    assert same == first
+    assert machine.server_seq == 2
+    assert len(machine.events) == 2
+
+    with pytest.raises(SceneSwitchStateError) as divergent:
+        machine.mark_preview_ready("prepare-001", 21, 21_000, now_monotonic_ns=1_300_000)
+    assert divergent.value.code == "IDEMPOTENCY_CONFLICT"
+    assert divergent.value.details["original_first_frame_id"] == 20
+    assert divergent.value.details["received_first_frame_id"] == 21
+    assert machine.server_seq == 2
+    assert machine.events[-1] == first
+
+    machine.dispatch(take_command(), now_monotonic_ns=1_400_000)
+    assert machine.mark_preview_ready("prepare-001", 20, 20_000, now_monotonic_ns=1_500_000) == first
 
 
 def test_concurrent_takes_cannot_both_commit() -> None:
