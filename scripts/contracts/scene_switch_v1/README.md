@@ -75,10 +75,14 @@ same as the accepted preparation, and its expected revisions must still match.
 `Abort` adds `take_command_id` and a reason from `operator`, `timeout`,
 `shutdown`, or `superseded`. An abort never changes the role map or revisions.
 
-Identifiers are bounded, non-empty, and use `[A-Za-z0-9][A-Za-z0-9._:-]*`.
-Frame IDs and PTS are non-negative integers; `pts_ns` is explicitly
-nanoseconds. Booleans, floats, unknown fields, and silently coerced values are
-not accepted.
+Identifiers are bounded to 128 characters, non-empty, and use
+`[A-Za-z0-9][A-Za-z0-9._:-]*` with a strict end-of-input anchor (a trailing
+newline is not accepted). Frame IDs and PTS are non-negative integers;
+`pts_ns` is explicitly nanoseconds. Draft 2020-12 defines `integer` by numeric
+value, so a JSON number such as `1.0` is accepted when finite and integral;
+the Python validator normalizes it to `1` before state transitions and event
+serialization. Booleans, fractional/non-finite numbers, and unknown fields are
+rejected. In particular, `schema_version=true` is not the integer version `1`.
 
 ## Events
 
@@ -121,7 +125,10 @@ Event-specific evidence:
 | `CommandRejected` | stable `error_code`, bounded message, details, and the caller's expected guards |
 
 `PreviewReady` is emitted only after the producer observes the first valid
-rendered Preview frame. WebSocket acceptance alone is not readiness. A
+rendered Preview frame. WebSocket acceptance alone is not readiness. The
+callback is one-shot: an exact repeat returns the original event byte-for-byte
+without another sequence number, while a different frame/PTS for the same
+preparation is rejected with `IDEMPOTENCY_CONFLICT`. A
 `TakeCommitted` frame/PTS is the frame selected at the atomic swap boundary,
 not a timestamp inferred by a downstream decoder.
 
@@ -143,6 +150,11 @@ The idempotency scope is `(runtime_instance_id, command_id)`:
    first `TakeAccepted` freezes the candidate, and the other command is
    rejected by state or revision guard.
 
+The reference machine serializes command dispatch, readiness callbacks, frame
+commit callbacks, expiry polling, and inspection snapshots under one reentrant
+lock. This is part of the reference semantics: callers may race, but only one
+serialized transition can observe and consume a revision or pending callback.
+
 The reference state machine exposes `payload_sha256()` so a server can record
 the digest in logs and in every correlated event without logging scene
 content beyond the contract fields.
@@ -157,12 +169,17 @@ not a parsing key. The v1 codes are:
 `PREVIEW_NOT_READY`, `PREPARE_NOT_FOUND`, `TAKE_NOT_PENDING`,
 `TAKE_INTENT_CONFLICT`, `TIMEOUT`, and `ABORTED`.
 
-If the preparation does not produce a first frame before its deadline, the
-preparation is cleared and a `CommandRejected` with `TIMEOUT` is emitted. If a
-Take reaches its deadline before the frame-boundary commit, the machine emits
-`TakeAborted(reason=timeout)`. Explicit abort uses `TakeAborted` with the
-requested reason. In all three cases the role map and route revisions remain
-unchanged; a later commit callback cannot create a commit.
+If the preparation does not produce a first frame before its deadline, polling
+or a late readiness callback clears the pending preparation and emits one
+stable `CommandRejected` with `TIMEOUT`. The initial `PrepareAccepted` command
+response remains the result returned by an exact command retry; the terminal
+timeout event is retained and replayed to late readiness callbacks. A
+replacement preparation must use the new revision snapshot; a late callback
+for the expired preparation cannot replace it silently. If a Take reaches its deadline before the frame-boundary commit, the
+machine emits `TakeAborted(reason=timeout)`. Explicit abort uses
+`TakeAborted` with the requested reason. In all three cases the role map and
+route revisions remain unchanged; a later commit callback cannot create a
+commit.
 
 The safe rollback sequence is: stop accepting new Takes, let the current
 Program frame drain, abort/expire pending Takes, preserve the current role map,

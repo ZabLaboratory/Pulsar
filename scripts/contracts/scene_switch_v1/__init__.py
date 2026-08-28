@@ -16,7 +16,9 @@ from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import re
+import threading
 import time
 from typing import Any, Final, Mapping
 
@@ -28,6 +30,7 @@ SCHEMA_FILE: Final = "schema.json"
 REVISION_KEYS: Final = ("program", "preview", "role_map")
 LANE_IDS: Final = ("A", "B")
 ROLE_KEYS: Final = ("on_air", "preview")
+ID_MAX_LENGTH: Final = 128
 STATES: Final = ("ready", "preparing", "preview_ready", "take_accepted")
 COMMAND_TYPES: Final = ("Prepare", "Take", "Abort")
 EVENT_TYPES: Final = (
@@ -55,7 +58,7 @@ ERROR_CODES: Final = (
     "ABORTED",
 )
 
-_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+_ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]*\Z")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MISSING = object()
 
@@ -111,8 +114,22 @@ def payload_sha256(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_json(value)).hexdigest()
 
 
-def _is_int(value: Any) -> bool:
-    return type(value) is int
+def _coerce_json_integer(value: Any) -> int | None:
+    """Return the integer represented by a JSON number, or ``None``.
+
+    Draft 2020-12 defines ``integer`` by numeric value, so a JSON number such
+    as ``1.0`` is an integer instance even though Python's JSON decoder stores
+    it as ``float``.  Normalize finite integral floats to ``int`` so the
+    reference model and its emitted events use one representation.  ``bool``
+    is deliberately excluded because it is a distinct JSON type despite
+    Python's ``bool``/``int`` inheritance.
+    """
+
+    if type(value) is int:
+        return value
+    if type(value) is float and math.isfinite(value) and value.is_integer():
+        return int(value)
+    return None
 
 
 def _require_object(value: Any, name: str) -> dict[str, Any]:
@@ -135,9 +152,10 @@ def _require_exact_keys(value: Mapping[str, Any], required: set[str], allowed: s
 
 
 def _require_string(value: Any, name: str, *, max_length: int = 256, identifier: bool = False) -> str:
-    if not isinstance(value, str) or not value or len(value) > max_length:
+    length_limit = ID_MAX_LENGTH if identifier else max_length
+    if not isinstance(value, str) or not value or len(value) > length_limit:
         raise SceneSwitchValidationError(
-            "SCHEMA_INVALID", f"{name} must be a non-empty string of at most {max_length} characters"
+            "SCHEMA_INVALID", f"{name} must be a non-empty string of at most {length_limit} characters"
         )
     if identifier and _ID_RE.fullmatch(value) is None:
         raise SceneSwitchValidationError(
@@ -147,10 +165,18 @@ def _require_string(value: Any, name: str, *, max_length: int = 256, identifier:
 
 
 def _require_non_negative_int(value: Any, name: str, *, positive: bool = False) -> int:
-    if not _is_int(value) or value < (1 if positive else 0):
+    integer = _coerce_json_integer(value)
+    if integer is None or integer < (1 if positive else 0):
         bound = "a positive integer" if positive else "a non-negative integer"
         raise SceneSwitchValidationError("SCHEMA_INVALID", f"{name} must be {bound}")
-    return value
+    return integer
+
+
+def _require_schema_version(value: Any, name: str) -> int:
+    version = _require_non_negative_int(value, name)
+    if version != SCHEMA_VERSION:
+        raise SceneSwitchValidationError("SCHEMA_INVALID", f"{name} must be {SCHEMA_VERSION}")
+    return version
 
 
 def _validate_revisions(value: Any, name: str) -> dict[str, int]:
@@ -211,8 +237,9 @@ def validate_command(command: Mapping[str, Any]) -> dict[str, Any]:
         "expected_revisions",
     }
     _require_exact_keys(obj, required, common | {"target", "timeout_ms", "prepared_command_id", "take_command_id", "reason"}, "command")
-    if obj.get("contract") != CONTRACT or obj.get("schema_version") != SCHEMA_VERSION:
+    if obj.get("contract") != CONTRACT:
         raise SceneSwitchValidationError("SCHEMA_INVALID", "command contract or schema_version is not v1")
+    _require_schema_version(obj.get("schema_version"), "schema_version")
     if obj.get("message_type") != "command":
         raise SceneSwitchValidationError("SCHEMA_INVALID", "message_type must be 'command'")
     command_type = obj["command_type"]
@@ -292,8 +319,9 @@ def _validate_event_common(obj: Mapping[str, Any], event_type: str) -> dict[str,
     }
     common_required = common_allowed - {"previous_role_map"}
     _require_exact_keys(obj, common_required, common_allowed | _EVENT_FIELDS[event_type], "event")
-    if obj.get("contract") != CONTRACT or obj.get("schema_version") != SCHEMA_VERSION:
+    if obj.get("contract") != CONTRACT:
         raise SceneSwitchValidationError("SCHEMA_INVALID", "event contract or schema_version is not v1")
+    _require_schema_version(obj.get("schema_version"), "event.schema_version")
     if obj.get("message_type") != "event" or obj.get("event_type") != event_type:
         raise SceneSwitchValidationError("SCHEMA_INVALID", "event envelope does not match its event_type")
     state = obj.get("state")
@@ -488,6 +516,7 @@ class SceneSwitchMachine:
         initial_role_map: Mapping[str, str] | None = None,
         initial_lane_scenes: Mapping[str, str] | None = None,
     ) -> None:
+        self._lock = threading.RLock()
         self.runtime_instance_id = _require_string(
             runtime_instance_id, "runtime_instance_id", identifier=True
         )
@@ -507,57 +536,76 @@ class SceneSwitchMachine:
         self._server_seq = 0
         self._pending_prepare: _PendingPrepare | None = None
         self._preview_ready: dict[str, int] | None = None
+        self._preview_ready_event: dict[str, Any] | None = None
         self._pending_take: _PendingTake | None = None
-        self._commands: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._commands: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
+        self._prepare_outcomes: dict[tuple[str, str], dict[str, Any]] = {}
         self._take_outcomes: dict[str, dict[str, Any]] = {}
         self._events: list[dict[str, Any]] = []
 
     @property
     def state(self) -> str:
-        return self._state
+        with self._lock:
+            return self._state
 
     @property
     def server_seq(self) -> int:
-        return self._server_seq
+        with self._lock:
+            return self._server_seq
 
     @property
     def revisions(self) -> dict[str, int]:
-        return deepcopy(self._revisions)
+        with self._lock:
+            return deepcopy(self._revisions)
 
     @property
     def role_map(self) -> dict[str, str]:
-        return deepcopy(self._role_map)
+        with self._lock:
+            return deepcopy(self._role_map)
 
     @property
     def events(self) -> list[dict[str, Any]]:
-        return deepcopy(self._events)
+        with self._lock:
+            return deepcopy(self._events)
 
     def snapshot(self) -> dict[str, Any]:
         """Return an inspection snapshot without exposing mutable internals."""
 
-        return {
-            "contract": CONTRACT,
-            "schema_version": SCHEMA_VERSION,
-            "runtime_instance_id": self.runtime_instance_id,
-            "state": self._state,
-            "server_seq": self._server_seq,
-            "revisions": deepcopy(self._revisions),
-            "role_map": deepcopy(self._role_map),
-            "lane_scenes": deepcopy(self._lane_scenes),
-            "pending_prepare_command_id": (
-                self._pending_prepare.command["command_id"] if self._pending_prepare else None
-            ),
-            "pending_take_command_id": self._pending_take.command["command_id"] if self._pending_take else None,
-        }
+        with self._lock:
+            return {
+                "contract": CONTRACT,
+                "schema_version": SCHEMA_VERSION,
+                "runtime_instance_id": self.runtime_instance_id,
+                "state": self._state,
+                "server_seq": self._server_seq,
+                "revisions": deepcopy(self._revisions),
+                "role_map": deepcopy(self._role_map),
+                "lane_scenes": deepcopy(self._lane_scenes),
+                "pending_prepare_command_id": (
+                    self._pending_prepare.command["command_id"] if self._pending_prepare else None
+                ),
+                "pending_take_command_id": self._pending_take.command["command_id"] if self._pending_take else None,
+            }
 
     def dispatch(self, command: Mapping[str, Any], *, now_monotonic_ns: int | None = None) -> dict[str, Any]:
-        """Accept a command or return a stable, non-mutating rejection event."""
+        """Accept a command or return a stable, non-mutating rejection event.
+
+        Validation, idempotency, guards, and the state transition share one
+        lock so two callers cannot both pass the same revision snapshot.
+        """
+
+        with self._lock:
+            return self._dispatch(command, now_monotonic_ns=now_monotonic_ns)
+
+    def _dispatch(self, command: Mapping[str, Any], *, now_monotonic_ns: int | None = None) -> dict[str, Any]:
+        """Locked implementation of :meth:`dispatch`."""
 
         validated = validate_command(command)
         command_id = validated["command_id"]
+        command_key = (validated["runtime_instance_id"], command_id)
         digest = payload_sha256(validated)
 
-        previous = self._commands.get(command_id)
+        previous = self._commands.get(command_key)
         if previous is not None:
             previous_digest, previous_event = previous
             if previous_digest == digest:
@@ -578,8 +626,21 @@ class SceneSwitchMachine:
                 {"runtime_instance_id": self.runtime_instance_id},
                 now_monotonic_ns=now_monotonic_ns,
             )
-            self._commands[command_id] = (digest, event)
+            self._commands[command_key] = (digest, event)
             return deepcopy(event)
+
+        # A command arrival is also a valid timer tick.  Expire an elapsed
+        # preparation before evaluating a new local command so it cannot
+        # silently replace the pending Preview reservation.  Exact command
+        # retries were handled above and still replay their original result.
+        now = self._now(now_monotonic_ns)
+        pending_prepare = self._pending_prepare
+        if (
+            pending_prepare is not None
+            and self._state == "preparing"
+            and now >= pending_prepare.deadline_ns
+        ):
+            self._expire_prepare(now)
 
         expected = validated["expected_revisions"]
         if expected != self._revisions:
@@ -590,7 +651,7 @@ class SceneSwitchMachine:
                 {"expected_revisions": expected, "actual_revisions": self._revisions},
                 now_monotonic_ns=now_monotonic_ns,
             )
-            self._commands[command_id] = (digest, event)
+            self._commands[command_key] = (digest, event)
             return deepcopy(event)
 
         expected_seq = validated.get("expected_server_seq", _MISSING)
@@ -602,16 +663,16 @@ class SceneSwitchMachine:
                 {"expected_server_seq": expected_seq, "actual_server_seq": self._server_seq},
                 now_monotonic_ns=now_monotonic_ns,
             )
-            self._commands[command_id] = (digest, event)
+            self._commands[command_key] = (digest, event)
             return deepcopy(event)
 
         if validated["command_type"] == "Prepare":
-            event = self._prepare(validated, digest, now_monotonic_ns)
+            event = self._prepare(validated, digest, now)
         elif validated["command_type"] == "Take":
-            event = self._take(validated, digest, now_monotonic_ns)
+            event = self._take(validated, digest, now)
         else:
-            event = self._abort(validated, digest, now_monotonic_ns)
-        self._commands[command_id] = (digest, event)
+            event = self._abort(validated, digest, now)
+        self._commands[command_key] = (digest, event)
         return deepcopy(event)
 
     def mark_preview_ready(
@@ -624,10 +685,38 @@ class SceneSwitchMachine:
     ) -> dict[str, Any]:
         """Publish readiness for the first actually rendered Preview frame."""
 
+        with self._lock:
+            return self._mark_preview_ready(
+                prepared_command_id,
+                first_frame_id,
+                first_pts_ns,
+                now_monotonic_ns=now_monotonic_ns,
+            )
+
+    def _mark_preview_ready(
+        self,
+        prepared_command_id: str,
+        first_frame_id: int,
+        first_pts_ns: int,
+        *,
+        now_monotonic_ns: int | None = None,
+    ) -> dict[str, Any]:
+        """Locked implementation of :meth:`mark_preview_ready`."""
+
         _require_string(prepared_command_id, "prepared_command_id", identifier=True)
-        _require_non_negative_int(first_frame_id, "first_frame_id")
-        _require_non_negative_int(first_pts_ns, "first_pts_ns")
+        first_frame_id = _require_non_negative_int(first_frame_id, "first_frame_id")
+        first_pts_ns = _require_non_negative_int(first_pts_ns, "first_pts_ns")
+        terminal = self._prepare_outcomes.get((self.runtime_instance_id, prepared_command_id))
+        if terminal is not None:
+            return deepcopy(terminal)
         if self._state == "take_accepted":
+            if (
+                self._preview_ready_event is not None
+                and self._pending_prepare is not None
+                and self._pending_prepare.command["command_id"] == prepared_command_id
+                and self._preview_ready == {"first_frame_id": first_frame_id, "first_pts_ns": first_pts_ns}
+            ):
+                return deepcopy(self._preview_ready_event)
             raise SceneSwitchStateError(
                 "PREVIEW_FROZEN",
                 "Preview readiness cannot change after TakeAccepted",
@@ -638,19 +727,23 @@ class SceneSwitchMachine:
             raise SceneSwitchStateError(
                 "PREPARE_NOT_FOUND", "PreviewReady references no current preparation", {"prepared_command_id": prepared_command_id}
             )
+        if self._preview_ready_event is not None:
+            if self._preview_ready == {"first_frame_id": first_frame_id, "first_pts_ns": first_pts_ns}:
+                return deepcopy(self._preview_ready_event)
+            raise SceneSwitchStateError(
+                "IDEMPOTENCY_CONFLICT",
+                "PreviewReady callback attempted to replace immutable readiness",
+                {
+                    "prepared_command_id": prepared_command_id,
+                    "original_first_frame_id": self._preview_ready["first_frame_id"] if self._preview_ready else None,
+                    "original_first_pts_ns": self._preview_ready["first_pts_ns"] if self._preview_ready else None,
+                    "received_first_frame_id": first_frame_id,
+                    "received_first_pts_ns": first_pts_ns,
+                },
+            )
         now = self._now(now_monotonic_ns)
         if now >= pending.deadline_ns:
-            self._state = "ready"
-            self._pending_prepare = None
-            self._preview_ready = None
-            event = self._reject(
-                pending.command,
-                "TIMEOUT",
-                "Preview did not produce its first frame before the preparation deadline",
-                {"deadline_monotonic_ns": pending.deadline_ns},
-                now_monotonic_ns=now,
-            )
-            return deepcopy(event)
+            return deepcopy(self._expire_prepare(now))
         self._state = "preview_ready"
         self._preview_ready = {"first_frame_id": first_frame_id, "first_pts_ns": first_pts_ns}
         event = self._emit(
@@ -666,6 +759,7 @@ class SceneSwitchMachine:
             state="preview_ready",
             now_monotonic_ns=now,
         )
+        self._preview_ready_event = event
         return deepcopy(event)
 
     def commit_take(
@@ -678,9 +772,27 @@ class SceneSwitchMachine:
     ) -> dict[str, Any]:
         """Commit the pending Take at the frame boundary chosen by the engine."""
 
+        with self._lock:
+            return self._commit_take(
+                take_command_id,
+                frame_id,
+                pts_ns,
+                now_monotonic_ns=now_monotonic_ns,
+            )
+
+    def _commit_take(
+        self,
+        take_command_id: str,
+        frame_id: int,
+        pts_ns: int,
+        *,
+        now_monotonic_ns: int | None = None,
+    ) -> dict[str, Any]:
+        """Locked implementation of :meth:`commit_take`."""
+
         _require_string(take_command_id, "take_command_id", identifier=True)
-        _require_non_negative_int(frame_id, "frame_id")
-        _require_non_negative_int(pts_ns, "pts_ns")
+        frame_id = _require_non_negative_int(frame_id, "frame_id")
+        pts_ns = _require_non_negative_int(pts_ns, "pts_ns")
         previous_outcome = self._take_outcomes.get(take_command_id)
         if previous_outcome is not None:
             return deepcopy(previous_outcome)
@@ -706,6 +818,7 @@ class SceneSwitchMachine:
         self._pending_take = None
         self._pending_prepare = None
         self._preview_ready = None
+        self._preview_ready_event = None
         event = self._emit(
             "TakeCommitted",
             pending.command,
@@ -730,17 +843,54 @@ class SceneSwitchMachine:
         return deepcopy(event)
 
     def poll(self, *, now_monotonic_ns: int | None = None) -> dict[str, Any] | None:
-        """Expire an accepted Take without changing the route or revisions."""
+        """Expire pending preparation or Take without changing the route."""
+
+        with self._lock:
+            return self._poll(now_monotonic_ns=now_monotonic_ns)
+
+    def _poll(self, *, now_monotonic_ns: int | None = None) -> dict[str, Any] | None:
+        """Locked implementation of :meth:`poll`."""
 
         pending = self._pending_take
-        if pending is None:
+        if pending is not None:
+            now = self._now(now_monotonic_ns)
+            if now < pending.deadline_ns:
+                return None
+            event = self._finish_abort_or_timeout(pending, "timeout", now)
+            self._take_outcomes[pending.command["command_id"]] = event
+            return deepcopy(event)
+
+        pending_prepare = self._pending_prepare
+        if pending_prepare is None or self._state != "preparing":
             return None
         now = self._now(now_monotonic_ns)
-        if now < pending.deadline_ns:
+        if now < pending_prepare.deadline_ns:
             return None
-        event = self._finish_abort_or_timeout(pending, "timeout", now)
-        self._take_outcomes[pending.command["command_id"]] = event
-        return deepcopy(event)
+        return deepcopy(self._expire_prepare(now))
+
+    def _expire_prepare(self, now: int) -> dict[str, Any]:
+        """Expire the pending preparation once and retain its timeout result."""
+
+        pending = self._pending_prepare
+        if pending is None:
+            raise SceneSwitchStateError(
+                "PREPARE_NOT_FOUND",
+                "prepare expiration references no current preparation",
+            )
+        self._state = "ready"
+        self._pending_prepare = None
+        self._preview_ready = None
+        self._preview_ready_event = None
+        event = self._reject(
+            pending.command,
+            "TIMEOUT",
+            "Preview did not produce its first frame before the preparation deadline",
+            {"deadline_monotonic_ns": pending.deadline_ns},
+            now_monotonic_ns=now,
+        )
+        command_key = (pending.command["runtime_instance_id"], pending.command["command_id"])
+        self._prepare_outcomes[command_key] = event
+        return event
 
     def _prepare(self, command: dict[str, Any], digest: str, now_ns: int | None) -> dict[str, Any]:
         now = self._now(now_ns)
@@ -769,6 +919,7 @@ class SceneSwitchMachine:
         pending = _PendingPrepare(command, digest, target["lane_id"], target["scene_id"], deadline)
         self._pending_prepare = pending
         self._preview_ready = None
+        self._preview_ready_event = None
         self._state = "preparing"
         return self._emit(
             "PrepareAccepted",
@@ -872,6 +1023,7 @@ class SceneSwitchMachine:
         self._pending_take = None
         self._pending_prepare = None
         self._preview_ready = None
+        self._preview_ready_event = None
         return self._emit(
             "TakeAborted",
             {"command_id": command_id, "intent_id": intent_id},
