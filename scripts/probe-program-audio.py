@@ -356,16 +356,33 @@ def check_route(
     return key
 
 
+def validate_program_surface_identity(identity: Any) -> None:
+    """Validate the canonical #246 ReadyIdentity surface relationship.
+
+    The dual-lane contract exposes lane names and boolean relationship fields,
+    not native view/video pointers.  Keep the audio probe on that canonical
+    public representation so it can run directly against the built artifact.
+    """
+
+    if identity.lane_a == identity.lane_b:
+        raise ProbeFailure(f"dual-lane identities are aliased: {identity}")
+    surface_flags = (
+        identity.lane_root_binding_valid,
+        identity.program_main_view_valid,
+        identity.program_main_video_valid,
+        identity.preview_distinct_valid,
+    )
+    if surface_flags != (1, 1, 1, 1):
+        raise ProbeFailure(f"invalid canonical Program/Preview surface relation: {identity}")
+
+
 async def drive(process: Any, takes: int, evidence_path: pathlib.Path | None) -> list[Any]:
     ready_match = process.wait_for(READY_RE, timeout=60)
     if ready_match.group(2) != process.password:
         raise ProbeFailure("PULSAR_READY password did not match the generated probe secret")
 
     identity = parse_ready(process.wait_for(DUAL_READY_RE, timeout=60))
-    if identity.program_view != identity.main_view or identity.program_video != identity.main_video:
-        raise ProbeFailure(f"Program surface is not the libobs main view/video: {identity}")
-    if identity.lane_a == identity.lane_b or identity.program_view == identity.preview_view:
-        raise ProbeFailure(f"dual-lane surfaces are aliased: {identity}")
+    validate_program_surface_identity(identity)
 
     encoder_match = process.wait_for(ENCODER_RE, timeout=60)
     if encoder_match.group(1).lower() != process.encoder:

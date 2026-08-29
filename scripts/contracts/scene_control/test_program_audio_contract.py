@@ -8,7 +8,11 @@ Windows OBS build on the contract-test runner.
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
+
+import pytest
 
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -24,6 +28,15 @@ _WIRE = _ROOT / "packages/pulsar-client/src/wire.ts"
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _load_probe(path: Path, module_name: str):
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_shared_route_identity_is_single_and_explicit() -> None:
@@ -103,3 +116,40 @@ def test_runtime_probe_runs_real_cuts_and_checks_audio_isolation() -> None:
     assert "AAC packet continuity" in probe
     assert 'source.get("channel")' in probe
     assert '"route_snapshots"' in probe
+
+
+def test_runtime_probe_validates_canonical_ready_identity_without_legacy_aliases() -> None:
+    probe = _load_probe(_PROBE, "pulsar_program_audio_probe_ready_identity")
+    fields = (
+        "LaneA=lane-a LaneB=lane-b lane_root_binding_valid=1 "
+        "program_main_view_valid=1 program_main_video_valid=1 preview_distinct_valid=1"
+    )
+    match = probe.DUAL_READY_RE.search("[pulsar-dual-lane] ready " + fields)
+    assert match is not None
+    identity = probe.parse_ready(match)
+
+    # Exercise the same parse/validation functions used by drive(), with the
+    # canonical ReadyIdentity fields emitted by the #246 binary.
+    probe.validate_program_surface_identity(identity)
+    assert identity.program_main_view_valid == 1
+    assert identity.program_main_video_valid == 1
+    assert identity.preview_distinct_valid == 1
+
+    invalid_match = probe.DUAL_READY_RE.search(
+        "[pulsar-dual-lane] ready "
+        "LaneA=lane-a LaneB=lane-b lane_root_binding_valid=1 "
+        "program_main_view_valid=0 program_main_video_valid=1 preview_distinct_valid=1"
+    )
+    assert invalid_match is not None
+    with pytest.raises(probe.ProbeFailure, match="canonical Program/Preview surface relation"):
+        probe.validate_program_surface_identity(probe.parse_ready(invalid_match))
+
+    source = _read(_PROBE)
+    for obsolete_field in (
+        "identity.program_view",
+        "identity.main_view",
+        "identity.program_video",
+        "identity.main_video",
+        "identity.preview_view",
+    ):
+        assert obsolete_field not in source
