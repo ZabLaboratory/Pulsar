@@ -39,7 +39,11 @@ if(NOT EXISTS "${PULSAR_OBS_DEPS}/include/nlohmann/json.hpp")
         "nlohmann_json headers not found in ${PULSAR_OBS_DEPS}. Build upstream configure first.")
 endif()
 list(APPEND CMAKE_PREFIX_PATH "${PULSAR_OBS_DEPS}")
-set(nlohmann_json_DIR "${PULSAR_OBS_DEPS}/lib/cmake/nlohmann_json")
+set(nlohmann_json_DIR "${PULSAR_OBS_DEPS}/share/cmake/nlohmann_json")
+if(NOT EXISTS "${nlohmann_json_DIR}/nlohmann_jsonConfig.cmake")
+    message(FATAL_ERROR
+        "nlohmann_json package config not found at ${nlohmann_json_DIR}. Build upstream configure first.")
+endif()
 find_package(nlohmann_json 3.11 REQUIRED)
 
 if(NOT EXISTS "${PULSAR_LIBOBS_LIB}")

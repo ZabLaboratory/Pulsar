@@ -27,7 +27,8 @@ def test_frontend_declares_its_own_json_dependency() -> None:
     assert "obs-deps-*-x64" in cmake
     assert "list(LENGTH _pulsar_obs_deps _pulsar_obs_deps_count)" in cmake
     assert "No non-Qt x64 obs-deps directory found" in cmake
-    assert 'set(nlohmann_json_DIR "${PULSAR_OBS_DEPS}/lib/cmake/nlohmann_json")' in cmake
+    assert 'set(nlohmann_json_DIR "${PULSAR_OBS_DEPS}/share/cmake/nlohmann_json")' in cmake
+    assert '"${nlohmann_json_DIR}/nlohmann_jsonConfig.cmake"' in cmake
     assert 'find_package(nlohmann_json 3.11 REQUIRED)' in cmake
     assert "nlohmann_json::nlohmann_json" in cmake
 
@@ -82,3 +83,28 @@ def test_runtime_adapter_guards_the_exact_v1_lifecycle_edges() -> None:
     committed = source[source.index("void takeCommitted") : source.index("private:", source.index("void takeCommitted"))]
     assert "outcomes_[take.key]" not in committed
     assert "original Dispatch(Take) response (TakeAccepted)" in committed
+
+
+def test_runtime_adapter_publishes_callbacks_only_after_successful_registration() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "std::atomic<PulsarSceneSwitchVendor *> g_sceneSwitchVendor{nullptr}" in source
+    assert "bool start()" in source
+    assert "callbacks remain safe, but it is never published" in source
+    assert "g_sceneSwitchVendorStorage.start())\n        g_sceneSwitchVendor.store" in source
+    assert "g_sceneSwitchVendor.store(nullptr, std::memory_order_release);\n    g_sceneSwitchVendorStorage.stop();" in source
+    assert source.count("g_sceneSwitchVendor.load(std::memory_order_acquire)") >= 2
+
+
+def test_prepare_rolls_back_physical_lane_and_marker_after_postcondition_failure() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    prepare = source[source.index("bool PulsarFrontendAPI::sceneSwitchPrepare") : source.index("bool PulsarFrontendAPI::sceneSwitchTake")]
+
+    # The retained old selection precedes physical replacement, then both the
+    # child composition and protocol marker are restored on an invariant miss.
+    assert prepare.index("oldSelection = obs_source_get_ref(previewSelection)") < prepare.index(
+        "replaceLaneCompositionLocked(previewLane, scene)"
+    )
+    assert "replaceLaneCompositionLocked(previewLane, oldSelection)" in prepare
+    assert 'sceneSwitchPreparedCommandId.clear();' in prepare
+    assert 'dualLaneInvariantLocked("scene-switch-prepare-rollback")' in prepare

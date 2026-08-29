@@ -110,7 +110,7 @@ using json = nlohmann::json;
 class PulsarFrontendAPI;
 PulsarFrontendAPI *g_api = nullptr;
 class PulsarSceneSwitchVendor;
-PulsarSceneSwitchVendor *g_sceneSwitchVendor = nullptr;
+std::atomic<PulsarSceneSwitchVendor *> g_sceneSwitchVendor{nullptr};
 
 template <typename T> struct StubCallback {
     T cb;
@@ -2273,10 +2273,10 @@ class PulsarSceneSwitchVendor {
 public:
     static constexpr const char *kVendorName = "pulsar-scene-switch";
 
-    void start()
+    bool start()
     {
         if (vendor_)
-            return;
+            return true;
         vendor_ = obs_websocket_register_vendor(kVendorName);
         if (!vendor_ || !obs_websocket_vendor_register_request(vendor_, "Prepare", &Prepare, this) ||
             !obs_websocket_vendor_register_request(vendor_, "Take", &Take, this) ||
@@ -2284,12 +2284,17 @@ public:
             !obs_websocket_vendor_register_request(vendor_, "Dispatch", &Dispatch, this) ||
             !obs_websocket_vendor_register_request(vendor_, "GetState", &GetState, this)) {
             blog(LOG_ERROR, "[pulsar-scene-switch] vendor registration failed");
+            // The websocket API has no unregister operation for a partially
+            // registered vendor.  This object has static lifetime, so those
+            // callbacks remain safe, but it is never published to graphics
+            // callbacks or marked running after a partial registration.
             vendor_ = nullptr;
-            return;
+            return false;
         }
         obs_add_tick_callback(&Tick, this);
         running_ = true;
         blog(LOG_INFO, "[pulsar-scene-switch] vendor registered name=%s", kVendorName);
+        return true;
     }
 
     void stop()
@@ -3034,20 +3039,44 @@ bool PulsarFrontendAPI::sceneSwitchPrepare(const std::string &commandId, char la
         std::lock_guard<std::mutex> lock(dualLaneMutex);
         const char expectedLane = previewLane == 0 ? 'A' : 'B';
         if (dualLaneReady && !dualLaneCutPending.load() && laneId == expectedLane &&
-            scene != programSelection && scene != currentScene && obs_scene_from_source(scene) &&
-            replaceLaneCompositionLocked(previewLane, scene)) {
-            if (previewSelection)
-                obs_source_release(previewSelection);
-            previewSelection = obs_source_get_ref(scene);
-            sceneSwitchPreparedCommandId = commandId;
-            prepared = dualLaneInvariantLocked("scene-switch-prepare");
+            scene != programSelection && scene != currentScene && obs_scene_from_source(scene)) {
+            // Hold the previous public selection before the physical child is
+            // replaced.  A postcondition failure must be able to restore both
+            // the lane composition and the selection without observable state
+            // change, including when external ownership is otherwise absent.
+            obs_source_t *oldSelection = obs_source_get_ref(previewSelection);
+            if (oldSelection && replaceLaneCompositionLocked(previewLane, scene)) {
+                obs_source_t *newSelection = obs_source_get_ref(scene);
+                if (!newSelection) {
+                    replaceLaneCompositionLocked(previewLane, oldSelection);
+                    blog(LOG_ERROR, "[pulsar-scene-switch] Prepare failed to retain new Preview selection");
+                } else {
+                    obs_source_release(previewSelection);
+                    previewSelection = newSelection;
+                    sceneSwitchPreparedCommandId = commandId;
+                    prepared = dualLaneInvariantLocked("scene-switch-prepare");
+                }
+                if (!prepared && newSelection) {
+                    // `replaceLaneCompositionLocked` is the only physical
+                    // mutation in Prepare. Restore the old child and marker
+                    // before returning a rejection so it is externally inert.
+                    const bool restored = replaceLaneCompositionLocked(previewLane, oldSelection);
+                    obs_source_release(previewSelection);
+                    previewSelection = oldSelection;
+                    oldSelection = nullptr;
+                    sceneSwitchPreparedCommandId.clear();
+                    if (!restored || !dualLaneInvariantLocked("scene-switch-prepare-rollback"))
+                        blog(LOG_ERROR, "[pulsar-scene-switch] Prepare rollback invariant failed");
+                }
+            }
+            if (oldSelection)
+                obs_source_release(oldSelection);
         }
     }
     obs_source_release(scene);
     if (prepared) {
-        // PreviewView is already a distinct, active libobs mix.  The next main
-        // rendered callback is therefore evidence of an actual Preview render,
-        // not merely WebSocket acceptance.
+        // PreviewView is a distinct active libobs mix; its video-output
+        // callback, not Program's main-render callback, supplies readiness.
         g_runtimeTelemetry.previewRevisionChanged();
         emit(OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED);
     }
@@ -3102,7 +3131,8 @@ void PulsarFrontendAPI::sceneSwitchClearPrepared(const std::string &commandId)
 void PulsarFrontendAPI::OnSceneSwitchPreviewVideoFrame(void *param, struct video_data *frame)
 {
     auto *self = static_cast<PulsarFrontendAPI *>(param);
-    if (!self || !g_sceneSwitchVendor)
+    auto *vendor = g_sceneSwitchVendor.load(std::memory_order_acquire);
+    if (!self || !vendor)
         return;
     std::string prepared;
     {
@@ -3110,7 +3140,7 @@ void PulsarFrontendAPI::OnSceneSwitchPreviewVideoFrame(void *param, struct video
         prepared = self->sceneSwitchPreparedCommandId;
     }
     if (!prepared.empty() && frame)
-        g_sceneSwitchVendor->previewRendered(prepared, video_output_get_total_frames(self->previewVideo), frame->timestamp);
+        vendor->previewRendered(prepared, video_output_get_total_frames(self->previewVideo), frame->timestamp);
 }
 
 bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
@@ -3267,8 +3297,8 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
     }
 
     g_runtimeTelemetry.commit(frameId, ptsNs, committedOnAirLane, committedPreviewLane);
-    if (!sceneSwitchTakeId.empty() && g_sceneSwitchVendor)
-        g_sceneSwitchVendor->takeCommitted(sceneSwitchTakeId, frameId, ptsNs);
+    if (auto *vendor = g_sceneSwitchVendor.load(std::memory_order_acquire); !sceneSwitchTakeId.empty() && vendor)
+        vendor->takeCommitted(sceneSwitchTakeId, frameId, ptsNs);
 
     blog(LOG_INFO, "[pulsar-dual-lane] TakeCommitted count=%llu frame_id=%llu pts_ns=%llu "
          "onair_lane=%d preview_lane=%d lane_root_binding_valid=%d "
@@ -4864,8 +4894,8 @@ extern "C" void pulsar_frontend_finished_loading(void)
         return;
     if (!g_api->setup())
         blog(LOG_WARNING, "[pulsar-frontend-stub] setup() reported partial failure");
-    g_sceneSwitchVendor = &g_sceneSwitchVendorStorage;
-    g_sceneSwitchVendorStorage.start();
+    if (g_sceneSwitchVendorStorage.start())
+        g_sceneSwitchVendor.store(&g_sceneSwitchVendorStorage, std::memory_order_release);
     g_api->emit(OBS_FRONTEND_EVENT_FINISHED_LOADING);
 }
 
@@ -4873,8 +4903,8 @@ extern "C" void pulsar_frontend_shutdown(void)
 {
     if (!g_api)
         return;
+    g_sceneSwitchVendor.store(nullptr, std::memory_order_release);
     g_sceneSwitchVendorStorage.stop();
-    g_sceneSwitchVendor = nullptr;
     // Close the supported WebSocket mutation gate before emitting EXIT. This
     // waits for an already-running mutation but admits no new one while the
     // frontend object and its stable lane roots are being destroyed.
