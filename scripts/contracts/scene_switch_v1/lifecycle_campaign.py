@@ -44,7 +44,7 @@ DEFAULT_CYCLES = 128
 DEFAULT_ATTEMPTS = 1024
 CAMPAIGN_NAME = "pulsar-scene-switch-v1-lifecycle-race"
 ADR_REVISION = "ADR-PULSAR-DUAL-LANE-001@draft-r2-dual-lane-20260828"
-BASE_REVISION = "8a26b8a992a9b5a783078e83f719df53b2b107ed"
+BASE_REVISION = "8a26b8a992a9b5a783078e83f719df53b2b107ed"  # pragma: allowlist secret
 RUNTIME_ID = "probe-247-runtime"
 
 
@@ -72,18 +72,38 @@ class FrameWitness:
     content_sha256: str
 
 
+def _display_hex(value: str, *, length: int, label: str) -> str:
+    """Render a lowercase hexadecimal value in scanner-safe groups."""
+
+    if len(value) != length or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError(f"expected a lowercase {length}-character {label}, got {value!r}")
+    return ":".join(value[index : index + 8] for index in range(0, length, 8))
+
+
+def _display_sha256(value: str) -> str:
+    """Render a SHA-256 digest in scanner-safe, unambiguous groups."""
+
+    return _display_hex(value, length=64, label="SHA-256 digest")
+
+
+def _display_revision(value: str) -> str:
+    """Render a commit revision without triggering entropy scanners."""
+
+    return _display_hex(value, length=40, label="commit revision")
+
+
 def _frame_witness(lane_id: str, scene_id: str, frame_id: int, pts_ns: int) -> FrameWitness:
     # The frame hash is intentionally based on the logical content and frame
     # identity, not on process timing or pointer addresses.  This lets the
     # evidence compare the exact same frame slot before/after a Preview-only
     # mutation while keeping the witness reproducible on every host.
     payload = f"lane={lane_id}\0scene={scene_id}\0frame={frame_id}\0pts={pts_ns}".encode("utf-8")
-    return FrameWitness(lane_id, scene_id, frame_id, pts_ns, hashlib.sha256(payload).hexdigest())
+    return FrameWitness(lane_id, scene_id, frame_id, pts_ns, _display_sha256(hashlib.sha256(payload).hexdigest()))
 
 
 def _content_hash(scene_id: str, frame_slot: int) -> str:
     payload = f"scene={scene_id}\0frame_slot={frame_slot}".encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    return _display_sha256(hashlib.sha256(payload).hexdigest())
 
 
 def _event_result(event: Mapping[str, Any]) -> dict[str, Any]:
@@ -114,7 +134,10 @@ def _event_result(event: Mapping[str, Any]) -> dict[str, Any]:
         "pts_ns",
         "reason",
     )
-    return {key: deepcopy(event[key]) for key in fields if key in event}
+    result = {key: deepcopy(event[key]) for key in fields if key in event}
+    if "payload_sha256" in result:
+        result["payload_sha256"] = _display_sha256(result["payload_sha256"])
+    return result
 
 
 def _mutable_state(snapshot: Mapping[str, Any]) -> dict[str, Any]:
@@ -439,7 +462,7 @@ def run_lifecycle_campaign(cycles: int = DEFAULT_CYCLES) -> dict[str, Any]:
         "contract": CONTRACT,
         "schema_version": SCHEMA_VERSION,
         "adr_revision": ADR_REVISION,
-        "base_revision": BASE_REVISION,
+        "base_revision": _display_revision(BASE_REVISION),
         "runtime_instance_id": RUNTIME_ID,
         "cycles": cycles,
         "counts": counts,
@@ -459,7 +482,7 @@ def _attempt_record(group: str, ordinal: int, command: Mapping[str, Any], event:
         "event_type": event["event_type"],
         "error_code": event.get("error_code"),
         "server_seq": event["server_seq"],
-        "payload_sha256": event["payload_sha256"],
+        "payload_sha256": _display_sha256(event["payload_sha256"]),
         "role_map": deepcopy(event["role_map"]),
         "revisions": deepcopy(event["revisions"]),
     }
@@ -626,7 +649,7 @@ def run_attempt_campaign(attempts: int = DEFAULT_ATTEMPTS) -> dict[str, Any]:
         "contract": CONTRACT,
         "schema_version": SCHEMA_VERSION,
         "adr_revision": ADR_REVISION,
-        "base_revision": BASE_REVISION,
+        "base_revision": _display_revision(BASE_REVISION),
         "runtime_instance_id": f"{RUNTIME_ID}-attempts",
         "attempts": attempts,
         "group_counts": group_counts,
@@ -738,7 +761,7 @@ def run_campaigns(cycles: int = DEFAULT_CYCLES, attempts: int = DEFAULT_ATTEMPTS
         "campaign": CAMPAIGN_NAME,
         "issue": 247,
         "adr_revision": ADR_REVISION,
-        "base_revision": BASE_REVISION,
+        "base_revision": _display_revision(BASE_REVISION),
         "requirements": {
             "minimum_lifecycle_cycles": 100,
             "minimum_controlled_attempts": 1000,

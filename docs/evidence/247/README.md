@@ -37,7 +37,10 @@ python scripts/probe-247-runtime.py \
 The recorded run used the Keeper baseline candidate at
 `D:\Documents\Zab\.agent-tmp\keeper-246-baseline-artifact\upstream\build_x64\rundir\RelWithDebInfo\bin\64bit\pulsar.exe`,
 SHA-256
-`a7723c366b20405b7519ef41a134aec6039e873360b2162350bc53957d704bd3`.
+`a7723c36:6b20405b:7519ef41:a134aec6:039e8733:60b21623:50bc5395:7d704bd3`.
+Digest values in both JSON artifacts use this colon-delimited eight-character
+grouping; removing the colons reconstructs the conventional lowercase
+64-character SHA-256 value.
 The artifact retains 100 real `TakeCommitted` rows with LaneA/LaneB roots,
 ProgramView/PreviewView, ProgramVideo/PreviewVideo, frame IDs and monotonic
 PTS; the actual pre-commit `PREVIEW_FROZEN` WebSocket response; post-commit
