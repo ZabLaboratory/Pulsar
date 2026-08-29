@@ -75,7 +75,10 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <map>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -83,9 +86,11 @@
 #include <vector>
 
 #include <util/platform.h>
+#include <nlohmann/json.hpp>
 
 #ifdef _WIN32
 #include <windows.h>
+#include <bcrypt.h>
 #endif
 
 #include "pulsar-frontend-stub.h"
@@ -93,8 +98,16 @@
 #include "pulsar-runtime-telemetry.h"
 #include "pulsar-program-audio.h"
 #include "pulsar-stream-egress.h"
+#include "obs-websocket-api.h"
 
 namespace {
+
+using json = nlohmann::json;
+
+class PulsarFrontendAPI;
+PulsarFrontendAPI *g_api = nullptr;
+class PulsarSceneSwitchVendor;
+PulsarSceneSwitchVendor *g_sceneSwitchVendor = nullptr;
 
 template <typename T> struct StubCallback {
     T cb;
@@ -1446,6 +1459,10 @@ public:
 
     bool setup();
     void emit(obs_frontend_event event);
+    bool sceneSwitchPrepare(const std::string &commandId, char laneId, const std::string &sceneId);
+    bool sceneSwitchTake(const std::string &takeCommandId);
+    bool sceneSwitchAbort(const std::string &takeCommandId);
+    static void OnSceneSwitchPreviewVideoFrame(void *param, struct video_data *frame);
 
     // ---------- main window / system tray (no GUI) ----------
     void *obs_frontend_get_main_window(void) override { return nullptr; }
@@ -2120,6 +2137,8 @@ private:
     std::mutex dualLaneMutex;
     bool dualLaneReady = false;
     std::atomic<bool> dualLaneCutPending{false};
+    std::string sceneSwitchPreparedCommandId;
+    std::string sceneSwitchPendingTakeId;
     std::atomic<uint64_t> lastCutFrameId{0};
     std::atomic<uint64_t> lastCutPtsNs{0};
     uint64_t cutCount = 0;
@@ -2241,6 +2260,262 @@ private:
     std::vector<StubCallback<obs_frontend_save_cb>> saveCallbacks;
     std::vector<StubCallback<obs_frontend_save_cb>> preloadCallbacks;
 };
+
+// Runtime transport for the versioned scene-switch contract.  It deliberately
+// lives with the frontend rather than in the websocket DLL: libobs keeps
+// global procedure registrations for process lifetime, so callback payloads
+// into an unloadable module would be unsafe during shutdown.
+class PulsarSceneSwitchVendor {
+public:
+    static constexpr const char *kVendorName = "pulsar-scene-switch";
+
+    void start()
+    {
+        if (vendor_)
+            return;
+        vendor_ = obs_websocket_register_vendor(kVendorName);
+        if (!vendor_ || !obs_websocket_vendor_register_request(vendor_, "Prepare", &Prepare, this) ||
+            !obs_websocket_vendor_register_request(vendor_, "Take", &Take, this) ||
+            !obs_websocket_vendor_register_request(vendor_, "Abort", &Abort, this) ||
+            !obs_websocket_vendor_register_request(vendor_, "Dispatch", &Dispatch, this) ||
+            !obs_websocket_vendor_register_request(vendor_, "GetState", &GetState, this)) {
+            blog(LOG_ERROR, "[pulsar-scene-switch] vendor registration failed");
+            vendor_ = nullptr;
+            return;
+        }
+        obs_add_tick_callback(&Tick, this);
+        running_ = true;
+        blog(LOG_INFO, "[pulsar-scene-switch] vendor registered name=%s", kVendorName);
+    }
+
+    void stop()
+    {
+        if (!running_)
+            return;
+        obs_remove_tick_callback(&Tick, this);
+        running_ = false;
+        std::unique_lock<std::mutex> lock(mutex_);
+        pendingPrepare_.reset();
+        pendingTake_.reset();
+    }
+
+    void previewRendered(const std::string &commandId, uint64_t frameId, uint64_t ptsNs)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (!pendingPrepare_ || pendingPrepare_->commandId != commandId || pendingPrepare_->ready || state_ != "preparing")
+            return;
+        pendingPrepare_->ready = true;
+        state_ = "preview_ready";
+        json event = eventFor("PreviewReady", *pendingPrepare_, {{"target_lane_id", pendingPrepare_->lane},
+            {"target_scene_id", pendingPrepare_->scene}, {"first_frame_id", frameId}, {"first_pts_ns", ptsNs}}, "preview_ready");
+        pendingPrepare_->readyEvent = event;
+        emit(event);
+    }
+
+    void takeCommitted(const std::string &takeId, uint64_t frameId, uint64_t ptsNs)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!pendingTake_ || pendingTake_->commandId != takeId)
+            return;
+        const Pending take = *pendingTake_;
+        const json previous = revisions_;
+        const json previousRoles = roleMap_;
+        ++revisions_["program"];
+        ++revisions_["role_map"];
+        std::swap(roleMap_["on_air"], roleMap_["preview"]);
+        state_ = "ready";
+        pendingTake_.reset();
+        pendingPrepare_.reset();
+        json extra = {{"take_command_id", take.commandId}, {"target_lane_id", take.lane},
+            {"target_scene_id", take.scene}, {"source_lane_id", previousRoles["on_air"]},
+            {"frame_id", frameId}, {"pts_ns", ptsNs}, {"program_lane_id", roleMap_["on_air"]},
+            {"preview_lane_id", roleMap_["preview"]}, {"previous_role_map", previousRoles}};
+        json event = eventFor("TakeCommitted", take, extra, "ready", previous);
+        outcomes_[take.key] = {take.digest, event};
+        emit(event);
+    }
+
+private:
+    struct Pending {
+        std::string key, commandId, intentId, runtimeId, digest, lane, scene;
+        uint64_t deadlineNs = 0;
+        bool ready = false;
+        json readyEvent;
+    };
+    static bool validId(const json &v)
+    {
+        if (!v.is_string() || v.get_ref<const std::string &>().empty() || v.get_ref<const std::string &>().size() > 128)
+            return false;
+        const std::string &s = v.get_ref<const std::string &>();
+        if (!std::isalnum(static_cast<unsigned char>(s.front()))) return false;
+        for (unsigned char c : s)
+            if (!(std::isalnum(c) || c == '.' || c == '_' || c == ':' || c == '-')) return false;
+        return true;
+    }
+    static bool integer(const json &v, uint64_t &out)
+    {
+        if (v.is_number_unsigned()) { out = v.get<uint64_t>(); return true; }
+        if (v.is_number_integer() && v.get<int64_t>() >= 0) { out = static_cast<uint64_t>(v.get<int64_t>()); return true; }
+        if (v.is_number_float()) { double n = v.get<double>(); if (std::isfinite(n) && n >= 0 && std::floor(n) == n) { out = static_cast<uint64_t>(n); return true; } }
+        return false;
+    }
+    static uint64_t nowNs() { return os_gettime_ns(); }
+    static std::string sha256(const std::string &text)
+    {
+        // BCrypt is the Windows system SHA-256 provider; no mutable or
+        // process-global crypto state is retained by the request path.
+#ifdef _WIN32
+        BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_HASH_HANDLE hash = nullptr;
+        DWORD objectLen = 0, bytes = 0; std::vector<unsigned char> object, digest(32);
+        if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0 ||
+            BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLen), sizeof(objectLen), &bytes, 0) != 0)
+            return {};
+        object.resize(objectLen);
+        const bool ok = BCryptCreateHash(alg, &hash, object.data(), objectLen, nullptr, 0, 0) == 0 &&
+            BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char *>(text.data())), static_cast<ULONG>(text.size()), 0) == 0 &&
+            BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) == 0;
+        if (hash) BCryptDestroyHash(hash); if (alg) BCryptCloseAlgorithmProvider(alg, 0);
+        if (!ok) return {};
+        static const char hex[] = "0123456789abcdef"; std::string result; result.reserve(64);
+        for (unsigned char b : digest) { result.push_back(hex[b >> 4]); result.push_back(hex[b & 15]); }
+        return result;
+#else
+        return {};
+#endif
+    }
+    bool normalize(const json &in, json &out, std::string &error)
+    {
+        if (!in.is_object()) { error = "requestData must be an object"; return false; }
+        const std::set<std::string> common = {"contract","schema_version","message_type","command_type","command_id","intent_id","runtime_instance_id","expected_revisions","expected_server_seq"};
+        const char *required[] = {"contract","schema_version","message_type","command_type","command_id","intent_id","runtime_instance_id","expected_revisions"};
+        for (auto key : required) if (!in.contains(key)) { error = "command is missing required fields"; return false; }
+        if (in["contract"] != "pulsar.scene-switch.v1" || in["message_type"] != "command" || !in["command_type"].is_string()) { error = "command contract is not v1"; return false; }
+        uint64_t n = 0; if (!integer(in["schema_version"], n) || n != 1 || !validId(in["command_id"]) || !validId(in["intent_id"]) || !validId(in["runtime_instance_id"])) { error = "command identifiers or schema version are invalid"; return false; }
+        if (!in["expected_revisions"].is_object() || in["expected_revisions"].size() != 3) { error = "expected_revisions is invalid"; return false; }
+        for (auto key : {"program","preview","role_map"}) if (!in["expected_revisions"].contains(key) || !integer(in["expected_revisions"][key], n)) { error = "expected_revisions is invalid"; return false; }
+        if (in.contains("expected_server_seq") && !integer(in["expected_server_seq"], n)) { error = "expected_server_seq is invalid"; return false; }
+        const std::string type = in["command_type"];
+        std::set<std::string> allowed = common;
+        if (type == "Prepare") {
+            allowed.insert("target"); allowed.insert("timeout_ms");
+            for (const auto &it : in.items()) if (!allowed.count(it.key())) { error = "Prepare command contains unknown or cross-type fields"; return false; }
+            if (!in.contains("target") || !in.contains("timeout_ms") || !in["target"].is_object() || in["target"].size() != 2 || !in["target"].contains("lane_id") || !in["target"].contains("scene_id") || !in["target"]["lane_id"].is_string() || (in["target"]["lane_id"] != "A" && in["target"]["lane_id"] != "B") || !in["target"]["scene_id"].is_string() || in["target"]["scene_id"].get<std::string>().empty() || !integer(in["timeout_ms"], n) || n < 1 || n > 60000) { error = "Prepare payload is invalid"; return false; }
+        } else if (type == "Take") {
+            allowed.insert("prepared_command_id"); allowed.insert("timeout_ms");
+            for (const auto &it : in.items()) if (!allowed.count(it.key())) { error = "Take command contains unknown or cross-type fields"; return false; }
+            if (!in.contains("prepared_command_id") || !in.contains("timeout_ms") || !validId(in["prepared_command_id"]) || !integer(in["timeout_ms"], n) || n < 1 || n > 60000) { error = "Take payload is invalid"; return false; }
+        } else if (type == "Abort") {
+            allowed.insert("take_command_id"); allowed.insert("reason");
+            for (const auto &it : in.items()) if (!allowed.count(it.key())) { error = "Abort command contains unknown or cross-type fields"; return false; }
+            if (!in.contains("take_command_id") || !in.contains("reason") || !validId(in["take_command_id"]) || !in["reason"].is_string() || (in["reason"] != "operator" && in["reason"] != "timeout" && in["reason"] != "shutdown" && in["reason"] != "superseded" && in["reason"] != "queue_rejected")) { error = "Abort payload is invalid"; return false; }
+        } else { error = "command_type is not supported by v1"; return false; }
+        out = in;
+        out["schema_version"] = 1;
+        for (auto key : {"program","preview","role_map"}) { integer(in["expected_revisions"][key], n); out["expected_revisions"][key] = n; }
+        if (in.contains("expected_server_seq")) { integer(in["expected_server_seq"], n); out["expected_server_seq"] = n; }
+        if (type == "Prepare" || type == "Take") { integer(in["timeout_ms"], n); out["timeout_ms"] = n; }
+        return true;
+    }
+    json eventFor(const char *type, const Pending &p, json extra = json::object(), const char *state = nullptr, json previous = json())
+    {
+        const json before = previous.is_null() ? revisions_ : previous;
+        json event = {{"contract","pulsar.scene-switch.v1"},{"schema_version",1},{"message_type","event"},{"event_type",type},{"command_id",p.commandId},{"intent_id",p.intentId},{"runtime_instance_id",p.runtimeId},{"server_seq",++serverSeq_},{"state",state ? state : "ready"},{"previous_revisions",before},{"revisions",revisions_},{"role_map",roleMap_},{"observed_at_monotonic_ns",nowNs()},{"payload_sha256",p.digest}};
+        for (const auto &it : extra.items()) event[it.key()] = it.value();
+        return event;
+    }
+    json reject(const Pending &p, const std::string &code, const std::string &message, json details = json::object())
+    {
+        json event = eventFor("CommandRejected", p, {{"error_code",code},{"error_message",message},{"error_details",details}});
+        return event;
+    }
+    void emit(const json &event)
+    {
+        if (!vendor_) return;
+        obs_data_t *data = obs_data_create_from_json(event.dump().c_str());
+        if (data) { obs_websocket_vendor_emit_event(vendor_, event["event_type"].get<std::string>().c_str(), data); obs_data_release(data); }
+    }
+    void respond(obs_data_t *response, const json &event) { obs_data_set_json(response, event.dump().c_str()); }
+    static void Dispatch(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, nullptr); }
+    static void Prepare(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, "Prepare"); }
+    static void Take(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, "Take"); }
+    static void Abort(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, "Abort"); }
+    static void GetState(obs_data_t *, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->state(response); }
+    static void Tick(void *priv, float) { static_cast<PulsarSceneSwitchVendor *>(priv)->expire(); }
+    void dispatch(obs_data_t *request, obs_data_t *response, const char *requestType)
+    {
+        json raw; try { raw = json::parse(obs_data_get_json(request)); } catch (...) { raw = json::object(); }
+        json command; std::string error;
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (requestType && raw.is_object()) {
+            if (!raw.contains("command_type")) raw["command_type"] = requestType;
+            else if (raw["command_type"] != requestType) { raw = json::object(); error = "vendor request type and command_type disagree"; }
+        }
+        if (!normalize(raw, command, error)) { Pending invalid{"invalid","invalid-command","invalid-intent",runtimeId_,"", "", ""}; json event = reject(invalid, "SCHEMA_INVALID", error); emit(event); respond(response,event); return; }
+        const std::string key = command["runtime_instance_id"].get<std::string>() + "\n" + command["command_id"].get<std::string>();
+        const std::string digest = sha256(command.dump());
+        auto prior = outcomes_.find(key);
+        if (prior != outcomes_.end()) { if (prior->second.first == digest) { respond(response, prior->second.second); return; } Pending p{key,command["command_id"],command["intent_id"],command["runtime_instance_id"],digest,"",""}; json event=reject(p,"IDEMPOTENCY_CONFLICT","command_id was already used with a different payload",{{"original_payload_sha256",prior->second.first},{"received_payload_sha256",digest}}); emit(event); respond(response,event); return; }
+        Pending p{key,command["command_id"],command["intent_id"],command["runtime_instance_id"],digest,"",""};
+        if (p.runtimeId != runtimeId_) { json event=reject(p,"RUNTIME_MISMATCH","command runtime_instance_id does not belong to this runtime"); outcomes_[key]={digest,event}; emit(event); respond(response,event); return; }
+        if (command["expected_revisions"] != revisions_) { json event=reject(p,"REVISION_STALE","expected revisions do not match the current runtime revisions",{{"expected_revisions",command["expected_revisions"]},{"actual_revisions",revisions_}}); outcomes_[key]={digest,event}; emit(event); respond(response,event); return; }
+        if (command.contains("expected_server_seq") && command["expected_server_seq"] != serverSeq_) { json event=reject(p,"SERVER_SEQ_STALE","expected server sequence does not match the current runtime sequence"); outcomes_[key]={digest,event}; emit(event); respond(response,event); return; }
+        const std::string type = command["command_type"];
+        if (type == "Prepare") { doPrepare(command,p,response); return; }
+        if (type == "Take") { doTake(command,p,response); return; }
+        doAbort(command,p,response,lock);
+    }
+    void doPrepare(const json &c, Pending p, obs_data_t *response)
+    {
+        if (pendingTake_) { json e=reject(p,"PREVIEW_FROZEN","Preview is frozen while Take is pending"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        p.lane=c["target"]["lane_id"]; p.scene=c["target"]["scene_id"]; p.deadlineNs=nowNs()+c["timeout_ms"].get<uint64_t>()*1000000ULL;
+        if (!g_api || !g_api->sceneSwitchPrepare(p.commandId,p.lane[0],p.scene)) { json e=reject(p,"PREVIEW_LANE_MISMATCH","target does not name the live Preview lane or scene"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        const json previous = revisions_;
+        ++revisions_["preview"]; state_="preparing"; pendingPrepare_=p; json e=eventFor("PrepareAccepted",p,{{"target_lane_id",p.lane},{"target_scene_id",p.scene},{"deadline_monotonic_ns",p.deadlineNs}},"preparing",previous); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e);
+    }
+    void doTake(const json &c, Pending p, obs_data_t *response)
+    {
+        if (pendingTake_ || state_ == "take_accepted") { json e=reject(p,"PREVIEW_FROZEN","another Take is already pending"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        if (!pendingPrepare_ || pendingPrepare_->commandId != c["prepared_command_id"].get<std::string>()) { json e=reject(p,"PREPARE_NOT_FOUND","prepared_command_id has no current preparation"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        if (!pendingPrepare_->ready) { json e=reject(p,"PREVIEW_NOT_READY","Preview has not rendered its first frame"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        if (pendingPrepare_->intentId != p.intentId) { json e=reject(p,"TAKE_INTENT_CONFLICT","Take intent_id differs from Prepare"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        p.lane=pendingPrepare_->lane; p.scene=pendingPrepare_->scene; p.deadlineNs=nowNs()+c["timeout_ms"].get<uint64_t>()*1000000ULL;
+        pendingTake_=p; state_="take_accepted";
+        if (!g_api || !g_api->sceneSwitchTake(p.commandId)) { pendingTake_.reset(); state_="preview_ready"; json e=reject(p,"TAKE_NOT_PENDING","atomic frame-boundary swap was not admitted"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        json e=eventFor("TakeAccepted",p,{{"take_command_id",p.commandId},{"target_lane_id",p.lane},{"target_scene_id",p.scene},{"freeze_until_monotonic_ns",p.deadlineNs}},"take_accepted"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e);
+    }
+    void doAbort(const json &c, Pending p, obs_data_t *response, std::unique_lock<std::mutex> &lock)
+    {
+        const std::string requested=c["take_command_id"];
+        if (!pendingTake_ || pendingTake_->commandId != requested) { json e=reject(p,"TAKE_NOT_PENDING","take_command_id has no cancellable pending Take"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        if (pendingTake_->intentId != p.intentId) { json e=reject(p,"TAKE_INTENT_CONFLICT","Abort intent_id differs from Take"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        // Cancellation can synchronously drain a graphics callback.  Do not
+        // hold the protocol mutex across it: the callback emits the terminal
+        // TakeCommitted through this same state machine.
+        lock.unlock();
+        const bool cancelled = g_api && g_api->sceneSwitchAbort(requested);
+        lock.lock();
+        if (!cancelled || !pendingTake_ || pendingTake_->commandId != requested) { json e=reject(p,"TAKE_NOT_PENDING","take_command_id has no cancellable pending Take"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        pendingTake_.reset(); pendingPrepare_.reset(); state_="ready"; json e=eventFor("TakeAborted",p,{{"take_command_id",requested},{"reason",c["reason"]}},"ready"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e);
+    }
+    void expire()
+    {
+        std::unique_lock<std::mutex> lock(mutex_); const uint64_t now=nowNs();
+        if (pendingPrepare_ && !pendingTake_ && now >= pendingPrepare_->deadlineNs) { Pending p=*pendingPrepare_; pendingPrepare_.reset(); state_="ready"; json e=reject(p,"TIMEOUT","Preview did not render before deadline"); emit(e); }
+        if (!pendingTake_ || now < pendingTake_->deadlineNs) return;
+        const std::string id=pendingTake_->commandId; lock.unlock(); const bool cancelled=g_api && g_api->sceneSwitchAbort(id); lock.lock();
+        if (cancelled && pendingTake_ && pendingTake_->commandId==id) { Pending p=*pendingTake_; pendingTake_.reset(); pendingPrepare_.reset(); state_="ready"; json e=eventFor("TakeAborted",p,{{"take_command_id",p.commandId},{"reason","timeout"}},"ready"); emit(e); }
+    }
+    void state(obs_data_t *response)
+    {
+        std::lock_guard<std::mutex> lock(mutex_); json out={{"contract","pulsar.scene-switch.v1"},{"schema_version",1},{"runtime_instance_id",runtimeId_},{"state",state_},{"server_seq",serverSeq_},{"revisions",revisions_},{"role_map",roleMap_}}; obs_data_set_json(response,out.dump().c_str());
+    }
+    std::mutex mutex_; obs_websocket_vendor vendor_ = nullptr; bool running_ = false;
+    std::string runtimeId_ = [] { const char *v=std::getenv("PULSAR_RUNTIME_INSTANCE_ID"); return (v && *v) ? std::string(v) : std::string("pulsar-runtime"); }();
+    uint64_t serverSeq_ = 0; json revisions_={{"program",0},{"preview",0},{"role_map",0}}; json roleMap_={{"on_air","A"},{"preview","B"}}; std::string state_="ready";
+    std::optional<Pending> pendingPrepare_, pendingTake_; std::map<std::string,std::pair<std::string,json>> outcomes_;
+};
+
+PulsarSceneSwitchVendor g_sceneSwitchVendorStorage;
 
 namespace {
 
@@ -2654,6 +2929,13 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
 
     obs_view_set_source(programView, 0, currentScene);
     obs_view_set_source(previewView, 0, previewScene);
+    // `previewVideo` is the dedicated PreviewView video_t.  Connecting here
+    // observes an output frame produced by that mix, unlike a main-render
+    // callback which only proves Program rendering.
+    if (!video_output_connect(previewVideo, nullptr, OnSceneSwitchPreviewVideoFrame, this)) {
+        blog(LOG_ERROR, "[pulsar-scene-switch] failed to observe PreviewView frames");
+        return false;
+    }
 
     // These are the only media bindings for the two stable raw surfaces.  In
     // particular, no output media is rebound by a Cut.
@@ -2706,6 +2988,90 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
          lane_root_binding_valid, program_main_view_valid, program_main_video_valid,
          preview_distinct_valid, pulsar_program_audio::kRouteId, programAudio != nullptr);
     return true;
+}
+
+bool PulsarFrontendAPI::sceneSwitchPrepare(const std::string &commandId, char laneId, const std::string &sceneId)
+{
+    obs_source_t *scene = obs_get_source_by_name(sceneId.c_str());
+    if (!scene)
+        scene = obs_get_source_by_uuid(sceneId.c_str());
+    if (!scene)
+        return false;
+    bool prepared = false;
+    {
+        std::lock_guard<std::mutex> lock(dualLaneMutex);
+        const char expectedLane = previewLane == 0 ? 'A' : 'B';
+        if (dualLaneReady && !dualLaneCutPending.load() && laneId == expectedLane &&
+            scene != programSelection && scene != currentScene && obs_scene_from_source(scene) &&
+            replaceLaneCompositionLocked(previewLane, scene)) {
+            if (previewSelection)
+                obs_source_release(previewSelection);
+            previewSelection = obs_source_get_ref(scene);
+            sceneSwitchPreparedCommandId = commandId;
+            prepared = dualLaneInvariantLocked("scene-switch-prepare");
+        }
+    }
+    obs_source_release(scene);
+    if (prepared) {
+        // PreviewView is already a distinct, active libobs mix.  The next main
+        // rendered callback is therefore evidence of an actual Preview render,
+        // not merely WebSocket acceptance.
+        g_runtimeTelemetry.previewRevisionChanged();
+        emit(OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED);
+    }
+    return prepared;
+}
+
+bool PulsarFrontendAPI::sceneSwitchTake(const std::string &takeCommandId)
+{
+    obs_source_t *preview = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(dualLaneMutex);
+        if (!dualLaneReady || dualLaneCutPending.load() || sceneSwitchPreparedCommandId.empty())
+            return false;
+        sceneSwitchPendingTakeId = takeCommandId;
+        preview = obs_source_get_ref(previewSelection);
+    }
+    const bool queued = queueDualLaneCut(preview);
+    if (preview)
+        obs_source_release(preview);
+    if (!queued) {
+        std::lock_guard<std::mutex> lock(dualLaneMutex);
+        if (sceneSwitchPendingTakeId == takeCommandId)
+            sceneSwitchPendingTakeId.clear();
+    }
+    return queued;
+}
+
+bool PulsarFrontendAPI::sceneSwitchAbort(const std::string &takeCommandId)
+{
+    // libobs cancels only a still-pending atomic request and drains a racing
+    // graphics callback.  Once that callback owns the request it clears the
+    // frontend pending marker, so this post-cancel check never reports a
+    // fabricated pre-boundary abort.
+    obs_view_cancel_atomic_swap();
+    std::lock_guard<std::mutex> lock(dualLaneMutex);
+    if (sceneSwitchPendingTakeId != takeCommandId || !dualLaneCutPending.load())
+        return false;
+    dualLaneCutPending.store(false);
+    g_dualLaneControlBridge.set_pending(false);
+    g_runtimeTelemetry.cancelPending();
+    sceneSwitchPendingTakeId.clear();
+    return true;
+}
+
+void PulsarFrontendAPI::OnSceneSwitchPreviewVideoFrame(void *param, struct video_data *frame)
+{
+    auto *self = static_cast<PulsarFrontendAPI *>(param);
+    if (!self || !g_sceneSwitchVendor)
+        return;
+    std::string prepared;
+    {
+        std::lock_guard<std::mutex> lock(self->dualLaneMutex);
+        prepared = self->sceneSwitchPreparedCommandId;
+    }
+    if (!prepared.empty() && frame)
+        g_sceneSwitchVendor->previewRendered(prepared, video_output_get_total_frames(self->previewVideo), frame->timestamp);
 }
 
 bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
@@ -2827,6 +3193,7 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
     bool programMainViewValid = false;
     bool programMainVideoValid = false;
     bool previewDistinctValid = false;
+    std::string sceneSwitchTakeId;
     {
         std::lock_guard<std::mutex> lk(self->dualLaneMutex);
         if (!self->dualLaneCutPending.load())
@@ -2853,11 +3220,16 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
                                self->currentScene != self->previewScene;
         self->dualLaneCutPending.store(false);
         g_dualLaneControlBridge.set_pending(false);
+        sceneSwitchTakeId = self->sceneSwitchPendingTakeId;
+        self->sceneSwitchPendingTakeId.clear();
+        self->sceneSwitchPreparedCommandId.clear();
         if (!self->dualLaneInvariantLocked("commit"))
             blog(LOG_ERROR, "[pulsar-dual-lane] commit invariant failed");
     }
 
     g_runtimeTelemetry.commit(frameId, ptsNs, committedOnAirLane, committedPreviewLane);
+    if (!sceneSwitchTakeId.empty() && g_sceneSwitchVendor)
+        g_sceneSwitchVendor->takeCommitted(sceneSwitchTakeId, frameId, ptsNs);
 
     blog(LOG_INFO, "[pulsar-dual-lane] TakeCommitted count=%llu frame_id=%llu pts_ns=%llu "
          "onair_lane=%d preview_lane=%d lane_root_binding_valid=%d "
@@ -3595,6 +3967,8 @@ void PulsarFrontendAPI::teardown()
     // is released. The bridge contains no frontend pointer, so a late proc
     // lookup cannot dereference this object after teardown.
     g_dualLaneControlBridge.deactivate();
+    if (previewVideo)
+        video_output_disconnect(previewVideo, OnSceneSwitchPreviewVideoFrame, this);
 
     // Stop callbacks before releasing their output/video owners.  The global
     // telemetry proc remains installed but is disabled, so a late module call
@@ -4410,11 +4784,6 @@ void PulsarFrontendAPI::obs_frontend_stop_virtualcam(void)
     obs_output_stop(virtualcamOutput);
 }
 
-// Module-static slot for the singleton, kept around so finished_loading /
-// shutdown can reach it. obs_frontend_set_callbacks_internal owns the
-// unique_ptr inside obs-frontend-api.dll; we keep a raw observer here.
-PulsarFrontendAPI *g_api = nullptr;
-
 } // namespace
 
 // Dispatch OBS_TASK_UI tasks synchronously on the calling thread. Without a
@@ -4456,6 +4825,8 @@ extern "C" void pulsar_frontend_finished_loading(void)
         return;
     if (!g_api->setup())
         blog(LOG_WARNING, "[pulsar-frontend-stub] setup() reported partial failure");
+    g_sceneSwitchVendor = &g_sceneSwitchVendorStorage;
+    g_sceneSwitchVendorStorage.start();
     g_api->emit(OBS_FRONTEND_EVENT_FINISHED_LOADING);
 }
 
@@ -4463,6 +4834,8 @@ extern "C" void pulsar_frontend_shutdown(void)
 {
     if (!g_api)
         return;
+    g_sceneSwitchVendorStorage.stop();
+    g_sceneSwitchVendor = nullptr;
     // Close the supported WebSocket mutation gate before emitting EXIT. This
     // waits for an already-running mutation but admits no new one while the
     // frontend object and its stable lane roots are being destroyed.

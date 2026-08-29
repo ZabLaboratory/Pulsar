@@ -9,6 +9,29 @@ first-class, adaptive bitrate, and live encoder retuning.
 The reference client is [`@clodocapeo/pulsar-client`](../packages/pulsar-client/),
 which exposes typed wrappers over both surfaces.
 
+## Scene-switch runtime vendor (v1)
+
+The production transport for [`pulsar.scene-switch.v1`](../scripts/contracts/scene_switch_v1/README.md)
+uses the fixed obs-websocket vendor name `pulsar-scene-switch`. It is reached
+only through the standard `CallVendorRequest` request; `Prepare`, `Take`, and
+`Abort` are deliberately **not** top-level obs-websocket requests.
+
+Send the complete v1 command envelope as `requestData` to the matching vendor
+request type `Prepare`, `Take`, or `Abort`. `Dispatch` is retained only as a
+compatibility alias when the envelope's `command_type` is present. The response is the correlated v1 event envelope. The same event
+is emitted to subscribed clients as an obs-websocket `VendorEvent`, with the
+v1 event in `eventData` and its `eventType` set to the v1 event type. `GetState`
+returns the current runtime ID, state, revisions, role map, and server sequence.
+
+The adapter validates every field strictly, hashes normalized compact sorted-key
+JSON with SHA-256 for `(runtime_instance_id, command_id)` idempotence, and
+replays the original response exactly. A different payload for an already-used
+command ID is rejected without mutation. It bridges Prepare to the hot Preview
+lane, waits for a real Preview-mix render before `PreviewReady`, and uses the
+existing libobs atomic frame-boundary swap for Take. Abort and timeout cancel
+only a still-pending swap; a callback already at the frame boundary wins and
+is reported as `TakeCommitted` with the real frame ID and PTS.
+
 ## Connection
 
 | | |

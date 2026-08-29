@@ -53,9 +53,11 @@ target_include_directories(pulsar-frontend-stub PRIVATE
     "${PULSAR_LIBOBS_BUILD}"
     "${PULSAR_LIBOBS_CONFIG}"
     "${PULSAR_FRONTEND_API_HEADERS}"   # obs-frontend-internal.hpp
+    "${PROJECT_SOURCE_DIR}/../pulsar-websocket/lib" # obs-websocket vendor API
 )
 
 target_link_libraries(pulsar-frontend-stub PUBLIC
     "${PULSAR_LIBOBS_LIB}"
     "${PULSAR_FRONTEND_API_LIB}"
+    bcrypt
 )
