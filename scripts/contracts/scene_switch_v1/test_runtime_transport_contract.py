@@ -79,3 +79,6 @@ def test_runtime_adapter_guards_the_exact_v1_lifecycle_edges() -> None:
     assert "RUNTIME_MISMATCH into an" in source
     assert '"idempotency_cache_entries",outcomes_.size()' in source
     assert '"idempotency_cache_capacity",kMaxOutcomes' in source
+    committed = source[source.index("void takeCommitted") : source.index("private:", source.index("void takeCommitted"))]
+    assert "outcomes_[take.key]" not in committed
+    assert "original Dispatch(Take) response (TakeAccepted)" in committed

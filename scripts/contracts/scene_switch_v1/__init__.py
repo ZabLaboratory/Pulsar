@@ -31,6 +31,7 @@ REVISION_KEYS: Final = ("program", "preview", "role_map")
 LANE_IDS: Final = ("A", "B")
 ROLE_KEYS: Final = ("on_air", "preview")
 ID_MAX_LENGTH: Final = 128
+IDEMPOTENCY_CACHE_CAPACITY: Final = 4096
 STATES: Final = ("ready", "preparing", "preview_ready", "take_accepted")
 COMMAND_TYPES: Final = ("Prepare", "Take", "Abort")
 EVENT_TYPES: Final = (
@@ -602,6 +603,8 @@ class SceneSwitchMachine:
                     self._pending_prepare.command["command_id"] if self._pending_prepare else None
                 ),
                 "pending_take_command_id": self._pending_take.command["command_id"] if self._pending_take else None,
+                "idempotency_cache_entries": len(self._commands),
+                "idempotency_cache_capacity": IDEMPOTENCY_CACHE_CAPACITY,
             }
 
     def dispatch(self, command: Mapping[str, Any], *, now_monotonic_ns: int | None = None) -> dict[str, Any]:
@@ -643,8 +646,19 @@ class SceneSwitchMachine:
                 {"runtime_instance_id": self.runtime_instance_id},
                 now_monotonic_ns=now_monotonic_ns,
             )
-            self._commands[command_key] = (digest, event)
             return deepcopy(event)
+
+        # Retain every accepted/current-runtime rejection for exact replay,
+        # but never evict one: eviction could admit a replayed mutation. New
+        # keys fail closed once this process/session window is full.
+        if len(self._commands) >= IDEMPOTENCY_CACHE_CAPACITY:
+            return self._reject(
+                validated,
+                "SCHEMA_INVALID",
+                "idempotency history capacity reached; restart runtime before a new command",
+                {"max_entries": IDEMPOTENCY_CACHE_CAPACITY},
+                now_monotonic_ns=now_monotonic_ns,
+            )
 
         # A command arrival is also a valid timer tick.  Expire an elapsed
         # preparation before evaluating a new local command so it cannot

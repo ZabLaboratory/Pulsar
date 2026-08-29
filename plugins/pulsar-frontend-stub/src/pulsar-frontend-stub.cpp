@@ -2346,7 +2346,9 @@ public:
             {"frame_id", frameId}, {"pts_ns", ptsNs}, {"program_lane_id", roleMap_["on_air"]},
             {"preview_lane_id", roleMap_["preview"]}, {"previous_role_map", previousRoles}};
         json event = eventFor("TakeCommitted", take, extra, "ready", previous);
-        outcomes_[take.key] = {take.digest, event};
+        // Keep the original Dispatch(Take) response (TakeAccepted) in the
+        // idempotency map. The terminal commit is a one-shot VendorEvent, not
+        // a replacement response for an exact retry of the command.
         emit(event);
     }
 
