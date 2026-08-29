@@ -211,11 +211,16 @@ def test_directshow_namespace_decision_is_shared_and_rejects_before_queue_sinks(
     assert "DIRECTSHOW_QUEUE_NAMESPACE_REJECT" in header
     assert "DIRECTSHOW_QUEUE_NAMESPACE_LEGACY" in header
     assert "DIRECTSHOW_QUEUE_NAMESPACE_DEDICATED" in header
+    assert "enum directshow_consumer_filter_kind" in header
+    assert "DIRECTSHOW_CONSUMER_FILTER_STOCK" in header
+    assert "DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN" in header
+    assert "DIRECTSHOW_CONSUMER_FILTER_PREVIEW_RETURN" in header
     assert "GetEnvironmentVariableA" in header
     assert "runtime_id_present && !directshow_runtime_instance_id_valid(runtime_id)" in header
-    assert "return legacy_alias_present ? DIRECTSHOW_QUEUE_NAMESPACE_REJECT" in header
+    assert "directshow_queue_namespace_for_consumer" in header
+    assert "filter_kind == DIRECTSHOW_CONSUMER_FILTER_STOCK" in header
     assert "directshow_queue_namespace_from_environment" in producer
-    assert "directshow_queue_namespace_from_environment" in consumer
+    assert "directshow_queue_namespace_for_consumer(filter_kind)" in consumer
     assert "OutputDebugStringW(L\"[pulsar-directshow] queue namespace rejected; consumer is disabled\\n\")" in consumer
     assert "blog(LOG_ERROR" not in consumer
     assert "+\tif (vcam->queue_namespace_rejected)\n+\t\treturn false;" in producer
@@ -227,6 +232,10 @@ def test_directshow_namespace_decision_is_shared_and_rejects_before_queue_sinks(
     assert frame.index("if (queue_namespace_rejected)") < frame.index(
         "+\t\tvq = video_queue_open_named"
     )
+
+    assert "CLSID_PulsarProgramReturnVideo" in patch
+    assert "CLSID_PulsarPreviewReturnVideo" in patch
+    assert "new VCamFilter(filter_kind)" in patch
 
     root_cmake = _read(_ROOT / "CMakeLists.txt")
     assert "add_subdirectory(tests/directshow-namespace-probe)" in root_cmake
