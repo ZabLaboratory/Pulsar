@@ -136,6 +136,83 @@ export interface MonitoringDeviceList {
   activeDeviceName?: string;
 }
 
+/** One consumer-facing output of the common r2 Program audio route (#245). */
+export interface ProgramAudioOutput {
+  /** Stable logical output label, e.g. `stream` or `program-return`. */
+  output: string;
+  /** libobs output kind, such as `rtmp_output` or `program_return_output`. */
+  id: string;
+  /** Runtime output name. */
+  name: string;
+  /** Whether this output has an audio consumer at all. Video-only return
+   *  surfaces are reported explicitly instead of being treated as a route. */
+  audioSupported: boolean;
+  /** Process-local audio_t identity observed at this output. */
+  audioIdentity: string;
+  /** True only when this output consumes the route's captured audio_t. */
+  audioMatchesRoute: boolean;
+  active: boolean;
+  slots: Array<{ slot: number; track: number; encoder: string }>;
+}
+
+/**
+ * One audio-capable source bound to a libobs canvas source channel at route
+ * snapshot time. Channel 0 is the mutable dual-lane video root and is never
+ * included; only channels >= 1 are part of the common Program audio route.
+ */
+export interface ProgramAudioSource {
+  channel: number;
+  identity: string;
+  id: string;
+  name: string;
+}
+
+/** PTS evidence collected from the actual mixer feeding one audio encoder. */
+export interface ProgramAudioPts {
+  firstNs: number;
+  lastNs: number;
+  samples: number;
+  regressions: number;
+  monotone: boolean;
+  /** Bounded recent series; the full evidence is retained by the probe. */
+  seriesNs: number[];
+}
+
+/** Stable common Program audio route snapshot (ADR dual-lane r2, issue #245). */
+export interface ProgramAudioTrack {
+  track: number;
+  mixerIndex: number;
+  encoder: string;
+  blocks: number;
+  frames: number;
+  firstPtsNs: number;
+  lastPtsNs: number;
+  ptsSamples: number;
+  ptsRegressions: number;
+  ptsMonotone: boolean;
+  pts: ProgramAudioPts;
+  ptsSeriesNs: number[];
+}
+
+export interface ProgramAudioRoute {
+  schemaVersion: number;
+  routeId: string;
+  routeName: string;
+  scope: string;
+  cutAudioPolicy: string;
+  audioIdentity: string;
+  stable: boolean;
+  previewAudioSupported: boolean;
+  afvSupported: boolean;
+  observed: boolean;
+  outputs: ProgramAudioOutput[];
+  sources: ProgramAudioSource[];
+  tracks: ProgramAudioTrack[];
+  ptsMonotone: boolean;
+  ptsSamples: number;
+  routeError?: string;
+}
+
 /**
  * Audio block of the manifest (ADR 027 §3.3 bloc 2). Every field is read from
  * libobs; a field the server could not read is `undefined` (declared absent),

@@ -1,7 +1,9 @@
 import type { PulsarClient } from "./client.js";
 import {
   monitoringDeviceListFromWire,
+  programAudioRouteFromWire,
   type WireGetMonitoringDeviceListResponse,
+  type WireGetProgramAudioRouteResponse,
   type WireSetMonitoringDeviceRequest,
   type WireSetMonitoringDeviceResponse,
 } from "./wire.js";
@@ -10,6 +12,7 @@ import type {
   AudioInput,
   MonitoringDevice,
   MonitoringDeviceList,
+  ProgramAudioRoute,
   SpecialInputs,
 } from "./types.js";
 
@@ -109,5 +112,18 @@ export class AudioNamespace {
       WireSetMonitoringDeviceResponse
     >("SetMonitoringDevice", { device_id: deviceId });
     return { id: resp.device_id ?? "", name: resp.device_name ?? "" };
+  }
+
+  /**
+   * Reads the explicit common Program audio route (#245). The route is
+   * independent of the dual-lane video Cut; the snapshot includes output and
+   * source identities plus the bounded recent PTS evidence from the actual
+   * mixer indexes consumed by the encoders.
+   */
+  async programRoute(): Promise<ProgramAudioRoute> {
+    const resp = await this.client.callVendor<object, WireGetProgramAudioRouteResponse>(
+      "GetProgramAudioRoute",
+    );
+    return programAudioRouteFromWire(resp);
   }
 }

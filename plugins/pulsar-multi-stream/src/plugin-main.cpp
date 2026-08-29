@@ -50,6 +50,7 @@
 // ADR-005 §3.4 / #182 -- shared reason_class classifier, also linked by
 // pulsar-frontend-stub (see plugins/pulsar-output-classify/README.md).
 #include <pulsar-output-classify.h>
+#include <pulsar-program-audio.h>
 
 #include <obs-websocket-api.h>
 
@@ -59,10 +60,12 @@
 #include <log-handler.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <map>
@@ -1848,6 +1851,380 @@ void on_measure_audio_track_flow(obs_data_t *req, obs_data_t *res, void *)
     obs_data_set_array(res, "tracks", tracks);
 }
 
+// ---- Common Program audio route (#245 / ADR-PULSAR-DUAL-LANE-001 I12/I14) -
+//
+// The dual-lane video implementation intentionally swaps only the roots of
+// ProgramView and PreviewView.  Audio is a process-wide libobs bus, so this
+// adapter makes that fact observable rather than asking a client to infer it
+// from an output slot or the current video scene.  The route is captured once
+// and the raw callbacks are installed only on mixer indexes that an actual
+// frontend-owned encoder consumes.  This keeps the observation representative
+// of the encoder input without forcing all six libobs buses to mix forever.
+
+static obs_output_t *get_program_return_output()
+{
+    return obs_get_output_by_name("PulsarProgramReturn");
+}
+
+static obs_output_t *get_preview_return_output()
+{
+    return obs_get_output_by_name("PulsarPreviewReturn");
+}
+
+static const struct {
+    const char *name;
+    obs_output_t *(*get)(void);
+} kProgramAudioOutputs[] = {
+    {"stream", obs_frontend_get_streaming_output},
+    {"record", obs_frontend_get_recording_output},
+    {"replay", obs_frontend_get_replay_buffer_output},
+    {"program-return", get_program_return_output},
+    {"preview-return", get_preview_return_output},
+};
+
+static std::string pointer_identity(const void *pointer)
+{
+    std::ostringstream out;
+    out << "0x" << std::hex << reinterpret_cast<std::uintptr_t>(pointer);
+    return out.str();
+}
+
+struct ProgramAudioMetric {
+    static constexpr size_t kPtsHistorySize = 64;
+
+    std::atomic<uint64_t> blocks{0};
+    std::atomic<uint64_t> frames{0};
+    std::atomic<uint64_t> ptsSamples{0};
+    std::atomic<uint64_t> ptsRegressions{0};
+    std::atomic<bool> hasFirstPts{false};
+    std::atomic<bool> hasLastPts{false};
+    std::atomic<uint64_t> firstPtsNs{0};
+    std::atomic<uint64_t> lastPtsNs{0};
+    std::atomic<uint64_t> historyWrite{0};
+    std::array<std::atomic<uint64_t>, kPtsHistorySize> ptsHistory;
+
+    ProgramAudioMetric()
+    {
+        for (auto &value : ptsHistory)
+            value.store(0, std::memory_order_relaxed);
+    }
+};
+
+static void program_audio_callback(void *param, size_t /*mix_idx*/, struct audio_data *data)
+{
+    auto *metric = static_cast<ProgramAudioMetric *>(param);
+    if (!metric || !data)
+        return;
+
+    metric->blocks.fetch_add(1, std::memory_order_relaxed);
+    metric->frames.fetch_add(data->frames, std::memory_order_relaxed);
+
+    const uint64_t pts = data->timestamp;
+    bool expected = false;
+    if (metric->hasFirstPts.compare_exchange_strong(expected, true,
+                                                    std::memory_order_relaxed)) {
+        metric->firstPtsNs.store(pts, std::memory_order_relaxed);
+    }
+
+    const bool hadLast = metric->hasLastPts.load(std::memory_order_relaxed);
+    const uint64_t previous = metric->lastPtsNs.load(std::memory_order_relaxed);
+    if (hadLast && pts < previous)
+        metric->ptsRegressions.fetch_add(1, std::memory_order_relaxed);
+    metric->lastPtsNs.store(pts, std::memory_order_relaxed);
+    metric->hasLastPts.store(true, std::memory_order_relaxed);
+    // Publish the sample only after its slot is written.  The vendor request
+    // reads the publication counter with acquire semantics; this ordering
+    // prevents a first-query race from exposing an uninitialised zero in the
+    // bounded history while the callback is still writing its PTS.
+    const uint64_t sequence = metric->historyWrite.load(std::memory_order_relaxed);
+    metric->ptsHistory[sequence % ProgramAudioMetric::kPtsHistorySize].store(
+        pts, std::memory_order_relaxed);
+    metric->historyWrite.store(sequence + 1, std::memory_order_release);
+    // Publish the sample count last so an acquire read that observes this
+    // sample also observes its PTS fields and history slot.
+    metric->ptsSamples.fetch_add(1, std::memory_order_release);
+}
+
+class ProgramAudioObserver {
+public:
+    ~ProgramAudioObserver() { stop(); }
+
+    bool ensure(std::string &error)
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (started_)
+            return true;
+
+        routeAudio_ = obs_get_audio();
+        if (!routeAudio_) {
+            error = "libobs audio bus is unavailable";
+            return false;
+        }
+
+        for (const auto &desc : kProgramAudioOutputs) {
+            OBSOutputAutoRelease output = desc.get();
+            if (!output)
+                continue;
+
+            // Encoded outputs expose the audio_t carried by their encoder.
+            // The raw Program/Preview return outputs are video-only by
+            // design, so they are recorded as non-audio consumers rather than
+            // mistaken for a second (or mismatched) audio route.
+            const bool audioSupported = (obs_output_get_flags(output) & OBS_OUTPUT_AUDIO) != 0;
+            if (audioSupported && obs_output_audio(output) != routeAudio_)
+                mismatchedOutputs_.push_back(desc.name);
+
+            for (size_t slot = 0; slot < static_cast<size_t>(MAX_AUDIO_MIXES); ++slot) {
+                obs_encoder_t *encoder = obs_output_get_audio_encoder(output, slot);
+                if (!encoder)
+                    continue;
+                const size_t mixer = obs_encoder_get_mixer_index(encoder);
+                if (mixer >= static_cast<size_t>(MAX_AUDIO_MIXES))
+                    continue;
+                if (find_track_locked(mixer))
+                    continue;
+
+                auto track = std::make_unique<Track>();
+                track->mixerIndex = mixer;
+                track->encoderName = obs_encoder_get_name(encoder) ?
+                    obs_encoder_get_name(encoder) : "";
+                obs_add_raw_audio_callback(mixer, nullptr, program_audio_callback,
+                                           track->metric.get());
+                tracks_.push_back(std::move(track));
+            }
+        }
+
+        // A route remains queryable while no output is configured, but the
+        // response marks observation as false and carries an explicit error.
+        // This is preferable to manufacturing a track or silently observing
+        // all six buses, and lets a Probe distinguish wiring from no-consumer.
+        started_ = true;
+        if (tracks_.empty())
+            error = "no frontend-owned audio encoder is bound to ProgramAudio";
+        return true;
+    }
+
+    void append(obs_data_t *res)
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        // Re-read every present audio-capable output on each snapshot.  A
+        // route that was correct at the first query must not hide a later
+        // output-media rebind behind a cached `stable=true` result.
+        mismatchedOutputs_.clear();
+        for (const auto &desc : kProgramAudioOutputs) {
+            OBSOutputAutoRelease output = desc.get();
+            if (!output)
+                continue;
+            const bool audioSupported = (obs_output_get_flags(output) & OBS_OUTPUT_AUDIO) != 0;
+            if (audioSupported && obs_output_audio(output) != routeAudio_)
+                mismatchedOutputs_.push_back(desc.name);
+        }
+        const audio_t *currentAudio = obs_get_audio();
+        const bool routeStable = routeAudio_ && currentAudio == routeAudio_ &&
+                                 mismatchedOutputs_.empty();
+
+        obs_data_set_int(res, "schema_version", pulsar_program_audio::kSchemaVersion);
+        obs_data_set_string(res, "route_id", pulsar_program_audio::kRouteId);
+        obs_data_set_string(res, "route_name", pulsar_program_audio::kRouteName);
+        obs_data_set_string(res, "scope", pulsar_program_audio::kScope);
+        obs_data_set_string(res, "cut_audio_policy", pulsar_program_audio::kCutPolicy);
+        obs_data_set_string(res, "audio_identity", pointer_identity(routeAudio_).c_str());
+        obs_data_set_bool(res, "stable", routeStable);
+        obs_data_set_bool(res, "preview_audio_supported", false);
+        obs_data_set_bool(res, "afv_supported", false);
+        // `observed` is promoted below only after at least one callback has
+        // delivered real frames/PTS.  Merely discovering an encoder slot is
+        // wiring evidence, not flow evidence (the first query can itself be
+        // what installs the persistent callback).
+        obs_data_set_bool(res, "observed", false);
+
+        if (!mismatchedOutputs_.empty()) {
+            std::string detail = "ProgramAudio mismatch: ";
+            for (size_t i = 0; i < mismatchedOutputs_.size(); ++i) {
+                if (i)
+                    detail += ",";
+                detail += mismatchedOutputs_[i];
+            }
+            obs_data_set_string(res, "route_error", detail.c_str());
+        } else if (tracks_.empty()) {
+            obs_data_set_string(res, "route_error",
+                                "no frontend-owned audio encoder is bound to ProgramAudio");
+        }
+
+        OBSDataArrayAutoRelease outputs = obs_data_array_create();
+        for (const auto &desc : kProgramAudioOutputs) {
+            OBSOutputAutoRelease output = desc.get();
+            if (!output)
+                continue;
+            OBSDataAutoRelease entry = obs_data_create();
+            obs_data_set_string(entry, "output", desc.name);
+            obs_data_set_string(entry, "id", obs_output_get_id(output) ?
+                                obs_output_get_id(output) : "");
+            obs_data_set_string(entry, "name", obs_output_get_name(output) ?
+                                obs_output_get_name(output) : "");
+            const bool audioSupported = (obs_output_get_flags(output) & OBS_OUTPUT_AUDIO) != 0;
+            obs_data_set_bool(entry, "audio_supported", audioSupported);
+            const audio_t *outputAudio = obs_output_audio(output);
+            obs_data_set_string(entry, "audio_identity",
+                                pointer_identity(outputAudio).c_str());
+            obs_data_set_bool(entry, "audio_matches_route",
+                              audioSupported && outputAudio == routeAudio_);
+            obs_data_set_bool(entry, "active", obs_output_active(output));
+
+            OBSDataArrayAutoRelease slots = obs_data_array_create();
+            for (size_t slot = 0; slot < static_cast<size_t>(MAX_AUDIO_MIXES); ++slot) {
+                obs_encoder_t *encoder = obs_output_get_audio_encoder(output, slot);
+                if (!encoder)
+                    continue;
+                OBSDataAutoRelease slotData = obs_data_create();
+                const size_t mixer = obs_encoder_get_mixer_index(encoder);
+                obs_data_set_int(slotData, "slot", static_cast<long long>(slot));
+                obs_data_set_int(slotData, "track", static_cast<long long>(mixer) + 1);
+                obs_data_set_string(slotData, "encoder", obs_encoder_get_name(encoder) ?
+                                    obs_encoder_get_name(encoder) : "");
+                obs_data_array_push_back(slots, slotData);
+            }
+            obs_data_set_array(entry, "slots", slots);
+            obs_data_array_push_back(outputs, entry);
+        }
+        obs_data_set_array(res, "outputs", outputs);
+
+        OBSDataArrayAutoRelease sources = obs_data_array_create();
+        // libobs calls these source channels, not audio mixes.  Channel 0 is
+        // the dual-lane Program video root and changes from PulsarLaneA to
+        // PulsarLaneB on every other Cut.  It must never be reported as part
+        // of the common Program audio route.  Enumerate the complete canvas
+        // source-channel range and retain only sources that actually advertise
+        // OBS_SOURCE_AUDIO; this keeps the wire contract explicit even when a
+        // future frontend adds an audio input beyond the first six channels.
+        for (uint32_t channel = 1; channel < MAX_CHANNELS; ++channel) {
+            OBSSourceAutoRelease source = obs_get_output_source(channel);
+            if (!source)
+                continue;
+            if ((obs_source_get_output_flags(source) & OBS_SOURCE_AUDIO) == 0)
+                continue;
+            OBSDataAutoRelease entry = obs_data_create();
+            obs_data_set_int(entry, "channel", static_cast<long long>(channel));
+            obs_data_set_string(entry, "identity", pointer_identity(source).c_str());
+            obs_data_set_string(entry, "id", obs_source_get_id(source) ?
+                                obs_source_get_id(source) : "");
+            obs_data_set_string(entry, "name", obs_source_get_name(source) ?
+                                obs_source_get_name(source) : "");
+            obs_data_array_push_back(sources, entry);
+        }
+        obs_data_set_array(res, "sources", sources);
+
+        OBSDataArrayAutoRelease tracks = obs_data_array_create();
+        bool allPtsMonotone = !tracks_.empty();
+        bool observedAudio = false;
+        uint64_t totalSamples = 0;
+        for (const auto &track : tracks_) {
+            const auto &metric = *track->metric;
+            const uint64_t samples = metric.ptsSamples.load(std::memory_order_acquire);
+            const uint64_t frames = metric.frames.load(std::memory_order_relaxed);
+            const uint64_t regressions = metric.ptsRegressions.load(std::memory_order_relaxed);
+            const bool monotone = samples > 0 && regressions == 0;
+            observedAudio = observedAudio || (samples > 0 && frames > 0);
+            allPtsMonotone = allPtsMonotone && monotone;
+            totalSamples += samples;
+
+            OBSDataAutoRelease entry = obs_data_create();
+            obs_data_set_int(entry, "track", static_cast<long long>(track->mixerIndex) + 1);
+            obs_data_set_int(entry, "mixer_index", static_cast<long long>(track->mixerIndex));
+            obs_data_set_string(entry, "encoder", track->encoderName.c_str());
+            obs_data_set_int(entry, "blocks", static_cast<long long>(
+                                metric.blocks.load(std::memory_order_relaxed)));
+            obs_data_set_int(entry, "frames", static_cast<long long>(
+                                metric.frames.load(std::memory_order_relaxed)));
+            obs_data_set_int(entry, "first_pts_ns", static_cast<long long>(
+                                metric.firstPtsNs.load(std::memory_order_relaxed)));
+            obs_data_set_int(entry, "last_pts_ns", static_cast<long long>(
+                                metric.lastPtsNs.load(std::memory_order_relaxed)));
+            obs_data_set_int(entry, "pts_samples", static_cast<long long>(samples));
+            obs_data_set_int(entry, "pts_regressions", static_cast<long long>(regressions));
+            obs_data_set_bool(entry, "pts_monotone", monotone);
+
+            OBSDataAutoRelease pts = obs_data_create();
+            obs_data_set_int(pts, "first_ns", static_cast<long long>(
+                                metric.firstPtsNs.load(std::memory_order_relaxed)));
+            obs_data_set_int(pts, "last_ns", static_cast<long long>(
+                                metric.lastPtsNs.load(std::memory_order_relaxed)));
+            obs_data_set_int(pts, "samples", static_cast<long long>(samples));
+            obs_data_set_int(pts, "regressions", static_cast<long long>(regressions));
+            obs_data_set_bool(pts, "monotone", monotone);
+            const uint64_t end = metric.historyWrite.load(std::memory_order_acquire);
+            const uint64_t begin = end > ProgramAudioMetric::kPtsHistorySize ?
+                end - ProgramAudioMetric::kPtsHistorySize : 0;
+            OBSDataArrayAutoRelease history = obs_data_array_create();
+            for (uint64_t sequence = begin; sequence < end; ++sequence) {
+                OBSDataAutoRelease point = obs_data_create();
+                obs_data_set_int(point, "pts_ns", static_cast<long long>(
+                    metric.ptsHistory[sequence % ProgramAudioMetric::kPtsHistorySize].load(
+                        std::memory_order_relaxed)));
+                obs_data_array_push_back(history, point);
+            }
+            obs_data_set_array(pts, "series_ns", history);
+            obs_data_set_obj(entry, "pts", pts);
+            obs_data_set_array(entry, "pts_series_ns", history);
+            obs_data_array_push_back(tracks, entry);
+        }
+        obs_data_set_array(res, "tracks", tracks);
+        obs_data_set_bool(res, "observed", observedAudio);
+        if (!observedAudio && mismatchedOutputs_.empty())
+            obs_data_set_string(res, "route_error", "ProgramAudio callback has not observed a frame yet");
+        obs_data_set_bool(res, "pts_monotone", allPtsMonotone);
+        obs_data_set_int(res, "pts_samples", static_cast<long long>(totalSamples));
+    }
+
+    void stop()
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        for (const auto &track : tracks_)
+            obs_remove_raw_audio_callback(track->mixerIndex, program_audio_callback,
+                                           track->metric.get());
+        tracks_.clear();
+        mismatchedOutputs_.clear();
+        routeAudio_ = nullptr;
+        started_ = false;
+    }
+
+private:
+    struct Track {
+        size_t mixerIndex = 0;
+        std::string encoderName;
+        std::unique_ptr<ProgramAudioMetric> metric = std::make_unique<ProgramAudioMetric>();
+    };
+
+    Track *find_track_locked(size_t mixer)
+    {
+        for (const auto &track : tracks_)
+            if (track->mixerIndex == mixer)
+                return track.get();
+        return nullptr;
+    }
+
+    std::mutex mu_;
+    bool started_ = false;
+    audio_t *routeAudio_ = nullptr;
+    std::vector<std::unique_ptr<Track>> tracks_;
+    std::vector<std::string> mismatchedOutputs_;
+};
+
+ProgramAudioObserver g_programAudioObserver;
+
+void on_get_program_audio_route(obs_data_t * /*req*/, obs_data_t *res, void *)
+{
+    std::string error;
+    if (!g_programAudioObserver.ensure(error)) {
+        obs_data_set_string(res, "error", error.c_str());
+        return;
+    }
+    g_programAudioObserver.append(res);
+    // `route_error` is deliberately separate from the transport-level error:
+    // callers can still record route/source identities when there is no active
+    // output, while a mismatch remains visible and makes `stable=false`.
+}
+
 // ---- Monitoring device selection (#173) ------------------------------------
 //
 // pulsar-headless binds "Default"/"default" at boot, which makes monitoring
@@ -2860,6 +3237,7 @@ void obs_module_post_load(void)
     obs_websocket_vendor_register_request(g_vendor, "GetCapabilities",      on_get_capabilities,    nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetAudioTracks",       on_get_audio_tracks,    nullptr);
     obs_websocket_vendor_register_request(g_vendor, "MeasureAudioTrackFlow", on_measure_audio_track_flow, nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "GetProgramAudioRoute", on_get_program_audio_route, nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetAdaptiveState",     on_get_adaptive_state,  nullptr);
     obs_websocket_vendor_register_request(g_vendor, "SetAdaptiveEnabled",   on_set_adaptive_enabled, nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetMonitoringDeviceList", on_get_monitoring_device_list, nullptr);
@@ -2867,7 +3245,8 @@ void obs_module_post_load(void)
     obs_websocket_vendor_register_request(g_vendor, "GetDiagnostics",      on_get_diagnostics,     nullptr);
     obs_websocket_vendor_register_request(g_vendor, "StopLogFileWrite",    on_stop_log_file_write, nullptr);
 
-    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 18 requests");
+    blog(LOG_INFO, "[pulsar-multi-stream] vendor 'pulsar' registered with 19 requests "
+         "(GetProgramAudioRoute exposes common ProgramAudio identity/PTS)");
 
     // Phase 12b: spin up the adaptive bitrate worker AFTER vendor registration
     // so its emit_event path has a valid handle.
@@ -2877,6 +3256,10 @@ void obs_module_post_load(void)
 void obs_module_unload(void)
 {
     blog(LOG_INFO, "[pulsar-multi-stream] obs_module_unload");
+    // Remove the persistent raw callbacks before any encoder/output handles
+    // are torn down.  The observer is process-local and has no frontend
+    // pointer, so this is the only lifecycle edge it needs.
+    g_programAudioObserver.stop();
     // Order matters: stop the adaptive thread BEFORE tearing down the
     // registry, otherwise the worker can read freed Destination snapshots
     // mid-tick.

@@ -295,12 +295,84 @@ frame ID/PTS evidence required to correlate the actual on-air cut.
 | `GetCapabilities` | **Capability manifest** — the authoritative statement of what this Pulsar can do (Prism ADR 027 §3.1/§3.2). Enumerates the encoder families this build exposes (via `obs_enum_encoder_types()`, mapped to Pulsar short names) plus the bitrate windows, each with its application regime. Declares, per enumerated family, its presets / profiles / rate-controls / keyint and bitrate windows (`capabilities.encoder_families`, all `boot-fixed`), the audio block (monitoring, tracks, sample rate, speaker layout), the presence-only inventories (registered filters, source kinds, destination kinds), the effective video colorimetry, and the graphics adapters + admitted output scales (`capabilities.graphics_adapters` / `output_scales`, ADR 027 Amendment 1). Off-air detection; `active_encoder` is the family bound to the streaming output. See the manifest, encoder-block and list-encoding notes below. | — | `version: number`, `capabilities: { [name]: CapabilityEntry }`, `encoders: {value: string}[]`, `active_encoder: string`, `video_bitrate?: {min, max}`, `audio_bitrate?: {value: number}[]`, `error?` |
 | `GetAudioTracks` | What each output actually carries: per output (`stream` / `record` / `replay`), the encoder bound at each slot, the **track** it pulls from (`obs_encoder_get_mixer_index() + 1`, *not* the slot index), its name, codec, bitrate, `active` flag and `encoded_frames`. An output that does not exist is **absent** from the list, never an empty entry. | — | `count: number`, `outputs: { output, slots: { slot, track, encoder, codec?, bitrate, active, encoded_frames }[] }[]`, `error?` |
 | `MeasureAudioTrackFlow` | Measure, for a bounded window, the audio that actually **flows** on each of the six libobs mixes — i.e. what each track's encoder is fed. Installs a raw audio callback on every mix for `duration_ms`, then removes it (a permanently connected callback would force libobs to mix all six buses for the process's lifetime). `encoder_bound` says whether the streaming output carries an encoder for that track, and is **omitted** off-air rather than guessed. This is the only read that distinguishes *routed* from *consumed*: see the note below. | `duration_ms?` (50..2000, default 300) | `duration_ms`, `tracks: { track, frames, peak, encoder_bound? }[]`, `error?` |
+| `GetProgramAudioRoute` | Read the explicit common r2 Program audio route. The route identity is captured from the process-wide libobs `audio_t`, and every present frontend-owned output (`stream`, `record`, `replay`, `program-return`, `preview-return`) reports whether it carries that same identity. `tracks` are the actual encoder-fed mixer indexes with persistent raw-audio counters and a bounded recent PTS series. A video Cut never changes this route. | — | `schema_version`, `route_id: "program-common"`, `route_name: "ProgramAudio"`, `scope: "program"`, `cut_audio_policy: "common-program-route-unchanged"`, `audio_identity`, `stable`, `outputs`, `sources`, `tracks`, `pts_monotone`, `pts_samples`, `preview_audio_supported: false`, `afv_supported: false`, `observed`, `route_error?`, `error?` |
 | `GetAdaptiveState` | Snapshot the bitrate adaptation worker. | — | `enabled`, `target_kbps`, `current_kbps`, `floor_kbps`, `stable_ticks`, `adjustments_total`, `last_delta_total`, `last_delta_dropped`, `last_drop_ratio`, `error?` |
 | `GetMonitoringDeviceList` | Playback devices audio monitoring can be routed to, enumerated from the machine **at call time** (`obs_enum_audio_monitoring_devices`), plus libobs's own dynamic `default` id at the head of the list — it is the device `pulsar-headless` binds at boot and a real choice, not a placeholder. `devices` is empty when the build has no monitoring backend. | — | `available: bool`, `devices: { id, name }[]`, `active_device_id?`, `active_device_name?`, `error?` |
 | `SetMonitoringDevice` | Route monitoring to `device_id`. An id the machine does not enumerate is **refused by name**: `obs_set_audio_monitoring_device()` stores any non-empty pair and returns `true`, so an unchecked id would be accepted into silence. The write is reported only after `obs_get_audio_monitoring_device()` reports it in force (read-back); the returned `device_id` is that read-back, not the request. Proves the bind, not that the endpoint is audible. | `device_id` | `changed: bool`, `device_id`, `device_name`, `error?` |
 | `SetAdaptiveEnabled` | Toggle the worker. Disabling pauses sampling; the encoder bitrate is left at whatever value the worker last applied. Re-enabling resets `stable_ticks` to 0 so the loop re-warms before any climb attempt. | `enabled` | `enabled: bool`, `error?` |
 | `GetDiagnostics` | ADR 005 §3.6.1 diagnostic extraction. Always returns per-level counters since start (`count_error`/`count_warn`/`count_info`/`count_debug`) and the known output/destination state — none of that carries message content. `log_path` and `recent_warn_error_lines` (served from memory, never a file re-read) are refused with an explicit `error` — never a silent empty array — unless obs-websocket is bound to the loopback interface; a bind widened via `PULSAR_WS_BIND` gets the same refusal. `max_lines` is clamped server-side regardless of what is asked. | `max_lines?` (server-capped) | `count_error`, `count_warn`, `count_info`, `count_debug`, `outputs: { output, active }[]`, `destinations: { id, name, kind, enabled, active }[]`, `log_path?`, `recent_warn_error_lines?: { line }[]`, `error?` |
 | `StopLogFileWrite` | ADR 005 §3.6.2 kill switch. Stops file writes on the running log sink **without a restart**; deliberately asymmetric — it never reopens the file, a restart is the only way to resume. No path in or out of scope: it acts on the one sink this process owns. The stop itself is journalled as the last line of the file before it closes. A second call is a no-op reporting `already_stopped: true`, never an error. | — | `stopped: bool`, `already_stopped: bool`, `log_path?`, `error?` |
+
+### Common Program audio route (r2, issue #245)
+
+`GetProgramAudioRoute` is the wire-level contract for the initial dual-lane
+audio scope. `route_id=program-common` and `route_name=ProgramAudio` identify
+one process-wide libobs `audio_t`; the frontend captures it once at setup and
+reuses it for every frontend-owned audio encoder. The
+`outputs[].audio_matches_route` flags and `audio_identity` values are the
+read-back evidence that an audio-capable output consumes that same bus.
+`program-return` and `preview-return` are video-only surfaces and therefore
+carry `audio_supported=false` explicitly; they are not inferred to have a
+second audio route. `sources` records only present audio-capable sources bound
+to the main canvas source channels `1..MAX_CHANNELS-1` (currently `1..63`).
+Channel 0 is deliberately excluded: it is the mutable dual-lane video root
+that changes between `PulsarLaneA` and `PulsarLaneB` on a Cut and is not part of
+the Program audio identity. Each source entry's `channel`, `identity`, `id`,
+and `name` describes the actual audio source set. `tracks[].mixer_index`
+identifies the actual encoder-fed mix (track number is `mixer_index + 1`, never
+an output slot).
+
+Each observed track reports `blocks`, `frames`, `first_pts_ns`,
+`last_pts_ns`, `pts_samples`, `pts_regressions`, `pts_monotone`, and a bounded
+`pts.series_ns` / `pts_series_ns` history. The callback is attached only to
+mixers consumed by a frontend-owned encoder, so `observed=true` is evidence of
+real audio flowing to an encoder rather than a configuration read-back. A
+missing encoder is represented by `observed=false` and `route_error`; it is
+never replaced with a fabricated track.
+
+The r2 Cut policy is explicit: video Cut swaps the Program/Preview video roots
+at a frame boundary while the common Program audio route remains unchanged.
+Preview audio and AFV (audio-follow-video) are unsupported in r2. They MUST
+NOT be inferred from the video lane, the selected Preview scene, or an output
+slot; an independent Preview mix requires a separately specified contract and
+validation issue.
+
+Representative response shape (raw vendor wire uses `snake_case`):
+
+```jsonc
+{
+  "schema_version": 1,
+  "route_id": "program-common",
+  "route_name": "ProgramAudio",
+  "scope": "program",
+  "cut_audio_policy": "common-program-route-unchanged",
+  "audio_identity": "0x...",
+  "stable": true,
+  "preview_audio_supported": false,
+  "afv_supported": false,
+  "observed": true,
+  "outputs": [{
+    "output": "record",
+    "audio_supported": true,
+    "audio_identity": "0x...",
+    "audio_matches_route": true,
+    "slots": [{ "slot": 0, "track": 1, "encoder": "PulsarAudioEnc" }]
+  }],
+  "tracks": [{
+    "track": 1,
+    "mixer_index": 0,
+    "pts_monotone": true,
+    "pts": {
+      "first_ns": 1000000000,
+      "last_ns": 1080000000,
+      "samples": 5,
+      "regressions": 0,
+      "monotone": true,
+      "series_ns": [{ "pts_ns": 1000000000 }, { "pts_ns": 1020000000 }]
+    }
+  }]
+}
+```
 
 #### The capability manifest (`GetCapabilities`)
 

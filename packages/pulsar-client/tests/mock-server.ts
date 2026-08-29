@@ -367,6 +367,65 @@ export class MockObsWebSocket {
       case "GetVideoSettings":
         return { ...this.video };
 
+      case "GetProgramAudioRoute":
+        return {
+          schema_version: 1,
+          route_id: "program-common",
+          route_name: "ProgramAudio",
+          scope: "program",
+          cut_audio_policy: "common-program-route-unchanged",
+          audio_identity: "0xprogram-audio",
+          stable: true,
+          preview_audio_supported: false,
+          afv_supported: false,
+          observed: true,
+          outputs: [
+            {
+              output: "record",
+              id: "ffmpeg_muxer",
+              name: "PulsarRecord",
+              audio_supported: true,
+              audio_identity: "0xprogram-audio",
+              audio_matches_route: true,
+              active: true,
+              slots: [{ slot: 0, track: 1, encoder: "PulsarAudioEnc" }],
+            },
+          ],
+          sources: [
+            { channel: 1, identity: "0xdesktop", id: "wasapi_output_capture", name: "PulsarDesktopAudio" },
+          ],
+          tracks: [
+            {
+              track: 1,
+              mixer_index: 0,
+              encoder: "PulsarAudioEnc",
+              blocks: 5,
+              frames: 960,
+              first_pts_ns: 1000000000,
+              last_pts_ns: 1000000000 + 4 * 20000000,
+              pts_samples: 5,
+              pts_regressions: 0,
+              pts_monotone: true,
+              pts: {
+                first_ns: 1000000000,
+                last_ns: 1000000000 + 4 * 20000000,
+                samples: 5,
+                regressions: 0,
+                monotone: true,
+                series_ns: [
+                  { pts_ns: 1000000000 },
+                  { pts_ns: 1020000000 },
+                  { pts_ns: 1040000000 },
+                  { pts_ns: 1060000000 },
+                  { pts_ns: 1080000000 },
+                ],
+              },
+            },
+          ],
+          pts_monotone: true,
+          pts_samples: 5,
+        };
+
       case "GetCapabilities": {
         const audioLadder = [64, 96, 128, 160, 192, 224, 256, 320];
         return {
@@ -596,4 +655,3 @@ function decodeFrame(raw: Buffer | ArrayBuffer | Buffer[], isBinary: boolean): F
     return undefined;
   }
 }
-

@@ -826,6 +826,36 @@ describe("PulsarClient", () => {
   });
 
   describe("audio", () => {
+    it("programRoute exposes the stable common route and PTS evidence", async () => {
+      const route = await client.audio.programRoute();
+      expect(route.schemaVersion).toBe(1);
+      expect(route.routeId).toBe("program-common");
+      expect(route.routeName).toBe("ProgramAudio");
+      expect(route.cutAudioPolicy).toBe("common-program-route-unchanged");
+      expect(route.stable).toBe(true);
+      expect(route.previewAudioSupported).toBe(false);
+      expect(route.afvSupported).toBe(false);
+      expect(route.outputs[0]?.audioSupported).toBe(true);
+      expect(route.outputs[0]?.audioMatchesRoute).toBe(true);
+      expect(route.sources).toEqual([
+        {
+          channel: 1,
+          identity: "0xdesktop",
+          id: "wasapi_output_capture",
+          name: "PulsarDesktopAudio",
+        },
+      ]);
+      expect(route.sources.every((source) => source.channel > 0)).toBe(true);
+      expect(route.tracks[0]?.ptsMonotone).toBe(true);
+      expect(route.tracks[0]?.pts.seriesNs).toEqual([
+        1000000000,
+        1020000000,
+        1040000000,
+        1060000000,
+        1080000000,
+      ]);
+    });
+
     it("specialInputs resolves the mic slot name", async () => {
       const s = await client.audio.specialInputs();
       expect(s.mic1).toBe("Mic/Aux");

@@ -19,6 +19,11 @@ import type {
   MonitoringDevice,
   MonitoringDeviceList,
   OutputScale,
+  ProgramAudioOutput,
+  ProgramAudioPts,
+  ProgramAudioRoute,
+  ProgramAudioSource,
+  ProgramAudioTrack,
   PulsarCapabilities,
   VideoSettings,
   VideoSettingsPatch,
@@ -202,6 +207,74 @@ export interface WireSetMonitoringDeviceResponse {
   changed?: boolean;
   device_id?: string;
   device_name?: string;
+  error?: string;
+}
+
+export interface WireProgramAudioPts {
+  first_ns?: number;
+  last_ns?: number;
+  samples?: number;
+  regressions?: number;
+  monotone?: boolean;
+  series_ns?: Array<{ pts_ns?: number }>;
+}
+
+export interface WireProgramAudioSlot {
+  slot?: number;
+  track?: number;
+  encoder?: string;
+}
+
+export interface WireProgramAudioOutput {
+  output?: string;
+  id?: string;
+  name?: string;
+  audio_supported?: boolean;
+  audio_identity?: string;
+  audio_matches_route?: boolean;
+  active?: boolean;
+  slots?: WireProgramAudioSlot[];
+}
+
+export interface WireProgramAudioSource {
+  channel?: number;
+  identity?: string;
+  id?: string;
+  name?: string;
+}
+
+export interface WireProgramAudioTrack {
+  track?: number;
+  mixer_index?: number;
+  encoder?: string;
+  blocks?: number;
+  frames?: number;
+  first_pts_ns?: number;
+  last_pts_ns?: number;
+  pts_samples?: number;
+  pts_regressions?: number;
+  pts_monotone?: boolean;
+  pts?: WireProgramAudioPts;
+  pts_series_ns?: Array<{ pts_ns?: number }>;
+}
+
+export interface WireGetProgramAudioRouteResponse {
+  schema_version?: number;
+  route_id?: string;
+  route_name?: string;
+  scope?: string;
+  cut_audio_policy?: string;
+  audio_identity?: string;
+  stable?: boolean;
+  preview_audio_supported?: boolean;
+  afv_supported?: boolean;
+  observed?: boolean;
+  outputs?: WireProgramAudioOutput[];
+  sources?: WireProgramAudioSource[];
+  tracks?: WireProgramAudioTrack[];
+  pts_monotone?: boolean;
+  pts_samples?: number;
+  route_error?: string;
   error?: string;
 }
 
@@ -566,6 +639,104 @@ export function monitoringDeviceListFromWire(
   if (w.active_device_id) list.activeDeviceId = w.active_device_id;
   if (w.active_device_name) list.activeDeviceName = w.active_device_name;
   return list;
+}
+
+function programAudioPtsFromWire(
+  wire: WireProgramAudioPts | undefined,
+  track?: WireProgramAudioTrack,
+): ProgramAudioPts {
+  const pts = wire ?? {};
+  const series = Array.isArray(track?.pts_series_ns)
+    ? track.pts_series_ns
+    : Array.isArray(pts.series_ns)
+      ? pts.series_ns
+      : [];
+  return {
+    firstNs: track?.first_pts_ns ?? pts.first_ns ?? 0,
+    lastNs: track?.last_pts_ns ?? pts.last_ns ?? 0,
+    samples: track?.pts_samples ?? pts.samples ?? 0,
+    regressions: track?.pts_regressions ?? pts.regressions ?? 0,
+    monotone: track?.pts_monotone ?? pts.monotone ?? false,
+    seriesNs: series
+      .filter((item): item is { pts_ns: number } => typeof item?.pts_ns === "number")
+      .map((item) => item.pts_ns),
+  };
+}
+
+/** Decodes the explicit common Program audio route (#245). */
+export function programAudioRouteFromWire(
+  w: WireGetProgramAudioRouteResponse,
+): ProgramAudioRoute {
+  const outputs: ProgramAudioOutput[] = (Array.isArray(w.outputs) ? w.outputs : []).map((item) => ({
+    output: item.output ?? "",
+    id: item.id ?? "",
+    name: item.name ?? "",
+    audioSupported: item.audio_supported === true,
+    audioIdentity: item.audio_identity ?? "",
+    audioMatchesRoute: item.audio_matches_route === true,
+    active: item.active === true,
+    slots: (Array.isArray(item.slots) ? item.slots : [])
+      .filter(
+        (slot): slot is { slot: number; track: number; encoder: string } =>
+          typeof slot?.slot === "number" &&
+          typeof slot.track === "number" &&
+          typeof slot.encoder === "string",
+      )
+      .map((slot) => ({ slot: slot.slot, track: slot.track, encoder: slot.encoder })),
+  }));
+
+  const sources: ProgramAudioSource[] = (Array.isArray(w.sources) ? w.sources : [])
+    .filter(
+      (item): item is { channel: number; identity: string; id: string; name: string } =>
+        typeof item?.channel === "number" &&
+        typeof item.identity === "string" &&
+        typeof item.id === "string" &&
+        typeof item.name === "string",
+    )
+    .map((item) => ({
+      channel: item.channel,
+      identity: item.identity,
+      id: item.id,
+      name: item.name,
+    }));
+
+  const tracks: ProgramAudioTrack[] = (Array.isArray(w.tracks) ? w.tracks : []).map((item) => {
+    const pts = programAudioPtsFromWire(item.pts, item);
+    return {
+      track: item.track ?? 0,
+      mixerIndex: item.mixer_index ?? 0,
+      encoder: item.encoder ?? "",
+      blocks: item.blocks ?? 0,
+      frames: item.frames ?? 0,
+      firstPtsNs: pts.firstNs,
+      lastPtsNs: pts.lastNs,
+      ptsSamples: pts.samples,
+      ptsRegressions: pts.regressions,
+      ptsMonotone: pts.monotone,
+      pts,
+      ptsSeriesNs: pts.seriesNs,
+    };
+  });
+
+  const route: ProgramAudioRoute = {
+    schemaVersion: w.schema_version ?? 0,
+    routeId: w.route_id ?? "",
+    routeName: w.route_name ?? "",
+    scope: w.scope ?? "",
+    cutAudioPolicy: w.cut_audio_policy ?? "",
+    audioIdentity: w.audio_identity ?? "",
+    stable: w.stable === true,
+    previewAudioSupported: w.preview_audio_supported === true,
+    afvSupported: w.afv_supported === true,
+    observed: w.observed === true,
+    outputs,
+    sources,
+    tracks,
+    ptsMonotone: w.pts_monotone === true,
+    ptsSamples: w.pts_samples ?? 0,
+  };
+  if (w.route_error) route.routeError = w.route_error;
+  return route;
 }
 
 export function bitrateAdjustedFromWire(w: WireBitrateAdjustedEvent): BitrateAdjustedEvent {
