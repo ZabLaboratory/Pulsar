@@ -41,6 +41,7 @@ goes through the vendor namespace.
 | `SetVideoSettings` | `video_bitrate?, audio_bitrate?` | `changed: bool, video_bitrate?, audio_bitrate?` (or `error`) |
 | `GetAdaptiveState` | — | `enabled, target_kbps, current_kbps, floor_kbps, stable_ticks, adjustments_total, last_delta_total, last_delta_dropped, last_drop_ratio, samples` |
 | `SetAdaptiveEnabled` | `enabled` | `enabled` |
+| `GetProgramAudioRoute` | — | Explicit `program-common` / `ProgramAudio` identity, output/source read-back, encoder-fed mixer tracks and monotone PTS counters/history. |
 
 ### Vendor events
 
@@ -49,6 +50,17 @@ goes through the vendor namespace.
 | `BitrateAdjusted` | `bitrate, target, floor, reason ("drops" \| "recovery"), drop_ratio` | Each time the adaptive loop applies a new video bitrate. |
 
 `SetVideoSettings` accepts only encoder-level mutations live: `video_bitrate` updates instantly via `obs_encoder_update`; `audio_bitrate` only updates when no output is pulling from the audio encoder (ffmpeg_aac doesn't support mid-stream re-init). `fps` / `width` / `height` are pinned at boot via `PULSAR_FPS` / `PULSAR_RESOLUTION` env vars; trying to set them through this request is rejected with a typed error.
+
+### Common Program audio route (r2, issue #245)
+
+`GetProgramAudioRoute` reports the one process-wide libobs `audio_t` captured
+as `program-common` / `ProgramAudio`. Audio-capable frontend outputs must report
+the same `audio_identity`; their bound mixer indexes receive persistent raw
+callbacks that expose actual frames and monotone PTS evidence. The Program and
+Preview return surfaces are video-only and are explicitly marked
+`audio_supported=false`. A video Cut swaps only video roots and never changes
+the common audio route. Preview audio and AFV are unsupported in r2 and are not
+inferred from a Preview scene or output slot.
 
 ### Kinds
 

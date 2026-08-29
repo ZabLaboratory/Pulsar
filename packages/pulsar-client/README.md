@@ -427,6 +427,7 @@ class AudioNamespace {
   toggleMuted(inputName: string): Promise<boolean>;      // returns new state
   listDevices(inputName: string): Promise<AudioDevice[]>; // wasapi device_id list
   setDevice(inputName: string, deviceId: string): Promise<void>;
+  programRoute(): Promise<ProgramAudioRoute>;              // common r2 Program route + PTS evidence
 }
 ```
 
@@ -444,6 +445,12 @@ if (mic1) {
 
 Mute changes (from any client, including the OBS UI) broadcast as the
 typed `inputMuteStateChanged` event — see "Events" below.
+
+`programRoute()` reads the explicit `program-common` / `ProgramAudio` route.
+Its `audioIdentity` and output read-back fields are stable across video Cuts;
+`tracks[].pts` reports actual encoder-fed audio PTS. r2 explicitly reports
+`previewAudioSupported=false` and `afvSupported=false`: Preview audio/AFV is
+not inferred from the selected video scene.
 
 ### v5 baseline passthrough
 

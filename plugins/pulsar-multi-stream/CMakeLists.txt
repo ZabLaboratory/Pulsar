@@ -22,6 +22,10 @@ set(PULSAR_LIBOBS_CONFIG          "${PULSAR_UPSTREAM_DIR}/build_x64/config")
 set(PULSAR_LIBOBS_LIB             "${PULSAR_LIBOBS_BUILD}/RelWithDebInfo/obs.lib")
 set(PULSAR_FRONTEND_API_HEADERS   "${PULSAR_UPSTREAM_DIR}/frontend/api")
 set(PULSAR_FRONTEND_API_LIB       "${PULSAR_UPSTREAM_DIR}/build_x64/frontend/api/RelWithDebInfo/obs-frontend-api.lib")
+# #245 -- the explicit Program-audio route identity is a read-only contract
+# shared with the headless frontend stub.  The plugin does not link against
+# that executable; it only consumes the header's stable constants.
+set(PULSAR_FRONTEND_STUB_HEADERS "${PROJECT_SOURCE_DIR}/../pulsar-frontend-stub/include")
 
 # obs-websocket-api.h is header-only, vendored inside our pulsar-websocket
 # fork. We only depend on the header; runtime registration discovers
@@ -58,6 +62,7 @@ target_include_directories(pulsar-multi-stream PRIVATE
     "${PULSAR_LIBOBS_BUILD}"
     "${PULSAR_LIBOBS_CONFIG}"
     "${PULSAR_FRONTEND_API_HEADERS}"
+    "${PULSAR_FRONTEND_STUB_HEADERS}"
     "${PULSAR_WEBSOCKET_API_HEADERS}"
     "${PULSAR_LOG_HANDLER_HEADERS}"
 )
