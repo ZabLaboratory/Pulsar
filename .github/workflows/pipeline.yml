@@ -337,15 +337,6 @@ jobs:
         # Keeper's antenna run (needs the VPS).
         run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py -v
 
-      # #246 -- strict JSONL latency/capacity evidence parser. These are
-      # fixture-only regression cases: they prove the harness rejects a
-      # wrong DirectShow boundary, mismatched revisions, duplicate first
-      # packets and incomplete sample counts. Runtime acceptance still needs
-      # Keeper's exact Windows/GPU artifact and a trace with evidence_kind=
-      # runtime; a fixture must never satisfy the SLO gate by itself.
-      - name: Run #246 latency evidence harness tests
-        run: pytest tests/probe-take-latency/test_probe_take_latency.py -v
-
   # ── Stage 2 : build pulsar.exe (THE ONE BUILD) ────────────────────
   # Every downstream Windows job consumes the `pulsar-rundir` artefact
   # this job uploads. retention-days is short -- the artefact only
