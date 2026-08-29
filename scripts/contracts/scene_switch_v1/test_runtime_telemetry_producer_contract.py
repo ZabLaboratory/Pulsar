@@ -47,7 +47,10 @@ def test_canonical_runtime_producer_patch_is_present_and_scoped() -> None:
     # must extend that target and make virtualcam.c consume the same public
     # header; changing the duplicate legacy copy would compile no code here.
     assert "-#include \"shared-memory-queue.h\"" in text
-    assert "+#include <shared-memory-queue.h>" in text
+    assert "+#include \"../../shared/obs-shared-memory-queue/shared-memory-queue.h\"" in text
+    assert "struct video_queue_frame_metadata" in text
+    assert "video_queue_read_ex" in text
+    assert "video_queue_write_ex" in text
     assert UPSTREAM_QUEUE_CMAKE.is_file()
     assert UPSTREAM_VCAM_CMAKE.is_file()
     queue_cmake = UPSTREAM_QUEUE_CMAKE.read_text(encoding="utf-8")

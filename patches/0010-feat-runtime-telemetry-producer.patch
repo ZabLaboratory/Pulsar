@@ -1,4 +1,4 @@
-From a2b91460456ea06b661702804ee112d76b7642c6 Mon Sep 17 00:00:00 2001
+From fc3ef389c107f6fae0c92195b1e3cd9bdfecd32b Mon Sep 17 00:00:00 2001
 From: ClodoCapeo <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Sat, 29 Aug 2026 09:14:20 +0200
 Subject: [PATCH] feat(telemetry): emit correlated runtime trace boundaries
@@ -193,7 +193,7 @@ index 1c2035ca4..c2f098f36 100644
  	const int GetOutputBufferSize(void);
  
 diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
-index 7b2cb3bf8..5651a3781 100644
+index 7b2cb3bf8..5306e819d 100644
 --- a/plugins/win-dshow/virtualcam.c
 +++ b/plugins/win-dshow/virtualcam.c
 @@ -5,12 +5,14 @@
@@ -201,7 +201,7 @@ index 7b2cb3bf8..5651a3781 100644
  #include <wchar.h>
  #include "util/threading.h"
 -#include "shared-memory-queue.h"
-+#include <shared-memory-queue.h>
++#include "../../shared/obs-shared-memory-queue/shared-memory-queue.h"
 +#include "../../../plugins/pulsar-frontend-stub/include/pulsar-runtime-telemetry-abi.h"
  
  struct virtualcam_data {
