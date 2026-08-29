@@ -216,6 +216,8 @@ def test_directshow_namespace_decision_is_shared_and_rejects_before_queue_sinks(
     assert "return legacy_alias_present ? DIRECTSHOW_QUEUE_NAMESPACE_REJECT" in header
     assert "directshow_queue_namespace_from_environment" in producer
     assert "directshow_queue_namespace_from_environment" in consumer
+    assert "OutputDebugStringW(L\"[pulsar-directshow] queue namespace rejected; consumer is disabled\\n\")" in consumer
+    assert "blog(LOG_ERROR" not in consumer
     assert "+\tif (vcam->queue_namespace_rejected)\n+\t\treturn false;" in producer
     assert consumer.index("+\tif (!queue_namespace_rejected)\n+\t\tvq = video_queue_open_named") < consumer.index(
         "+\t\tvq = video_queue_open_named"

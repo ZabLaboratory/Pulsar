@@ -1,4 +1,4 @@
-From be0b8749bf135cd78fcd3030e54714d1d5d4c1c8 Mon Sep 17 00:00:00 2001
+From e94481da3cbecd4c9068ca9eeecd1e9a6feb8946 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Sat, 29 Aug 2026 13:38:43 +0200
@@ -130,7 +130,7 @@ index 000000000..38ca9b26e
 +	}
 +}
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
-index b304fdf40..dad7a1eb8 100644
+index b304fdf40..0393d7481 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 +++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 @@ -1,11 +1,11 @@
@@ -197,7 +197,7 @@ index b304fdf40..dad7a1eb8 100644
 +	queue_namespace_rejected = queue_namespace == DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
 +	queue_name = queue_name_for_filter(queue_namespace, program_return, preview_return);
 +	if (queue_namespace_rejected) {
-+		blog(LOG_ERROR, "[pulsar-directshow] queue namespace rejected; consumer is disabled");
++		OutputDebugStringW(L"[pulsar-directshow] queue namespace rejected; consumer is disabled\n");
 +	}
  	thread_start = CreateEvent(nullptr, true, false, nullptr);
  	thread_stop = CreateEvent(nullptr, true, false, nullptr);
