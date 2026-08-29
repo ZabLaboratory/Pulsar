@@ -90,6 +90,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#endif
+
+#ifdef _WIN32
 #include <bcrypt.h>
 #endif
 
