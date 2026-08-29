@@ -1,0 +1,152 @@
+"""Static contract tests for the Pulsar dual-lane implementation.
+
+The Windows/GPU probe is intentionally separate: it must exercise a built
+Pulsar binary with x264 and NVENC.  These tests run without that environment
+and protect the source-level invariants that make the probe meaningful:
+physical A/B roots, stable downstream identities, a frame-boundary pair swap,
+and a teardown barrier for an extracted (in-flight) swap.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+
+_ROOT = Path(__file__).resolve().parents[3]
+_FRONTEND = _ROOT / "plugins/pulsar-frontend-stub/src/pulsar-frontend-stub.cpp"
+_DUAL_LANE_PATCH = _ROOT / "patches/0009-feat-libobs-add-frame-boundary-dual-lane-swaps.patch"
+_RUNTIME_PROBE = _ROOT / "scripts/probe-dual-lane.py"
+
+
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _between(source: str, start: str, end: str) -> str:
+    start_at = source.index(start)
+    end_at = source.index(end, start_at + len(start))
+    return source[start_at:end_at]
+
+
+def test_physical_roots_are_fixed_and_roles_point_at_their_lane() -> None:
+    source = _read(_FRONTEND)
+
+    assert 'obs_scene_create_private("PulsarLaneA")' in source
+    assert 'obs_scene_create_private("PulsarLaneB")' in source
+    assert "OBS_SCENE_DUP_PRIVATE_COPY" in source
+    assert "obs_scene_duplicate(obs_scene_from_source(scene)" in source
+    assert "obs_scene_add(laneScene, contentSource)" in source
+    assert "laneSources[onAirLane] == currentScene" in source
+    assert "laneSources[previewLane] == previewScene" in source
+    assert "laneItems[0] && laneItems[1]" in source
+    assert "programView && previewView" in source
+    assert "std::swap(self->onAirLane, self->previewLane)" in source
+    assert "std::swap(self->currentScene, self->previewScene)" in source
+
+
+def test_preview_and_direct_selection_mutate_composition_not_view_identity() -> None:
+    source = _read(_FRONTEND)
+    preview_setter = _between(
+        source,
+        "void obs_frontend_set_current_preview_scene(obs_source_t *scene) override",
+        "    // ---------- screenshots ----------",
+    )
+    scene_setter = _between(
+        source,
+        "void PulsarFrontendAPI::obs_frontend_set_current_scene(obs_source_t *scene)",
+        "void PulsarFrontendAPI::obs_frontend_get_transitions",
+    )
+    cut = _between(
+        source,
+        "bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)",
+        "bool PulsarFrontendAPI::setup()",
+    )
+
+    assert "replaceLaneCompositionLocked(previewLane, scene)" in preview_setter
+    assert "replaceLaneCompositionLocked(onAirLane, scene)" in scene_setter
+    assert "Program mutation rejected while Take is pending" in scene_setter
+    assert "obs_view_set_source(programView" not in preview_setter + scene_setter + cut
+    assert "obs_view_set_source(previewView" not in preview_setter + scene_setter + cut
+
+
+def test_encoder_and_stable_surfaces_are_bound_only_during_setup() -> None:
+    source = _read(_FRONTEND)
+    assert source.count("obs_encoder_set_video(videoEncoder, programVideo)") == 1
+    assert "obs_encoder_set_video(videoEncoder, obs_get_video())" not in source
+
+    setup = _between(
+        source,
+        "bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)",
+        "bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)",
+    )
+    cut = _between(
+        source,
+        "bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)",
+        "bool PulsarFrontendAPI::setup()",
+    )
+    assert "obs_view_set_source(programView, 0, currentScene)" in setup
+    assert "obs_view_set_source(previewView, 0, previewScene)" in setup
+    assert "obs_output_set_media(programReturnOutput, programVideo" in setup
+    assert "obs_output_set_media(previewReturnOutput, previewVideo" in setup
+    assert "obs_view_set_source(" not in cut
+    assert "obs_encoder_set_video(" not in cut
+    assert "obs_output_set_media(" not in cut
+
+
+def test_take_logs_roles_frame_identity_and_stable_downstream_objects() -> None:
+    source = _read(_FRONTEND)
+    assert "TakeAccepted" in source
+    assert "TakeCommitted" in source
+    assert "frame_id=%llu" in source
+    assert "pts_ns=%llu" in source
+    assert "OnAirRoot=%p PreviewRoot=%p" in source
+    assert "ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p" in source
+    assert "obs_set_output_source(0, legacyProgramScene)" in source
+
+
+def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> None:
+    probe = _read(_RUNTIME_PROBE)
+    assert "--encoder" in probe
+    assert "--takes" in probe
+    assert '"StartRecord"' in probe
+    assert '"StopRecord"' in probe
+    assert "OBS_WEBSOCKET_OUTPUT_STARTED" in probe
+    assert "OBS_WEBSOCKET_OUTPUT_STOPPED" in probe
+    assert "-count_frames" in probe
+    assert "encoder video_t bound once to ProgramView" in probe
+
+
+def test_core_swap_is_frame_boundary_and_rejects_concurrent_requests() -> None:
+    patch = _read(_DUAL_LANE_PATCH)
+
+    assert "pthread_cond_t atomic_swap_cond;" in patch
+    assert "bool atomic_swap_initialized;" in patch
+    assert "bool atomic_swap_inflight;" in patch
+    assert "pthread_cond_wait(&obs->video.atomic_swap_cond" in patch
+    assert "pthread_cond_broadcast(&obs->video.atomic_swap_cond)" in patch
+    assert "pthread_equal(pthread_self(), obs->video.video_thread)" in patch
+    assert "obs->video.pending_atomic_swap || obs->video.atomic_swap_inflight" in patch
+
+    apply_at = patch.index("obs_view_apply_pending_atomic_swap(++obs->video.video_frame_id")
+    output_at = patch.index("output_frames();", apply_at)
+    assert apply_at < output_at
+    assert "obs->video.atomic_swap_inflight = true;" in patch
+    assert "obs->video.atomic_swap_inflight = false;" in patch
+
+
+def test_teardown_drains_in_flight_swap_before_destroying_views() -> None:
+    source = _read(_FRONTEND)
+    teardown = _between(
+        source,
+        "void PulsarFrontendAPI::teardown()",
+        "void PulsarFrontendAPI::emit(obs_frontend_event event)",
+    )
+
+    ready_false = teardown.index("dualLaneReady = false;")
+    pending_false = teardown.index("dualLaneCutPending.store(false);")
+    cancel = teardown.index("obs_view_cancel_atomic_swap();")
+    program_destroy = teardown.index("obs_view_destroy(programView)")
+    preview_destroy = teardown.index("obs_view_destroy(previewView)")
+    assert ready_false < pending_false < cancel < program_destroy
+    assert cancel < preview_destroy
+    assert "dualLaneCutPending.store(false);" in teardown

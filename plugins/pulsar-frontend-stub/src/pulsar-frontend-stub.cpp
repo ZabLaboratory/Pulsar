@@ -292,16 +292,39 @@ public:
     {
         if (!studioMode)
             return nullptr;
-        obs_source_t *s = previewScene ? previewScene : currentScene;
+        std::lock_guard<std::mutex> lk(dualLaneMutex);
+        obs_source_t *s = dualLaneReady ? previewSelection : (previewScene ? previewScene : currentScene);
         return s ? obs_source_get_ref(s) : nullptr;
     }
     void obs_frontend_set_current_preview_scene(obs_source_t *scene) override
     {
         if (!scene)
             return;
-        if (previewScene)
-            obs_source_release(previewScene);
-        previewScene = obs_source_get_ref(scene);
+        {
+            std::lock_guard<std::mutex> lk(dualLaneMutex);
+            if (dualLaneCutPending.load()) {
+                blog(LOG_WARNING, "[pulsar-dual-lane] Preview mutation rejected while Take is pending");
+                return;
+            }
+            if (dualLaneReady && (scene == programSelection || scene == currentScene)) {
+                // Sharing the selected source or physical root between ProgramView
+                // and PreviewView would invalidate the lane isolation invariant.
+                blog(LOG_WARNING, "[pulsar-dual-lane] Preview mutation rejected: scene aliases OnAir");
+                return;
+            }
+            if (dualLaneReady) {
+                if (!replaceLaneCompositionLocked(previewLane, scene))
+                    return;
+                if (previewSelection)
+                    obs_source_release(previewSelection);
+                previewSelection = obs_source_get_ref(scene);
+                dualLaneInvariantLocked("set-preview");
+            } else {
+                if (previewScene)
+                    obs_source_release(previewScene);
+                previewScene = obs_source_get_ref(scene);
+            }
+        }
         emit(OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED);
     }
 
@@ -393,6 +416,15 @@ private:
     static char *bstrdup_or_null(const char *s) { return s ? bstrdup(s) : nullptr; }
 
     void teardown();
+
+    // Dual-lane video topology (ADR-PULSAR-DUAL-LANE-001).  The two view
+    // contexts and their video_t objects are created once; a Take only queues
+    // a pair swap for the libobs graphics boundary.
+    bool setupDualLane(obs_scene_t *templateScene);
+    bool queueDualLaneCut(obs_source_t *scene);
+    bool replaceLaneCompositionLocked(int lane, obs_source_t *scene);
+    bool dualLaneInvariantLocked(const char *where) const;
+    static void OnDualLaneCutCommitted(void *param, uint64_t frameId, uint64_t ptsNs);
 
     // ADR-005 §3.4 / #182: pulsar:OutputFailed. This binary is a static lib
     // linked into pulsar-headless.exe -- it owns no obs-websocket vendor of
@@ -725,8 +757,25 @@ private:
     }
 
     // state
+    std::mutex dualLaneMutex;
+    bool dualLaneReady = false;
+    std::atomic<bool> dualLaneCutPending{false};
+    std::atomic<uint64_t> lastCutFrameId{0};
+    std::atomic<uint64_t> lastCutPtsNs{0};
+    uint64_t cutCount = 0;
+    int onAirLane = 0;
+    int previewLane = 1;
+    obs_source_t *laneSources[2] = {};
+    obs_sceneitem_t *laneItems[2] = {};
+
+    // Physical role roots remain stable for the lifetime of the frontend.
+    // These separate references are the public logical scene selections; a
+    // lane composition can point at one of them without changing the root or
+    // either downstream view identity.
     obs_source_t *currentScene = nullptr;
     obs_source_t *previewScene = nullptr;
+    obs_source_t *programSelection = nullptr;
+    obs_source_t *previewSelection = nullptr;
     obs_source_t *currentTransition = nullptr;
     // Reference OWNER only -- never an enumeration source of truth (ADR Prism
     // 026 §3.1, issue #119). It holds the ref on the boot "Default" scene so it
@@ -739,6 +788,14 @@ private:
     obs_output_t *replayOutput = nullptr;
     obs_output_t *virtualcamOutput = nullptr;
     obs_output_t *programReturnOutput = nullptr;
+    obs_output_t *previewReturnOutput = nullptr;
+
+    // Stable downstream surfaces.  The encoder and the two return outputs
+    // remain attached to these video_t objects for the lifetime of Pulsar.
+    obs_view_t *programView = nullptr;
+    video_t *programVideo = nullptr;
+    obs_view_t *previewView = nullptr;
+    video_t *previewVideo = nullptr;
 
     // ADR-005 §3.5 / #186: attempt lifecycle for pulsar:OutputAttemptSettled,
     // one pair per output this binary owns directly (multi-stream's own
@@ -1034,6 +1091,325 @@ void applyX264Defaults(obs_data_t *s, int bitrate)
 
 } // namespace
 
+bool PulsarFrontendAPI::dualLaneInvariantLocked(const char *where) const
+{
+    if (!dualLaneReady)
+        return true;
+
+    const bool valid = onAirLane >= 0 && onAirLane < 2 && previewLane >= 0 && previewLane < 2 &&
+                       onAirLane != previewLane && laneSources[onAirLane] == currentScene &&
+                       laneSources[previewLane] == previewScene && laneItems[0] && laneItems[1] &&
+                       programSelection && previewSelection && programView && previewView &&
+                       programVideo && previewVideo;
+    if (!valid) {
+        blog(LOG_ERROR,
+             "[pulsar-dual-lane] invariant failed at %s: onair_lane=%d preview_lane=%d "
+             "LaneA=%p LaneB=%p current=%p preview=%p program_selection=%p preview_selection=%p",
+             where ? where : "unknown", onAirLane, previewLane, (void *)laneSources[0],
+             (void *)laneSources[1], (void *)currentScene, (void *)previewScene,
+             (void *)programSelection, (void *)previewSelection);
+    }
+    return valid;
+}
+
+bool PulsarFrontendAPI::replaceLaneCompositionLocked(int lane, obs_source_t *scene)
+{
+    if (lane < 0 || lane >= 2 || !scene || !laneSources[lane])
+        return false;
+    if (scene == laneSources[lane] || scene == laneSources[lane == 0 ? 1 : 0]) {
+        blog(LOG_WARNING, "[pulsar-dual-lane] refusing to nest a physical lane root as composition");
+        return false;
+    }
+
+    obs_scene_t *laneScene = obs_scene_from_source(laneSources[lane]);
+    if (!laneScene)
+        return false;
+
+    // Clone the selected logical scene into a private composition.  Adding
+    // the public scene object itself would make both lanes activate the same
+    // stateful producers (CEF/WGC/media) and would defeat physical
+    // isolation.  The wrapper root remains the same source; only its single
+    // private child changes.
+    obs_scene_t *content = obs_scene_duplicate(obs_scene_from_source(scene),
+                                               lane == 0 ? "PulsarLaneAContent" : "PulsarLaneBContent",
+                                               OBS_SCENE_DUP_PRIVATE_COPY);
+    if (!content)
+        return false;
+    obs_source_t *contentSource = obs_scene_get_source(content);
+    obs_sceneitem_t *newItem = obs_scene_add(laneScene, contentSource);
+    obs_scene_release(content);
+    if (!newItem) {
+        blog(LOG_WARNING, "[pulsar-dual-lane] failed to install composition in lane %d", lane);
+        return false;
+    }
+    obs_sceneitem_t *oldItem = laneItems[lane];
+    laneItems[lane] = newItem;
+    if (oldItem)
+        obs_sceneitem_remove(oldItem);
+    return true;
+}
+
+bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
+{
+    if (!templateScene)
+        return false;
+
+    // The lane roots are private wrappers, not aliases for the user's scene.
+    // Their single child is the hot composition.  This keeps each physical
+    // producer identity stable while allowing SetCurrentPreviewScene to select
+    // any main-canvas scene without rebinding either downstream view.
+    obs_scene_t *laneAScene = obs_scene_create_private("PulsarLaneA");
+    obs_scene_t *laneBScene = obs_scene_create_private("PulsarLaneB");
+    obs_scene_t *laneAContent = obs_scene_duplicate(templateScene, "PulsarLaneAContent",
+                                                    OBS_SCENE_DUP_PRIVATE_COPY);
+    obs_scene_t *laneBContent = obs_scene_duplicate(templateScene, "PulsarLaneBContent",
+                                                    OBS_SCENE_DUP_PRIVATE_COPY);
+    if (!laneAScene || !laneBScene || !laneAContent || !laneBContent) {
+        if (laneAScene)
+            obs_scene_release(laneAScene);
+        if (laneBScene)
+            obs_scene_release(laneBScene);
+        if (laneAContent)
+            obs_scene_release(laneAContent);
+        if (laneBContent)
+            obs_scene_release(laneBContent);
+        blog(LOG_ERROR, "[pulsar-dual-lane] failed to create fixed roots and hot compositions");
+        return false;
+    }
+
+    obs_sceneitem_t *laneAItem = obs_scene_add(laneAScene, obs_scene_get_source(laneAContent));
+    obs_sceneitem_t *laneBItem = obs_scene_add(laneBScene, obs_scene_get_source(laneBContent));
+    obs_source_t *laneA = obs_source_get_ref(obs_scene_get_source(laneAScene));
+    obs_source_t *laneB = obs_source_get_ref(obs_scene_get_source(laneBScene));
+    obs_scene_release(laneAContent);
+    obs_scene_release(laneBContent);
+    obs_scene_release(laneAScene);
+    obs_scene_release(laneBScene);
+    if (!laneAItem || !laneBItem || !laneA || !laneB) {
+        if (laneA)
+            obs_source_release(laneA);
+        if (laneB)
+            obs_source_release(laneB);
+        blog(LOG_ERROR, "[pulsar-dual-lane] failed to install hot compositions in fixed roots");
+        return false;
+    }
+
+    laneSources[0] = laneA;
+    laneSources[1] = laneB;
+    laneItems[0] = laneAItem;
+    laneItems[1] = laneBItem;
+
+    // Role refs point only to the fixed roots.  Public scene identity is
+    // tracked separately so the frontend API still reports the selected scene.
+    if (currentScene)
+        obs_source_release(currentScene);
+    if (previewScene)
+        obs_source_release(previewScene);
+    currentScene = obs_source_get_ref(laneSources[0]);
+    previewScene = obs_source_get_ref(laneSources[1]);
+    programSelection = obs_source_get_ref(templateScene ? obs_scene_get_source(templateScene) : nullptr);
+    previewSelection = obs_source_get_ref(templateScene ? obs_scene_get_source(templateScene) : nullptr);
+    onAirLane = 0;
+    previewLane = 1;
+
+    programView = obs_view_create();
+    previewView = obs_view_create();
+    if (!programView || !previewView) {
+        blog(LOG_ERROR, "[pulsar-dual-lane] failed to create ProgramView/PreviewView");
+        if (programView) {
+            obs_view_destroy(programView);
+            programView = nullptr;
+        }
+        if (previewView) {
+            obs_view_destroy(previewView);
+            previewView = nullptr;
+        }
+        if (currentScene) {
+            obs_source_release(currentScene);
+            currentScene = nullptr;
+        }
+        if (previewScene) {
+            obs_source_release(previewScene);
+            previewScene = nullptr;
+        }
+        if (programSelection) {
+            obs_source_release(programSelection);
+            programSelection = nullptr;
+        }
+        if (previewSelection) {
+            obs_source_release(previewSelection);
+            previewSelection = nullptr;
+        }
+        obs_source_release(laneSources[0]);
+        obs_source_release(laneSources[1]);
+        laneSources[0] = nullptr;
+        laneSources[1] = nullptr;
+        laneItems[0] = nullptr;
+        laneItems[1] = nullptr;
+        return false;
+    }
+
+    programVideo = obs_view_add(programView);
+    previewVideo = obs_view_add(previewView);
+    if (!programVideo || !previewVideo) {
+        blog(LOG_ERROR, "[pulsar-dual-lane] failed to add stable view mixes");
+        obs_view_remove(programView);
+        obs_view_remove(previewView);
+        obs_view_destroy(programView);
+        obs_view_destroy(previewView);
+        programView = nullptr;
+        previewView = nullptr;
+        programVideo = nullptr;
+        previewVideo = nullptr;
+        if (currentScene) {
+            obs_source_release(currentScene);
+            currentScene = nullptr;
+        }
+        if (previewScene) {
+            obs_source_release(previewScene);
+            previewScene = nullptr;
+        }
+        if (programSelection) {
+            obs_source_release(programSelection);
+            programSelection = nullptr;
+        }
+        if (previewSelection) {
+            obs_source_release(previewSelection);
+            previewSelection = nullptr;
+        }
+        obs_source_release(laneSources[0]);
+        obs_source_release(laneSources[1]);
+        laneSources[0] = nullptr;
+        laneSources[1] = nullptr;
+        laneItems[0] = nullptr;
+        laneItems[1] = nullptr;
+        return false;
+    }
+
+    obs_view_set_source(programView, 0, currentScene);
+    obs_view_set_source(previewView, 0, previewScene);
+
+    // These are the only media bindings for the two stable raw surfaces.  In
+    // particular, no output media is rebound by a Cut.
+    if (programReturnOutput)
+        obs_output_set_media(programReturnOutput, programVideo, obs_get_audio());
+    if (previewReturnOutput)
+        obs_output_set_media(previewReturnOutput, previewVideo, obs_get_audio());
+
+    // The encoder is intentionally bound once, before any output can start.
+    // obs_encoder_set_video rejects active/initialized encoders; the dual-lane
+    // callback never calls it.
+    if (videoEncoder) {
+        obs_encoder_set_video(videoEncoder, programVideo);
+        blog(LOG_INFO, "[pulsar-dual-lane] encoder video_t bound once to ProgramView");
+    }
+
+    // Preserve the old main-canvas compatibility surface for plugins that
+    // still query obs_get_video(), while all production downstream bindings
+    // use ProgramView above.  This is a setup-time bind, not a Take path.
+    if (nativeStingerEnabled)
+        bindTransitionOutput(currentTransition, currentScene);
+    else
+        obs_set_output_source(0, currentScene);
+
+    dualLaneReady = true;
+    if (!dualLaneInvariantLocked("setup")) {
+        blog(LOG_ERROR, "[pulsar-dual-lane] setup invariant failed");
+        return false;
+    }
+    blog(LOG_INFO, "[pulsar-dual-lane] ready LaneA=%p LaneB=%p ProgramView=%p PreviewView=%p "
+         "ProgramVideo=%p PreviewVideo=%p",
+         (void *)laneSources[0], (void *)laneSources[1], (void *)programView, (void *)previewView,
+         (void *)programVideo, (void *)previewVideo);
+    return true;
+}
+
+bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
+{
+    std::lock_guard<std::mutex> lk(dualLaneMutex);
+    if (!dualLaneReady || !scene || !dualLaneInvariantLocked("queue-before"))
+        return false;
+    if (dualLaneCutPending.load()) {
+        blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: another Cut is pending");
+        return false;
+    }
+    if (scene != previewSelection) {
+        blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: scene is not the frozen Preview selection");
+        return false;
+    }
+
+    // Set the guard before queuing so a concurrent Preview mutation cannot
+    // pass between queueing and the graphics-thread callback.
+    dualLaneCutPending.store(true);
+    if (!obs_view_queue_atomic_swap(programView, 0, previewScene, previewView, 0, currentScene,
+                                    OnDualLaneCutCommitted, this)) {
+        dualLaneCutPending.store(false);
+        blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: atomic frame-boundary slot is busy");
+        return false;
+    }
+
+    blog(LOG_INFO, "[pulsar-dual-lane] TakeAccepted preview_lane=%d onair_lane=%d "
+         "OnAirRoot=%p PreviewRoot=%p ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p",
+         previewLane, onAirLane, (void *)currentScene, (void *)previewScene, (void *)programView,
+         (void *)previewView, (void *)programVideo, (void *)previewVideo);
+    return true;
+}
+
+void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, uint64_t ptsNs)
+{
+    auto *self = static_cast<PulsarFrontendAPI *>(param);
+    if (!self)
+        return;
+
+    uint64_t committedCount = 0;
+    int committedOnAirLane = -1;
+    int committedPreviewLane = -1;
+    obs_source_t *legacyProgramScene = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(self->dualLaneMutex);
+        if (!self->dualLaneCutPending.load())
+            return;
+
+        // The pair was already replaced in libobs at this frame boundary.  A
+        // role swap is now only metadata/ref interpretation; the two view and
+        // video_t identities do not change.
+        std::swap(self->currentScene, self->previewScene);
+        std::swap(self->onAirLane, self->previewLane);
+        std::swap(self->programSelection, self->previewSelection);
+        self->lastCutFrameId.store(frameId);
+        self->lastCutPtsNs.store(ptsNs);
+        ++self->cutCount;
+        committedCount = self->cutCount;
+        committedOnAirLane = self->onAirLane;
+        committedPreviewLane = self->previewLane;
+        self->dualLaneCutPending.store(false);
+        if (!self->dualLaneInvariantLocked("commit"))
+            blog(LOG_ERROR, "[pulsar-dual-lane] commit invariant failed");
+        if (!self->nativeStingerEnabled)
+            legacyProgramScene = obs_source_get_ref(self->currentScene);
+    }
+
+    // Keep the legacy main-canvas compatibility surface aligned with the new
+    // OnAir root at the same graphics boundary.  ProgramView remains the
+    // encoder's stable binding; this is only for callers that still inspect
+    // obs_get_video().  The dormant native-transition path owns channel 0 and
+    // is intentionally left untouched here.
+    if (legacyProgramScene) {
+        obs_set_output_source(0, legacyProgramScene);
+        obs_source_release(legacyProgramScene);
+    }
+
+    blog(LOG_INFO, "[pulsar-dual-lane] TakeCommitted count=%llu frame_id=%llu pts_ns=%llu "
+         "onair_lane=%d preview_lane=%d OnAirRoot=%p PreviewRoot=%p "
+         "ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p",
+         static_cast<unsigned long long>(committedCount), static_cast<unsigned long long>(frameId),
+         static_cast<unsigned long long>(ptsNs), committedOnAirLane, committedPreviewLane,
+         (void *)self->currentScene, (void *)self->previewScene, (void *)self->programView,
+         (void *)self->previewView, (void *)self->programVideo, (void *)self->previewVideo);
+    self->emit(OBS_FRONTEND_EVENT_SCENE_CHANGED);
+    self->emit(OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED);
+}
+
 bool PulsarFrontendAPI::setup()
 {
     // Issue #129: close the loop libobs expects the FRONTEND to close on
@@ -1052,7 +1428,8 @@ bool PulsarFrontendAPI::setup()
         return false;
     }
     currentScene = obs_source_get_ref(obs_scene_get_source(scene));
-    obs_scene_release(scene); // currentScene holds the ref now
+    // Keep the scene handle until the hot A/B copies are made after the
+    // bootstrap capture source is attached below.
     scenes.push_back(obs_source_get_ref(currentScene));
 
     // Default transition (fade).
@@ -1162,9 +1539,21 @@ bool PulsarFrontendAPI::setup()
             programReturnOutput = obs_output_create("program_return_output", "PulsarProgramReturn", nullptr, nullptr);
         }
         if (programReturnOutput) {
-            obs_output_set_media(programReturnOutput, obs_get_video(), obs_get_audio());
-            blog(LOG_WARNING, "[pulsar-frontend-stub] program return output ready (PulsarProgramReturn)");
+            blog(LOG_WARNING, "[pulsar-frontend-stub] program return output allocated; awaiting stable ProgramView");
         }
+    }
+
+    // The Preview return is the same raw-output primitive with a distinct
+    // output name.  The win-dshow patch maps that name to its own queue and
+    // filter, so consumers never alias ProgramReturn.
+    previewReturnOutput = obs_output_create("program_return_output", "PulsarPreviewReturn", nullptr, nullptr);
+    if (previewReturnOutput) {
+        if (obs_output_get_flags(previewReturnOutput) == 0) {
+            obs_output_release(previewReturnOutput);
+            previewReturnOutput = obs_output_create("program_return_output", "PulsarPreviewReturn", nullptr, nullptr);
+        }
+        if (previewReturnOutput)
+            blog(LOG_WARNING, "[pulsar-frontend-stub] preview return output allocated; awaiting stable PreviewView");
     }
 
     // Streaming service placeholder -- NEUTRAL by construction (#136).
@@ -1295,7 +1684,6 @@ bool PulsarFrontendAPI::setup()
     if (!videoEncoder) {
         blog(LOG_WARNING, "[pulsar-frontend-stub] video encoder '%s' unavailable", encoderId);
     } else {
-        obs_encoder_set_video(videoEncoder, obs_get_video());
         if (recordOutput)
             obs_output_set_video_encoder(recordOutput, videoEncoder);
         if (streamOutput)
@@ -1306,8 +1694,8 @@ bool PulsarFrontendAPI::setup()
         // a video encoder to the process.
         if (replayOutput)
             obs_output_set_video_encoder(replayOutput, videoEncoder);
-        blog(LOG_INFO, "[pulsar-frontend-stub] video encoder configured: family=%s id=%s, "
-             "%d kbps", encoderFamily.c_str(), encoderId, videoBitrate);
+        blog(LOG_INFO, "[pulsar-frontend-stub] video encoder allocated: family=%s id=%s, "
+             "%d kbps (stable ProgramView binding follows)", encoderFamily.c_str(), encoderId, videoBitrate);
     }
 
     // ---- Audio encoders: N tracks, routed per output (issue #168) ---------
@@ -1415,6 +1803,15 @@ bool PulsarFrontendAPI::setup()
     } else if (scene) {
         captureItem = obs_scene_add(scene, captureSource);
     }
+
+    // Build the two independent hot roots only after the bootstrap scene has
+    // its initial producer.  The copies are then bound to stable ProgramView
+    // and PreviewView mixes; all production encoders/returns consume those
+    // mixes rather than the legacy main canvas.
+    if (!setupDualLane(scene))
+        blog(LOG_WARNING, "[pulsar-frontend-stub] dual-lane setup unavailable; keeping legacy canvas path");
+    obs_scene_release(scene);
+    scene = nullptr;
 
     // ---- Phase 9: audio sources on the main mixer ----
     // libobs has 6 main "channels" addressed via obs_set_output_source.
@@ -1593,6 +1990,16 @@ void PulsarFrontendAPI::teardown()
     stop_output_and_wait(replayOutput, "replay");
     stop_output_and_wait(virtualcamOutput, "virtualcam");
     stop_output_and_wait(programReturnOutput, "program-return");
+    stop_output_and_wait(previewReturnOutput, "preview-return");
+
+    // Prevent a graphics-thread callback from dereferencing this frontend
+    // while its stable views and role refs are being torn down.
+    {
+        std::lock_guard<std::mutex> lk(dualLaneMutex);
+        dualLaneReady = false;
+        dualLaneCutPending.store(false);
+    }
+    obs_view_cancel_atomic_swap();
 
     // Unbind every main mixer channel (video on 0, audio on 1/2/3) before
     // releasing the underlying sources. Otherwise libobs keeps refs past
@@ -1658,6 +2065,24 @@ void PulsarFrontendAPI::teardown()
         obs_output_release(programReturnOutput);
         programReturnOutput = nullptr;
     }
+    if (previewReturnOutput) {
+        obs_output_release(previewReturnOutput);
+        previewReturnOutput = nullptr;
+    }
+    if (programView) {
+        obs_view_remove(programView);
+        obs_view_set_source(programView, 0, nullptr);
+        obs_view_destroy(programView);
+        programView = nullptr;
+        programVideo = nullptr;
+    }
+    if (previewView) {
+        obs_view_remove(previewView);
+        obs_view_set_source(previewView, 0, nullptr);
+        obs_view_destroy(previewView);
+        previewView = nullptr;
+        previewVideo = nullptr;
+    }
     if (vcamView) {
         obs_view_remove(vcamView);
         obs_view_set_source(vcamView, 0, nullptr);
@@ -1702,6 +2127,15 @@ void PulsarFrontendAPI::teardown()
         micAudioSource = nullptr;
     }
 
+    for (obs_source_t *&lane : laneSources) {
+        if (!lane)
+            continue;
+        obs_source_release(lane);
+        lane = nullptr;
+    }
+    laneItems[0] = nullptr;
+    laneItems[1] = nullptr;
+
     if (currentTransition) {
         obs_source_release(currentTransition);
         currentTransition = nullptr;
@@ -1713,6 +2147,14 @@ void PulsarFrontendAPI::teardown()
     if (previewScene) {
         obs_source_release(previewScene);
         previewScene = nullptr;
+    }
+    if (programSelection) {
+        obs_source_release(programSelection);
+        programSelection = nullptr;
+    }
+    if (previewSelection) {
+        obs_source_release(previewSelection);
+        previewSelection = nullptr;
     }
     release_source_vec(scenes);
     release_source_vec(transitions);
@@ -1758,15 +2200,79 @@ void PulsarFrontendAPI::obs_frontend_get_scenes(struct obs_frontend_source_list 
 
 obs_source_t *PulsarFrontendAPI::obs_frontend_get_current_scene(void)
 {
-    return currentScene ? obs_source_get_ref(currentScene) : nullptr;
+    std::lock_guard<std::mutex> lk(dualLaneMutex);
+    obs_source_t *scene = dualLaneReady ? programSelection : currentScene;
+    return scene ? obs_source_get_ref(scene) : nullptr;
 }
 
 void PulsarFrontendAPI::obs_frontend_set_current_scene(obs_source_t *scene)
 {
     if (!scene)
         return;
-    if (currentScene == scene)
+    bool dualLaneTake = false;
+    bool dualLaneDirect = false;
+    {
+        std::lock_guard<std::mutex> lk(dualLaneMutex);
+        if (dualLaneReady && dualLaneCutPending.load()) {
+            blog(LOG_WARNING, "[pulsar-dual-lane] Program mutation rejected while Take is pending");
+            return;
+        }
+        if (dualLaneReady && programSelection == scene)
+            return;
+        if (!dualLaneReady && currentScene == scene)
+            return;
+        if (dualLaneReady) {
+            // The websocket studio-mode trigger calls this method with the
+            // frozen logical Preview selection.  The Cut itself swaps the two
+            // fixed physical roots; public scene identity is swapped in the
+            // graphics-thread callback at the same frame boundary.
+            dualLaneTake = studioMode && scene == previewSelection;
+            dualLaneDirect = !studioMode && !dualLaneTake;
+            if (dualLaneTake) {
+                // queueDualLaneCut takes the same mutex after this scope.
+            } else if (!dualLaneDirect) {
+                blog(LOG_WARNING, "[pulsar-dual-lane] scene switch rejected: select Preview before Take");
+                return;
+            }
+        }
+    }
+
+    if (dualLaneTake) {
+        // Re-checks the role and pending guard under the role mutex, then
+        // queues both routes together.  There is deliberately no fallback to
+        // obs_set_output_source here: that would bypass the frame boundary.
+        if (queueDualLaneCut(scene))
+            return;
         return;
+    }
+
+    if (dualLaneDirect) {
+        {
+            std::lock_guard<std::mutex> lk(dualLaneMutex);
+            if (!dualLaneInvariantLocked("direct-before"))
+                return;
+            if (!replaceLaneCompositionLocked(onAirLane, scene))
+                return;
+            if (programSelection)
+                obs_source_release(programSelection);
+            programSelection = obs_source_get_ref(scene);
+            if (!dualLaneInvariantLocked("direct-after"))
+                return;
+        }
+        // Keep the legacy main canvas on the stable physical OnAir root. The
+        // encoder is attached to ProgramView and is never rebound here.
+        obs_set_output_source(0, currentScene);
+        emit(OBS_FRONTEND_EVENT_SCENE_CHANGED);
+        return;
+    }
+
+    if (dualLaneReady) {
+        // In studio mode an on-air change must go through Preview and the
+        // atomic pair primitive.  Do not silently fall back to a one-view
+        // rebind that could expose an intermediate route.
+        return;
+    }
+
     obs_source_t *prev = currentScene;
     currentScene = obs_source_get_ref(scene);
 
