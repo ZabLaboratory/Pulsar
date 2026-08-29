@@ -23,6 +23,7 @@ _WEBSOCKET_HANDLER = _ROOT / "plugins/pulsar-websocket/src/requesthandler/Reques
 _DUAL_LANE_PATCH = _ROOT / "patches/0009-feat-libobs-add-frame-boundary-dual-lane-swaps.patch"
 _DIRECTSHOW_NAMESPACE_PATCH = _ROOT / "patches/0010-fix-win-dshow-reject-ambiguous-queue-namespaces.patch"
 _RUNTIME_PROBE = _ROOT / "scripts/probe-dual-lane.py"
+_ROLLBACK_PROBE = _ROOT / "scripts/probe-dual-lane-rollback.py"
 _OUTPUT_EFFECT_PROBE = _ROOT / "scripts/probe-output-effect.py"
 
 
@@ -265,6 +266,51 @@ def test_take_logs_roles_frame_identity_and_stable_downstream_objects() -> None:
     accepted = _between(source, 'blog(LOG_INFO, "[pulsar-dual-lane] TakeAccepted', "return true;")
     committed = _between(source, 'blog(LOG_INFO, "[pulsar-dual-lane] TakeCommitted', "self->emit(")
     assert "%p" not in ready + accepted + committed
+
+
+def test_dual_lane_activation_flag_is_consumed_and_rollback_preserves_surfaces() -> None:
+    source = _read(_FRONTEND)
+    probe = _read(_RUNTIME_PROBE)
+
+    # The reference campaign's environment assignment must have a matching
+    # boot-time consumer.  A probe-side env var without this decision would
+    # measure the wrong topology while still looking like a valid baseline.
+    assert "PULSAR_DISABLE_DUAL_LANE" in source
+    assert "PULSAR_DUAL_LANE_ENABLED" in source
+    assert "resolve_dual_lane_activation" in source
+    assert "flag_resolved_at=setup" in source
+    assert "positive == EnvBool::Invalid" in source
+    assert "legacyDisable == EnvBool::Invalid" in source
+    assert 'return {false, "invalid-PULSAR_DUAL_LANE_ENABLED"}' in source
+    assert 'return {false, "invalid-PULSAR_DISABLE_DUAL_LANE"}' in source
+    assert "dualLaneEnabled = activation.enabled && !resourceReference" in source
+    assert "assert_dual_lane_activation" in probe
+    assert 'required_source="PULSAR_DISABLE_DUAL_LANE" if expected_reference else "PULSAR_DUAL_LANE_ENABLED=1"' in probe
+    assert 'required_source="PULSAR_DUAL_LANE_ENABLED=1"' in probe
+
+    # Rollback is a post-commit operational freeze.  It must leave the
+    # already-selected Program route and both stable downstream identities in
+    # place; changing an active video_t here would violate the ADR invariant.
+    assert "PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES" in source
+    assert "rollbackAfterTakes" in source
+    assert "dualLaneOperational = false" in source
+    assert "rollback committed at frame_id=%llu" in source
+    assert "current_program_preserved=1" in source
+    assert "active_video_t_rebound=0" in source
+    callback = _between(
+        source,
+        "void PulsarFrontendAPI::OnDualLaneCutCommitted",
+        "bool PulsarFrontendAPI::setup()",
+    )
+    assert "obs_set_output_source(" not in callback
+    assert "obs_view_set_source(" not in callback
+    assert "obs_encoder_set_video(" not in callback
+    rollback_probe = _read(_ROLLBACK_PROBE)
+    assert "PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES" in rollback_probe
+    assert "pulsar-dual-lane-rollback.json" in rollback_probe
+    assert "pulsar.dual-lane-rollback.v1" in rollback_probe
+    assert "current_program_preserved" in rollback_probe
+    assert "stable encoder/video binding count=1" in rollback_probe
 
 
 def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> None:

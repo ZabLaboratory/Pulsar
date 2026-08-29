@@ -107,6 +107,74 @@ namespace {
 
 using json = nlohmann::json;
 
+// Boot-time feature switches are deliberately process-local and fail closed.
+// `PULSAR_DISABLE_DUAL_LANE` is retained as the backwards-compatible probe
+// switch used by the single-canvas reference campaign.  The positive flag is
+// useful for operators that want an explicit capability declaration; when it
+// is absent, the approved dual-lane path remains enabled.  Neither value is
+// read after setup(), and no WebSocket/leaf request can mutate it.
+enum class EnvBool : uint8_t { Unset, Enabled, Disabled, Invalid };
+
+EnvBool parse_env_bool(const char *value)
+{
+    if (!value || !*value)
+        return EnvBool::Unset;
+    std::string lower;
+    for (const char *p = value; *p; ++p)
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(*p))));
+    if (lower == "1" || lower == "true" || lower == "on" || lower == "yes")
+        return EnvBool::Enabled;
+    if (lower == "0" || lower == "false" || lower == "off" || lower == "no")
+        return EnvBool::Disabled;
+    return EnvBool::Invalid;
+}
+
+struct DualLaneActivation {
+    bool enabled = true;
+    const char *reason = "default";
+};
+
+DualLaneActivation resolve_dual_lane_activation()
+{
+    const EnvBool positive = parse_env_bool(std::getenv("PULSAR_DUAL_LANE_ENABLED"));
+    const EnvBool legacyDisable = parse_env_bool(std::getenv("PULSAR_DISABLE_DUAL_LANE"));
+
+    // A malformed explicit capability is never treated as an enable.  This
+    // prevents a typo in a deployment environment from silently activating a
+    // topology that was meant to stay in the compatibility path.
+    if (positive == EnvBool::Invalid)
+        return {false, "invalid-PULSAR_DUAL_LANE_ENABLED"};
+    if (legacyDisable == EnvBool::Invalid)
+        return {false, "invalid-PULSAR_DISABLE_DUAL_LANE"};
+    if (legacyDisable == EnvBool::Enabled)
+        return {false, "PULSAR_DISABLE_DUAL_LANE"};
+    if (positive == EnvBool::Disabled)
+        return {false, "PULSAR_DUAL_LANE_ENABLED=0"};
+    if (positive == EnvBool::Enabled)
+        return {true, "PULSAR_DUAL_LANE_ENABLED=1"};
+    return {true, "default"};
+}
+
+uint64_t resolve_dual_lane_rollback_after_takes()
+{
+    const char *value = std::getenv("PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES");
+    if (!value || !*value)
+        return 0;
+
+    char *end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    // Keep this an intentionally small, testable operational guard.  A value
+    // of zero or a malformed/oversized value disables the drill rather than
+    // changing normal runtime behavior.
+    if (!end || *end != '\0' || parsed == 0 || parsed > 100000ULL) {
+        blog(LOG_WARNING,
+             "[pulsar-dual-lane] PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES rejected; "
+             "expected an integer in 1..100000");
+        return 0;
+    }
+    return static_cast<uint64_t>(parsed);
+}
+
 class PulsarFrontendAPI;
 PulsarFrontendAPI *g_api = nullptr;
 class PulsarSceneSwitchVendor;
@@ -1679,6 +1747,11 @@ public:
         bool changed = false;
         {
             std::lock_guard<std::mutex> lk(dualLaneMutex);
+            if (dualLaneReady && !dualLaneOperational) {
+                blog(LOG_WARNING,
+                     "[pulsar-dual-lane] Preview mutation rejected: rollback freeze is active");
+                return;
+            }
             if (dualLaneCutPending.load()) {
                 blog(LOG_WARNING, "[pulsar-dual-lane] Preview mutation rejected while Take is pending");
                 return;
@@ -1797,6 +1870,58 @@ private:
     static char *bstrdup_or_null(const char *s) { return s ? bstrdup(s) : nullptr; }
 
     void teardown();
+
+    // Write a compact machine-readable rollback marker beside the recording
+    // output.  This is intentionally not a scene-switch-v1 event: the
+    // rollback freezes an already committed route and does not represent a
+    // new scene command.  Keeping it as a separate operational record avoids
+    // widening the shared command contract while giving the runbook a durable
+    // assertion to verify alongside the structured log line.
+    void writeDualLaneRollbackStatus(uint64_t frameId, uint64_t ptsNs,
+                                     int committedOnAirLane, int committedPreviewLane)
+    {
+        if (recordDirectory.empty()) {
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] rollback status marker unavailable: recording directory is unset");
+            return;
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(recordDirectory, ec);
+        if (ec) {
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] rollback status marker directory unavailable: %s",
+                 ec.message().c_str());
+            return;
+        }
+        const std::filesystem::path marker =
+            std::filesystem::path(recordDirectory) / "pulsar-dual-lane-rollback.json";
+        std::ofstream out(marker, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] rollback status marker unavailable: %s",
+                 marker.string().c_str());
+            return;
+        }
+        const char *runtimeId = std::getenv("PULSAR_RUNTIME_INSTANCE_ID");
+        out << "{\"schema\":\"pulsar.dual-lane-rollback.v1\","
+               "\"runtime_instance_id\":\""
+            << (runtimeId && *runtimeId ? runtimeId : "pulsar-runtime")
+            << "\",\"state\":\"frozen\",\"frame_id\":" << frameId
+            << ",\"pts_ns\":" << ptsNs << ",\"onair_lane\":"
+            << committedOnAirLane << ",\"preview_lane\":" << committedPreviewLane
+            << ",\"current_program_preserved\":true"
+               ",\"active_video_t_rebound\":false"
+               ",\"new_takes_enabled\":false"
+               ",\"program_view_stable\":true"
+               ",\"preview_view_stable\":true}\n";
+        if (!out) {
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] rollback status marker write failed: %s",
+                 marker.string().c_str());
+            return;
+        }
+        blog(LOG_INFO, "[pulsar-dual-lane] rollback status marker=%s", marker.string().c_str());
+    }
 
     // Dual-lane video topology (ADR-PULSAR-DUAL-LANE-001).  The two view
     // contexts and their video_t objects are created once; a Take only queues
@@ -2139,13 +2264,20 @@ private:
 
     // state
     std::mutex dualLaneMutex;
+    // Resolved exactly once during setup().  `dualLaneReady` describes the
+    // physical topology; `dualLaneOperational` is separately cleared by the
+    // frame-boundary rollback drill so the current Program route remains live
+    // while new scene mutations fail closed.
+    bool dualLaneEnabled = true;
     bool dualLaneReady = false;
+    bool dualLaneOperational = false;
     std::atomic<bool> dualLaneCutPending{false};
     std::string sceneSwitchPreparedCommandId;
     std::string sceneSwitchPendingTakeId;
     std::atomic<uint64_t> lastCutFrameId{0};
     std::atomic<uint64_t> lastCutPtsNs{0};
     uint64_t cutCount = 0;
+    uint64_t rollbackAfterTakes = 0;
     int onAirLane = 0;
     int previewLane = 1;
     obs_source_t *laneSources[2] = {};
@@ -3070,7 +3202,10 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
     // Do not create a third mix or rebind the main route after setup.
 
     dualLaneReady = true;
+    dualLaneOperational = true;
     if (!dualLaneInvariantLocked("setup")) {
+        dualLaneOperational = false;
+        dualLaneReady = false;
         blog(LOG_ERROR, "[pulsar-dual-lane] setup invariant failed");
         return false;
     }
@@ -3100,8 +3235,12 @@ bool PulsarFrontendAPI::sceneSwitchPrepare(const std::string &commandId, char la
     bool prepared = false;
     {
         std::lock_guard<std::mutex> lock(dualLaneMutex);
+        if (dualLaneReady && !dualLaneOperational) {
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] Prepare rejected: rollback freeze is active");
+        }
         const char expectedLane = previewLane == 0 ? 'A' : 'B';
-        if (dualLaneReady && !dualLaneCutPending.load() && laneId == expectedLane &&
+        if (dualLaneReady && dualLaneOperational && !dualLaneCutPending.load() && laneId == expectedLane &&
             scene != programSelection && scene != currentScene && obs_scene_from_source(scene)) {
             // Hold the previous public selection before the physical child is
             // replaced.  A postcondition failure must be able to restore both
@@ -3151,7 +3290,8 @@ bool PulsarFrontendAPI::sceneSwitchTake(const std::string &takeCommandId)
     obs_source_t *preview = nullptr;
     {
         std::lock_guard<std::mutex> lock(dualLaneMutex);
-        if (!dualLaneReady || dualLaneCutPending.load() || sceneSwitchPreparedCommandId.empty())
+        if (!dualLaneReady || !dualLaneOperational || dualLaneCutPending.load() ||
+            sceneSwitchPreparedCommandId.empty())
             return false;
         sceneSwitchPendingTakeId = takeCommandId;
         preview = obs_source_get_ref(previewSelection);
@@ -3219,8 +3359,11 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
     bool telemetryAccepted = false;
     {
         std::lock_guard<std::mutex> lk(dualLaneMutex);
-        if (!dualLaneReady || !scene || !dualLaneInvariantLocked("queue-before")) {
+        if (!dualLaneReady || !dualLaneOperational || !scene || !dualLaneInvariantLocked("queue-before")) {
             g_runtimeTelemetry.cancelPending();
+            if (dualLaneReady && !dualLaneOperational)
+                blog(LOG_WARNING,
+                     "[pulsar-dual-lane] Take rejected: rollback freeze is active");
             return false;
         }
         if (dualLaneCutPending.load()) {
@@ -3325,6 +3468,7 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
     bool programMainViewValid = false;
     bool programMainVideoValid = false;
     bool previewDistinctValid = false;
+    bool rollbackNow = false;
     std::string sceneSwitchTakeId;
     {
         std::lock_guard<std::mutex> lk(self->dualLaneMutex);
@@ -3357,9 +3501,29 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
         self->sceneSwitchPreparedCommandId.clear();
         if (!self->dualLaneInvariantLocked("commit"))
             blog(LOG_ERROR, "[pulsar-dual-lane] commit invariant failed");
+        if (self->rollbackAfterTakes > 0 && self->cutCount >= self->rollbackAfterTakes &&
+            self->dualLaneOperational) {
+            // The atomic swap has completed and the current Program root is
+            // already producing the committed frame.  Rollback therefore
+            // only closes the mutation gate; it never calls
+            // output-source setters or the encoder binding and cannot rebind
+            // the active video_t.
+            self->dualLaneOperational = false;
+            rollbackNow = true;
+        }
     }
 
     g_runtimeTelemetry.commit(frameId, ptsNs, committedOnAirLane, committedPreviewLane);
+    if (rollbackNow) {
+        g_dualLaneControlBridge.deactivate();
+        self->writeDualLaneRollbackStatus(frameId, ptsNs, committedOnAirLane, committedPreviewLane);
+        blog(LOG_WARNING,
+             "[pulsar-dual-lane] rollback committed at frame_id=%llu pts_ns=%llu "
+             "onair_lane=%d preview_lane=%d current_program_preserved=1 "
+             "active_video_t_rebound=0 new_takes_enabled=0",
+             static_cast<unsigned long long>(frameId), static_cast<unsigned long long>(ptsNs),
+             committedOnAirLane, committedPreviewLane);
+    }
     if (auto *vendor = g_sceneSwitchVendor.load(std::memory_order_acquire); !sceneSwitchTakeId.empty() && vendor)
         vendor->takeCommitted(sceneSwitchTakeId, frameId, ptsNs);
 
@@ -3866,6 +4030,25 @@ bool PulsarFrontendAPI::setup()
              "[pulsar-frontend-stub] external lane workload owner: suppressing Default PulsarCefWorkload; probe must bind public A/B browser_source producers");
     }
 
+    // Resolve the dual-lane capability once, before binding the output views.
+    // The legacy disable switch is consumed here (rather than only being set
+    // by the probe), so a reference run genuinely retains one canvas and an
+    // operator can perform a deterministic compatibility-path boot.
+    const DualLaneActivation activation = resolve_dual_lane_activation();
+    const bool resourceReference = PulsarRuntimeTelemetry::resourceReferenceRequested();
+    // A reference resource phase is an explicit compatibility measurement,
+    // so its effective topology is single-canvas even if a caller forgot the
+    // legacy disable variable.  Keep the effective decision in the startup
+    // log so evidence cannot mistake an enabled request for an enabled path.
+    dualLaneEnabled = activation.enabled && !resourceReference;
+    const char *activationReason = resourceReference ? "resource-reference" : activation.reason;
+    rollbackAfterTakes = resolve_dual_lane_rollback_after_takes();
+    blog(LOG_INFO,
+         "[pulsar-dual-lane] activation=%s source=%s rollback_after_takes=%llu "
+         "flag_resolved_at=setup",
+         dualLaneEnabled ? "enabled" : "disabled", activationReason,
+         static_cast<unsigned long long>(rollbackAfterTakes));
+
     // Build the two independent hot roots only after the bootstrap scene has
     // its initial producer.  ProgramView is the existing main canvas/video_t;
     // PreviewView is the single auxiliary mix.  Production encoder/Program
@@ -3874,8 +4057,11 @@ bool PulsarFrontendAPI::setup()
     // canvas before the dual-lane topology is allocated.  This is opt-in and
     // only reachable with an explicit trace resource mode; normal runtime
     // starts retain the dual-lane setup and Cut semantics.
-    if (PulsarRuntimeTelemetry::resourceReferenceRequested()) {
-        blog(LOG_INFO, "[pulsar-runtime-telemetry] reference resource mode: retaining legacy single canvas");
+    if (!dualLaneEnabled || resourceReference) {
+        if (resourceReference)
+            blog(LOG_INFO, "[pulsar-runtime-telemetry] reference resource mode: retaining legacy single canvas");
+        else
+            blog(LOG_INFO, "[pulsar-dual-lane] compatibility single-canvas path selected");
     } else if (!setupDualLane(scene)) {
         blog(LOG_WARNING, "[pulsar-frontend-stub] dual-lane setup unavailable; keeping legacy canvas path");
     }
@@ -4126,6 +4312,7 @@ void PulsarFrontendAPI::teardown()
     // while its stable views and role refs are being torn down.
     {
         std::lock_guard<std::mutex> lk(dualLaneMutex);
+        dualLaneOperational = false;
         dualLaneReady = false;
         dualLaneCutPending.store(false);
     }
@@ -4354,6 +4541,11 @@ void PulsarFrontendAPI::obs_frontend_set_current_scene(obs_source_t *scene)
     bool dualLaneDirect = false;
     {
         std::lock_guard<std::mutex> lk(dualLaneMutex);
+        if (dualLaneReady && !dualLaneOperational) {
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] Program mutation rejected: rollback freeze is active");
+            return;
+        }
         if (dualLaneReady && dualLaneCutPending.load()) {
             blog(LOG_WARNING, "[pulsar-dual-lane] Program mutation rejected while Take is pending");
             return;

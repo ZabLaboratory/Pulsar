@@ -1,0 +1,204 @@
+# Pulsar dual-lane canary and rollback runbook
+
+This runbook is the operational companion for ADR-PULSAR-DUAL-LANE-001,
+revision `draft-r2-dual-lane-20260828`, and issue #249. It covers only the
+approved Cut core: two hot physical lanes, stable Program/Preview surfaces,
+the common Program audio route, and a frame-boundary rollback freeze.
+
+Fade/Stinger/T-bar, Preview audio/AFV, decoder tuning and full soak/recovery
+remain separate follow-ups. A successful canary here must not be described as
+an end-to-end decoded or antenna latency guarantee.
+
+## Preconditions
+
+1. Use the exact `pulsar-rundir` artifact produced by CI for the candidate
+   commit. Record its GitHub artifact ID, SHA-256 and the extracted
+   `pulsar.exe` SHA-256. Never use a stale local binary for a canary result.
+2. Run on the declared 1080p60 host. For a traced WGC+CEF run, provide a
+   visible, animated target descriptor and let the probe reject blank frames.
+3. Use a fresh `PULSAR_RUNTIME_INSTANCE_ID` and an output directory outside
+   the repository. Do not reuse a runtime directory or trace file from another
+   candidate.
+4. Verify the runtime/legacy-alias lease lines in the process log before
+   accepting any measurements:
+
+   ```text
+   PULSAR_RUNTIME_INSTANCE ... instance_lock=acquired runtime_dir_lock=acquired
+   PULSAR_LEGACY_ALIAS lease=acquired|disabled|refused ...
+   ```
+
+   A required legacy alias that is refused is not a successful alias canary;
+   rerun with dedicated names or stop the conflicting holder. Do not make two
+   runtimes share the historical `Program`/`Preview` aliases.
+
+## Activation modes
+
+The frontend resolves the dual-lane capability once during `setup()`. The
+decision is process-local and cannot be changed through obs-websocket.
+
+| Environment | Effective mode | Intended use |
+| --- | --- | --- |
+| unset | dual-lane enabled | normal runtime |
+| `PULSAR_DUAL_LANE_ENABLED=1` | dual-lane enabled | explicit capability declaration |
+| `PULSAR_DUAL_LANE_ENABLED=0` | compatibility single-canvas | controlled rollout gate |
+| `PULSAR_DISABLE_DUAL_LANE=1` | compatibility single-canvas | backwards-compatible reference/rollback switch |
+| malformed explicit value | disabled, fail-closed | operator configuration error |
+
+The first relevant line must look like:
+
+```text
+[pulsar-dual-lane] activation=enabled|disabled source=... rollback_after_takes=0 flag_resolved_at=setup
+```
+
+The reference phase of `scripts/probe-dual-lane.py` sets
+`PULSAR_DISABLE_DUAL_LANE=1`; the probe now verifies the corresponding
+startup decision rather than trusting the environment assignment.
+
+## Standard codec canaries
+
+Run the standard 100-Take campaign independently for each codec. This checks
+the live A/B roots, stable surfaces, atomic frame-boundary Cut, command safety,
+recording and exactly one encoder binding.
+
+```powershell
+python scripts/probe-dual-lane.py `
+  --exe <exact-artifact> --encoder x264 --takes 100
+
+python scripts/probe-dual-lane.py `
+  --exe <exact-artifact> --encoder nvenc --takes 100
+```
+
+For a complete runtime trace (including the two normative latency boundaries),
+run each codec with a separate trace and candidate SHA:
+
+```powershell
+python scripts/probe-dual-lane.py `
+  --exe <exact-artifact> --encoder x264 --takes 100 `
+  --trace <evidence-dir>\x264.jsonl `
+  --runtime-id pulsar-249-x264-<unique> `
+  --build-revision <40-lowercase-candidate-sha> `
+  --capture-window <visible-title:class:exe> --cef-workload `
+  --resource-mode dual_lane
+
+python scripts/probe-dual-lane.py `
+  --exe <exact-artifact> --encoder nvenc --takes 100 `
+  --trace <evidence-dir>\nvenc.jsonl `
+  --runtime-id pulsar-249-nvenc-<unique> `
+  --build-revision <40-lowercase-candidate-sha> `
+  --capture-window <visible-title:class:exe> --cef-workload `
+  --resource-mode dual_lane
+```
+
+The trace must contain at least 100 warm-up Takes and 100 measured Takes for
+each codec. Validate it with the boundary-aware parser:
+
+```powershell
+python scripts/probe-take-latency.py `
+  --trace <evidence-dir>\x264.jsonl <evidence-dir>\nvenc.jsonl `
+  --output <evidence-dir>\latency-report.json
+```
+
+The report is acceptable only when both `encoder_input_raw` and
+`directshow_return` are present with their own counts and p95 values. The
+limits are raw p95 `<=50 ms` and DirectShow-return p95 `<=75 ms`. A first
+encoded packet or RTMP receiver value is an additional guard and never a
+substitute for either boundary. Decoded/player/antenna values are diagnostic
+only.
+
+If the machine cannot supply a real WGC/CEF producer, record a typed skip;
+never convert the color-source or resource-only fixture into a production
+capacity claim. The resource reference/dual-lane method and the no-blank WGC
+gate are described in `docs/runbooks/probe-take-latency.md` and were first
+exercised by issues #246 and #247.
+
+## Frame-boundary rollback drill
+
+The rollback drill is intentionally separate from the long canary. It arms a
+bounded boot-time trigger and performs one real Cut:
+
+```powershell
+python scripts/probe-dual-lane-rollback.py `
+  --exe <exact-artifact> --encoder x264
+
+python scripts/probe-dual-lane-rollback.py `
+  --exe <exact-artifact> --encoder nvenc
+```
+
+The harness sets `PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES=1` for the child. The
+expected sequence is:
+
+1. A/B are ready and the encoder is bound once to the stable Program surface.
+2. Take 1 is accepted and committed at `(frame_id, pts_ns)`.
+3. The rollback log reports the same frame/PTS, `current_program_preserved=1`,
+   `active_video_t_rebound=0` and `new_takes_enabled=0`.
+4. Program remains the committed scene and Preview remains the other scene.
+5. A subsequent Preview/scene mutation receives `PREVIEW_FROZEN` and does not
+   alter the scene graph; reads remain available.
+6. The recording remains valid and the encoder-binding count stays exactly
+   one.
+
+This is an in-process operational freeze. It does not pretend to convert the
+already-live two-view topology into a single view. Once the current Program
+has drained at the committed boundary, stop outputs, restart the process with
+`PULSAR_DISABLE_DUAL_LANE=1`, and explicitly label that process as the
+compatibility/degraded path. At no point does rollback call a view/source
+setter or rebind the active `video_t`.
+
+If rollback is triggered by an integrity fault, preserve the trace and logs,
+keep the runtime fail-stopped, and escalate the candidate for investigation.
+Do not clear the flag, retry indefinitely or overwrite the evidence.
+
+## Namespace and lease checks
+
+For an isolation check, launch runtimes with distinct IDs and distinct
+directories. Confirm distinct configuration/log/record paths, ports and
+internal queue names. For the historical DirectShow names, either:
+
+```powershell
+$env:PULSAR_LEGACY_ALIAS = "required"   # exactly one holder
+$env:PULSAR_RUNTIME_INSTANCE_ID = "pulsar-249-alias-holder"
+```
+
+or use:
+
+```powershell
+$env:PULSAR_LEGACY_ALIAS = "dedicated"  # no historical singleton alias
+```
+
+The second holder must report `lease=refused` and continue only with its
+validated dedicated mapping; silent alias takeover is a failure. The complete
+runtime identity and DirectShow lease rules are in `docs/ARCHITECTURE.md` and
+`docs/PRISM-EMBEDDING.md`, with the implementation/QA history in #243, #246,
+and #248.
+
+## Evidence ledger for core closure
+
+This issue consolidates the already-validated core inputs; it does not
+recreate them from prose.
+
+| ADR area | Existing evidence | Keeper #249 proof to attach |
+| --- | --- | --- |
+| I1-I3, hot roots and role permutation | #242 / #244; `docs/evidence/247/` | exact x264/NVENC 100-Take logs and surface identities |
+| I4-I6, stable surfaces and no active `video_t` rebind | #242, #244, #247 | one setup bind, unchanged through both canaries and rollback |
+| I7-I9, atomic Cut and Preview lifecycle | #242 / #247 | commit frame/PTS, monotone roles, rollback boundary |
+| I10-I11, ordering and idempotence | #247 | runtime contract/QA results; no new contract implementation here |
+| I12, common Program audio | #245 | common route/PTS result from #245; Preview audio remains unsupported |
+| I13, runtime namespace and alias lease | #243 / #246 / #248 | startup lease lines, distinct runtime IDs and dedicated/refused second holder |
+| I14, separate measurements | #246 | independent raw, DirectShow-return and optional RTMP fields |
+
+| Acceptance criterion | Required Keeper evidence |
+| --- | --- |
+| AC-01/02 | 100 warm + 100 measured Takes per codec; stable A/B and Program/Preview surfaces |
+| AC-03/04 | frame/PTS commit, no mixed-frame result, freeze and post-Take scene isolation |
+| AC-05/06/11 | existing #247 contract/race evidence plus exact-candidate trace correlation |
+| AC-07 | `probe-take-latency.py` raw p95 report, count >=100 per codec |
+| AC-08 | independent DirectShow-return p95 report, count >=100 per codec |
+| AC-09 | #245 common Program audio evidence; no Preview/AFV claim |
+| AC-10 | runtime/alias lease logs and #243/#246/#248 evidence |
+| AC-12 | separately reported encoded first packet/RTMP guard, if captured |
+| AC-13 | reference versus dual-lane resource delta under WGC+CEF+NVENC |
+| AC-14 | rollback probe output with matching committed frame/PTS and one encoder bind |
+
+The evidence directory should contain only compact, deterministic summaries
+and hashes for large traces/recordings; do not commit secrets, WebSocket
+passwords or unredacted process logs.

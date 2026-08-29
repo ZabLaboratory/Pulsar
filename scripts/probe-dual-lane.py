@@ -44,6 +44,13 @@ the native OBS/platform resource sampler; use ``--resource-only`` for the
 single-producer-pair reference phase and ``--trace-append --resource-mode dual_lane``
 for the correlated two-pair A/B phase.
 
+Normal and dual-lane canary processes explicitly set
+``PULSAR_DUAL_LANE_ENABLED=1`` and require the matching startup decision in
+the log.  The reference phase explicitly sets
+``PULSAR_DISABLE_DUAL_LANE=1`` and requires the compatibility decision, so a
+probe-side environment assignment can never be mistaken for a runtime
+consumer.
+
 The --cef-workload mode starts an ephemeral loopback HTTP server for a
 deterministic page and requires --capture-window to name an actual visible WGC
 target. It verifies source settings, enabled scene bindings, and decoded
@@ -124,6 +131,11 @@ DUAL_READY_RE = re.compile(
     r"program_main_video_valid=(\d) preview_distinct_valid=(\d)"
 )
 ENCODER_RE = re.compile(r"video encoder allocated: family=(\S+) id=(\S+)")
+DUAL_ACTIVATION_RE = re.compile(
+    DUAL_LANE_LOG_PREFIX
+    + r"\s*activation=(enabled|disabled) source=(\S+) "
+    r"rollback_after_takes=(\d+) flag_resolved_at=setup"
+)
 BUILD_REVISION_RE = re.compile(r"[0-9a-f]{40}")
 ENCODER_BIND_RE = re.compile(
     DUAL_LANE_LOG_PREFIX + r"\s*encoder video_t bound once to ProgramView"
@@ -262,6 +274,32 @@ def redact_log_line(line: str) -> str:
 
 def failure_tail(lines: list[str], limit: int) -> str:
     return "\n".join(f"  | {redact_log_line(line)}" for line in lines[-limit:])
+
+
+def assert_dual_lane_activation(
+    process: "PulsarProcess", expected: bool, required_source: str | None = None
+) -> tuple[str, str, int]:
+    """Verify that the runtime consumed the boot-time topology switch.
+
+    The probe sets ``PULSAR_DISABLE_DUAL_LANE`` for its single-canvas
+    reference phase.  A startup decision line is required before any source
+    or Take evidence is accepted; an environment assignment alone is not
+    evidence that the binary used it.
+    """
+
+    match = process.wait_for(DUAL_ACTIVATION_RE, timeout=60)
+    enabled = match.group(1) == "enabled"
+    if enabled != expected:
+        raise ProbeFailure(
+            "runtime dual-lane activation mismatch: "
+            f"reported={match.group(1)!r} source={match.group(2)!r} expected={expected}"
+        )
+    if required_source is not None and match.group(2) != required_source:
+        raise ProbeFailure(
+            "runtime dual-lane activation source mismatch: "
+            f"reported={match.group(2)!r} expected={required_source!r}"
+        )
+    return match.group(1), match.group(2), int(match.group(3))
 
 
 def choose_port() -> int:
@@ -460,6 +498,12 @@ class PulsarProcess:
         env["PULSAR_PASSWORD"] = self.password
         env["PULSAR_RECORD_DIR"] = str(self.record_dir)
         env["PULSAR_VIDEO_ENCODER"] = self.encoder
+        # Make the normal canary opt in explicitly.  This keeps a caller's
+        # ambient disable flag from silently changing the intended topology,
+        # while the reference phase below deliberately overrides it with the
+        # backwards-compatible single-canvas switch.
+        env["PULSAR_DUAL_LANE_ENABLED"] = "1"
+        env.pop("PULSAR_DISABLE_DUAL_LANE", None)
         if self.trace_path is not None:
             if self.build_revision is None or BUILD_REVISION_RE.fullmatch(self.build_revision) is None:
                 raise ProbeFailure(
@@ -496,8 +540,10 @@ class PulsarProcess:
             else:
                 env.pop("PULSAR_PROGRAM_RETURN_AUTOSTART", None)
             if self.resource_mode == "reference":
+                env.pop("PULSAR_DUAL_LANE_ENABLED", None)
                 env["PULSAR_DISABLE_DUAL_LANE"] = "1"
             else:
+                env["PULSAR_DUAL_LANE_ENABLED"] = "1"
                 env.pop("PULSAR_DISABLE_DUAL_LANE", None)
         else:
             # Do not let a caller's trace-only owner flag leak into an
@@ -1465,6 +1511,17 @@ async def collect_resource_samples(
     ws_url = ready_match.group(1)
     if ready_match.group(2) != process.password:
         raise ProbeFailure("PULSAR_READY password did not match the generated probe secret")
+    expected_reference = mode == "reference"
+    activation, activation_source, rollback_after_takes = assert_dual_lane_activation(
+        process,
+        expected=not expected_reference,
+        required_source="PULSAR_DISABLE_DUAL_LANE" if expected_reference else "PULSAR_DUAL_LANE_ENABLED=1",
+    )
+    print(
+        "   dual-lane activation consumed: "
+        f"activation={activation} source={activation_source} "
+        f"rollback_after_takes={rollback_after_takes} mode={mode}"
+    )
 
     async with websockets.connect(
         ws_url, subprotocols=["obswebsocket.json"], open_timeout=15
@@ -1571,6 +1628,19 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
     ready_password = ready_match.group(2)
     if ready_password != process.password:
         raise ProbeFailure("PULSAR_READY password did not match the generated probe secret")
+
+    activation, activation_source, rollback_after_takes = assert_dual_lane_activation(
+        process, expected=True, required_source="PULSAR_DUAL_LANE_ENABLED=1"
+    )
+    if rollback_after_takes:
+        raise ProbeFailure(
+            "ordinary Take campaign unexpectedly has rollback drill armed: "
+            f"source={activation_source!r} after={rollback_after_takes}"
+        )
+    print(
+        "   dual-lane activation consumed: "
+        f"activation={activation} source={activation_source} rollback_after_takes=0"
+    )
 
     identity = parse_ready(process.wait_for(DUAL_READY_RE, timeout=60))
     if identity.lane_a == identity.lane_b:
