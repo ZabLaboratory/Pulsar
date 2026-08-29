@@ -2701,9 +2701,10 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
                                         currentScene != previewScene;
     blog(LOG_INFO, "[pulsar-dual-lane] ready LaneA=lane-a LaneB=lane-b "
          "lane_root_binding_valid=%d program_main_view_valid=%d program_main_video_valid=%d "
-         "preview_distinct_valid=%d ProgramAudioRoute=%s ProgramAudio=%p PreviewAudioPolicy=common",
+         "preview_distinct_valid=%d ProgramAudioRoute=%s ProgramAudioBound=%d "
+         "PreviewAudioPolicy=common",
          lane_root_binding_valid, program_main_view_valid, program_main_video_valid,
-         preview_distinct_valid, pulsar_program_audio::kRouteId, (void *)programAudio);
+         preview_distinct_valid, pulsar_program_audio::kRouteId, programAudio != nullptr);
     return true;
 }
 
@@ -2861,11 +2862,11 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
     blog(LOG_INFO, "[pulsar-dual-lane] TakeCommitted count=%llu frame_id=%llu pts_ns=%llu "
          "onair_lane=%d preview_lane=%d lane_root_binding_valid=%d "
          "program_main_view_valid=%d program_main_video_valid=%d preview_distinct_valid=%d "
-         "ProgramAudioRoute=%s ProgramAudio=%p",
+         "ProgramAudioRoute=%s ProgramAudioBound=%d",
          static_cast<unsigned long long>(committedCount), static_cast<unsigned long long>(frameId),
          static_cast<unsigned long long>(ptsNs), committedOnAirLane, committedPreviewLane,
          laneRootBindingValid, programMainViewValid, programMainVideoValid, previewDistinctValid,
-         pulsar_program_audio::kRouteId, (void *)self->programAudio);
+         pulsar_program_audio::kRouteId, self->programAudio != nullptr);
     self->emit(OBS_FRONTEND_EVENT_SCENE_CHANGED);
     self->emit(OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED);
 }
@@ -2880,9 +2881,9 @@ bool PulsarFrontendAPI::setup()
         blog(LOG_ERROR, "[pulsar-program-audio] setup failed: libobs audio is unavailable");
         return false;
     }
-    blog(LOG_INFO, "[pulsar-program-audio] route_id=%s route_name=%s audio=%p "
+    blog(LOG_INFO, "[pulsar-program-audio] ProgramAudioRoute=%s ProgramAudio=%p "
          "cut_policy=%s preview_audio_supported=false afv_supported=false",
-         pulsar_program_audio::kRouteId, pulsar_program_audio::kRouteName,
+         pulsar_program_audio::kRouteId,
          (void *)programAudio, pulsar_program_audio::kCutPolicy);
 
     // Issue #129: close the loop libobs expects the FRONTEND to close on

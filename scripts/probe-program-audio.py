@@ -324,11 +324,13 @@ def check_route(
         if nested.get("monotone") is not True or nested.get("regressions", 1) != 0:
             raise ProbeFailure(f"{label}: nested track PTS evidence regressed: {track}")
         series = nested.get("series_ns") or track.get("pts_series_ns") or []
-        series_values = [
-            point.get("pts_ns")
-            for point in series
-            if isinstance(point, dict) and isinstance(point.get("pts_ns"), int)
-        ]
+        series_values: list[int] = []
+        for point in series:
+            if not isinstance(point, dict):
+                continue
+            pts_ns = point.get("pts_ns")
+            if isinstance(pts_ns, int):
+                series_values.append(pts_ns)
         if not series_values:
             raise ProbeFailure(f"{label}: no raw audio PTS series was returned: {track}")
         if any(right < left for left, right in zip(series_values, series_values[1:])):
@@ -577,7 +579,7 @@ def main() -> int:
     try:
         args = parse_args(sys.argv[1:])
     except SystemExit as exc:
-        return int(exc.code)
+        return exc.code if isinstance(exc.code, int) else EXIT_USAGE
     return run(args)
 
 
