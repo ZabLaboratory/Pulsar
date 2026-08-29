@@ -2536,7 +2536,7 @@ private:
     }
     void state(obs_data_t *response)
     {
-        std::lock_guard<std::mutex> lock(mutex_); json out={{"contract","pulsar.scene-switch.v1"},{"schema_version",1},{"runtime_instance_id",runtimeId_},{"state",state_},{"server_seq",serverSeq_},{"revisions",revisions_},{"role_map",roleMap_}}; obs_data_set_json(response,out.dump().c_str());
+        std::lock_guard<std::mutex> lock(mutex_); json out={{"contract","pulsar.scene-switch.v1"},{"schema_version",1},{"runtime_instance_id",runtimeId_},{"state",state_},{"server_seq",serverSeq_},{"revisions",revisions_},{"role_map",roleMap_},{"idempotency_cache_entries",outcomes_.size()},{"idempotency_cache_capacity",kMaxOutcomes}}; obs_data_set_json(response,out.dump().c_str());
     }
     std::mutex mutex_; obs_websocket_vendor vendor_ = nullptr; bool running_ = false;
     std::string runtimeId_ = [] { const char *v=std::getenv("PULSAR_RUNTIME_INSTANCE_ID"); return (v && *v) ? std::string(v) : std::string("pulsar-runtime"); }();

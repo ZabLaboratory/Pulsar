@@ -22,6 +22,11 @@ compatibility alias when the envelope's `command_type` is present. The response 
 is emitted to subscribed clients as an obs-websocket `VendorEvent`, with the
 v1 event in `eventData` and its `eventType` set to the v1 event type. `GetState`
 returns the current runtime ID, state, revisions, role map, and server sequence.
+It also reports `idempotency_cache_entries` and
+`idempotency_cache_capacity` so an operator can observe the active retention
+window. The process/session retains at most 4096 current-runtime command
+outcomes: known command IDs replay exactly and are never evicted; once full,
+new commands fail closed before mutation until the runtime is restarted.
 
 The adapter validates every field strictly, hashes normalized compact sorted-key
 JSON with SHA-256 for `(runtime_instance_id, command_id)` idempotence, and

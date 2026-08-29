@@ -309,12 +309,21 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
 
     assert '#include "pulsar-dual-lane-control.h"' in handler
     assert 'requestType.rfind("Get", 0) == 0' in handler
-    assert "pulsar_dual_lane_control::MutationLease mutationLease(!IsReadOnlyRequest(request.RequestType))" in handler
+    assert "IsControlledSceneSwitchPendingBypass" in handler
+    assert 'request.RequestType != "CallVendorRequest"' in handler
+    assert 'request.RequestData.value("vendorName", "") != "pulsar-scene-switch"' in handler
+    assert 'return nested == "Abort" || nested == "GetState"' in handler
+    assert "const bool controlledSceneSwitchBypass" in handler
+    assert "!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass" in handler
     assert "RequestStatus::RequestProcessingFailed" in handler
     assert "PREVIEW_FROZEN" in handler
-    # The gate must be acquired before handler lookup, so unknown/future
-    # non-Get commands cannot bypass the freeze while pending.
-    assert handler.index("MutationLease mutationLease(!IsReadOnlyRequest") < handler.index("_handlerMap.at")
+    # The gate is central and acquired before handler lookup. The only pending
+    # bypass is the exact vendor Abort/GetState pair; Prepare/Take/Dispatch,
+    # malformed CallVendorRequest data, and every other vendor remain gated.
+    assert 'nested == "Prepare"' not in handler
+    assert 'nested == "Take"' not in handler
+    assert 'nested == "Dispatch"' not in handler
+    assert handler.index("const bool controlledSceneSwitchBypass") < handler.index("_handlerMap.at")
 
 
 def test_runtime_probe_exercises_serial_frame_preview_freeze() -> None:
