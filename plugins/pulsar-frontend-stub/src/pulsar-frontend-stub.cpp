@@ -2340,8 +2340,15 @@ public:
         const Pending take = *pendingTake_;
         const json previous = revisions_;
         const json previousRoles = roleMap_;
-        ++revisions_["program"];
-        ++revisions_["role_map"];
+        // doTake admits a frame-boundary Cut only after both counters pass
+        // this same bound check. Keep the callback defensive: a corrupted
+        // internal state must not silently wrap a protocol revision.
+        if (!revisionCanAdvance("program") || !revisionCanAdvance("role_map")) {
+            blog(LOG_ERROR, "[pulsar-scene-switch] TakeCommitted revision overflow guard tripped");
+            return;
+        }
+        advanceRevision("program");
+        advanceRevision("role_map");
         std::swap(roleMap_["on_air"], roleMap_["preview"]);
         state_ = "ready";
         pendingTake_.reset();
@@ -2380,6 +2387,23 @@ private:
         if (v.is_number_integer() && v.get<int64_t>() >= 0) { out = static_cast<uint64_t>(v.get<int64_t>()); return true; }
         if (v.is_number_float()) { double n = v.get<double>(); if (std::isfinite(n) && n >= 0 && n < 18446744073709551616.0 && std::floor(n) == n) { out = static_cast<uint64_t>(n); return true; } }
         return false;
+    }
+    bool revisionCanAdvance(const char *key) const
+    {
+        const auto it = revisions_.find(key);
+        if (it == revisions_.end() || (!it->is_number_integer() && !it->is_number_unsigned()))
+            return false;
+        if (it->is_number_integer() && it->get<int64_t>() < 0)
+            return false;
+        return it->get<uint64_t>() < (std::numeric_limits<uint64_t>::max)();
+    }
+    bool advanceRevision(const char *key)
+    {
+        if (!revisionCanAdvance(key))
+            return false;
+        const uint64_t current = revisions_.at(key).get<uint64_t>();
+        revisions_[key] = current + 1;
+        return true;
     }
     static uint64_t nowNs() { return os_gettime_ns(); }
     static std::string sha256(const std::string &text)
@@ -2465,7 +2489,23 @@ private:
         obs_data_t *data = obs_data_create_from_json(event.dump().c_str());
         if (data) { obs_websocket_vendor_emit_event(vendor_, event["event_type"].get<std::string>().c_str(), data); obs_data_release(data); }
     }
-    void respond(obs_data_t *response, const json &event) { obs_data_set_json(response, event.dump().c_str()); }
+    void respond(obs_data_t *response, const json &event)
+    {
+        if (!response) {
+            blog(LOG_ERROR, "[pulsar-scene-switch] vendor response object is null");
+            return;
+        }
+        const std::string serialized = event.dump();
+        obs_data_t *temporary = obs_data_create_from_json(serialized.c_str());
+        if (!temporary) {
+            // Leave the vendor response empty rather than emitting a partial
+            // or non-canonical object when libobs rejects our serialization.
+            blog(LOG_ERROR, "[pulsar-scene-switch] failed to serialize vendor response");
+            return;
+        }
+        obs_data_apply(response, temporary);
+        obs_data_release(temporary);
+    }
     static void Dispatch(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, nullptr); }
     static void Prepare(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, "Prepare"); }
     static void Take(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, "Take"); }
@@ -2503,10 +2543,12 @@ private:
     void doPrepare(const json &c, Pending p, obs_data_t *response)
     {
         if (pendingTake_) { json e=reject(p,"PREVIEW_FROZEN","Preview is frozen while Take is pending"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        if (!revisionCanAdvance("preview")) { json e=reject(p,"SCHEMA_INVALID","Preview revision capacity has been reached"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
         p.lane=c["target"]["lane_id"]; p.scene=c["target"]["scene_id"]; p.deadlineNs=nowNs()+c["timeout_ms"].get<uint64_t>()*1000000ULL;
         if (!g_api || !g_api->sceneSwitchPrepare(p.commandId,p.lane[0],p.scene)) { json e=reject(p,"PREVIEW_LANE_MISMATCH","target does not name the live Preview lane or scene"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
         const json previous = revisions_;
-        ++revisions_["preview"]; state_="preparing"; pendingPrepare_=p; json e=eventFor("PrepareAccepted",p,{{"target_lane_id",p.lane},{"target_scene_id",p.scene},{"deadline_monotonic_ns",p.deadlineNs}},"preparing",previous); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e);
+        if (!advanceRevision("preview")) { g_api->sceneSwitchClearPrepared(p.commandId); json e=reject(p,"SCHEMA_INVALID","Preview revision capacity has been reached"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        state_="preparing"; pendingPrepare_=p; json e=eventFor("PrepareAccepted",p,{{"target_lane_id",p.lane},{"target_scene_id",p.scene},{"deadline_monotonic_ns",p.deadlineNs}},"preparing",previous); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e);
     }
     void doTake(const json &c, Pending p, obs_data_t *response)
     {
@@ -2514,6 +2556,7 @@ private:
         if (!pendingPrepare_ || pendingPrepare_->commandId != c["prepared_command_id"].get<std::string>()) { json e=reject(p,"PREPARE_NOT_FOUND","prepared_command_id has no current preparation"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
         if (!pendingPrepare_->ready) { json e=reject(p,"PREVIEW_NOT_READY","Preview has not rendered its first frame"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
         if (pendingPrepare_->intentId != p.intentId) { json e=reject(p,"TAKE_INTENT_CONFLICT","Take intent_id differs from Prepare"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
+        if (!revisionCanAdvance("program") || !revisionCanAdvance("role_map")) { json e=reject(p,"SCHEMA_INVALID","Program revision capacity has been reached"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
         p.lane=pendingPrepare_->lane; p.scene=pendingPrepare_->scene; p.deadlineNs=nowNs()+c["timeout_ms"].get<uint64_t>()*1000000ULL;
         pendingTake_=p; state_="take_accepted";
         if (!g_api || !g_api->sceneSwitchTake(p.commandId)) { pendingTake_.reset(); state_="preview_ready"; json e=reject(p,"TAKE_NOT_PENDING","atomic frame-boundary swap was not admitted"); outcomes_[p.key]={p.digest,e}; emit(e); respond(response,e); return; }
@@ -2543,7 +2586,7 @@ private:
     }
     void state(obs_data_t *response)
     {
-        std::lock_guard<std::mutex> lock(mutex_); json out={{"contract","pulsar.scene-switch.v1"},{"schema_version",1},{"runtime_instance_id",runtimeId_},{"state",state_},{"server_seq",serverSeq_},{"revisions",revisions_},{"role_map",roleMap_},{"idempotency_cache_entries",outcomes_.size()},{"idempotency_cache_capacity",kMaxOutcomes}}; obs_data_set_json(response,out.dump().c_str());
+        std::lock_guard<std::mutex> lock(mutex_); json out={{"contract","pulsar.scene-switch.v1"},{"schema_version",1},{"runtime_instance_id",runtimeId_},{"state",state_},{"server_seq",serverSeq_},{"revisions",revisions_},{"role_map",roleMap_},{"idempotency_cache_entries",outcomes_.size()},{"idempotency_cache_capacity",kMaxOutcomes}}; respond(response,out);
     }
     std::mutex mutex_; obs_websocket_vendor vendor_ = nullptr; bool running_ = false;
     std::string runtimeId_ = [] { const char *v=std::getenv("PULSAR_RUNTIME_INSTANCE_ID"); return (v && *v) ? std::string(v) : std::string("pulsar-runtime"); }();

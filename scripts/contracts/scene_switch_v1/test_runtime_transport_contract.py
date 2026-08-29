@@ -60,6 +60,18 @@ def test_runtime_adapter_keeps_protocol_and_physical_boundaries_explicit() -> No
     assert "obs_output_set_media" not in adapter
 
 
+def test_runtime_adapter_uses_supported_obs_data_response_api_and_typed_revisions() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "++revisions_[" not in source
+    assert "obs_data_set_json" not in source
+    assert "obs_data_create_from_json(serialized.c_str())" in source
+    assert "obs_data_apply(response, temporary)" in source
+    assert "bool revisionCanAdvance(const char *key) const" in source
+    assert "bool advanceRevision(const char *key)" in source
+    assert "!revisionCanAdvance(\"program\") || !revisionCanAdvance(\"role_map\")" in source
+
+
 def test_runtime_adapter_guards_the_exact_v1_lifecycle_edges() -> None:
     source = SOURCE.read_text(encoding="utf-8")
 
