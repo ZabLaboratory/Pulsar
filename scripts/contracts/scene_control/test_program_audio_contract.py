@@ -90,7 +90,10 @@ def test_runtime_probe_runs_real_cuts_and_checks_audio_isolation() -> None:
     assert "Preview video mutation" in probe
     assert "--takes" in probe
     assert "default=100" in probe or "default=100" in probe.replace(" ", "")
-    assert "verify_recording(output_path, ffprobe)" in probe
+    # The strengthened helper keeps the shared recording proof explicit while
+    # accepting its current parameter name.  Guard the actual call and the
+    # ffprobe argument instead of matching the pre-refactor local variable.
+    assert "verify_recording(path_text, ffprobe)" in probe
     assert "verify_program_audio_recording(output_path, ffprobe)" in probe
     assert '"sample_rate"' in probe
     assert '"show_packets"' in probe
