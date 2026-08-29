@@ -24,6 +24,16 @@ inline constexpr char kSnapshotFrameProc[] = "pulsar_runtime_telemetry_snapshot_
 inline constexpr size_t kIdentifierCapacity = PULSAR_RUNTIME_TELEMETRY_IDENTIFIER_CAPACITY;
 using FrameMetadata = pulsar_runtime_frame_metadata;
 
+// Keep the three observations at the proc boundary visible to the websocket
+// adapter. A boolean-only helper used to collapse "proc not registered",
+// "producer disabled", and "envelope rejected" into the same false value;
+// that made a trace with no TakeAccepted event look like a healthy Cut.
+struct BeginTakeStatus {
+    bool called = false;
+    bool available = false;
+    bool accepted = false;
+};
+
 inline void copy_identifier(char *destination, size_t capacity, const char *value)
 {
     if (!destination || capacity == 0)
@@ -37,13 +47,15 @@ inline void copy_identifier(char *destination, size_t capacity, const char *valu
 // Start/replace the metadata context for the next scene-switch ingress.  A
 // missing bridge is intentionally reported as false so an ordinary OBS
 // frontend continues to execute its legacy path.
-inline bool begin_take(const char *command_id, const char *intent_id, const char *runtime_instance_id,
-                       const char *take_command_id, const char *target_lane_id, const char *target_scene_id,
-                       int64_t freeze_until_monotonic_ns, const char *payload_sha256)
+inline BeginTakeStatus begin_take_status(const char *command_id, const char *intent_id,
+                                         const char *runtime_instance_id, const char *take_command_id,
+                                         const char *target_lane_id, const char *target_scene_id,
+                                         int64_t freeze_until_monotonic_ns, const char *payload_sha256)
 {
+    BeginTakeStatus status;
     proc_handler_t *handler = obs_get_proc_handler();
     if (!handler)
-        return false;
+        return status;
 
     calldata_t cd = {};
     calldata_set_string(&cd, "command_id", command_id ? command_id : "");
@@ -54,12 +66,22 @@ inline bool begin_take(const char *command_id, const char *intent_id, const char
     calldata_set_string(&cd, "target_scene_id", target_scene_id ? target_scene_id : "");
     calldata_set_int(&cd, "freeze_until_monotonic_ns", freeze_until_monotonic_ns);
     calldata_set_string(&cd, "payload_sha256", payload_sha256 ? payload_sha256 : "");
-    const bool called = proc_handler_call(handler, kBeginTakeProc, &cd);
-    bool available = false;
-    if (called)
-        calldata_get_bool(&cd, "available", &available);
+    status.called = proc_handler_call(handler, kBeginTakeProc, &cd);
+    if (status.called) {
+        calldata_get_bool(&cd, "available", &status.available);
+        calldata_get_bool(&cd, "accepted", &status.accepted);
+    }
     calldata_free(&cd);
-    return called && available;
+    return status;
+}
+
+inline bool begin_take(const char *command_id, const char *intent_id, const char *runtime_instance_id,
+                       const char *take_command_id, const char *target_lane_id, const char *target_scene_id,
+                       int64_t freeze_until_monotonic_ns, const char *payload_sha256)
+{
+    return begin_take_status(command_id, intent_id, runtime_instance_id, take_command_id, target_lane_id,
+                             target_scene_id, freeze_until_monotonic_ns, payload_sha256)
+        .accepted;
 }
 
 // Clear metadata for a request that did not enter the atomic Take path.  The

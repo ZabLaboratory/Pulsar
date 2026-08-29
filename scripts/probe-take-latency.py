@@ -130,7 +130,7 @@ SESSION_REQUIRED = {
     "hardware",
     "evidence_kind",
 }
-SESSION_OPTIONAL = {"comparison_id", "notes"}
+SESSION_OPTIONAL = {"comparison_id", "notes", "source_types"}
 SESSION_ALLOWED = SESSION_REQUIRED | SESSION_OPTIONAL
 
 OBSERVATION_REQUIRED = {
@@ -246,8 +246,18 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
     if obj.get("record_type") != "session" or obj.get("schema") != TRACE_SCHEMA:
         raise EvidenceError("SCHEMA_INVALID", "session record_type/schema is not pulsar.take-latency.v1", line=line)
     result = dict(obj)
-    for key in ("runtime_instance_id", "session_id", "build_revision"):
-        _string(obj[key], f"session.{key}", identifier=(key != "build_revision"), line=line)
+    for key in ("runtime_instance_id", "session_id"):
+        _string(obj[key], f"session.{key}", identifier=True, line=line)
+    build_revision = _string(obj["build_revision"], "session.build_revision", line=line)
+    if obj["evidence_kind"] not in ("runtime", "fixture"):
+        raise EvidenceError("SCHEMA_INVALID", "session.evidence_kind must be runtime or fixture", line=line)
+    if obj["evidence_kind"] == "runtime":
+        if re.fullmatch(r"[0-9a-f]{40}", build_revision) is None:
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "runtime session.build_revision must be the exact 40-character lowercase candidate SHA",
+                line=line,
+            )
     _string(obj["command_line"], "session.command_line", line=line)
     if obj["codec"] not in ("x264", "nvenc"):
         raise EvidenceError("SCHEMA_INVALID", "session.codec must be x264 or nvenc", line=line)
@@ -264,6 +274,24 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
         _boolean(workload[key], f"session.workload.{key}", line=line)
     if obj["codec"] == "nvenc" and not workload["nvenc"]:
         raise EvidenceError("SCHEMA_INVALID", "an nvenc session must declare workload.nvenc=true", line=line)
+    source_types = obj.get("source_types")
+    if obj["evidence_kind"] == "runtime":
+        if not isinstance(source_types, list) or not source_types or any(
+            not isinstance(source_type, str) or not source_type for source_type in source_types
+        ):
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "runtime session.source_types must list the successfully bound workload source kinds",
+                line=line,
+            )
+        if len(set(source_types)) != len(source_types):
+            raise EvidenceError("SCHEMA_INVALID", "session.source_types must not contain duplicates", line=line)
+        if any(source_type not in ("window_capture", "browser_source") for source_type in source_types):
+            raise EvidenceError("SCHEMA_INVALID", "session.source_types contains an unsupported source kind", line=line)
+        if workload["wgc"] and "window_capture" not in source_types:
+            raise EvidenceError("SCHEMA_INVALID", "workload.wgc=true requires window_capture in source_types", line=line)
+        if workload["cef"] and "browser_source" not in source_types:
+            raise EvidenceError("SCHEMA_INVALID", "workload.cef=true requires browser_source in source_types", line=line)
     paths = obj["capture_paths"]
     if not isinstance(paths, list) or not paths or any(path not in BOUNDARIES for path in paths):
         raise EvidenceError("SCHEMA_INVALID", "session.capture_paths must list supported boundaries", line=line)
@@ -280,8 +308,6 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
             line=line,
         )
     _object(obj["hardware"], "session.hardware", line=line)
-    if obj["evidence_kind"] not in ("runtime", "fixture"):
-        raise EvidenceError("SCHEMA_INVALID", "session.evidence_kind must be runtime or fixture", line=line)
     return result
 
 

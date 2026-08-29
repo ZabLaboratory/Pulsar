@@ -17,6 +17,10 @@ Run the two acceptance campaigns independently against the same build::
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 \
         --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001
+    python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 \
+        --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 \
+        --build-revision <candidate-sha> --capture-window <visible-title:class:exe> \
+        --cef-workload
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc \
         --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 \
         --resource-mode reference --resource-only
@@ -38,6 +42,12 @@ producer for an independent DirectShow consumer.  ``--resource-mode`` enables
 the native OBS/platform resource sampler; use ``--resource-only`` for the
 single-canvas reference phase and ``--trace-append --resource-mode dual_lane``
 for the correlated dual-lane phase.
+
+The --cef-workload mode starts an ephemeral loopback HTTP server for a
+deterministic page and requires --capture-window to name an actual visible WGC
+target. It verifies source settings, enabled scene bindings, and decoded
+non-black screenshots before running Takes. The server is stopped in the same
+cleanup path as the Pulsar child.
 """
 
 from __future__ import annotations
@@ -46,6 +56,7 @@ import argparse
 import asyncio
 import base64
 import hashlib
+import http.server
 import json
 import os
 import pathlib
@@ -53,11 +64,13 @@ import re
 import secrets
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import zlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -96,6 +109,7 @@ DUAL_READY_RE = re.compile(
     r"MainView=(\S+) MainVideo=(\S+)"
 )
 ENCODER_RE = re.compile(r"video encoder allocated: family=(\S+) id=(\S+)")
+BUILD_REVISION_RE = re.compile(r"[0-9a-f]{40}")
 ENCODER_BIND_RE = re.compile(
     DUAL_LANE_LOG_PREFIX + r"\s*encoder video_t bound once to ProgramView"
 )
@@ -121,6 +135,83 @@ INPUT_B_FROZEN = "probe-dual-lane-frozen-B"
 COLOR_RED_ABGR = 0xFF0000FF
 COLOR_GREEN_ABGR = 0xFF00FF00
 COLOR_BLUE_ABGR = 0xFFFF0000
+CAPTURE_SOURCE_NAME = "PulsarCapture"
+CEF_SOURCE_NAME = "PulsarCefWorkload"
+BOOTSTRAP_SCENE_NAME = "Default"
+SOURCE_SCREENSHOT_DEADLINE_S = 20.0
+SOURCE_SCREENSHOT_INTERVAL_S = 0.5
+
+# The dual-lane campaign must exercise an actual browser_source, but its
+# content must not depend on a public website or network availability.  This
+# page is served by DeterministicCefServer below and has a deliberately
+# non-black background plus high-contrast blocks so a source screenshot can
+# prove that CEF painted pixels rather than merely accepting settings.
+CEF_PAGE_HTML = b"""<!doctype html>
+<html><head><meta charset=\"utf-8\"><title>Pulsar #246 CEF workload</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#132238;color:#f6fbff;font-family:Arial,sans-serif}
+main{box-sizing:border-box;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px}
+h1{margin:0;font-size:72px;letter-spacing:5px;text-shadow:0 0 18px #38e8ff}
+p{margin:0;font-size:27px;color:#9bd8e8;letter-spacing:2px}
+.bar{width:62%;height:20px;border-radius:10px;background:linear-gradient(90deg,#ff3da6,#38e8ff)}
+.tiles{display:flex;gap:18px}.tile{width:100px;height:54px;border-radius:8px}.a{background:#ff3da6}.b{background:#38e8ff}.c{background:#9dff6e}
+</style></head><body><main><div class=\"bar\"></div><h1>PULSAR CEF #246</h1><p>deterministic local browser_source workload</p><div class=\"tiles\"><div class=\"tile a\"></div><div class=\"tile b\"></div><div class=\"tile c\"></div></div></main></body></html>"""
+
+
+class _DeterministicCefHandler(http.server.BaseHTTPRequestHandler):
+    """Serve one immutable page and keep the probe's HTTP boundary quiet."""
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+        if self.path.split("?", 1)[0] != "/pulsar-cef-246.html":
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(CEF_PAGE_HTML)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(CEF_PAGE_HTML)
+
+    def do_HEAD(self) -> None:  # noqa: N802 - stdlib handler API
+        if self.path.split("?", 1)[0] != "/pulsar-cef-246.html":
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(CEF_PAGE_HTML)))
+        self.end_headers()
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        return
+
+
+class DeterministicCefServer:
+    """Ephemeral loopback HTTP source for the real CEF browser_source."""
+
+    def __init__(self) -> None:
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _DeterministicCefHandler)
+        self.server.daemon_threads = True
+        self.thread: threading.Thread | None = None
+
+    @property
+    def url(self) -> str:
+        host, port = self.server.server_address[:2]
+        return f"http://{host}:{port}/pulsar-cef-246.html"
+
+    def start(self) -> None:
+        if self.thread is not None:
+            return
+        self.thread = threading.Thread(target=self.server.serve_forever, name="pulsar-cef-probe-http", daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        if self.thread is None:
+            self.server.server_close()
+            return
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        self.thread = None
 
 
 class ProbeFailure(RuntimeError):
@@ -161,6 +252,8 @@ class PulsarProcess:
         resource_interval_ms: int = 500,
         capture_window: str | None = None,
         cef_workload: bool = False,
+        build_revision: str | None = None,
+        cef_url: str | None = None,
     ) -> None:
         self.exe = exe
         self.encoder = encoder
@@ -172,6 +265,8 @@ class PulsarProcess:
         self.resource_interval_ms = resource_interval_ms
         self.capture_window = capture_window
         self.cef_workload = cef_workload
+        self.build_revision = build_revision or os.environ.get("PULSAR_BUILD_REVISION")
+        self.cef_url = cef_url or os.environ.get("PULSAR_CEF_URL")
         self.port = choose_port()
         self.password = secrets.token_urlsafe(24)
         self.proc: subprocess.Popen[str] | None = None
@@ -186,9 +281,15 @@ class PulsarProcess:
         env["PULSAR_RECORD_DIR"] = str(self.record_dir)
         env["PULSAR_VIDEO_ENCODER"] = self.encoder
         if self.trace_path is not None:
+            if self.build_revision is None or BUILD_REVISION_RE.fullmatch(self.build_revision) is None:
+                raise ProbeFailure(
+                    "--trace requires --build-revision (or PULSAR_BUILD_REVISION) to be the exact "
+                    "40-character lowercase candidate SHA"
+                )
             env["PULSAR_TRACE_PATH"] = str(self.trace_path)
             env["PULSAR_RUNTIME_INSTANCE_ID"] = self.runtime_id
             env["PULSAR_TRACE_SESSION_ID"] = f"{self.runtime_id}-{self.encoder}"
+            env["PULSAR_BUILD_REVISION"] = self.build_revision
             env["PULSAR_TRACE_WARMUP_TAKES"] = str(100)
             env["PULSAR_TRACE_COMMAND"] = "scripts/probe-dual-lane.py --trace"
             if self.resource_mode is not None:
@@ -218,8 +319,13 @@ class PulsarProcess:
             env.pop("PULSAR_CAPTURE_WINDOW", None)
         if self.cef_workload:
             env["PULSAR_WORKLOAD_CEF"] = "1"
+            if self.cef_url:
+                env["PULSAR_CEF_URL"] = self.cef_url
+            else:
+                env.pop("PULSAR_CEF_URL", None)
         else:
             env.pop("PULSAR_WORKLOAD_CEF", None)
+            env.pop("PULSAR_CEF_URL", None)
         env.pop("PULSAR_MIC_DEVICE_ID", None)
 
         creationflags = 0x08000000 if os.name == "nt" else 0
@@ -614,6 +720,196 @@ def verify_recording(path_text: str, ffprobe: str) -> None:
     )
 
 
+def _paeth(a: int, b: int, c: int) -> int:
+    p = a + b - c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    if pa <= pb and pa <= pc:
+        return a
+    if pb <= pc:
+        return b
+    return c
+
+
+def decode_png(data: bytes) -> tuple[int, int, int, bytearray]:
+    """Decode the RGB/RGBA PNG returned by GetSourceScreenshot.
+
+    This intentionally stays stdlib-only.  OBS's screenshot encoder emits
+    non-interlaced 8-bit RGB(A), and decoding the pixels here is what makes
+    the WGC/CEF checks non-vacuous instead of trusting a successful RPC.
+    """
+
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG (bad signature)")
+    offset = 8
+    width = height = bit_depth = colour_type = interlace = 0
+    idat = bytearray()
+    while offset + 8 <= len(data):
+        length = struct.unpack(">I", data[offset : offset + 4])[0]
+        chunk_type = data[offset + 4 : offset + 8]
+        body_start = offset + 8
+        body_end = body_start + length
+        if body_end + 4 > len(data):
+            raise ValueError("truncated PNG chunk")
+        body = data[body_start:body_end]
+        offset = body_end + 4
+        if chunk_type == b"IHDR":
+            width, height, bit_depth, colour_type, _compression, _filter, interlace = struct.unpack(
+                ">IIBBBBB", body
+            )
+        elif chunk_type == b"IDAT":
+            idat += body
+        elif chunk_type == b"IEND":
+            break
+    if bit_depth != 8 or interlace != 0:
+        raise ValueError("unsupported PNG (need non-interlaced 8-bit pixels)")
+    if colour_type == 2:
+        channels = 3
+    elif colour_type == 6:
+        channels = 4
+    else:
+        raise ValueError(f"unsupported PNG colour type {colour_type} (want RGB/RGBA)")
+    if width <= 0 or height <= 0:
+        raise ValueError("PNG has invalid dimensions")
+
+    raw = zlib.decompress(bytes(idat))
+    stride = width * channels
+    expected = height * (stride + 1)
+    if len(raw) < expected:
+        raise ValueError("PNG scanline data is truncated")
+    pixels = bytearray(width * height * channels)
+    previous = bytearray(stride)
+    position = 0
+    for row in range(height):
+        filter_type = raw[position]
+        position += 1
+        scanline = bytearray(raw[position : position + stride])
+        position += stride
+        if filter_type == 1:  # Sub
+            for index in range(channels, stride):
+                scanline[index] = (scanline[index] + scanline[index - channels]) & 0xFF
+        elif filter_type == 2:  # Up
+            for index in range(stride):
+                scanline[index] = (scanline[index] + previous[index]) & 0xFF
+        elif filter_type == 3:  # Average
+            for index in range(stride):
+                left = scanline[index - channels] if index >= channels else 0
+                scanline[index] = (scanline[index] + ((left + previous[index]) >> 1)) & 0xFF
+        elif filter_type == 4:  # Paeth
+            for index in range(stride):
+                left = scanline[index - channels] if index >= channels else 0
+                upper_left = previous[index - channels] if index >= channels else 0
+                scanline[index] = (scanline[index] + _paeth(left, previous[index], upper_left)) & 0xFF
+        elif filter_type != 0:
+            raise ValueError(f"unknown PNG filter {filter_type}")
+        pixels[row * stride : (row + 1) * stride] = scanline
+        previous = scanline
+    return width, height, channels, pixels
+
+
+def analyse_frame(width: int, height: int, channels: int, pixels: bytearray) -> dict[str, Any]:
+    """Return cheap non-black/variance metrics over a representative sample."""
+
+    total = width * height
+    if total <= 0:
+        return {"distinct": 0, "nonblack_ratio": 0.0, "all_same": True, "sampled": 0}
+    step = max(1, total // 40000)
+    distinct: set[int] = set()
+    nonblack = 0
+    sampled = 0
+    first: tuple[int, int, int] | None = None
+    all_same = True
+    for index in range(0, total, step):
+        base = index * channels
+        red, green, blue = pixels[base], pixels[base + 1], pixels[base + 2]
+        sampled += 1
+        distinct.add((red << 16) | (green << 8) | blue)
+        if first is None:
+            first = (red, green, blue)
+        elif (red, green, blue) != first:
+            all_same = False
+        if max(red, green, blue) > 8:
+            nonblack += 1
+    return {
+        "distinct": len(distinct),
+        "nonblack_ratio": nonblack / sampled if sampled else 0.0,
+        "all_same": all_same,
+        "sampled": sampled,
+    }
+
+
+def frame_is_nonblack(metrics: dict[str, Any], *, require_variance: bool) -> bool:
+    if metrics["nonblack_ratio"] < 0.005:
+        return False
+    if require_variance and (metrics["all_same"] or metrics["distinct"] < 8):
+        return False
+    return True
+
+
+def _strip_data_uri(image_data: str) -> bytes:
+    comma = image_data.find(",")
+    payload = image_data[comma + 1 :] if comma >= 0 else image_data
+    return base64.b64decode(payload, validate=True)
+
+
+async def wait_for_nonblack_source(
+    inbox: Inbox,
+    ws: Any,
+    source_name: str,
+    *,
+    require_variance: bool,
+) -> dict[str, Any]:
+    """Poll an active source until OBS returns a real, non-black frame."""
+
+    deadline = time.monotonic() + SOURCE_SCREENSHOT_DEADLINE_S
+    attempt = 0
+    last_failure = "no screenshot response"
+    while time.monotonic() < deadline:
+        attempt += 1
+        response = await request(
+            inbox,
+            ws,
+            "GetSourceScreenshot",
+            f"workload-screenshot-{source_name}-{attempt}",
+            {
+                "sourceName": source_name,
+                "imageFormat": "png",
+                "imageWidth": CANVAS_W,
+                "imageHeight": CANVAS_H,
+            },
+        )
+        status = response.get("requestStatus") or {}
+        if not status.get("result"):
+            last_failure = f"RPC {status}"
+            await asyncio.sleep(SOURCE_SCREENSHOT_INTERVAL_S)
+            continue
+        try:
+            image_data = (response.get("responseData") or {}).get("imageData")
+            if not isinstance(image_data, str) or not image_data:
+                raise ValueError("responseData.imageData missing")
+            png = _strip_data_uri(image_data)
+            width, height, channels, pixels = decode_png(png)
+            metrics = analyse_frame(width, height, channels, pixels)
+        except (TypeError, ValueError, zlib.error) as exc:
+            last_failure = f"PNG decode: {exc}"
+            await asyncio.sleep(SOURCE_SCREENSHOT_INTERVAL_S)
+            continue
+        if (width, height) != (CANVAS_W, CANVAS_H):
+            last_failure = f"unexpected dimensions {width}x{height}"
+        elif frame_is_nonblack(metrics, require_variance=require_variance):
+            print(
+                f"   source frame verified: {source_name} {width}x{height} "
+                f"distinct={metrics['distinct']} nonblack={metrics['nonblack_ratio']:.3f}"
+            )
+            return metrics
+        else:
+            last_failure = f"black/blank metrics={metrics}"
+        await asyncio.sleep(SOURCE_SCREENSHOT_INTERVAL_S)
+    raise ProbeFailure(
+        f"source {source_name!r} never produced a non-black frame within "
+        f"{SOURCE_SCREENSHOT_DEADLINE_S:.0f}s ({last_failure})"
+    )
+
+
 async def create_input(inbox: Inbox, ws: Any, scene: str, input_name: str, color: int) -> None:
     response = await request(
         inbox,
@@ -657,6 +953,161 @@ async def create_scene(inbox: Inbox, ws: Any, scene: str, input_name: str, color
     response = await request(inbox, ws, "CreateScene", f"create-scene-{scene}", {"sceneName": scene})
     assert_success(response, f"CreateScene({scene})")
     await create_input(inbox, ws, scene, input_name, color)
+
+
+async def verify_workload_sources(inbox: Inbox, ws: Any, process: PulsarProcess) -> None:
+    """Prove the configured WGC/CEF workload is bound and emitting pixels.
+
+    ``PULSAR_WORKLOAD_CEF`` and ``PULSAR_CAPTURE_WINDOW`` are inputs to the
+    runtime, not evidence by themselves.  This check walks the public
+    obs-websocket boundary: source registration, read-back settings, enabled
+    Default-scene items, and decoded source screenshots.  A CEF campaign also
+    requires an explicitly supplied visible WGC target so a metadata-only
+    workload can never pass.
+    """
+
+    required: list[tuple[str, str]] = []
+    if process.capture_window:
+        required.append((CAPTURE_SOURCE_NAME, "window_capture"))
+    if process.cef_workload:
+        if not process.capture_window:
+            raise ProbeFailure("--cef-workload requires --capture-window for a visible WGC target")
+        required.append((CEF_SOURCE_NAME, "browser_source"))
+    if not required:
+        return
+
+    response = await request(inbox, ws, "GetInputList", "workload-input-list")
+    assert_success(response, "GetInputList(workload)")
+    input_data = response.get("responseData") or response
+    inputs = input_data.get("inputs") or []
+    by_name = {
+        item.get("inputName"): item
+        for item in inputs
+        if isinstance(item, dict) and isinstance(item.get("inputName"), str)
+    }
+    for source_name, expected_kind in required:
+        item = by_name.get(source_name)
+        if item is None:
+            raise ProbeFailure(f"runtime did not register required source {source_name!r}")
+        actual_kind = item.get("inputKind") or item.get("unversionedInputKind")
+        if actual_kind != expected_kind:
+            raise ProbeFailure(
+                f"source {source_name!r} kind mismatch: got {actual_kind!r}, expected {expected_kind!r}"
+            )
+        settings_response = await request(
+            inbox,
+            ws,
+            "GetInputSettings",
+            f"workload-settings-{source_name}",
+            {"inputName": source_name},
+        )
+        assert_success(settings_response, f"GetInputSettings({source_name})")
+        settings_data = settings_response.get("responseData") or settings_response
+        settings = settings_data.get("inputSettings") or {}
+        if expected_kind == "window_capture":
+            if settings.get("window") != process.capture_window:
+                raise ProbeFailure(
+                    f"WGC target was not bound exactly: got {settings.get('window')!r}, "
+                    f"expected {process.capture_window!r}"
+                )
+            if settings.get("method") not in (2, "2"):
+                raise ProbeFailure(f"WGC source did not retain method=2: {settings!r}")
+        else:
+            if settings.get("url") != process.cef_url:
+                raise ProbeFailure(
+                    f"CEF URL was not bound exactly: got {settings.get('url')!r}, expected {process.cef_url!r}"
+                )
+            if settings.get("is_local_file") is True:
+                raise ProbeFailure("CEF workload unexpectedly treated its HTTP page as a local file")
+
+    scene_response = await request(
+        inbox,
+        ws,
+        "GetSceneItemList",
+        "workload-default-scene-items",
+        {"sceneName": BOOTSTRAP_SCENE_NAME},
+    )
+    assert_success(scene_response, "GetSceneItemList(Default workload)")
+    scene_data = scene_response.get("responseData") or scene_response
+    enabled_items = {
+        item.get("sourceName")
+        for item in scene_data.get("sceneItems") or []
+        if isinstance(item, dict) and item.get("sceneItemEnabled", True)
+    }
+    for source_name, _expected_kind in required:
+        if source_name not in enabled_items:
+            raise ProbeFailure(f"source {source_name!r} is not an enabled item in {BOOTSTRAP_SCENE_NAME!r}")
+
+    if process.cef_workload:
+        await wait_for_nonblack_source(inbox, ws, CEF_SOURCE_NAME, require_variance=True)
+    if process.capture_window:
+        await wait_for_nonblack_source(inbox, ws, CAPTURE_SOURCE_NAME, require_variance=False)
+    print(
+        "   workload topology verified: "
+        + ", ".join(f"{name}:{kind}" for name, kind in required)
+        + " (bound scene items + non-black frames)"
+    )
+
+
+def wait_for_trace_record(
+    process: PulsarProcess,
+    record_type: str,
+    take_command_id: str,
+    *,
+    event_type: str | None = None,
+    boundary: str | None = None,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """Fail fast when an opt-in Take never reaches the JSONL producer.
+
+    The old driver waited for the full campaign and only then discovered that
+    the session line was malformed or that no event/observation crossed the
+    proc boundary. A first-Take check keeps that diagnostic close to the
+    ingress logs and prevents wasting a 100-take run.
+    """
+
+    if process.trace_path is None:
+        raise ProbeFailure("trace record check requested without --trace")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            lines = process.trace_path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            lines = []
+        for line_number, line in enumerate(lines, start=1):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ProbeFailure(
+                    f"runtime trace malformed at line {line_number} while waiting for "
+                    f"{record_type}: {exc}"
+                ) from exc
+            if not isinstance(record, dict) or record.get("record_type") != record_type:
+                continue
+            if record_type == "event":
+                value = record.get("event") or {}
+                if value.get("runtime_instance_id") != process.runtime_id:
+                    continue
+                if value.get("take_command_id") != take_command_id:
+                    continue
+                if event_type is not None and value.get("event_type") != event_type:
+                    continue
+                return value
+            if record.get("runtime_instance_id") != process.runtime_id:
+                continue
+            if record.get("take_command_id") != take_command_id:
+                continue
+            if boundary is not None and record.get("boundary") != boundary:
+                continue
+            return record
+        time.sleep(0.1)
+    diagnostics = [line for line in process.snapshot() if "pulsar-runtime-telemetry" in line]
+    diagnostic_text = " | ".join(diagnostics[-8:]) or "no runtime-telemetry ingress diagnostics"
+    selector = event_type or boundary or record_type
+    raise ProbeFailure(
+        f"trace did not emit {selector} for {take_command_id} within {timeout:.1f}s; "
+        f"diagnostics: {diagnostic_text}"
+    )
 
 
 def take_telemetry_data(process: PulsarProcess, number: int, target_scene: str) -> dict[str, Any]:
@@ -716,6 +1167,7 @@ async def collect_resource_samples(
         ws_url, subprotocols=["obswebsocket.json"], open_timeout=15
     ) as ws:
         await identify(ws, process.password)
+        await verify_workload_sources(Inbox(), ws, process)
         deadline = time.monotonic() + timeout
         while True:
             if process.trace_path is None:
@@ -814,6 +1266,7 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
     ) as ws:
         await identify(ws, process.password)
         inbox = Inbox()
+        await verify_workload_sources(inbox, ws, process)
         await create_scene(inbox, ws, SCENE_A, INPUT_A, COLOR_RED_ABGR)
         await create_scene(inbox, ws, SCENE_B, INPUT_B, COLOR_GREEN_ABGR)
 
@@ -933,7 +1386,30 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
                     take_telemetry_data(process, number, target),
                 )
                 assert_success(response, f"TriggerStudioModeTransition({number})")
+            if number == 1 and process.trace_path is not None:
+                wait_for_trace_record(
+                    process,
+                    "event",
+                    f"take-{number:03d}",
+                    event_type="TakeAccepted",
+                    timeout=10.0,
+                )
             commit = parse_commit(process.wait_for_commit(number, timeout=15))
+            if number == 1 and process.trace_path is not None:
+                wait_for_trace_record(
+                    process,
+                    "event",
+                    f"take-{number:03d}",
+                    event_type="TakeCommitted",
+                    timeout=10.0,
+                )
+                wait_for_trace_record(
+                    process,
+                    "observation",
+                    f"take-{number:03d}",
+                    boundary="encoder_input_raw",
+                    timeout=10.0,
+                )
             validate_commit(identity, commits[-1] if commits else None, commit)
             commits.append(commit)
             if number in (1, takes) or number % 25 == 0:
@@ -1057,6 +1533,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=pathlib.Path,
         help="opt-in #246 JSONL trace path; enables runtime event/raw/RTMP producer hooks",
     )
+    parser.add_argument(
+        "--build-revision",
+        default=os.environ.get("PULSAR_BUILD_REVISION"),
+        help="exact 40-character lowercase candidate SHA stamped into a --trace session (or PULSAR_BUILD_REVISION)",
+    )
     parser.add_argument("--runtime-id", help="runtime_instance_id for --trace (default: generated)")
     parser.add_argument(
         "--resource-mode",
@@ -1087,12 +1568,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--capture-window",
-        help="WGC window descriptor to pass through for an instrumented workload",
+        help="visible WGC window descriptor (<title>:<class>:<exe>); required with --cef-workload",
     )
     parser.add_argument(
         "--cef-workload",
         action="store_true",
-        help="declare the configured CEF workload in the runtime session metadata",
+        help="create and bind a real browser_source CEF workload alongside window_capture",
+    )
+    parser.add_argument(
+        "--cef-url",
+        default=os.environ.get("PULSAR_CEF_URL"),
+        help="URL for the --cef-workload browser_source (or PULSAR_CEF_URL; default is an ephemeral local page)",
     )
     args = parser.parse_args(argv)
     if args.takes < 1:
@@ -1105,6 +1591,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--resource-only requires --resource-mode")
     if args.trace_append and args.trace is None:
         parser.error("--trace-append requires --trace")
+    if args.trace is not None and (
+        not args.build_revision or BUILD_REVISION_RE.fullmatch(args.build_revision) is None
+    ):
+        parser.error("--trace requires --build-revision to be the exact 40-character lowercase candidate SHA")
+    if args.cef_workload and not args.capture_window:
+        parser.error("--cef-workload requires --capture-window for a visible WGC target")
     if args.resource_samples < 1:
         parser.error("--resource-samples must be >= 1")
     if not 100 <= args.resource_interval_ms <= 10000:
@@ -1121,6 +1613,11 @@ def run(args: argparse.Namespace) -> int:
         trace_path = args.trace.resolve() if args.trace is not None else None
         if trace_path is not None:
             trace_path.parent.mkdir(parents=True, exist_ok=True)
+        cef_server = None
+        if args.cef_workload and not args.cef_url:
+            cef_server = DeterministicCefServer()
+            cef_server.start()
+        cef_url = args.cef_url or (cef_server.url if cef_server is not None else None)
         process = PulsarProcess(
             args.exe.resolve(),
             args.encoder,
@@ -1132,6 +1629,8 @@ def run(args: argparse.Namespace) -> int:
             args.resource_interval_ms,
             args.capture_window,
             args.cef_workload,
+            args.build_revision,
+            cef_url,
         )
         try:
             process.spawn()
@@ -1165,6 +1664,8 @@ def run(args: argparse.Namespace) -> int:
             return EXIT_FAIL
         finally:
             process.shutdown()
+            if cef_server is not None:
+                cef_server.close()
 
 
 def main() -> int:

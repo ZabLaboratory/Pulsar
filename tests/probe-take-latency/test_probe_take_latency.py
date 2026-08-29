@@ -60,11 +60,14 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
         "workload": {"wgc": True, "cef": True, "nvenc": True},
         "capture_paths": list(probe.BOUNDARIES),
         "resource_reference": deepcopy(probe.RESOURCE_REFERENCE),
-        "build_revision": "fixture-build",
+        "source_types": ["window_capture", "browser_source"] if evidence_kind == "runtime" else None,
+        "build_revision": "f" * 40 if evidence_kind == "runtime" else "fixture-build",
         "command_line": "fixture only; never a runtime acceptance",
         "hardware": {"host": "fixture", "gpu": "fixture"},
         "evidence_kind": evidence_kind,
     }
+    if session["source_types"] is None:
+        del session["source_types"]
     records = [session]
     revisions = {"program": 0, "preview": 0, "role_map": 0}
     seq = 1

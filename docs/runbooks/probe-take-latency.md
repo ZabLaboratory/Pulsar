@@ -47,11 +47,12 @@ metadata:
   "video": {"width": 1920, "height": 1080, "fps_num": 60, "fps_den": 1},
   "workload": {"wgc": true, "cef": true, "nvenc": true},
   "capture_paths": ["encoder_input_raw", "directshow_return", "rtmp_first_packet"],
+  "source_types": ["window_capture", "browser_source"],
   "resource_reference": {
     "extra_frame_render_ms": 0.091,
     "extra_resident_bytes": 3130000
   },
-  "build_revision": "<binary/source revision>",
+  "build_revision": "0123456789abcdef0123456789abcdef01234567",
   "command_line": "<redacted reproducible command>",
   "hardware": {"host": "<host>", "gpu": "<adapter/driver>"},
   "evidence_kind": "runtime"
