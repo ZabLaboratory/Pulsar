@@ -108,9 +108,10 @@ exact observed frame/PTS and incremented revisions; it never fabricates a
 monotone boundary and never emits `TakeAborted` or claims a physical rollback.
 It then emits one out-of-contract `integrity_fault` process record with the
 candidate and prior frame/PTS and latches a fail-stop. The parser rejects any
-trace containing that record, and subsequent Takes are rejected until restart
-or explicit reconciliation. Duplicate callbacks for the accepted Take are
-ignored; the physical role map remains the one reported by the callback.
+trace containing that record, and subsequent Takes are rejected until a runtime
+restart. This revision exposes no explicit reconciliation API; adding one would
+require a separate contract decision. Duplicate callbacks for the accepted Take
+are ignored; the physical role map remains the one reported by the callback.
 
 The pre-network encoded callback uses the same correlation fields, with
 `boundary=encoded_first_packet`, `surface=EncoderOutput`,
