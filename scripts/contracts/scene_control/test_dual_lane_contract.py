@@ -145,6 +145,12 @@ def test_encoder_and_stable_surfaces_are_bound_only_during_setup() -> None:
     assert "obs_view_set_source(previewView, 0, previewScene)" in setup
     assert "obs_output_set_media(programReturnOutput, programVideo" in setup
     assert "obs_output_set_media(previewReturnOutput, previewVideo" in setup
+    assert "obs_output_start(previewReturnOutput)" in setup
+    assert setup.index("obs_output_set_media(previewReturnOutput, previewVideo") < setup.index(
+        "obs_output_start(previewReturnOutput)"
+    )
+    assert "PreviewView producer started for frame-backed readiness" in setup
+    assert "failed to start PreviewView producer" in setup
     assert setup.count("obs_view_create()") == 1
     assert "programView = obs_get_main_view();" in setup
     assert "programVideo = obs_get_video();" in setup

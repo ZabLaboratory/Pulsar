@@ -47,6 +47,8 @@ def test_runtime_adapter_keeps_protocol_and_physical_boundaries_explicit() -> No
         "sceneSwitchAbort",
         "OnSceneSwitchPreviewVideoFrame",
         "video_output_connect(previewVideo",
+        "obs_output_start(previewReturnOutput)",
+        "PreviewView producer started for frame-backed readiness",
         "takeCommitted(sceneSwitchTakeId, frameId, ptsNs)",
         "obs_view_cancel_atomic_swap()",
         "BCryptFinishHash",

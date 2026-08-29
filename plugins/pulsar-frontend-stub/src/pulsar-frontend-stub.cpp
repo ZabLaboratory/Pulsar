@@ -3035,12 +3035,27 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
         // slot null makes the lack of a second Preview/return audio route
         // explicit at the libobs boundary.
         obs_output_set_media(programReturnOutput, programVideo, nullptr);
-    if (previewReturnOutput)
+    if (previewReturnOutput) {
         // Preview has a distinct video surface, but r2 intentionally has no
         // independent Preview audio/AFV route.  These return outputs are
         // video-only; the audio argument is ignored by libobs for them.  The
         // actual audio consumers below all bind the same common Program bus.
         obs_output_set_media(previewReturnOutput, previewVideo, nullptr);
+        // Keep the auxiliary Preview mix hot independently of any external
+        // DirectShow consumer.  Without an active output no previewVideo
+        // frame is produced, so the vendor could accept Prepare but never
+        // prove PreviewReady.  Its callback still observes previewVideo
+        // itself, never a Program frame or synthetic readiness signal.
+        if (!obs_output_start(previewReturnOutput)) {
+            blog(LOG_ERROR, "[pulsar-scene-switch] failed to start PreviewView producer: %s",
+                 obs_output_get_last_error(previewReturnOutput));
+            return false;
+        }
+        blog(LOG_INFO, "[pulsar-scene-switch] PreviewView producer started for frame-backed readiness");
+    } else {
+        blog(LOG_ERROR, "[pulsar-scene-switch] PreviewView producer is unavailable");
+        return false;
+    }
 
     // The encoder is intentionally bound once, before any output can start.
     // obs_encoder_set_video rejects active/initialized encoders; the dual-lane
