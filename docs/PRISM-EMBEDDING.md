@@ -196,7 +196,11 @@ or `PULSAR_LEGACY_ALIAS=dedicated` / `off` to force a namespaced mapping.
 For a non-holder, launch the external DirectShow consumer with the same
 `PULSAR_RUNTIME_INSTANCE_ID` and `PULSAR_DIRECTSHOW_LEGACY_ALIAS=0`. This
 keeps the consumer on that runtime's mapping instead of accidentally opening
-the compatibility singleton.
+the compatibility singleton. The two variables form a fail-closed contract:
+the historical names are used only when neither variable is present; a valid
+runtime ID selects dedicated names unless the alias is explicitly truthy; a
+present invalid/empty ID or an alias without a valid ID disables the mapping.
+Do not set an empty alias as a compatibility shortcut.
 
 ## 4. The READY handshake
 

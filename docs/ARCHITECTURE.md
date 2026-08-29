@@ -195,7 +195,12 @@ A consumer (Prism today, others later) must:
 - Treat the returned runtime identity as the correlation key. If an external
   DirectShow consumer needs a non-holder's dedicated mapping, launch it with
   the same `PULSAR_RUNTIME_INSTANCE_ID` and
-  `PULSAR_DIRECTSHOW_LEGACY_ALIAS=0`.
+  `PULSAR_DIRECTSHOW_LEGACY_ALIAS=0`. The DirectShow producer and consumer
+  share one fail-closed tri-state decision: legacy names are allowed only
+  when **both** variables are absent; a valid runtime ID selects a dedicated
+  mapping unless the alias is explicitly truthy; any present invalid/empty
+  runtime ID, or any alias without a valid ID, disables the mapping rather
+  than opening a legacy queue.
 - Read stdout line-by-line until `^PULSAR_READY ` arrives; extract
   `url` + `password`; open the obs-websocket v5 session.
 - Hold the connection open for the lifetime of broadcast work.

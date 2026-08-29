@@ -1,4 +1,4 @@
-From c0b08f1d4a645ca59d210b6d46a185d87dea18ba Mon Sep 17 00:00:00 2001
+From 4b44f947e9c3ddf0c307a51b3baa2d9720ee98fe Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Sat, 29 Aug 2026 17:05:25 +0200
@@ -18,36 +18,37 @@ ADR-Revision: draft-r2-dual-lane-20260828
 
 Evidence: csf_8f564977366045d762be66e4; bounded-directshow-identifiers; mapping-layout-validation
 ---
- .../virtualcam-module/virtualcam-filter.cpp   | 136 ++++++++-
+ .../virtualcam-module/virtualcam-filter.cpp   | 131 ++++++++-
  .../virtualcam-module/virtualcam-filter.hpp   |   5 +-
- plugins/win-dshow/virtualcam.c                |  86 +++++-
+ plugins/win-dshow/virtualcam.c                |  73 ++++-
  .../shared-memory-queue.c                     | 262 +++++++++++++++---
  .../shared-memory-queue.h                     |  26 ++
- 5 files changed, 476 insertions(+), 39 deletions(-)
+ 5 files changed, 459 insertions(+), 38 deletions(-)
 
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
-index b304fdf40..7117b8167 100644
+index 2cde01233..274ade2d1 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 +++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
-@@ -7,6 +7,8 @@
+@@ -5,7 +5,10 @@
+ #include <strsafe.h>
+ #include <inttypes.h>
  #include <util/platform.h>
- #include <cstdlib>
++#include <cstdlib>
  #include <cstring>
 +#include <mutex>
 +#include <sstream>
  
  using namespace DShow;
  
-@@ -63,7 +65,7 @@ static std::wstring queue_name_for_filter(bool program_return, bool preview_retu
- }
- 
- VCamFilter::VCamFilter(bool program_return, bool preview_return)
--	: OutputFilter(), queue_name(queue_name_for_filter(program_return, preview_return))
-+	: OutputFilter(), queue_name(queue_name_for_filter(program_return, preview_return)), program_return(program_return)
+@@ -46,6 +49,7 @@ static std::wstring queue_name_for_filter(enum directshow_queue_namespace queue_
+ VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
+ 	: OutputFilter()
  {
- 	thread_start = CreateEvent(nullptr, true, false, nullptr);
- 	thread_stop = CreateEvent(nullptr, true, false, nullptr);
-@@ -340,23 +342,147 @@ void VCamFilter::Frame(uint64_t ts)
++	program_return = filter_kind == DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN;
+ 	const enum directshow_queue_namespace queue_namespace = directshow_queue_namespace_for_consumer(filter_kind);
+ 	queue_namespace_rejected = queue_namespace == DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
+ 	queue_name = queue_name_for_filter(queue_namespace, filter_kind);
+@@ -337,23 +341,142 @@ void VCamFilter::Frame(uint64_t ts)
  
  	/* Actual output */
  	uint8_t *ptr;
@@ -63,9 +64,6 @@ index b304fdf40..7117b8167 100644
  		UnlockSampleData(ts, ts + obs_interval);
  	}
 +
-+	/* This is deliberately after UnlockSampleData: it marks the actual
-+	 * ProgramReturn/DirectShow consumer boundary, not the producer's queue write
-+	 * and not a raw ProgramView substitute. */
 +	if (consumed_program_frame && program_return)
 +		EmitDirectShowObservation(metadata);
  }
@@ -101,7 +99,7 @@ index b304fdf40..7117b8167 100644
 +}
 +
 +static bool trace_prepare_identifier(const char *value, size_t capacity, std::string &raw,
-+					     std::string &escaped)
++				     std::string &escaped)
 +{
 +	raw.clear();
 +	escaped.clear();
@@ -125,14 +123,12 @@ index b304fdf40..7117b8167 100644
 +		case '\r': escaped += "\\r"; break;
 +		case '\t': escaped += "\\t"; break;
 +		default:
-+			/* JSON cannot contain any other C0 byte literally.  Rejecting
-+			 * before building the line keeps every emitted JSONL parseable. */
 +			if (ch < 0x20)
 +				return false;
 +			escaped.push_back((char)ch);
 +			break;
 +		}
- 	}
++	}
 +	return true;
 +}
 +
@@ -149,13 +145,13 @@ index b304fdf40..7117b8167 100644
 +	WaitForSingleObject(mutex, INFINITE);
 +
 +	HANDLE file = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-+					 nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
++				 nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 +	if (file != INVALID_HANDLE_VALUE) {
 +		const std::string payload = line + "\n";
 +		DWORD written = 0;
 +		WriteFile(file, payload.data(), (DWORD)payload.size(), &written, nullptr);
 +		CloseHandle(file);
-+	}
+ 	}
 +
 +	ReleaseMutex(mutex);
 +	CloseHandle(mutex);
@@ -172,13 +168,13 @@ index b304fdf40..7117b8167 100644
 +	std::string take_command_id;
 +	std::string take_command_id_json;
 +	if (!metadata.valid ||
-+		!trace_prepare_identifier(metadata.runtime_instance_id, sizeof(metadata.runtime_instance_id), runtime_id,
-+					  runtime_id_json) ||
-+		!trace_prepare_identifier(metadata.command_id, sizeof(metadata.command_id), command_id, command_id_json) ||
-+		!trace_prepare_identifier(metadata.intent_id, sizeof(metadata.intent_id), intent_id, intent_id_json) ||
-+		!trace_prepare_identifier(metadata.take_command_id, sizeof(metadata.take_command_id), take_command_id,
-+					  take_command_id_json) ||
-+		take_command_id.empty() || last_trace_take == take_command_id)
++	    !trace_prepare_identifier(metadata.runtime_instance_id, sizeof(metadata.runtime_instance_id), runtime_id,
++				      runtime_id_json) ||
++	    !trace_prepare_identifier(metadata.command_id, sizeof(metadata.command_id), command_id, command_id_json) ||
++	    !trace_prepare_identifier(metadata.intent_id, sizeof(metadata.intent_id), intent_id, intent_id_json) ||
++	    !trace_prepare_identifier(metadata.take_command_id, sizeof(metadata.take_command_id), take_command_id,
++				      take_command_id_json) ||
++	    take_command_id.empty() || last_trace_take == take_command_id)
 +		return;
 +
 +	std::ostringstream observation;
@@ -200,18 +196,18 @@ index b304fdf40..7117b8167 100644
  
  void VCamFilter::ShowDefaultFrame(uint8_t *ptr)
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
-index 1c2035ca4..c2f098f36 100644
+index 775d0893f..550724d29 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
 +++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
-@@ -34,6 +34,7 @@ class VCamFilter : public DShow::OutputFilter {
- 
+@@ -36,6 +36,7 @@ class VCamFilter : public DShow::OutputFilter {
  	video_queue_t *vq = nullptr;
  	std::wstring queue_name;
+ 	bool queue_namespace_rejected = false;
 +	bool program_return = false;
  	int queue_mode = 0;
  	bool in_obs = false;
  	enum queue_state prev_state = SHARED_QUEUE_STATE_INVALID;
-@@ -49,6 +50,7 @@ class VCamFilter : public DShow::OutputFilter {
+@@ -51,6 +52,7 @@ class VCamFilter : public DShow::OutputFilter {
  	volatile bool active = false;
  
  	nv12_scale_t scaler = {};
@@ -219,7 +215,7 @@ index 1c2035ca4..c2f098f36 100644
  
  	inline bool stopped() const { return WaitForSingleObject(thread_stop, 0) != WAIT_TIMEOUT; }
  
-@@ -56,8 +58,9 @@ class VCamFilter : public DShow::OutputFilter {
+@@ -58,8 +60,9 @@ class VCamFilter : public DShow::OutputFilter {
  
  	void Thread();
  	void Frame(uint64_t ts);
@@ -231,10 +227,10 @@ index 1c2035ca4..c2f098f36 100644
  	const int GetOutputBufferSize(void);
  
 diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
-index 7b2cb3bf8..2d587319c 100644
+index 562cb4150..5db534ac7 100644
 --- a/plugins/win-dshow/virtualcam.c
 +++ b/plugins/win-dshow/virtualcam.c
-@@ -3,14 +3,17 @@
+@@ -3,20 +3,85 @@
  #include <string.h>
  #include <stdio.h>
  #include <stdlib.h>
@@ -243,19 +239,18 @@ index 7b2cb3bf8..2d587319c 100644
  #include "util/threading.h"
 -#include "shared-memory-queue.h"
 +#include "../../shared/obs-shared-memory-queue/shared-memory-queue.h"
+ #include "directshow-namespace.h"
 +#include "../../../plugins/pulsar-frontend-stub/include/pulsar-runtime-telemetry-abi.h"
  
  struct virtualcam_data {
  	obs_output_t *output;
  	video_queue_t *vq;
  	wchar_t queue_name[256];
+ 	bool queue_namespace_rejected;
 +	bool program_return;
  	volatile bool active;
  	volatile bool stopping;
  };
-@@ -39,6 +42,81 @@ static bool valid_runtime_instance_id(const char *value)
- 	return strcmp(value, ".") != 0 && strcmp(value, "..") != 0;
- }
  
 +static void copy_telemetry_identifier(char *destination, const char *value)
 +{
@@ -267,20 +262,12 @@ index 7b2cb3bf8..2d587319c 100644
 +
 +static bool copy_telemetry_counter(uint64_t *destination, long long value)
 +{
-+	/* calldata_int is signed.  Never let a missing/overflowed value wrap into
-+	 * uint64 metadata: a DirectShow reader would otherwise report a fabricated
-+	 * frame/PTS and could admit a false boundary. */
 +	if (!destination || value < 0 || value > INT64_MAX)
 +		return false;
 +	*destination = (uint64_t)value;
 +	return true;
 +}
 +
-+/* The ProgramReturn producer is in the OBS process, while the DirectShow
-+ * filter may be hosted by another process.  Copy the committed correlation
-+ * envelope into each shared-memory slot so the reader can report exactly the
-+ * frame it consumed.  A missing/disabled bridge is represented by valid=0;
-+ * virtual camera delivery remains byte-for-byte legacy in that case. */
 +static void snapshot_runtime_frame(struct video_queue_frame_metadata *metadata)
 +{
 +	memset(metadata, 0, sizeof(*metadata));
@@ -295,35 +282,30 @@ index 7b2cb3bf8..2d587319c 100644
 +	}
 +
 +	const bool valid = calldata_bool(&cd, "valid");
-+	const long long server_seq = calldata_int(&cd, "server_seq");
-+	const long long frame_id = calldata_int(&cd, "frame_id");
-+	const long long pts_ns = calldata_int(&cd, "pts_ns");
-+	const long long program_revision = calldata_int(&cd, "program_revision");
-+	const long long preview_revision = calldata_int(&cd, "preview_revision");
-+	const long long role_map_revision = calldata_int(&cd, "role_map_revision");
-+	uint64_t converted_server_seq = 0;
-+	uint64_t converted_frame_id = 0;
-+	uint64_t converted_pts_ns = 0;
-+	uint64_t converted_program_revision = 0;
-+	uint64_t converted_preview_revision = 0;
-+	uint64_t converted_role_map_revision = 0;
-+	const bool counters_valid = copy_telemetry_counter(&converted_server_seq, server_seq) &&
-+				    copy_telemetry_counter(&converted_frame_id, frame_id) &&
-+				    copy_telemetry_counter(&converted_pts_ns, pts_ns) &&
-+				    copy_telemetry_counter(&converted_program_revision, program_revision) &&
-+				    copy_telemetry_counter(&converted_preview_revision, preview_revision) &&
-+				    copy_telemetry_counter(&converted_role_map_revision, role_map_revision);
++	uint64_t server_seq = 0;
++	uint64_t frame_id = 0;
++	uint64_t pts_ns = 0;
++	uint64_t program_revision = 0;
++	uint64_t preview_revision = 0;
++	uint64_t role_map_revision = 0;
++	const bool counters_valid =
++		copy_telemetry_counter(&server_seq, calldata_int(&cd, "server_seq")) &&
++		copy_telemetry_counter(&frame_id, calldata_int(&cd, "frame_id")) &&
++		copy_telemetry_counter(&pts_ns, calldata_int(&cd, "pts_ns")) &&
++		copy_telemetry_counter(&program_revision, calldata_int(&cd, "program_revision")) &&
++		copy_telemetry_counter(&preview_revision, calldata_int(&cd, "preview_revision")) &&
++		copy_telemetry_counter(&role_map_revision, calldata_int(&cd, "role_map_revision"));
 +	if (!valid || !counters_valid) {
-+		/* metadata was zeroed above; keep valid=0 and fail closed for this slot. */
 +		calldata_free(&cd);
 +		return;
 +	}
-+	metadata->server_seq = converted_server_seq;
-+	metadata->frame_id = converted_frame_id;
-+	metadata->pts_ns = converted_pts_ns;
-+	metadata->program_revision = converted_program_revision;
-+	metadata->preview_revision = converted_preview_revision;
-+	metadata->role_map_revision = converted_role_map_revision;
++
++	metadata->server_seq = server_seq;
++	metadata->frame_id = frame_id;
++	metadata->pts_ns = pts_ns;
++	metadata->program_revision = program_revision;
++	metadata->preview_revision = preview_revision;
++	metadata->role_map_revision = role_map_revision;
 +	metadata->valid = 1U;
 +	copy_telemetry_identifier(metadata->runtime_instance_id, calldata_string(&cd, "runtime_instance_id"));
 +	copy_telemetry_identifier(metadata->command_id, calldata_string(&cd, "command_id"));
@@ -332,19 +314,19 @@ index 7b2cb3bf8..2d587319c 100644
 +	calldata_free(&cd);
 +}
 +
- static void queue_name_for_output(obs_output_t *output, wchar_t *destination, size_t capacity)
+ static bool queue_name_for_output(obs_output_t *output, wchar_t *destination, size_t capacity)
  {
  	const char *output_name = obs_output_get_name(output);
-@@ -85,6 +163,8 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+@@ -67,6 +132,8 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
  {
  	struct virtualcam_data *vcam = (struct virtualcam_data *)bzalloc(sizeof(*vcam));
  	vcam->output = output;
 +	vcam->program_return = obs_output_get_id(output) &&
 +				       strcmp(obs_output_get_id(output), "program_return_output") == 0;
- 	queue_name_for_output(output, vcam->queue_name, sizeof(vcam->queue_name) / sizeof(vcam->queue_name[0]));
- 
- 	UNUSED_PARAMETER(settings);
-@@ -174,7 +254,9 @@ static void virtual_video(void *param, struct video_data *frame)
+ 	vcam->queue_namespace_rejected = !queue_name_for_output(
+ 		output, vcam->queue_name, sizeof(vcam->queue_name) / sizeof(vcam->queue_name[0]));
+ 	if (vcam->queue_namespace_rejected)
+@@ -157,7 +224,9 @@ static void virtual_video(void *param, struct video_data *frame)
  		return;
  	}
  
@@ -783,3 +765,6 @@ index 41c4cee5c..029e73084 100644
  
  #ifdef __cplusplus
  }
+-- 
+2.54.0.windows.1
+

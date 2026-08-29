@@ -2,7 +2,7 @@
 
 The upstream producer lives in the pinned submodule and is materialized by the
 numbered patch chain.  These checks keep the superproject wiring and the
-canonical 0010 patch visible to the scene-switch contract suite without
+canonical 0011 patch visible to the scene-switch contract suite without
 requiring a Windows/OBS toolchain.
 """
 
@@ -23,7 +23,7 @@ from . import validate_event
 
 
 ROOT = Path(__file__).resolve().parents[3]
-PATCH = ROOT / "patches" / "0010-feat-runtime-telemetry-producer.patch"
+PATCH = ROOT / "patches" / "0011-feat-runtime-telemetry-producer.patch"
 FRONTEND_CMAKE = ROOT / "plugins" / "pulsar-frontend-stub" / "CMakeLists.txt"
 WEBSOCKET_CMAKE = ROOT / "plugins" / "pulsar-websocket" / "CMakeLists.txt"
 FRONTEND_SOURCE = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
@@ -168,10 +168,10 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "freeze_until_monotonic_ns=%llu reserve_now_monotonic_ns=%llu deadline_delta_ns=%s" in frontend
     assert "deadline >= now" in frontend
 
-    # 0010 must record the observation after the DirectShow sample has been
+    # 0011 must record the observation after the DirectShow sample has been
     # unlocked, and only for the actual ProgramReturn filter instance.
     assert "if (consumed_program_frame && program_return)" in patch
-    assert "after UnlockSampleData" in patch
+    assert patch.index("UnlockSampleData") < patch.index("if (consumed_program_frame && program_return)")
     assert '"boundary\\":\\"directshow_return' in patch
     assert "video_queue_read_ex" in patch
     assert "video_queue_write_ex" in patch

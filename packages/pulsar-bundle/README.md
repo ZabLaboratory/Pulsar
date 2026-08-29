@@ -275,7 +275,10 @@ const pulsar = await spawn({
 ```
 
 The `onLog` callback fires for **every** line — including the
-`PULSAR_READY ` sentinel — even before `spawn()` resolves.
+`PULSAR_READY ` sentinel — even before `spawn()` resolves. Credential values
+in native boot lines (including `password`, `token`, `secret` and stream keys)
+are replaced with `[redacted]`; the bundle keeps the unmodified data only for
+its private boot/config parsing.
 
 ## Boot environment variables
 
@@ -327,6 +330,11 @@ the caller must own the old names, or `PULSAR_LEGACY_ALIAS=dedicated` / `off`
 to avoid claiming them. The returned `runtimeInstanceId` is the value an
 external DirectShow consumer must receive as `PULSAR_RUNTIME_INSTANCE_ID`,
 together with `PULSAR_DIRECTSHOW_LEGACY_ALIAS=0`, to open a dedicated mapping.
+At the DirectShow boundary, legacy mapping names are used only when both
+variables are truly absent. A valid runtime ID with an absent, false, or
+unrecognised alias selects dedicated mapping names; any present invalid/empty
+runtime ID, or an alias without a valid runtime ID, is rejected before either
+side opens or creates a named queue.
 
 The native logs expose `PULSAR_RUNTIME_INSTANCE`, `PULSAR_RUNTIME_COLLISION`
 and `PULSAR_LEGACY_ALIAS` records with the identity, paths and lease outcome;

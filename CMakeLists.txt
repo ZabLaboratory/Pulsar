@@ -134,6 +134,12 @@ if(WIN32)
     # acquire/refusal/release/abandoned-recovery of both lock classes.
     add_subdirectory(tests/runtime-isolation-probe)
 
+    # #248 -- the producer (C) and DirectShow consumer (C++) must take the
+    # same fail-closed namespace decision before either can touch a named
+    # shared-memory queue.  This probe includes the production C-compatible
+    # helper after the lexical upstream patch series has been applied.
+    add_subdirectory(tests/directshow-namespace-probe)
+
     # #182 -- regression gate for the pulsar:OutputFailed reason_class
     # classifier (ADR-005 §3.4). No pulsar.exe, no libobs/Qt: a pure
     # function of (is_local_output, code, last_error).
