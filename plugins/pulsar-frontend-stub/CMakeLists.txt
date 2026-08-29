@@ -22,6 +22,20 @@ set(PULSAR_LIBOBS_LIB             "${PULSAR_LIBOBS_BUILD}/RelWithDebInfo/obs.lib
 set(PULSAR_FRONTEND_API_HEADERS   "${PULSAR_UPSTREAM_DIR}/frontend/api")
 set(PULSAR_FRONTEND_API_LIB       "${PULSAR_UPSTREAM_DIR}/build_x64/frontend/api/RelWithDebInfo/obs-frontend-api.lib")
 
+# The frontend runtime owns the scene-switch vendor adapter and includes
+# nlohmann/json directly. Resolve the dependency locally instead of relying on
+# the sibling pulsar-websocket directory's CMake scope or build order.
+file(GLOB _pulsar_obs_deps LIST_DIRECTORIES true
+     "${PULSAR_UPSTREAM_DIR}/.deps/obs-deps-*-x64")
+list(FILTER _pulsar_obs_deps EXCLUDE REGEX "obs-deps-qt6-")
+list(GET _pulsar_obs_deps 0 PULSAR_OBS_DEPS)
+if(NOT EXISTS "${PULSAR_OBS_DEPS}/include/nlohmann/json.hpp")
+    message(FATAL_ERROR
+        "nlohmann_json headers not found in ${PULSAR_OBS_DEPS}. Build upstream configure first.")
+endif()
+list(APPEND CMAKE_PREFIX_PATH "${PULSAR_OBS_DEPS}")
+find_package(nlohmann_json 3.11 REQUIRED)
+
 if(NOT EXISTS "${PULSAR_LIBOBS_LIB}")
     message(FATAL_ERROR
         "libobs import library not found at ${PULSAR_LIBOBS_LIB}.\n"
@@ -60,4 +74,5 @@ target_link_libraries(pulsar-frontend-stub PUBLIC
     "${PULSAR_LIBOBS_LIB}"
     "${PULSAR_FRONTEND_API_LIB}"
     bcrypt
+    nlohmann_json::nlohmann_json
 )

@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 SOURCE = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
+FRONTEND_CMAKE = ROOT / "plugins" / "pulsar-frontend-stub" / "CMakeLists.txt"
 PROTOCOL = ROOT / "docs" / "PROTOCOL.md"
 
 
@@ -19,6 +20,13 @@ def test_runtime_vendor_is_dedicated_and_only_uses_call_vendor_surface() -> None
     assert "obs_websocket_vendor_emit_event" in source
     assert "pulsar-scene-switch" in protocol
     assert "not** top-level obs-websocket requests" in protocol
+
+
+def test_frontend_declares_its_own_json_dependency() -> None:
+    cmake = FRONTEND_CMAKE.read_text(encoding="utf-8")
+    assert "obs-deps-*-x64" in cmake
+    assert 'find_package(nlohmann_json 3.11 REQUIRED)' in cmake
+    assert "nlohmann_json::nlohmann_json" in cmake
 
 
 def test_runtime_adapter_keeps_protocol_and_physical_boundaries_explicit() -> None:
