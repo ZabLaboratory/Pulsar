@@ -19,6 +19,8 @@ import zlib
 
 import pytest
 
+from . import validate_event
+
 
 ROOT = Path(__file__).resolve().parents[3]
 PATCH = ROOT / "patches" / "0010-feat-runtime-telemetry-producer.patch"
@@ -176,6 +178,49 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "copy_telemetry_counter" in patch
     assert "INT64_MAX" in patch
     assert "queue_rejected" in frontend
+
+
+def test_take_committed_runtime_json_closes_preview_lane_quote() -> None:
+    frontend = FRONTEND_SOURCE.read_text(encoding="utf-8")
+    commit_start = frontend.index("void commit(")
+    commit = frontend[commit_start : frontend.index("void rawFrame", commit_start)]
+    closing_quote = chr(92) + '"'
+    assert f'laneId(context.previewLane) << "{closing_quote}";' in commit
+
+    # This is a complete TakeCommitted record captured from the runtime shape
+    # (including the observed frame/PTS boundary from the exact Probe-2 smoke).
+    # Parse the line as JSON and through the v1 validator: a substring check
+    # would not catch the missing closing quote that produced A}}.
+    candidate_sha = "0123456789abcdef" * 4
+    line = (
+        '{"record_type":"event","event":{'
+        '"contract":"pulsar.scene-switch.v1","schema_version":1,"message_type":"event",'
+        '"event_type":"TakeCommitted","command_id":"command-001","intent_id":"intent-001",'
+        '"runtime_instance_id":"runtime-qpc-001","server_seq":2,"state":"ready",'
+        '"previous_revisions":{"program":0,"preview":1,"role_map":0},'
+        '"revisions":{"program":1,"preview":1,"role_map":1},'
+        '"role_map":{"on_air":"B","preview":"A"},'
+        '"previous_role_map":{"on_air":"A","preview":"B"},'
+        '"observed_at_monotonic_ns":1318528200144256,'
+        f'"payload_sha256":"{candidate_sha}",'
+        '"take_command_id":"take-001","target_lane_id":"B","target_scene_id":"Scene B",'
+        '"source_lane_id":"B","frame_id":604,"pts_ns":1318528200144256,'
+        '"program_lane_id":"B","preview_lane_id":"A"}}'
+    )
+    parsed = json.loads(line)
+    event = parsed["event"]
+    assert validate_event(event) == event
+    assert event["event_type"] == "TakeCommitted"
+    assert event["take_command_id"] == "take-001"
+    assert event["frame_id"] == 604
+    assert event["pts_ns"] == 1318528200144256
+    assert event["role_map"] == {"on_air": "B", "preview": "A"}
+    assert event["program_lane_id"] == "B"
+    assert event["preview_lane_id"] == "A"
+
+    malformed = line.replace('"preview_lane_id":"A"}}', '"preview_lane_id":"A}}')
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(malformed)
 
 
 def test_runtime_session_line_is_valid_json_and_has_bound_source_topology() -> None:

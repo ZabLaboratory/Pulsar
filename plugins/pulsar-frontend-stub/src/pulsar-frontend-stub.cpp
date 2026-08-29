@@ -718,7 +718,7 @@ public:
               << "\",\"source_lane_id\":\"" << laneId(context.onAirLane)
               << "\",\"frame_id\":" << frameId << ",\"pts_ns\":" << ptsNs
               << ",\"program_lane_id\":\"" << laneId(context.onAirLane)
-              << "\",\"preview_lane_id\":\"" << laneId(context.previewLane);
+              << "\",\"preview_lane_id\":\"" << laneId(context.previewLane) << "\"";
         event << "}}";
         writeLine(event.str());
 
