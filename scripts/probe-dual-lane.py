@@ -5,7 +5,11 @@ The probe drives the public obs-websocket v5 boundary only.  It starts with
 one logical scene on air, alternates a second scene into Preview, and commits
 ``--takes`` studio-mode Cuts.  Pulsar's structured dual-lane logs expose the
 physical roots, stable view/video identities, and frame-boundary frame/PTS
-commit; those values are checked for every Take.
+commit; those values are checked for every Take.  It also mutates the public
+Program and Preview scenes after their lane is bound, mutates the former
+OnAir scene after the first Take, and checks that the logical selections stay
+distinct.  The raw NV12 time-code probe remains the pixel-level proof that
+those live mutations reach only their selected lane.
 
 Run the two acceptance campaigns independently against the same build::
 
@@ -96,8 +100,13 @@ SCENE_A = "probe-dual-lane-A"
 SCENE_B = "probe-dual-lane-B"
 INPUT_A = "probe-dual-lane-color-A"
 INPUT_B = "probe-dual-lane-color-B"
+INPUT_A_LIVE = "probe-dual-lane-live-A"
+INPUT_B_LIVE = "probe-dual-lane-live-B"
+INPUT_A_POST_TAKE = "probe-dual-lane-post-take-A"
+INPUT_B_FROZEN = "probe-dual-lane-frozen-B"
 COLOR_RED_ABGR = 0xFF0000FF
 COLOR_GREEN_ABGR = 0xFF00FF00
+COLOR_BLUE_ABGR = 0xFFFF0000
 
 
 class ProbeFailure(RuntimeError):
@@ -247,6 +256,18 @@ class Inbox:
             elif message.get("op") == 5:
                 self.events.append(message.get("d", {}))
 
+    async def receive_until_batch_response(self, ws: Any, request_id: str) -> dict[str, Any]:
+        while True:
+            message = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
+            if message.get("op") == 9:
+                data = message.get("d", {})
+                if data.get("requestId") == request_id:
+                    return data
+            elif message.get("op") == 7:
+                self.responses.append(message.get("d", {}))
+            elif message.get("op") == 5:
+                self.events.append(message.get("d", {}))
+
 
 async def request(
     inbox: Inbox, ws: Any, request_type: str, request_id: str, data: dict[str, Any] | None = None
@@ -261,10 +282,44 @@ async def request(
     return await inbox.receive_until_response(ws, request_id)
 
 
+async def request_batch(
+    inbox: Inbox,
+    ws: Any,
+    request_id: str,
+    requests: list[dict[str, Any]],
+    execution_type: int = 1,
+) -> dict[str, Any]:
+    payload = {
+        "op": 8,
+        "d": {
+            "requestId": request_id,
+            "executionType": execution_type,
+            "haltOnFailure": False,
+            "requests": requests,
+        },
+    }
+    await ws.send(json.dumps(payload))
+    return await inbox.receive_until_batch_response(ws, request_id)
+
+
 def assert_success(response: dict[str, Any], operation: str) -> None:
     status = response.get("requestStatus") or {}
     if not status.get("result"):
         raise ProbeFailure(f"{operation} declined: {status}")
+
+
+def assert_preview_frozen(response: dict[str, Any], operation: str) -> None:
+    status = response.get("requestStatus") or {}
+    comment = str(status.get("comment") or "")
+    if status.get("result") or status.get("code") != 702 or "PREVIEW_FROZEN" not in comment:
+        raise ProbeFailure(f"{operation} was not rejected as PREVIEW_FROZEN/702: {status}")
+
+
+def batch_results(response: dict[str, Any], operation: str) -> list[dict[str, Any]]:
+    results = response.get("results")
+    if not isinstance(results, list):
+        raise ProbeFailure(f"{operation} did not return a result list: {response}")
+    return results
 
 
 async def wait_event(
@@ -496,14 +551,12 @@ def verify_recording(path_text: str, ffprobe: str) -> None:
     )
 
 
-async def create_scene(inbox: Inbox, ws: Any, scene: str, input_name: str, color: int) -> None:
-    response = await request(inbox, ws, "CreateScene", f"create-scene-{scene}", {"sceneName": scene})
-    assert_success(response, f"CreateScene({scene})")
+async def create_input(inbox: Inbox, ws: Any, scene: str, input_name: str, color: int) -> None:
     response = await request(
         inbox,
         ws,
         "CreateInput",
-        f"create-input-{scene}",
+        f"create-input-{input_name}",
         {
             "sceneName": scene,
             "inputName": input_name,
@@ -513,6 +566,60 @@ async def create_scene(inbox: Inbox, ws: Any, scene: str, input_name: str, color
         },
     )
     assert_success(response, f"CreateInput({scene})")
+
+
+async def assert_scene_item_presence(
+    inbox: Inbox, ws: Any, scene: str, input_name: str, expected: bool, operation: str
+) -> None:
+    response = await request(
+        inbox,
+        ws,
+        "GetSceneItemList",
+        f"scene-items-{operation}-{scene}-{input_name}",
+        {"sceneName": scene},
+    )
+    assert_success(response, f"GetSceneItemList({operation})")
+    data = response.get("responseData") or response
+    scene_items = data.get("sceneItems") or []
+    names = {item.get("sourceName") for item in scene_items if isinstance(item, dict)}
+    present = input_name in names
+    if present != expected:
+        raise ProbeFailure(
+            f"scene mutation visibility mismatch at {operation}: scene={scene!r} "
+            f"input={input_name!r} present={present}, expected={expected}"
+        )
+
+
+async def create_scene(inbox: Inbox, ws: Any, scene: str, input_name: str, color: int) -> None:
+    response = await request(inbox, ws, "CreateScene", f"create-scene-{scene}", {"sceneName": scene})
+    assert_success(response, f"CreateScene({scene})")
+    await create_input(inbox, ws, scene, input_name, color)
+
+
+async def assert_distinct_selected_scenes(
+    inbox: Inbox,
+    ws: Any,
+    operation: str,
+    expected_program: str,
+    expected_preview: str,
+) -> None:
+    program_response = await request(inbox, ws, "GetCurrentProgramScene", f"{operation}-program")
+    assert_success(program_response, f"GetCurrentProgramScene({operation})")
+    program_data = program_response.get("responseData") or program_response
+    program = program_data.get("currentProgramSceneName") or program_data.get("sceneName")
+
+    preview_response = await request(inbox, ws, "GetCurrentPreviewScene", f"{operation}-preview")
+    assert_success(preview_response, f"GetCurrentPreviewScene({operation})")
+    preview_data = preview_response.get("responseData") or preview_response
+    preview = preview_data.get("currentPreviewSceneName") or preview_data.get("sceneName")
+
+    if (program, preview) != (expected_program, expected_preview):
+        raise ProbeFailure(
+            f"logical Program/Preview selection mismatch at {operation}: "
+            f"got {(program, preview)!r}, expected {(expected_program, expected_preview)!r}"
+        )
+    if program == preview:
+        raise ProbeFailure(f"logical Program and Preview scenes aliased at {operation}: {program!r}")
 
 
 async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
@@ -566,6 +673,10 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
             {"sceneName": SCENE_A},
         )
         assert_success(response, "SetCurrentProgramScene(A)")
+        # Mutate the public Program scene after the physical lane is already
+        # bound.  The wrapper must retain this exact source rather than a
+        # private duplicate; the raw NV12 probe verifies the resulting pixels.
+        await create_input(inbox, ws, SCENE_A, INPUT_A_LIVE, COLOR_BLUE_ABGR)
         response = await request(
             inbox,
             ws,
@@ -609,13 +720,61 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
                 {"sceneName": target},
             )
             assert_success(response, f"SetCurrentPreviewScene({target})")
-            response = await request(
+            if number == 1:
+                # The Preview lane is now bound to B.  Apply its mutation only
+                # after binding so a snapshot implementation cannot pass this
+                # lifecycle exercise accidentally.
+                await create_input(inbox, ws, SCENE_B, INPUT_B_LIVE, COLOR_RED_ABGR)
+            await assert_distinct_selected_scenes(
                 inbox,
                 ws,
-                "TriggerStudioModeTransition",
                 f"take-{number}",
+                expected_program=SCENE_A if number % 2 else SCENE_B,
+                expected_preview=target,
             )
-            assert_success(response, f"TriggerStudioModeTransition({number})")
+            if number == 1:
+                # SerialFrame executes these requests on one graphics tick.
+                # The first request publishes TakeAccepted/pending; the
+                # second must be rejected before CreateInput can mutate the
+                # scene that is being promoted. This is the supported
+                # WebSocket control-plane proof of the AC-04 freeze.
+                freeze_batch = await request_batch(
+                    inbox,
+                    ws,
+                    "take-1-freeze-batch",
+                    [
+                        {"requestType": "TriggerStudioModeTransition"},
+                        {
+                            "requestType": "CreateInput",
+                            "requestData": {
+                                "sceneName": SCENE_B,
+                                "inputName": INPUT_B_FROZEN,
+                                "inputKind": "color_source_v3",
+                                "inputSettings": {
+                                    "color": COLOR_GREEN_ABGR,
+                                    "width": CANVAS_W,
+                                    "height": CANVAS_H,
+                                },
+                                "sceneItemEnabled": True,
+                            },
+                        },
+                    ],
+                )
+                freeze_results = batch_results(freeze_batch, "take-1-freeze-batch")
+                if len(freeze_results) != 2:
+                    raise ProbeFailure(
+                        f"take-1-freeze-batch returned {len(freeze_results)} results, expected 2"
+                    )
+                assert_success(freeze_results[0], "TriggerStudioModeTransition(1)")
+                assert_preview_frozen(freeze_results[1], "CreateInput(B during pending)")
+            else:
+                response = await request(
+                    inbox,
+                    ws,
+                    "TriggerStudioModeTransition",
+                    f"take-{number}",
+                )
+                assert_success(response, f"TriggerStudioModeTransition({number})")
             commit = parse_commit(process.wait_for_commit(number, timeout=15))
             validate_commit(identity, commits[-1] if commits else None, commit)
             commits.append(commit)
@@ -623,6 +782,72 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
                 print(
                     f"   Take {number:03d}: frame_id={commit.frame_id} pts_ns={commit.pts_ns} "
                     f"onair_lane={commit.onair_lane} preview_lane={commit.preview_lane}"
+                )
+            if number == 1:
+                await assert_scene_item_presence(
+                    inbox,
+                    ws,
+                    SCENE_B,
+                    INPUT_B_FROZEN,
+                    False,
+                    "CreateInput(B during pending)",
+                )
+                # After the Cut, A is the Preview scene.  This is the
+                # post-Take lifecycle proof: its producer remains the same
+                # public scene and can be mutated only after commit.
+                await create_input(inbox, ws, SCENE_A, INPUT_A_POST_TAKE, COLOR_GREEN_ABGR)
+                await assert_scene_item_presence(
+                    inbox,
+                    ws,
+                    SCENE_A,
+                    INPUT_A_POST_TAKE,
+                    True,
+                    "CreateInput(A after commit)",
+                )
+                # Keep the post-commit Preview mutation observable for at
+                # least thirty rendered frames while logical Program remains
+                # the promoted B scene. The raw NV12 time-code probe supplies
+                # the pixel-level lane-isolation proof.
+                settle_batch = await request_batch(
+                    inbox,
+                    ws,
+                    "take-1-post-commit-settle",
+                    [
+                        {"requestType": "Sleep", "requestData": {"sleepFrames": 30}},
+                        {"requestType": "GetCurrentProgramScene"},
+                        {"requestType": "GetCurrentPreviewScene"},
+                    ],
+                )
+                settle_results = batch_results(settle_batch, "take-1-post-commit-settle")
+                if len(settle_results) != 3:
+                    raise ProbeFailure(
+                        f"take-1-post-commit-settle returned {len(settle_results)} results, expected 3"
+                    )
+                assert_success(settle_results[0], "Sleep(30 frames)")
+                assert_success(settle_results[1], "GetCurrentProgramScene(after settle)")
+                assert_success(settle_results[2], "GetCurrentPreviewScene(after settle)")
+                await assert_distinct_selected_scenes(
+                    inbox,
+                    ws,
+                    "take-1-post-commit-settle",
+                    expected_program=SCENE_B,
+                    expected_preview=SCENE_A,
+                )
+                await assert_scene_item_presence(
+                    inbox,
+                    ws,
+                    SCENE_B,
+                    INPUT_B_FROZEN,
+                    False,
+                    "frozen input after commit",
+                )
+                await assert_scene_item_presence(
+                    inbox,
+                    ws,
+                    SCENE_A,
+                    INPUT_A_POST_TAKE,
+                    True,
+                    "post-commit Preview after 30 frames",
                 )
 
         response = await request(inbox, ws, "StopRecord", "stop-record")

@@ -16,6 +16,8 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[3]
 _FRONTEND = _ROOT / "plugins/pulsar-frontend-stub/src/pulsar-frontend-stub.cpp"
+_CONTROL_BRIDGE = _ROOT / "plugins/pulsar-frontend-stub/include/pulsar-dual-lane-control.h"
+_WEBSOCKET_HANDLER = _ROOT / "plugins/pulsar-websocket/src/requesthandler/RequestHandler.cpp"
 _DUAL_LANE_PATCH = _ROOT / "patches/0009-feat-libobs-add-frame-boundary-dual-lane-swaps.patch"
 _RUNTIME_PROBE = _ROOT / "scripts/probe-dual-lane.py"
 _OUTPUT_EFFECT_PROBE = _ROOT / "scripts/probe-output-effect.py"
@@ -45,17 +47,54 @@ def test_physical_roots_are_fixed_and_roles_point_at_their_lane() -> None:
 
     assert 'obs_scene_create_private("PulsarLaneA")' in source
     assert 'obs_scene_create_private("PulsarLaneB")' in source
-    assert "OBS_SCENE_DUP_PRIVATE_COPY" in source
-    assert "obs_scene_duplicate(obs_scene_from_source(scene)" in source
-    assert "obs_scene_add(laneScene, contentSource)" in source
+    assert 'obs_scene_create_private("PulsarPreviewBootstrap")' in source
+    assert "obs_scene_add(laneAScene, obs_scene_get_source(templateScene))" in source
+    assert "obs_scene_add(laneBScene, obs_scene_get_source(previewBootstrap))" in source
+    assert "obs_scene_add(laneScene, scene)" in source
     assert "laneSources[onAirLane] == currentScene" in source
     assert "laneSources[previewLane] == previewScene" in source
     assert "laneItems[0] && laneItems[1]" in source
+    assert "programSelection != previewSelection" in source
     assert "previewView && programVideo && previewVideo" in source
     assert "programView == obs_get_main_view()" in source
     assert "programVideo == obs_get_video()" in source
     assert "std::swap(self->onAirLane, self->previewLane)" in source
     assert "std::swap(self->currentScene, self->previewScene)" in source
+
+
+def test_live_selected_scene_references_propagate_and_roles_swap_after_take() -> None:
+    source = _read(_FRONTEND)
+    setup = _between(
+        source,
+        "bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)",
+        "bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)",
+    )
+    replace = _between(
+        source,
+        "bool PulsarFrontendAPI::replaceLaneCompositionLocked(int lane, obs_source_t *scene)",
+        "bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)",
+    )
+    commit = _between(
+        source,
+        "void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, uint64_t ptsNs)",
+        "bool PulsarFrontendAPI::setup()",
+    )
+
+    # The wrapper children are the exact scene sources, so post-bind edits to
+    # each public scene remain visible in its selected lane.  Preview starts
+    # on a private source only until a second public scene is selected.
+    assert "obs_scene_add(laneAScene, obs_scene_get_source(templateScene))" in setup
+    assert "obs_scene_add(laneBScene, obs_scene_get_source(previewBootstrap))" in setup
+    assert "obs_scene_add(laneScene, scene)" in replace
+    assert "if (!obs_scene_from_source(scene))" in replace
+    assert "OBS_SCENE_DUP_PRIVATE_COPY" not in setup + replace
+    assert "programSelection != previewSelection" in source
+
+    # A Cut swaps the stable root roles and the logical scene refs together at
+    # the frame-boundary callback; it never clones or rebinds a view.
+    assert "std::swap(self->currentScene, self->previewScene)" in commit
+    assert "std::swap(self->programSelection, self->previewSelection)" in commit
+    assert "std::swap(self->onAirLane, self->previewLane)" in commit
 
 
 def test_preview_and_direct_selection_mutate_composition_not_view_identity() -> None:
@@ -79,6 +118,7 @@ def test_preview_and_direct_selection_mutate_composition_not_view_identity() -> 
     assert "replaceLaneCompositionLocked(previewLane, scene)" in preview_setter
     assert "replaceLaneCompositionLocked(onAirLane, scene)" in scene_setter
     assert "Program mutation rejected while Take is pending" in scene_setter
+    assert "direct scene switch rejected: scene aliases Preview; use Take" in scene_setter
     assert "obs_view_set_source(programView" not in preview_setter + scene_setter + cut
     assert "obs_view_set_source(previewView" not in preview_setter + scene_setter + cut
 
@@ -172,6 +212,64 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert "encoder video_t bound once to ProgramView" in probe
     assert "MainView=(\\S+) MainVideo=(\\S+)" in probe
     assert "ProgramView is not the libobs main view" in probe
+
+
+def test_runtime_probe_exercises_live_mutation_and_post_take_isolation() -> None:
+    probe = _read(_RUNTIME_PROBE)
+
+    assert 'INPUT_A_LIVE = "probe-dual-lane-live-A"' in probe
+    assert 'INPUT_B_LIVE = "probe-dual-lane-live-B"' in probe
+    assert 'INPUT_A_POST_TAKE = "probe-dual-lane-post-take-A"' in probe
+    assert "await create_input(inbox, ws, SCENE_A, INPUT_A_LIVE, COLOR_BLUE_ABGR)" in probe
+    assert "await create_input(inbox, ws, SCENE_B, INPUT_B_LIVE, COLOR_RED_ABGR)" in probe
+    assert "await create_input(inbox, ws, SCENE_A, INPUT_A_POST_TAKE, COLOR_GREEN_ABGR)" in probe
+    assert "assert_distinct_selected_scenes(" in probe
+    assert "GetCurrentProgramScene" in probe
+    assert "GetCurrentPreviewScene" in probe
+
+
+def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
+    bridge = _read(_CONTROL_BRIDGE)
+    frontend = _read(_FRONTEND)
+    handler = _read(_WEBSOCKET_HANDLER)
+
+    assert 'kMutationEnterProc[] = "pulsar_dual_lane_mutation_enter"' in bridge
+    assert 'kMutationLeaveProc[] = "pulsar_dual_lane_mutation_leave"' in bridge
+    assert "class MutationLease" in bridge
+    assert "proc_handler_call(procHandler_, kMutationEnterProc" in bridge
+    assert "proc_handler_call(procHandler_, kMutationLeaveProc" in bridge
+    assert "g_dualLaneControlBridge" in frontend
+    assert "std::mutex dispatchMutex_" in frontend
+    assert "std::atomic<bool> pending_" in frontend
+    assert "Lifecycle::ShuttingDown" in frontend
+    assert "g_dualLaneControlBridge.set_pending(true)" in frontend
+    assert "g_dualLaneControlBridge.set_pending(false)" in frontend
+    assert "g_dualLaneControlBridge.deactivate()" in frontend
+
+    assert '#include "pulsar-dual-lane-control.h"' in handler
+    assert 'requestType.rfind("Get", 0) == 0' in handler
+    assert "pulsar_dual_lane_control::MutationLease mutationLease(!IsReadOnlyRequest(request.RequestType))" in handler
+    assert "RequestStatus::RequestProcessingFailed" in handler
+    assert "PREVIEW_FROZEN" in handler
+    # The gate must be acquired before handler lookup, so unknown/future
+    # non-Get commands cannot bypass the freeze while pending.
+    assert handler.index("MutationLease mutationLease(!IsReadOnlyRequest") < handler.index("_handlerMap.at")
+
+
+def test_runtime_probe_exercises_serial_frame_preview_freeze() -> None:
+    probe = _read(_RUNTIME_PROBE)
+
+    assert "async def request_batch(" in probe
+    assert '"op": 8' in probe
+    assert '"executionType": execution_type' in probe
+    assert '"requestType": "TriggerStudioModeTransition"' in probe
+    assert '"requestType": "CreateInput"' in probe
+    assert 'INPUT_B_FROZEN = "probe-dual-lane-frozen-B"' in probe
+    assert "assert_preview_frozen" in probe
+    assert "status.get(\"code\") != 702" in probe
+    assert '"PREVIEW_FROZEN" not in comment' in probe
+    assert '"sleepFrames": 30' in probe
+    assert "post-commit Preview after 30 frames" in probe
 
 
 def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:

@@ -74,6 +74,7 @@
 #include <vector>
 
 #include "pulsar-frontend-stub.h"
+#include "pulsar-dual-lane-control.h"
 #include "pulsar-stream-egress.h"
 
 namespace {
@@ -83,6 +84,106 @@ template <typename T> struct StubCallback {
     void *priv;
     StubCallback(T c, void *p) : cb(c), priv(p) {}
 };
+
+// The websocket module is a DLL while this frontend implementation is part
+// of pulsar-headless.exe.  Keep the mutation fence in a process-lifetime
+// object and expose only the two small operations through libobs's global
+// proc handler.  In particular, the callbacks never carry a
+// PulsarFrontendAPI pointer: a proc handler can outlive the frontend during
+// module/OBS teardown, so such a pointer would turn a late request into a
+// use-after-free.
+class PulsarDualLaneControlBridge {
+public:
+    void install()
+    {
+        lifecycle_.store(Lifecycle::Disabled, std::memory_order_release);
+        pending_.store(false, std::memory_order_release);
+
+        proc_handler_t *global = obs_get_proc_handler();
+        if (!global)
+            return;
+
+        proc_handler_add(global,
+                         "void pulsar_dual_lane_mutation_enter(in bool mutating, out bool available, "
+                         "out bool allowed, out bool held)",
+                         &MutationEnter, this);
+        proc_handler_add(global, "void pulsar_dual_lane_mutation_leave()", &MutationLeave, this);
+    }
+
+    void activate()
+    {
+        pending_.store(false, std::memory_order_release);
+        lifecycle_.store(Lifecycle::Active, std::memory_order_release);
+    }
+
+    // Stop admitting new mutations, then wait for the one already inside the
+    // supported websocket dispatch path to finish.  The graphics callback
+    // only changes the atomic pending bit and never waits on this mutex, so a
+    // Cut cannot deadlock teardown or vice versa.
+    void deactivate()
+    {
+        lifecycle_.store(Lifecycle::ShuttingDown, std::memory_order_release);
+        std::unique_lock<std::mutex> lock(dispatchMutex_);
+        pending_.store(false, std::memory_order_release);
+        // Keep ShuttingDown published until the next install().  A late
+        // websocket proc call must remain fail-closed while the frontend
+        // emits EXIT and libobs releases its objects; reporting Disabled
+        // here would make the websocket adapter fall back to legacy writes.
+    }
+
+    void set_pending(bool pending) { pending_.store(pending, std::memory_order_release); }
+
+private:
+    enum class Lifecycle : uint8_t { Disabled, Active, ShuttingDown };
+
+    static void MutationEnter(void *param, calldata_t *cd)
+    {
+        auto *self = static_cast<PulsarDualLaneControlBridge *>(param);
+        if (!self)
+            return;
+
+        const bool mutating = calldata_bool(cd, "mutating");
+        const Lifecycle state = self->lifecycle_.load(std::memory_order_acquire);
+        const bool available = state != Lifecycle::Disabled;
+        bool allowed = true;
+        bool held = false;
+
+        if (mutating && available) {
+            // Lock before checking pending.  This makes a mutation which was
+            // already in progress complete before TakeAccepted can publish
+            // the pending bit, and makes every later mutation re-check the
+            // bit after it obtains the same lock.
+            self->dispatchMutex_.lock();
+            const Lifecycle lockedState = self->lifecycle_.load(std::memory_order_acquire);
+            if (lockedState != Lifecycle::Active || self->pending_.load(std::memory_order_acquire)) {
+                self->dispatchMutex_.unlock();
+                allowed = false;
+            } else {
+                held = true;
+            }
+        }
+
+        calldata_set_bool(cd, "available", available);
+        calldata_set_bool(cd, "allowed", allowed);
+        calldata_set_bool(cd, "held", held);
+    }
+
+    static void MutationLeave(void *param, calldata_t *)
+    {
+        auto *self = static_cast<PulsarDualLaneControlBridge *>(param);
+        if (self)
+            self->dispatchMutex_.unlock();
+    }
+
+    std::mutex dispatchMutex_;
+    std::atomic<Lifecycle> lifecycle_{Lifecycle::Disabled};
+    std::atomic<bool> pending_{false};
+};
+
+// Deliberately never destroyed while the global proc handler can still call
+// it.  OBS owns/replaces the proc handler as part of its process lifecycle;
+// the callback data itself remains valid across that boundary.
+PulsarDualLaneControlBridge g_dualLaneControlBridge;
 
 class PulsarFrontendAPI : public obs_frontend_callbacks {
 public:
@@ -769,9 +870,9 @@ private:
     obs_sceneitem_t *laneItems[2] = {};
 
     // Physical role roots remain stable for the lifetime of the frontend.
-    // These separate references are the public logical scene selections; a
-    // lane composition can point at one of them without changing the root or
-    // either downstream view identity.
+    // These references point at the roots bound to ProgramView/PreviewView;
+    // the selected public scene sources are tracked separately and remain live
+    // children of the roots (rather than private snapshots).
     obs_source_t *currentScene = nullptr;
     obs_source_t *previewScene = nullptr;
     obs_source_t *programSelection = nullptr;
@@ -1099,7 +1200,8 @@ bool PulsarFrontendAPI::dualLaneInvariantLocked(const char *where) const
     const bool valid = onAirLane >= 0 && onAirLane < 2 && previewLane >= 0 && previewLane < 2 &&
                        onAirLane != previewLane && laneSources[onAirLane] == currentScene &&
                        laneSources[previewLane] == previewScene && laneItems[0] && laneItems[1] &&
-                       programSelection && previewSelection && programView == obs_get_main_view() &&
+                       programSelection && previewSelection && programSelection != previewSelection &&
+                       programView == obs_get_main_view() &&
                        programVideo == obs_get_video() && previewView && programVideo && previewVideo;
     if (!valid) {
         blog(LOG_ERROR,
@@ -1116,6 +1218,8 @@ bool PulsarFrontendAPI::replaceLaneCompositionLocked(int lane, obs_source_t *sce
 {
     if (lane < 0 || lane >= 2 || !scene || !laneSources[lane])
         return false;
+    if (!obs_scene_from_source(scene))
+        return false;
     if (scene == laneSources[lane] || scene == laneSources[lane == 0 ? 1 : 0]) {
         blog(LOG_WARNING, "[pulsar-dual-lane] refusing to nest a physical lane root as composition");
         return false;
@@ -1125,19 +1229,11 @@ bool PulsarFrontendAPI::replaceLaneCompositionLocked(int lane, obs_source_t *sce
     if (!laneScene)
         return false;
 
-    // Clone the selected logical scene into a private composition.  Adding
-    // the public scene object itself would make both lanes activate the same
-    // stateful producers (CEF/WGC/media) and would defeat physical
-    // isolation.  The wrapper root remains the same source; only its single
-    // private child changes.
-    obs_scene_t *content = obs_scene_duplicate(obs_scene_from_source(scene),
-                                               lane == 0 ? "PulsarLaneAContent" : "PulsarLaneBContent",
-                                               OBS_SCENE_DUP_PRIVATE_COPY);
-    if (!content)
-        return false;
-    obs_source_t *contentSource = obs_scene_get_source(content);
-    obs_sceneitem_t *newItem = obs_scene_add(laneScene, contentSource);
-    obs_scene_release(content);
+    // Keep the exact selected scene source as the single wrapper child.  This
+    // is deliberately a live reference: mutations made through the public
+    // scene API after binding are rendered by this lane without recreating the
+    // physical root, view, video_t, output, or encoder binding.
+    obs_sceneitem_t *newItem = obs_scene_add(laneScene, scene);
     if (!newItem) {
         blog(LOG_WARNING, "[pulsar-dual-lane] failed to install composition in lane %d", lane);
         return false;
@@ -1155,42 +1251,41 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
         return false;
 
     // The lane roots are private wrappers, not aliases for the user's scene.
-    // Their single child is the hot composition.  This keeps each physical
-    // producer identity stable while allowing SetCurrentPreviewScene to select
-    // any main-canvas scene without rebinding either downstream view.
+    // Their single child is a live scene source.  Program starts on the
+    // selected public template; Preview starts on a distinct private
+    // bootstrap until a second public scene is selected.  This keeps each
+    // physical root stable while allowing later scene mutations to reach the
+    // lane without rebinding either downstream view.
     obs_scene_t *laneAScene = obs_scene_create_private("PulsarLaneA");
     obs_scene_t *laneBScene = obs_scene_create_private("PulsarLaneB");
-    obs_scene_t *laneAContent = obs_scene_duplicate(templateScene, "PulsarLaneAContent",
-                                                    OBS_SCENE_DUP_PRIVATE_COPY);
-    obs_scene_t *laneBContent = obs_scene_duplicate(templateScene, "PulsarLaneBContent",
-                                                    OBS_SCENE_DUP_PRIVATE_COPY);
-    if (!laneAScene || !laneBScene || !laneAContent || !laneBContent) {
+    obs_scene_t *previewBootstrap = obs_scene_create_private("PulsarPreviewBootstrap");
+    if (!laneAScene || !laneBScene || !previewBootstrap) {
         if (laneAScene)
             obs_scene_release(laneAScene);
         if (laneBScene)
             obs_scene_release(laneBScene);
-        if (laneAContent)
-            obs_scene_release(laneAContent);
-        if (laneBContent)
-            obs_scene_release(laneBContent);
-        blog(LOG_ERROR, "[pulsar-dual-lane] failed to create fixed roots and hot compositions");
+        if (previewBootstrap)
+            obs_scene_release(previewBootstrap);
+        blog(LOG_ERROR, "[pulsar-dual-lane] failed to create fixed roots and Preview bootstrap");
         return false;
     }
 
-    obs_sceneitem_t *laneAItem = obs_scene_add(laneAScene, obs_scene_get_source(laneAContent));
-    obs_sceneitem_t *laneBItem = obs_scene_add(laneBScene, obs_scene_get_source(laneBContent));
+    obs_sceneitem_t *laneAItem = obs_scene_add(laneAScene, obs_scene_get_source(templateScene));
+    obs_sceneitem_t *laneBItem = obs_scene_add(laneBScene, obs_scene_get_source(previewBootstrap));
     obs_source_t *laneA = obs_source_get_ref(obs_scene_get_source(laneAScene));
     obs_source_t *laneB = obs_source_get_ref(obs_scene_get_source(laneBScene));
-    obs_scene_release(laneAContent);
-    obs_scene_release(laneBContent);
+    obs_source_t *bootstrapSource = obs_source_get_ref(obs_scene_get_source(previewBootstrap));
+    obs_scene_release(previewBootstrap);
     obs_scene_release(laneAScene);
     obs_scene_release(laneBScene);
-    if (!laneAItem || !laneBItem || !laneA || !laneB) {
+    if (!laneAItem || !laneBItem || !laneA || !laneB || !bootstrapSource) {
         if (laneA)
             obs_source_release(laneA);
         if (laneB)
             obs_source_release(laneB);
-        blog(LOG_ERROR, "[pulsar-dual-lane] failed to install hot compositions in fixed roots");
+        if (bootstrapSource)
+            obs_source_release(bootstrapSource);
+        blog(LOG_ERROR, "[pulsar-dual-lane] failed to install live compositions in fixed roots");
         return false;
     }
 
@@ -1208,7 +1303,7 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
     currentScene = obs_source_get_ref(laneSources[0]);
     previewScene = obs_source_get_ref(laneSources[1]);
     programSelection = obs_source_get_ref(templateScene ? obs_scene_get_source(templateScene) : nullptr);
-    previewSelection = obs_source_get_ref(templateScene ? obs_scene_get_source(templateScene) : nullptr);
+    previewSelection = bootstrapSource;
     onAirLane = 0;
     previewLane = 1;
 
@@ -1316,6 +1411,7 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
         blog(LOG_ERROR, "[pulsar-dual-lane] setup invariant failed");
         return false;
     }
+    g_dualLaneControlBridge.activate();
     blog(LOG_INFO, "[pulsar-dual-lane] ready LaneA=%p LaneB=%p ProgramView=%p PreviewView=%p "
          "ProgramVideo=%p PreviewVideo=%p MainView=%p MainVideo=%p",
          (void *)laneSources[0], (void *)laneSources[1], (void *)programView, (void *)previewView,
@@ -1341,9 +1437,11 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
     // Set the guard before queuing so a concurrent Preview mutation cannot
     // pass between queueing and the graphics-thread callback.
     dualLaneCutPending.store(true);
+    g_dualLaneControlBridge.set_pending(true);
     if (!obs_view_queue_atomic_swap(programView, 0, previewScene, previewView, 0, currentScene,
                                     OnDualLaneCutCommitted, this)) {
         dualLaneCutPending.store(false);
+        g_dualLaneControlBridge.set_pending(false);
         blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: atomic frame-boundary slot is busy");
         return false;
     }
@@ -1384,6 +1482,7 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
         committedOnAirLane = self->onAirLane;
         committedPreviewLane = self->previewLane;
         self->dualLaneCutPending.store(false);
+        g_dualLaneControlBridge.set_pending(false);
         if (!self->dualLaneInvariantLocked("commit"))
             blog(LOG_ERROR, "[pulsar-dual-lane] commit invariant failed");
     }
@@ -1419,7 +1518,7 @@ bool PulsarFrontendAPI::setup()
         return false;
     }
     currentScene = obs_source_get_ref(obs_scene_get_source(scene));
-    // Keep the scene handle until the hot A/B copies are made after the
+    // Keep the scene handle until the stable A/B wrappers are bound after the
     // bootstrap capture source is attached below.
     scenes.push_back(obs_source_get_ref(currentScene));
 
@@ -1973,6 +2072,12 @@ void PulsarFrontendAPI::teardown()
         v.clear();
     };
 
+    // Stop admitting new supported WebSocket mutations and drain one which
+    // is already in the dispatch path before any frontend-owned libobs state
+    // is released. The bridge contains no frontend pointer, so a late proc
+    // lookup cannot dereference this object after teardown.
+    g_dualLaneControlBridge.deactivate();
+
     // Drain active outputs gracefully before release. A user who Ctrl+C's
     // mid-recording would otherwise hit obs_output_release on a live
     // output, which races with the muxer thread still writing frames.
@@ -2223,6 +2328,13 @@ void PulsarFrontendAPI::obs_frontend_set_current_scene(obs_source_t *scene)
                 // queueDualLaneCut takes the same mutex after this scope.
             } else if (!dualLaneDirect) {
                 blog(LOG_WARNING, "[pulsar-dual-lane] scene switch rejected: select Preview before Take");
+                return;
+            } else if (scene == previewSelection) {
+                // Direct mode has no atomic role swap.  Reusing the Preview
+                // source would put one stateful producer in both physical
+                // lanes, so require the studio-mode Take path for this case.
+                blog(LOG_WARNING,
+                     "[pulsar-dual-lane] direct scene switch rejected: scene aliases Preview; use Take");
                 return;
             }
         }
@@ -2785,6 +2897,7 @@ extern "C" void pulsar_frontend_init(void)
     // Heavy state -- scenes, encoders, outputs, sources, services -- depends
     // on plugins that aren't loaded yet, so it lives in setup() called from
     // pulsar_frontend_finished_loading() once obs_post_load_modules has run.
+    g_dualLaneControlBridge.install();
     auto *api = new PulsarFrontendAPI();
     g_api = api;
     obs_frontend_set_callbacks_internal(api);
@@ -2805,6 +2918,10 @@ extern "C" void pulsar_frontend_shutdown(void)
 {
     if (!g_api)
         return;
+    // Close the supported WebSocket mutation gate before emitting EXIT. This
+    // waits for an already-running mutation but admits no new one while the
+    // frontend object and its stable lane roots are being destroyed.
+    g_dualLaneControlBridge.deactivate();
     g_api->emit(OBS_FRONTEND_EVENT_EXIT);
     // Hand ownership back to obs-frontend-api.dll, which deletes the object;
     // its destructor releases all libobs handles (outputs, scene, transition,
