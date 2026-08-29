@@ -22,6 +22,20 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #endif
 
 #include "RequestHandler.h"
+#include "pulsar-dual-lane-control.h"
+
+namespace {
+
+bool IsReadOnlyRequest(const std::string &requestType)
+{
+	// The control plane deliberately has a small allowlist: explicit Get*
+	// requests are observational, while every other current or future request
+	// is treated as potentially mutating. This keeps a newly added command from
+	// bypassing the Preview freeze by accident.
+	return requestType.rfind("Get", 0) == 0;
+}
+
+} // namespace
 
 const std::unordered_map<std::string, RequestMethodHandler> RequestHandler::_handlerMap{
 	// General
@@ -211,6 +225,16 @@ RequestResult RequestHandler::ProcessRequest(const Request &request)
 #ifdef PLUGIN_TESTS
 	ScopeProfiler prof{"obs_websocket_request_processing"};
 #endif
+
+	// Acquire the process bridge before validating/looking up the handler. A
+	// non-Get command which arrives after TakeAccepted must fail closed even if
+	// it is unknown to this build: future mutation-capable handlers cannot
+	// silently bypass AC-04. The lease serializes the whole handler invocation
+	// so a mutation already in flight completes before a Cut publishes pending.
+	pulsar_dual_lane_control::MutationLease mutationLease(!IsReadOnlyRequest(request.RequestType));
+	if (!mutationLease.allowed())
+		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
+					    "PREVIEW_FROZEN: WebSocket mutation rejected while a dual-lane Take is pending.");
 
 	if (!request.RequestData.is_object() && !request.RequestData.is_null())
 		return RequestResult::Error(RequestStatus::InvalidRequestFieldType, "Your request data is not an object.");

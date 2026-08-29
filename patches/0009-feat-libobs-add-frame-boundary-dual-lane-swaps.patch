@@ -1,0 +1,551 @@
+From 9847695b39827e17db8466702a2743ef65c0bb49 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Sat, 29 Aug 2026 01:39:27 +0200
+Subject: [PATCH] feat(libobs): add frame-boundary dual-lane swaps
+
+Keep two view surfaces stable while replacing their scene roots as one graphics-frame operation. The frontend can bind the active encoder once and commit role metadata from the swap callback.
+
+Agent-Role: forge
+
+Agent-Thread: /root/forge_pul_dl_03
+
+Work-Unit: ZabLaboratory/Pulsar#244
+
+Issue: 244
+
+ADR-Revision: draft-r2-dual-lane-20260828
+
+Evidence: atomic-view-swap-core-and-preview-return-filter
+---
+ libobs/obs-internal.h                         |  27 ++++
+ libobs/obs-video.c                            |   4 +
+ libobs/obs-view.c                             | 144 ++++++++++++++++++
+ libobs/obs.c                                  |  20 +++
+ libobs/obs.h                                  |  25 +++
+ plugins/win-dshow/dshow-plugin.cpp            |   2 +
+ .../virtualcam-module/virtualcam-filter.cpp   |  11 +-
+ .../virtualcam-module/virtualcam-filter.hpp   |   2 +-
+ .../virtualcam-module/virtualcam-guid.h.in    |  15 ++
+ .../virtualcam-module/virtualcam-module.cpp   |  25 ++-
+ plugins/win-dshow/virtualcam.c                |  18 ++-
+ 11 files changed, 291 insertions(+), 13 deletions(-)
+
+diff --git a/libobs/obs-internal.h b/libobs/obs-internal.h
+index d88093eec..ba55e6dc8 100644
+--- a/libobs/obs-internal.h
++++ b/libobs/obs-internal.h
+@@ -281,8 +281,25 @@ struct obs_view {
+ 	enum view_type type;
+ };
+ 
++/*
++ * A pending pair swap is owned by obs->video until it is either consumed by
++ * the graphics thread or cancelled during video teardown.  The source refs
++ * held here become the corresponding view-channel refs when the swap commits.
++ */
++struct obs_view_atomic_swap {
++	struct obs_view *first_view;
++	uint32_t first_channel;
++	struct obs_source *first_source;
++	struct obs_view *second_view;
++	uint32_t second_channel;
++	struct obs_source *second_source;
++	obs_view_atomic_swap_cb callback;
++	void *callback_param;
++};
++
+ extern bool obs_view_init(struct obs_view *view, enum view_type type);
+ extern void obs_view_free(struct obs_view *view);
++extern void obs_view_apply_pending_atomic_swap(uint64_t frame_id, uint64_t pts_ns);
+ 
+ /* ------------------------------------------------------------------------- */
+ /* displays */
+@@ -433,6 +450,16 @@ struct obs_core_video {
+ 
+ 	pthread_mutex_t mixes_mutex;
+ 	DARRAY(struct obs_core_video_mix *) mixes;
++
++	/* Exactly one frame-boundary role swap may be pending at a time.  The
++	 * in-flight bit keeps teardown from destroying views while the graphics
++	 * thread is still applying the request or running its callback. */
++	pthread_mutex_t atomic_swap_mutex;
++	pthread_cond_t atomic_swap_cond;
++	bool atomic_swap_initialized;
++	struct obs_view_atomic_swap *pending_atomic_swap;
++	bool atomic_swap_inflight;
++	uint64_t video_frame_id;
+ };
+ 
+ extern void add_ready_encoder_group(obs_encoder_t *encoder);
+diff --git a/libobs/obs-video.c b/libobs/obs-video.c
+index 55a63ef56..f18ae98f3 100644
+--- a/libobs/obs-video.c
++++ b/libobs/obs-video.c
+@@ -1124,6 +1124,10 @@ bool obs_graphics_thread_loop(struct obs_graphics_context *context)
+ 
+ 	source_profiler_render_begin();
+ 	profile_start(output_frame_name);
++	/* Apply the whole role swap before any mix renders this video tick.  The
++	 * callback runs on this graphics thread, after both view channel arrays are
++	 * replaced, so ProgramView and PreviewView cannot observe a mixed pair. */
++	obs_view_apply_pending_atomic_swap(++obs->video.video_frame_id, obs->video.video_time);
+ 	output_frames();
+ 	profile_end(output_frame_name);
+ 
+diff --git a/libobs/obs-view.c b/libobs/obs-view.c
+index 9aa321407..7f87afc08 100644
+--- a/libobs/obs-view.c
++++ b/libobs/obs-view.c
+@@ -115,6 +115,154 @@ void obs_view_set_source(obs_view_t *view, uint32_t channel, obs_source_t *sourc
+ 	}
+ }
+ 
++static void release_atomic_swap(struct obs_view_atomic_swap *swap)
++{
++	if (!swap)
++		return;
++
++	if (swap->first_source)
++		obs_source_release(swap->first_source);
++	if (swap->second_source)
++		obs_source_release(swap->second_source);
++	bfree(swap);
++}
++
++static bool atomic_swap_is_graphics_thread(void)
++{
++	if (!obs->video.thread_initialized)
++		return false;
++
++	return pthread_equal(pthread_self(), obs->video.video_thread) != 0;
++}
++
++bool obs_view_queue_atomic_swap(obs_view_t *first_view, uint32_t first_channel,
++					obs_source_t *first_source, obs_view_t *second_view,
++					uint32_t second_channel, obs_source_t *second_source,
++					obs_view_atomic_swap_cb callback, void *param)
++{
++	if (!obs || !obs->video.atomic_swap_initialized || !first_view || !second_view || first_view == second_view ||
++	    first_channel >= MAX_CHANNELS || second_channel >= MAX_CHANNELS)
++		return false;
++
++	struct obs_view_atomic_swap *swap = bzalloc(sizeof(*swap));
++	swap->first_view = first_view;
++	swap->first_channel = first_channel;
++	swap->second_view = second_view;
++	swap->second_channel = second_channel;
++	swap->first_source = obs_source_get_ref(first_source);
++	swap->second_source = obs_source_get_ref(second_source);
++	swap->callback = callback;
++	swap->callback_param = param;
++
++	/* A non-null input must have produced a retained reference. */
++	if ((first_source && !swap->first_source) || (second_source && !swap->second_source)) {
++		release_atomic_swap(swap);
++		return false;
++	}
++
++	pthread_mutex_lock(&obs->video.atomic_swap_mutex);
++	/* The pending pointer is the admission guard.  Once the graphics thread
++	 * has detached it, a successor may queue while the previous callback is
++	 * still unwinding; atomic_swap_inflight remains solely a teardown drain
++	 * barrier. */
++	if (obs->video.pending_atomic_swap) {
++		pthread_mutex_unlock(&obs->video.atomic_swap_mutex);
++		release_atomic_swap(swap);
++		return false;
++	}
++	obs->video.pending_atomic_swap = swap;
++	pthread_mutex_unlock(&obs->video.atomic_swap_mutex);
++	return true;
++}
++
++void obs_view_cancel_atomic_swap(void)
++{
++	if (!obs || !obs->video.atomic_swap_initialized)
++		return;
++
++	pthread_mutex_lock(&obs->video.atomic_swap_mutex);
++	struct obs_view_atomic_swap *swap = obs->video.pending_atomic_swap;
++	obs->video.pending_atomic_swap = NULL;
++	/* A caller may race the graphics thread after it has taken the pending
++	 * request.  Keep the mutex while waiting so teardown cannot proceed until
++	 * the callback has returned and no code can still dereference its views or
++	 * callback parameter.  The graphics thread itself must not wait here: a
++	 * callback is allowed to cancel its own request. */
++	if (obs->video.atomic_swap_inflight && !atomic_swap_is_graphics_thread()) {
++		while (obs->video.atomic_swap_inflight)
++			pthread_cond_wait(&obs->video.atomic_swap_cond, &obs->video.atomic_swap_mutex);
++	}
++	pthread_mutex_unlock(&obs->video.atomic_swap_mutex);
++
++	release_atomic_swap(swap);
++}
++
++void obs_view_apply_pending_atomic_swap(uint64_t frame_id, uint64_t pts_ns)
++{
++	if (!obs || !obs->video.atomic_swap_initialized)
++		return;
++
++	pthread_mutex_lock(&obs->video.atomic_swap_mutex);
++	struct obs_view_atomic_swap *swap = obs->video.pending_atomic_swap;
++	obs->video.pending_atomic_swap = NULL;
++	if (swap)
++		obs->video.atomic_swap_inflight = true;
++	pthread_mutex_unlock(&obs->video.atomic_swap_mutex);
++
++	if (!swap)
++		return;
++
++	/* Lock both channel arrays in a stable order.  The graphics thread is the
++	 * only renderer, so once both locks are held no output can observe a
++	 * half-applied pair. */
++	const bool first_before_second = (uintptr_t)swap->first_view < (uintptr_t)swap->second_view;
++	if (first_before_second) {
++		pthread_mutex_lock(&swap->first_view->channels_mutex);
++		pthread_mutex_lock(&swap->second_view->channels_mutex);
++	} else {
++		pthread_mutex_lock(&swap->second_view->channels_mutex);
++		pthread_mutex_lock(&swap->first_view->channels_mutex);
++	}
++
++	struct obs_source *old_first = swap->first_view->channels[swap->first_channel];
++	struct obs_source *old_second = swap->second_view->channels[swap->second_channel];
++	struct obs_source *new_first = swap->first_source;
++	struct obs_source *new_second = swap->second_source;
++	/* The references acquired by queue_atomic_swap now belong to the views. */
++	swap->first_source = NULL;
++	swap->second_source = NULL;
++	swap->first_view->channels[swap->first_channel] = new_first;
++	swap->second_view->channels[swap->second_channel] = new_second;
++
++	pthread_mutex_unlock(&swap->first_view->channels_mutex);
++	pthread_mutex_unlock(&swap->second_view->channels_mutex);
++
++	if (new_first)
++		obs_source_activate(new_first, swap->first_view->type);
++	if (new_second)
++		obs_source_activate(new_second, swap->second_view->type);
++	if (old_first) {
++		obs_source_deactivate(old_first, swap->first_view->type);
++		obs_source_release(old_first);
++	}
++	if (old_second) {
++		obs_source_deactivate(old_second, swap->second_view->type);
++		obs_source_release(old_second);
++	}
++
++	if (swap->callback)
++		swap->callback(swap->callback_param, frame_id, pts_ns);
++
++	/* Publish completion only after the callback returns.  This is the drain
++	 * barrier used by teardown before it destroys either view. */
++	pthread_mutex_lock(&obs->video.atomic_swap_mutex);
++	obs->video.atomic_swap_inflight = false;
++	pthread_cond_broadcast(&obs->video.atomic_swap_cond);
++	pthread_mutex_unlock(&obs->video.atomic_swap_mutex);
++
++	release_atomic_swap(swap);
++}
++
+ void obs_view_render(obs_view_t *view)
+ {
+ 	if (!view)
+diff --git a/libobs/obs.c b/libobs/obs.c
+index e4688e67d..8c52ec52f 100644
+--- a/libobs/obs.c
++++ b/libobs/obs.c
+@@ -698,6 +698,14 @@ static int obs_init_video(struct obs_video_info *ovi)
+ 		return OBS_VIDEO_FAIL;
+ 	if (pthread_mutex_init(&video->mixes_mutex, NULL) < 0)
+ 		return OBS_VIDEO_FAIL;
++	if (pthread_mutex_init(&video->atomic_swap_mutex, NULL) < 0)
++		return OBS_VIDEO_FAIL;
++	if (pthread_cond_init(&video->atomic_swap_cond, NULL) != 0) {
++		pthread_mutex_destroy(&video->atomic_swap_mutex);
++		pthread_mutex_init_value(&video->atomic_swap_mutex);
++		return OBS_VIDEO_FAIL;
++	}
++	video->atomic_swap_initialized = true;
+ 
+ 	/* Reset main canvas mix first so it remains first in the rendering order. */
+ 	if (!obs_canvas_reset_video_internal(obs->data.main_canvas, ovi))
+@@ -820,6 +828,10 @@ void obs_free_video_mix(struct obs_core_video_mix *video)
+ 
+ static void obs_free_video(void)
+ {
++	/* The graphics thread has already joined in stop_video().  Drop any
++	 * sources retained by a not-yet-consumed Cut before views are destroyed. */
++	obs_view_cancel_atomic_swap();
++
+ 	pthread_mutex_lock(&obs->video.mixes_mutex);
+ 	size_t num_views = 0;
+ 	for (size_t i = 0; i < obs->video.mixes.num; i++) {
+@@ -836,6 +848,13 @@ static void obs_free_video(void)
+ 
+ 	pthread_mutex_destroy(&obs->video.mixes_mutex);
+ 	pthread_mutex_init_value(&obs->video.mixes_mutex);
++	if (obs->video.atomic_swap_initialized) {
++		pthread_cond_destroy(&obs->video.atomic_swap_cond);
++		memset(&obs->video.atomic_swap_cond, 0, sizeof(obs->video.atomic_swap_cond));
++		obs->video.atomic_swap_initialized = false;
++	}
++	pthread_mutex_destroy(&obs->video.atomic_swap_mutex);
++	pthread_mutex_init_value(&obs->video.atomic_swap_mutex);
+ 
+ 	for (size_t i = 0; i < obs->video.ready_encoder_groups.num; i++) {
+ 		obs_weak_encoder_release(obs->video.ready_encoder_groups.array[i]);
+@@ -1227,6 +1246,7 @@ static bool obs_init(const char *locale, const char *module_config_path, profile
+ 	pthread_mutex_init_value(&obs->video.task_mutex);
+ 	pthread_mutex_init_value(&obs->video.encoder_group_mutex);
+ 	pthread_mutex_init_value(&obs->video.mixes_mutex);
++	pthread_mutex_init_value(&obs->video.atomic_swap_mutex);
+ 
+ 	obs->name_store_owned = !store;
+ 	obs->name_store = store ? store : profiler_name_store_create();
+@@ -1827,1 +1827,6 @@ obs_source_t *obs_get_output_source(uint32_t channel)
++obs_view_t *obs_get_main_view(void)
++{
++	return &obs->data.main_canvas->view;
++}
++
+ obs_source_t *obs_get_output_source(uint32_t channel)
+diff --git a/libobs/obs.h b/libobs/obs.h
+index 57844b056..199df7720 100644
+--- a/libobs/obs.h
++++ b/libobs/obs.h
+@@ -967,6 +967,35 @@ EXPORT void obs_view_set_source(obs_view_t *view, uint32_t channel, obs_source_t
+ /** Gets the source currently in use for this view context */
+ EXPORT obs_source_t *obs_view_get_source(obs_view_t *view, uint32_t channel);
+ 
++/**
++ * Callback invoked on the graphics thread after a queued pair swap has been
++ * applied at a video frame boundary.
++ *
++ * `frame_id` identifies the frame whose render observes the new pair and
++ * `pts_ns` is the libobs video timestamp for that boundary.
++ */
++typedef void (*obs_view_atomic_swap_cb)(void *param, uint64_t frame_id, uint64_t pts_ns);
++
++/**
++ * Queue an atomic source swap for two independent view channels.
++ *
++ * The two channels are replaced together immediately before a graphics frame
++ * is rendered.  At most one swap may be pending; a successor may be queued
++ * after the graphics thread detaches the prior request, even while its
++ * completion callback is still unwinding.  The queued sources are referenced
++ * until the swap is applied or cancelled.
++ */
++EXPORT bool obs_view_queue_atomic_swap(obs_view_t *first_view, uint32_t first_channel,
++                                       obs_source_t *first_source, obs_view_t *second_view,
++                                       uint32_t second_channel, obs_source_t *second_source,
++                                       obs_view_atomic_swap_cb callback, void *param);
++
++/** Cancel the pending pair swap, if any, without changing either view. */
++EXPORT void obs_view_cancel_atomic_swap(void);
++
++/** Returns the non-owning main OBS view used by obs_get_video(). */
++EXPORT obs_view_t *obs_get_main_view(void);
++
+ /** Renders the sources of this view context */
+ EXPORT void obs_view_render(obs_view_t *view);
+ 
+diff --git a/plugins/win-dshow/dshow-plugin.cpp b/plugins/win-dshow/dshow-plugin.cpp
+index 6778b7435..c80d0a172 100644
+--- a/plugins/win-dshow/dshow-plugin.cpp
++++ b/plugins/win-dshow/dshow-plugin.cpp
+@@ -15,6 +15,7 @@ extern void RegisterDShowEncoders();
+ #ifdef VIRTUALCAM_AVAILABLE
+ extern "C" struct obs_output_info virtualcam_info;
+ extern "C" struct obs_output_info program_return_info;
++extern "C" struct obs_output_info preview_return_info;
+ #endif
+ 
+ bool obs_module_load(void)
+@@ -29,6 +30,7 @@ bool obs_module_load(void)
+ 	// publish its named shared-memory queue.
+ 	obs_register_output(&virtualcam_info);
+ 	obs_register_output(&program_return_info);
++	obs_register_output(&preview_return_info);
+ #endif
+ 
+ 	return true;
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index b3a2c2dc5..b304fdf40 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -41,9 +41,10 @@ static bool valid_runtime_instance_id(const char *value)
+ 	return strcmp(value, ".") != 0 && strcmp(value, "..") != 0;
+ }
+ 
+-static std::wstring queue_name_for_filter(bool program_return)
++static std::wstring queue_name_for_filter(bool program_return, bool preview_return)
+ {
+-	const wchar_t *legacy_name = program_return ? L"OBSPulsarProgramReturnVideo" : L"OBSVirtualCamVideo";
++	const wchar_t *legacy_name = preview_return ? L"OBSPulsarPreviewReturnVideo"
++						   : program_return ? L"OBSPulsarProgramReturnVideo" : L"OBSVirtualCamVideo";
+ 	const char *runtime_id = getenv("PULSAR_RUNTIME_INSTANCE_ID");
+ 	if (directshow_legacy_alias_enabled() || !valid_runtime_instance_id(runtime_id))
+ 		return legacy_name;
+@@ -56,11 +57,13 @@ static std::wstring queue_name_for_filter(bool program_return)
+ 	wchar_t name[256] = {0};
+ 	_snwprintf_s(name, sizeof(name) / sizeof(name[0]), _TRUNCATE,
+ 			     L"Local\\Pulsar.%ls.%ls", wide_id,
+-			     program_return ? L"ProgramReturnVideo" : L"VirtualCamVideo");
++				     preview_return ? L"PreviewReturnVideo"
++						     : program_return ? L"ProgramReturnVideo" : L"VirtualCamVideo");
+ 	return name;
+ }
+ 
+-VCamFilter::VCamFilter(bool program_return) : OutputFilter(), queue_name(queue_name_for_filter(program_return))
++VCamFilter::VCamFilter(bool program_return, bool preview_return)
++	: OutputFilter(), queue_name(queue_name_for_filter(program_return, preview_return))
+ {
+ 	thread_start = CreateEvent(nullptr, true, false, nullptr);
+ 	thread_stop = CreateEvent(nullptr, true, false, nullptr);
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+index 9f2263366..1c2035ca4 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+@@ -65,7 +65,7 @@ protected:
+ 	const wchar_t *FilterName() const override;
+ 
+ public:
+-	VCamFilter(bool program_return);
++	VCamFilter(bool program_return, bool preview_return);
+ 	~VCamFilter() override;
+ 
+ 	STDMETHODIMP Pause() override;
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-guid.h.in b/plugins/win-dshow/virtualcam-module/virtualcam-guid.h.in
+index a2cd26882..b28e32e12 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-guid.h.in
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-guid.h.in
+@@ -32,3 +32,18 @@ DEFINE_GUID(CLSID_PulsarProgramReturnVideo,
+ 			0xe4,
+ 			0x90);
+ #endif
++
++#ifdef VIRTUALCAM_AVAILABLE
++DEFINE_GUID(CLSID_PulsarPreviewReturnVideo,
++			0x8c4e159d,
++			0x3f60,
++			0x4a42,
++			0x9a,
++			0x6d,
++			0x7f,
++			0x3a,
++			0x5b,
++			0x21,
++			0xe4,
++			0x91);
++#endif
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-module.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-module.cpp
+index 860d68227..420608bed 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-module.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-module.cpp
+@@ -74,8 +74,11 @@ STDMETHODIMP VCamFactory::CreateInstance(LPUNKNOWN parent, REFIID, void **p_ptr)
+ 		return E_NOINTERFACE;
+ 	}
+ 
+-	if (IsEqualCLSID(cls, CLSID_OBS_VirtualVideo) || IsEqualCLSID(cls, CLSID_PulsarProgramReturnVideo)) {
+-		*p_ptr = (void *)new VCamFilter(IsEqualCLSID(cls, CLSID_PulsarProgramReturnVideo));
++	if (IsEqualCLSID(cls, CLSID_OBS_VirtualVideo) || IsEqualCLSID(cls, CLSID_PulsarProgramReturnVideo) ||
++	    IsEqualCLSID(cls, CLSID_PulsarPreviewReturnVideo)) {
++		const bool program_return = IsEqualCLSID(cls, CLSID_PulsarProgramReturnVideo);
++		const bool preview_return = IsEqualCLSID(cls, CLSID_PulsarPreviewReturnVideo);
++		*p_ptr = (void *)new VCamFilter(program_return, preview_return);
+ 		return S_OK;
+ 	}
+ 
+@@ -165,8 +168,14 @@ static bool RegServers(bool reg)
+ 			UnregServer(CLSID_OBS_VirtualVideo);
+ 			return false;
+ 		}
++		if (!RegServer(CLSID_PulsarPreviewReturnVideo, L"Pulsar Preview Return", file)) {
++			UnregServer(CLSID_PulsarProgramReturnVideo);
++			UnregServer(CLSID_OBS_VirtualVideo);
++			return false;
++		}
+ 		return true;
+ 	} else {
++		UnregServer(CLSID_PulsarPreviewReturnVideo);
+ 		UnregServer(CLSID_PulsarProgramReturnVideo);
+ 		return UnregServer(CLSID_OBS_VirtualVideo);
+ 	}
+@@ -202,9 +211,18 @@ static bool RegFilters(bool reg)
+ 			fm->UnregisterFilter(&CLSID_VideoInputDeviceCategory, 0, CLSID_OBS_VirtualVideo);
+ 			return false;
+ 		}
++		moniker = nullptr;
++		hr = fm->RegisterFilter(CLSID_PulsarPreviewReturnVideo, L"Pulsar Preview Return", &moniker,
++					&CLSID_VideoInputDeviceCategory, nullptr, &rf2);
++		if (FAILED(hr)) {
++			fm->UnregisterFilter(&CLSID_VideoInputDeviceCategory, 0, CLSID_PulsarProgramReturnVideo);
++			fm->UnregisterFilter(&CLSID_VideoInputDeviceCategory, 0, CLSID_OBS_VirtualVideo);
++			return false;
++		}
+ 	} else {
+ 		hr = fm->UnregisterFilter(&CLSID_VideoInputDeviceCategory, 0, CLSID_OBS_VirtualVideo);
+ 		fm->UnregisterFilter(&CLSID_VideoInputDeviceCategory, 0, CLSID_PulsarProgramReturnVideo);
++		fm->UnregisterFilter(&CLSID_VideoInputDeviceCategory, 0, CLSID_PulsarPreviewReturnVideo);
+ 		if (FAILED(hr) && hr != VFW_E_NOT_FOUND)
+ 			return false;
+ 	}
+@@ -268,7 +286,8 @@ STDAPI DllGetClassObject(REFCLSID cls, REFIID riid, void **p_ptr)
+ 	if (riid != IID_IClassFactory && riid != IID_IUnknown) {
+ 		return E_NOINTERFACE;
+ 	}
+-	if (!IsEqualCLSID(cls, CLSID_OBS_VirtualVideo) && !IsEqualCLSID(cls, CLSID_PulsarProgramReturnVideo)) {
++	if (!IsEqualCLSID(cls, CLSID_OBS_VirtualVideo) && !IsEqualCLSID(cls, CLSID_PulsarProgramReturnVideo) &&
++	    !IsEqualCLSID(cls, CLSID_PulsarPreviewReturnVideo)) {
+ 		return E_INVALIDARG;
+ 	}
+ 
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index 85e28afd9..7b2cb3bf8 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -43,7 +43,13 @@ static void queue_name_for_output(obs_output_t *output, wchar_t *destination, si
+ {
+ 	const char *output_name = obs_output_get_name(output);
+-	const bool program_return = output_name && strcmp(output_name, "PulsarProgramReturn") == 0;
++	const char *output_id = obs_output_get_id(output);
++	const bool has_output_id = output_id && *output_id;
++	const bool program_return = has_output_id ? strcmp(output_id, "program_return_output") == 0
++							 : output_name && strcmp(output_name, "PulsarProgramReturn") == 0;
+-	const wchar_t *legacy_name = program_return ? L"OBSPulsarProgramReturnVideo" : L"OBSVirtualCamVideo";
++	const bool preview_return = has_output_id ? strcmp(output_id, "preview_return_output") == 0
++							 : output_name && strcmp(output_name, "PulsarPreviewReturn") == 0;
++	const wchar_t *legacy_name = preview_return ? L"OBSPulsarPreviewReturnVideo"
++						   : program_return ? L"OBSPulsarProgramReturnVideo" : L"OBSVirtualCamVideo";
+ 	const char *runtime_id = getenv("PULSAR_RUNTIME_INSTANCE_ID");
+ 
+ 	if (directshow_legacy_alias_enabled() || !valid_runtime_instance_id(runtime_id)) {
+@@ -58,7 +60,8 @@ static void queue_name_for_output(obs_output_t *output, wchar_t *destination, si
+ 		wide_id[i] = (wchar_t)(unsigned char)runtime_id[i];
+ 
+ 	_snwprintf_s(destination, capacity, _TRUNCATE, L"Local\\Pulsar.%ls.%ls", wide_id,
+-			     program_return ? L"ProgramReturnVideo" : L"VirtualCamVideo");
++			     preview_return ? L"PreviewReturnVideo"
++					     : program_return ? L"ProgramReturnVideo" : L"VirtualCamVideo");
+ }
+ 
+ static const char *virtualcam_name(void *unused)
+@@ -191,3 +194,14 @@ struct obs_output_info program_return_info = {
+ 	.stop = virtualcam_stop,
+ 	.raw_video = virtual_video,
+ };
++
++struct obs_output_info preview_return_info = {
++	.id = "preview_return_output",
++	.flags = OBS_OUTPUT_VIDEO,
++	.get_name = virtualcam_name,
++	.create = virtualcam_create,
++	.destroy = virtualcam_destroy,
++	.start = virtualcam_start,
++	.stop = virtualcam_stop,
++	.raw_video = virtual_video,
++};
+-- 
+2.54.0.windows.1
