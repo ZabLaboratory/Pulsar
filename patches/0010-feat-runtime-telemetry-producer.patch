@@ -1,0 +1,526 @@
+From 255e61a468a26de0cae09a80574f8d1338e92fa7 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Sat, 29 Aug 2026 08:41:45 +0200
+Subject: [PATCH] feat(telemetry): emit correlated runtime trace boundaries
+
+Persist the runtime producer changes as the source patch consumed by the superproject build. The patch keeps the legacy virtual-camera queue layout while adding metadata to ProgramReturn and PreviewReturn queues, and records the actual raw, DirectShow, and RTMP boundaries.
+
+Agent-Role: Conduit
+
+Agent-Thread: /root/conduit_246_runtime_telemetry
+
+Work-Unit: ZabLaboratory/Pulsar#246
+
+Issue: 246
+
+ADR-Revision: draft-r2-dual-lane-20260828
+
+Evidence: runtime-telemetry-producer-static-checks
+---
+ plugins/win-dshow/shared-memory-queue.c       |  84 +++++++++++---
+ plugins/win-dshow/shared-memory-queue.h       |  25 +++++
+ .../virtualcam-module/virtualcam-filter.cpp   | 104 +++++++++++++++++-
+ .../virtualcam-module/virtualcam-filter.hpp   |   5 +-
+ plugins/win-dshow/virtualcam.c                |  48 +++++++-
+ 5 files changed, 245 insertions(+), 21 deletions(-)
+
+diff --git a/plugins/win-dshow/shared-memory-queue.c b/plugins/win-dshow/shared-memory-queue.c
+index b0f2662aa..59d6908a0 100644
+--- a/plugins/win-dshow/shared-memory-queue.c
++++ b/plugins/win-dshow/shared-memory-queue.c
+@@ -21,22 +21,37 @@ struct queue_header {
+ 	uint32_t cy;
+ 	uint64_t interval;
+ 
+-	uint32_t reserved[8];
++	/* Zero for the legacy queue layout; FRAME_HEADER_SIZE for queues that
++	 * carry the #246 runtime correlation envelope. */
++	uint32_t frame_header_size;
++	uint32_t reserved[7];
+ };
+ 
+ struct video_queue {
+ 	HANDLE handle;
+ 	bool ready_to_read;
+ 	struct queue_header *header;
+-	uint64_t *ts[3];
++	struct video_queue_frame_metadata *metadata[3];
++	uint64_t *timestamp[3];
+ 	uint8_t *frame[3];
+ 	long last_inc;
+ 	int dup_counter;
+ 	bool is_writer;
++	bool metadata_enabled;
+ };
+ 
+ #define ALIGN_SIZE(size, align) size = (((size) + (align - 1)) & (~(align - 1)))
+-#define FRAME_HEADER_SIZE 32
++#define FRAME_HEADER_SIZE ((uint32_t)sizeof(struct video_queue_frame_metadata))
++
++static bool queue_uses_metadata(const wchar_t *name)
++{
++	/* Keep the public OBSVirtualCamVideo ABI byte-for-byte compatible.  The
++	 * named ProgramReturn/PreviewReturn queues are created by the patched
++	 * producer and are the only queues consumed by the telemetry-aware
++	 * DirectShow filter. */
++	return name && (wcsstr(name, L"ProgramReturnVideo") ||
++			wcsstr(name, L"PreviewReturnVideo"));
++}
+ 
+ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t interval,
+ 									 const wchar_t *name)
+@@ -44,6 +59,7 @@ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t inter
+ 	struct video_queue vq = {0};
+ 	struct video_queue *pvq;
+ 	DWORD frame_size = cx * cy * 3 / 2;
++	const uint32_t frame_header_size = queue_uses_metadata(name) ? FRAME_HEADER_SIZE : sizeof(uint64_t);
+ 	uint32_t offset_frame[3];
+ 	DWORD size;
+ 
+@@ -52,15 +68,15 @@ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t inter
+ 	ALIGN_SIZE(size, 32);
+ 
+ 	offset_frame[0] = size;
+-	size += frame_size + FRAME_HEADER_SIZE;
++	size += frame_size + frame_header_size;
+ 	ALIGN_SIZE(size, 32);
+ 
+ 	offset_frame[1] = size;
+-	size += frame_size + FRAME_HEADER_SIZE;
++	size += frame_size + frame_header_size;
+ 	ALIGN_SIZE(size, 32);
+ 
+ 	offset_frame[2] = size;
+-	size += frame_size + FRAME_HEADER_SIZE;
++	size += frame_size + frame_header_size;
+ 	ALIGN_SIZE(size, 32);
+ 
+ 	struct queue_header header = {0};
+@@ -69,7 +85,9 @@ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t inter
+ 	header.cx = cx;
+ 	header.cy = cy;
+ 	header.interval = interval;
++	header.frame_header_size = frame_header_size == FRAME_HEADER_SIZE ? FRAME_HEADER_SIZE : 0;
+ 	vq.is_writer = true;
++	vq.metadata_enabled = header.frame_header_size == FRAME_HEADER_SIZE;
+ 
+ 	for (size_t i = 0; i < 3; i++) {
+ 		uint32_t off = offset_frame[i];
+@@ -94,11 +112,15 @@ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t inter
+ 		return NULL;
+ 	}
+ 	memcpy(vq.header, &header, sizeof(header));
++	vq.metadata_enabled = header.frame_header_size == FRAME_HEADER_SIZE;
+ 
+ 	for (size_t i = 0; i < 3; i++) {
+ 		uint32_t off = offset_frame[i];
+-		vq.ts[i] = (uint64_t *)(((uint8_t *)vq.header) + off);
+-		vq.frame[i] = ((uint8_t *)vq.header) + off + FRAME_HEADER_SIZE;
++		vq.metadata[i] = vq.metadata_enabled ?
++			(struct video_queue_frame_metadata *)(((uint8_t *)vq.header) + off) : NULL;
++		vq.timestamp[i] = vq.metadata_enabled ? &vq.metadata[i]->timestamp :
++			(uint64_t *)(((uint8_t *)vq.header) + off);
++		vq.frame[i] = ((uint8_t *)vq.header) + off + frame_header_size;
+ 	}
+ 	pvq = malloc(sizeof(vq));
+ 	if (!pvq) {
+@@ -123,6 +145,7 @@ video_queue_t *video_queue_open_named(const wchar_t *name)
+ 		CloseHandle(vq.handle);
+ 		return NULL;
+ 	}
++	vq.metadata_enabled = vq.header->frame_header_size == FRAME_HEADER_SIZE;
+ 
+ 	struct video_queue *pvq = malloc(sizeof(vq));
+ 	if (!pvq) {
+@@ -167,7 +190,8 @@ void video_queue_get_info(video_queue_t *vq, uint32_t *cx, uint32_t *cy, uint64_
+ 
+ #define get_idx(inc) ((unsigned long)inc % 3)
+ 
+-void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp)
++void video_queue_write_ex(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp,
++				  const struct video_queue_frame_metadata *metadata)
+ {
+ 	struct queue_header *qh = vq->header;
+ 	long inc = ++qh->write_idx;
+@@ -175,14 +199,29 @@ void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, ui
+ 	unsigned long idx = get_idx(inc);
+ 	size_t size = linesize[0] * qh->cy;
+ 
+-	*vq->ts[idx] = timestamp;
+ 	memcpy(vq->frame[idx], data[0], size);
+ 	memcpy(vq->frame[idx] + size, data[1], size / 2);
++	if (vq->metadata_enabled) {
++		if (metadata)
++			vq->metadata[idx][0] = *metadata;
++		else
++			memset(vq->metadata[idx], 0, sizeof(*vq->metadata[idx]));
++		vq->metadata[idx]->timestamp = timestamp;
++	} else {
++		/* The original OBSVirtualCamVideo queue stores its timestamp as the
++		 * first eight bytes before each NV12 frame. */
++		*vq->timestamp[idx] = timestamp;
++	}
+ 
+ 	qh->read_idx = inc;
+ 	qh->state = SHARED_QUEUE_STATE_READY;
+ }
+ 
++void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp)
++{
++	video_queue_write_ex(vq, data, linesize, timestamp, NULL);
++}
++
+ enum queue_state video_queue_state(video_queue_t *vq)
+ {
+ 	if (!vq) {
+@@ -193,8 +232,12 @@ enum queue_state video_queue_state(video_queue_t *vq)
+ 	if (!vq->ready_to_read && state == SHARED_QUEUE_STATE_READY) {
+ 		for (size_t i = 0; i < 3; i++) {
+ 			size_t off = vq->header->offsets[i];
+-			vq->ts[i] = (uint64_t *)(((uint8_t *)vq->header) + off);
+-			vq->frame[i] = ((uint8_t *)vq->header) + off + FRAME_HEADER_SIZE;
++			vq->metadata[i] = vq->metadata_enabled ?
++				(struct video_queue_frame_metadata *)(((uint8_t *)vq->header) + off) : NULL;
++			vq->timestamp[i] = vq->metadata_enabled ? &vq->metadata[i]->timestamp :
++				(uint64_t *)(((uint8_t *)vq->header) + off);
++			vq->frame[i] = ((uint8_t *)vq->header) + off +
++				(vq->metadata_enabled ? FRAME_HEADER_SIZE : sizeof(uint64_t));
+ 		}
+ 		vq->ready_to_read = true;
+ 	}
+@@ -202,7 +245,8 @@ enum queue_state video_queue_state(video_queue_t *vq)
+ 	return state;
+ }
+ 
+-bool video_queue_read(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_t *ts)
++bool video_queue_read_ex(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_t *ts,
++				 struct video_queue_frame_metadata *metadata)
+ {
+ 	struct queue_header *qh = vq->header;
+ 	long inc = qh->read_idx;
+@@ -222,8 +266,20 @@ bool video_queue_read(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_
+ 
+ 	unsigned long idx = get_idx(inc);
+ 
+-	*ts = *vq->ts[idx];
++	if (metadata) {
++		if (vq->metadata_enabled)
++			*metadata = vq->metadata[idx][0];
++		else
++			memset(metadata, 0, sizeof(*metadata));
++	}
++	if (ts)
++		*ts = *vq->timestamp[idx];
+ 
+ 	nv12_do_scale(scale, dst, vq->frame[idx]);
+ 	return true;
+ }
++
++bool video_queue_read(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_t *ts)
++{
++	return video_queue_read_ex(vq, scale, dst, ts, NULL);
++}
+diff --git a/plugins/win-dshow/shared-memory-queue.h b/plugins/win-dshow/shared-memory-queue.h
+index 41c4cee5c..5a9187abc 100644
+--- a/plugins/win-dshow/shared-memory-queue.h
++++ b/plugins/win-dshow/shared-memory-queue.h
+@@ -13,6 +13,27 @@ struct nv12_scale;
+ typedef struct video_queue video_queue_t;
+ typedef struct nv12_scale nv12_scale_t;
+ 
++/* Frame metadata travels with the NV12 slot, not in a process-local side
++ * channel.  That is what lets an out-of-process DirectShow reader report the
++ * exact ProgramReturn frame it consumed.  The first field intentionally keeps
++ * the legacy queue timestamp layout; old callers can continue using
++ * video_queue_read()/video_queue_write(). */
++#define VIDEO_QUEUE_IDENTIFIER_CAPACITY 129
++struct video_queue_frame_metadata {
++	uint64_t timestamp;
++	uint64_t frame_id;
++	uint64_t pts_ns;
++	uint64_t server_seq;
++	uint64_t program_revision;
++	uint64_t preview_revision;
++	uint64_t role_map_revision;
++	uint32_t valid;
++	char runtime_instance_id[VIDEO_QUEUE_IDENTIFIER_CAPACITY];
++	char command_id[VIDEO_QUEUE_IDENTIFIER_CAPACITY];
++	char intent_id[VIDEO_QUEUE_IDENTIFIER_CAPACITY];
++	char take_command_id[VIDEO_QUEUE_IDENTIFIER_CAPACITY];
++};
++
+ enum queue_state {
+ 	SHARED_QUEUE_STATE_INVALID,
+ 	SHARED_QUEUE_STATE_STARTING,
+@@ -29,8 +50,12 @@ extern void video_queue_close(video_queue_t *vq);
+ 
+ extern void video_queue_get_info(video_queue_t *vq, uint32_t *cx, uint32_t *cy, uint64_t *interval);
+ extern void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp);
++extern void video_queue_write_ex(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp,
++					 const struct video_queue_frame_metadata *metadata);
+ extern enum queue_state video_queue_state(video_queue_t *vq);
+ extern bool video_queue_read(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_t *ts);
++extern bool video_queue_read_ex(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_t *ts,
++					struct video_queue_frame_metadata *metadata);
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index b304fdf40..8be1b6c04 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -7,6 +7,8 @@
+ #include <util/platform.h>
+ #include <cstdlib>
+ #include <cstring>
++#include <mutex>
++#include <sstream>
+ 
+ using namespace DShow;
+ 
+@@ -63,7 +65,7 @@ static std::wstring queue_name_for_filter(bool program_return, bool preview_retu
+ }
+ 
+ VCamFilter::VCamFilter(bool program_return, bool preview_return)
+-	: OutputFilter(), queue_name(queue_name_for_filter(program_return, preview_return))
++	: OutputFilter(), queue_name(queue_name_for_filter(program_return, preview_return)), program_return(program_return)
+ {
+ 	thread_start = CreateEvent(nullptr, true, false, nullptr);
+ 	thread_stop = CreateEvent(nullptr, true, false, nullptr);
+@@ -340,23 +342,115 @@ void VCamFilter::Frame(uint64_t ts)
+ 
+ 	/* Actual output */
+ 	uint8_t *ptr;
++	struct video_queue_frame_metadata metadata = {};
++	bool consumed_program_frame = false;
+ 	if (LockSampleData(&ptr)) {
+ 		if (state == SHARED_QUEUE_STATE_READY)
+-			ShowOBSFrame(ptr);
++			consumed_program_frame = ShowOBSFrame(ptr, &metadata);
+ 		else
+ 			ShowDefaultFrame(ptr);
+ 
+ 		UnlockSampleData(ts, ts + obs_interval);
+ 	}
++
++	/* This is deliberately after UnlockSampleData: it marks the actual
++	 * ProgramReturn/DirectShow consumer boundary, not the producer's queue write
++	 * and not a raw ProgramView substitute. */
++	if (consumed_program_frame && program_return)
++		EmitDirectShowObservation(metadata);
+ }
+ 
+-void VCamFilter::ShowOBSFrame(uint8_t *ptr)
++bool VCamFilter::ShowOBSFrame(uint8_t *ptr, struct video_queue_frame_metadata *metadata)
+ {
+-	uint64_t temp;
+-	if (!video_queue_read(vq, &scaler, ptr, &temp)) {
++	uint64_t temp = 0;
++	if (!video_queue_read_ex(vq, &scaler, ptr, &temp, metadata)) {
+ 		video_queue_close(vq);
+ 		vq = nullptr;
++		return false;
++	}
++	return true;
++}
++
++static uint64_t trace_monotonic_ns()
++{
++	static LARGE_INTEGER frequency = [] {
++		LARGE_INTEGER value = {};
++		QueryPerformanceFrequency(&value);
++		return value;
++	}();
++	LARGE_INTEGER counter = {};
++	QueryPerformanceCounter(&counter);
++	if (frequency.QuadPart <= 0)
++		return 0;
++	const uint64_t ticks = (uint64_t)counter.QuadPart;
++	const uint64_t hz = (uint64_t)frequency.QuadPart;
++	return (ticks / hz) * 1000000000ULL + ((ticks % hz) * 1000000000ULL) / hz;
++}
++
++static std::string trace_escape(const char *value)
++{
++	std::string out;
++	if (!value)
++		return out;
++	for (const unsigned char *p = (const unsigned char *)value; *p; ++p) {
++		switch (*p) {
++		case '\\': out += "\\\\"; break;
++		case '"': out += "\\\""; break;
++		case '\n': out += "\\n"; break;
++		case '\r': out += "\\r"; break;
++		case '\t': out += "\\t"; break;
++		default: out.push_back((char)*p); break;
++		}
+ 	}
++	return out;
++}
++
++static void append_trace_line(const std::string &line, const char *runtime_id)
++{
++	const char *path = getenv("PULSAR_TRACE_PATH");
++	if (!path || !*path || !runtime_id || !*runtime_id)
++		return;
++
++	const std::string mutex_name = std::string("Local\\Pulsar.") + runtime_id + ".Trace";
++	HANDLE mutex = CreateMutexA(nullptr, FALSE, mutex_name.c_str());
++	if (!mutex)
++		return;
++	WaitForSingleObject(mutex, INFINITE);
++
++	HANDLE file = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++					 nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
++	if (file != INVALID_HANDLE_VALUE) {
++		const std::string payload = line + "\n";
++		DWORD written = 0;
++		WriteFile(file, payload.data(), (DWORD)payload.size(), &written, nullptr);
++		CloseHandle(file);
++	}
++
++	ReleaseMutex(mutex);
++	CloseHandle(mutex);
++}
++
++void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metadata &metadata)
++{
++	if (!metadata.valid || metadata.take_command_id[0] == '\0' ||
++		last_trace_take == metadata.take_command_id)
++		return;
++
++	std::ostringstream observation;
++	observation << "{\"record_type\":\"observation\",\"boundary\":\"directshow_return\","
++			<< "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
++			<< trace_escape(metadata.runtime_instance_id) << "\",\"command_id\":\""
++			<< trace_escape(metadata.command_id) << "\",\"intent_id\":\""
++			<< trace_escape(metadata.intent_id) << "\",\"take_command_id\":\""
++			<< trace_escape(metadata.take_command_id) << "\",\"revisions\":{"
++			<< "\"program\":" << metadata.program_revision << ",\"preview\":"
++			<< metadata.preview_revision << ",\"role_map\":" << metadata.role_map_revision << "},"
++			<< "\"frame_id\":" << metadata.frame_id << ",\"pts_ns\":" << metadata.pts_ns
++			<< ",\"observed_at_monotonic_ns\":" << trace_monotonic_ns()
++			<< ",\"valid\":true,\"program_frame\":true,\"surface\":\"ProgramReturn\","
++			<< "\"consumer\":\"DirectShow\"}";
++	append_trace_line(observation.str(), metadata.runtime_instance_id);
++	last_trace_take = metadata.take_command_id;
+ }
+ 
+ void VCamFilter::ShowDefaultFrame(uint8_t *ptr)
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+index 1c2035ca4..c2f098f36 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+@@ -34,6 +34,7 @@ class VCamFilter : public DShow::OutputFilter {
+ 
+ 	video_queue_t *vq = nullptr;
+ 	std::wstring queue_name;
++	bool program_return = false;
+ 	int queue_mode = 0;
+ 	bool in_obs = false;
+ 	enum queue_state prev_state = SHARED_QUEUE_STATE_INVALID;
+@@ -49,6 +50,7 @@ class VCamFilter : public DShow::OutputFilter {
+ 	volatile bool active = false;
+ 
+ 	nv12_scale_t scaler = {};
++	std::string last_trace_take;
+ 
+ 	inline bool stopped() const { return WaitForSingleObject(thread_stop, 0) != WAIT_TIMEOUT; }
+ 
+@@ -56,8 +58,9 @@ class VCamFilter : public DShow::OutputFilter {
+ 
+ 	void Thread();
+ 	void Frame(uint64_t ts);
+-	void ShowOBSFrame(uint8_t *ptr);
++	bool ShowOBSFrame(uint8_t *ptr, struct video_queue_frame_metadata *metadata);
+ 	void ShowDefaultFrame(uint8_t *ptr);
++	void EmitDirectShowObservation(const struct video_queue_frame_metadata &metadata);
+ 	void UpdatePlaceholder(void);
+ 	const int GetOutputBufferSize(void);
+ 
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index 7b2cb3bf8..a066b82d1 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -6,11 +6,13 @@
+ #include <wchar.h>
+ #include "util/threading.h"
+ #include "shared-memory-queue.h"
++#include "../../../plugins/pulsar-frontend-stub/include/pulsar-runtime-telemetry-abi.h"
+ 
+ struct virtualcam_data {
+ 	obs_output_t *output;
+ 	video_queue_t *vq;
+ 	wchar_t queue_name[256];
++	bool program_return;
+ 	volatile bool active;
+ 	volatile bool stopping;
+ };
+@@ -39,6 +41,46 @@ static bool valid_runtime_instance_id(const char *value)
+ 	return strcmp(value, ".") != 0 && strcmp(value, "..") != 0;
+ }
+ 
++static void copy_telemetry_identifier(char *destination, const char *value)
++{
++	if (!value)
++		value = "";
++	strncpy(destination, value, PULSAR_RUNTIME_TELEMETRY_IDENTIFIER_CAPACITY - 1);
++	destination[PULSAR_RUNTIME_TELEMETRY_IDENTIFIER_CAPACITY - 1] = '\0';
++}
++
++/* The ProgramReturn producer is in the OBS process, while the DirectShow
++ * filter may be hosted by another process.  Copy the committed correlation
++ * envelope into each shared-memory slot so the reader can report exactly the
++ * frame it consumed.  A missing/disabled bridge is represented by valid=0;
++ * virtual camera delivery remains byte-for-byte legacy in that case. */
++static void snapshot_runtime_frame(struct video_queue_frame_metadata *metadata)
++{
++	memset(metadata, 0, sizeof(*metadata));
++	proc_handler_t *ph = obs_get_proc_handler();
++	if (!ph)
++		return;
++
++	calldata_t cd = {0};
++	if (!proc_handler_call(ph, PULSAR_RUNTIME_TELEMETRY_SNAPSHOT_PROC, &cd)) {
++		calldata_free(&cd);
++		return;
++	}
++
++	metadata->valid = calldata_bool(&cd, "valid") ? 1U : 0U;
++	metadata->server_seq = (uint64_t)calldata_int(&cd, "server_seq");
++	metadata->frame_id = (uint64_t)calldata_int(&cd, "frame_id");
++	metadata->pts_ns = (uint64_t)calldata_int(&cd, "pts_ns");
++	metadata->program_revision = (uint64_t)calldata_int(&cd, "program_revision");
++	metadata->preview_revision = (uint64_t)calldata_int(&cd, "preview_revision");
++	metadata->role_map_revision = (uint64_t)calldata_int(&cd, "role_map_revision");
++	copy_telemetry_identifier(metadata->runtime_instance_id, calldata_string(&cd, "runtime_instance_id"));
++	copy_telemetry_identifier(metadata->command_id, calldata_string(&cd, "command_id"));
++	copy_telemetry_identifier(metadata->intent_id, calldata_string(&cd, "intent_id"));
++	copy_telemetry_identifier(metadata->take_command_id, calldata_string(&cd, "take_command_id"));
++	calldata_free(&cd);
++}
++
+ static void queue_name_for_output(obs_output_t *output, wchar_t *destination, size_t capacity)
+ {
+ 	const char *output_name = obs_output_get_name(output);
+@@ -85,6 +127,8 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+ {
+ 	struct virtualcam_data *vcam = (struct virtualcam_data *)bzalloc(sizeof(*vcam));
+ 	vcam->output = output;
++	vcam->program_return = obs_output_get_id(output) &&
++				       strcmp(obs_output_get_id(output), "program_return_output") == 0;
+ 	queue_name_for_output(output, vcam->queue_name, sizeof(vcam->queue_name) / sizeof(vcam->queue_name[0]));
+ 
+ 	UNUSED_PARAMETER(settings);
+@@ -174,7 +218,9 @@ static void virtual_video(void *param, struct video_data *frame)
+ 		return;
+ 	}
+ 
+-	video_queue_write(vcam->vq, frame->data, frame->linesize, frame->timestamp);
++	struct video_queue_frame_metadata metadata;
++	snapshot_runtime_frame(&metadata);
++	video_queue_write_ex(vcam->vq, frame->data, frame->linesize, frame->timestamp, &metadata);
+ }
+ 
+ struct obs_output_info virtualcam_info = {

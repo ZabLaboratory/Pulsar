@@ -62,19 +62,27 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include <util/platform.h>
+
 #include "pulsar-frontend-stub.h"
 #include "pulsar-dual-lane-control.h"
+#include "pulsar-runtime-telemetry.h"
 #include "pulsar-stream-egress.h"
 
 namespace {
@@ -184,6 +192,792 @@ private:
 // it.  OBS owns/replaces the proc handler as part of its process lifecycle;
 // the callback data itself remains valid across that boundary.
 PulsarDualLaneControlBridge g_dualLaneControlBridge;
+
+// #246 runtime evidence producer.  This object intentionally has process
+// lifetime: libobs's procedure handler has no remove operation, and the
+// websocket/virtual-camera modules can still issue a late lookup while OBS is
+// tearing down its frontend callbacks.  `shutdown()` only disables evidence;
+// it never leaves a dangling callback payload behind.
+class PulsarRuntimeTelemetry {
+    struct TakeContext {
+        bool valid = false;
+        std::string commandId;
+        std::string intentId;
+        std::string runtimeInstanceId;
+        std::string takeCommandId;
+        std::string targetLaneId;
+        std::string targetSceneId;
+        std::string payloadSha256;
+        uint64_t freezeUntilNs = 0;
+        uint64_t acceptedAtNs = 0;
+        uint64_t programRevision = 0;
+        uint64_t previewRevision = 0;
+        uint64_t roleMapRevision = 0;
+        int onAirLane = 0;
+        int previewLane = 1;
+        uint64_t frameId = 0;
+        uint64_t ptsNs = 0;
+    };
+
+public:
+    void install()
+    {
+        proc_handler_t *global = obs_get_proc_handler();
+        if (!global)
+            return;
+        proc_handler_add(global,
+                         "void pulsar_runtime_telemetry_begin_take(in string command_id, in string intent_id, "
+                         "in string runtime_instance_id, in string take_command_id, in string target_lane_id, "
+                         "in string target_scene_id, in int freeze_until_monotonic_ns, in string payload_sha256, "
+                         "out bool available, out bool accepted)",
+                         &BeginTake, this);
+        proc_handler_add(global, "void pulsar_runtime_telemetry_cancel_take()", &CancelTake, this);
+        proc_handler_add(global,
+                         "void pulsar_runtime_telemetry_snapshot_frame(out bool valid, out int server_seq, "
+                         "out int frame_id, out int pts_ns, out int program_revision, out int preview_revision, "
+                         "out int role_map_revision, out string runtime_instance_id, out string command_id, "
+                         "out string intent_id, out string take_command_id)",
+                         &SnapshotFrame, this);
+    }
+
+    void initialize(const char *encoderFamily, const obs_video_info &video, bool wgcWorkload)
+    {
+        stopResourceSampler();
+
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        enabled_ = false;
+        pending_ = {};
+        accepted_ = {};
+        committed_ = {};
+        lastRawTake_.clear();
+        lastPacketTake_.clear();
+        serverSeq_ = 0;
+        programRevision_ = 0;
+        previewRevision_ = 0;
+        roleMapRevision_ = 0;
+        rawFrameCount_.store(0, std::memory_order_relaxed);
+        packetFrameCount_.store(0, std::memory_order_relaxed);
+        resourceMode_.clear();
+        wgcWorkload_ = false;
+
+        const char *tracePath = std::getenv("PULSAR_TRACE_PATH");
+        const char *runtimeId = std::getenv("PULSAR_RUNTIME_INSTANCE_ID");
+        if (!tracePath || !*tracePath || !validIdentifier(runtimeId))
+            return;
+
+        runtimeInstanceId_ = runtimeId;
+        tracePath_ = tracePath;
+        sessionId_ = environmentOr("PULSAR_TRACE_SESSION_ID", runtimeInstanceId_ + "-" + std::to_string(nowNs()));
+        if (!validIdentifier(sessionId_.c_str()))
+            sessionId_ = runtimeInstanceId_ + "-session";
+
+#ifdef _WIN32
+        const std::string mutexName = "Local\\Pulsar." + runtimeInstanceId_ + ".Trace";
+        traceMutex_ = CreateMutexA(nullptr, FALSE, mutexName.c_str());
+#endif
+
+        const bool append = truthy(std::getenv("PULSAR_TRACE_APPEND"));
+        bool hasExisting = false;
+        if (append) {
+            std::ifstream existing(tracePath_, std::ios::binary | std::ios::ate);
+            hasExisting = existing.good() && existing.tellg() > 0;
+        }
+        if (!hasExisting) {
+            {
+                std::lock_guard<std::mutex> fileLock(fileMutex_);
+#ifdef _WIN32
+                if (traceMutex_)
+                    WaitForSingleObject(traceMutex_, INFINITE);
+#endif
+                std::ofstream truncate(tracePath_, std::ios::binary | std::ios::trunc);
+#ifdef _WIN32
+                if (traceMutex_)
+                    ReleaseMutex(traceMutex_);
+#endif
+            }
+            writeLine(sessionJson(encoderFamily, video, wgcWorkload));
+        }
+
+        enabled_ = true;
+        wgcWorkload_ = wgcWorkload;
+        const char *resourceMode = std::getenv("PULSAR_TRACE_RESOURCE_MODE");
+        if (resourceMode && (std::strcmp(resourceMode, "reference") == 0 ||
+                             std::strcmp(resourceMode, "dual_lane") == 0)) {
+            resourceMode_ = resourceMode;
+        }
+        blog(LOG_INFO, "[pulsar-runtime-telemetry] trace enabled path=%s runtime_instance_id=%s session_id=%s",
+             tracePath_.c_str(), runtimeInstanceId_.c_str(), sessionId_.c_str());
+        if (!resourceMode_.empty())
+            startResourceSampler();
+    }
+
+    void shutdown()
+    {
+        stopResourceSampler();
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        enabled_ = false;
+        pending_ = {};
+        accepted_ = {};
+        committed_ = {};
+        lastRawTake_.clear();
+        lastPacketTake_.clear();
+    }
+
+    bool enabled()
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        return enabled_;
+    }
+
+    bool environmentTruthy(const char *value) const { return truthy(value); }
+
+    static bool resourceReferenceRequested()
+    {
+        const char *tracePath = std::getenv("PULSAR_TRACE_PATH");
+        const char *mode = std::getenv("PULSAR_TRACE_RESOURCE_MODE");
+        return tracePath && *tracePath && mode && std::strcmp(mode, "reference") == 0;
+    }
+
+    void previewRevisionChanged()
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        if (enabled_)
+            ++previewRevision_;
+    }
+
+    void cancelPending()
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        pending_.valid = false;
+    }
+
+    // Called after the libobs atomic swap has been queued successfully but
+    // before the role mutex is released.  A malformed/missing metadata
+    // envelope never blocks the Cut; it simply leaves this Take uninstrumented.
+    void accept(obs_source_t *scene, int onAirLane, int previewLane)
+    {
+        TakeContext context;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            if (!enabled_ || !pending_.valid)
+                return;
+
+            // Consume the ingress envelope on every queue outcome.  A failed
+            // or non-Take request must never leave metadata available for a
+            // later scene mutation; accepted_ is the separate context held
+            // until the graphics commit callback.
+            TakeContext candidate = pending_;
+            pending_.valid = false;
+            if (candidate.targetLaneId != laneId(previewLane))
+                return;
+
+            const char *name = scene ? obs_source_get_name(scene) : nullptr;
+            const char *uuid = scene ? obs_source_get_uuid(scene) : nullptr;
+            if ((!name || candidate.targetSceneId != name) && (!uuid || candidate.targetSceneId != uuid))
+                return;
+
+            const uint64_t now = nowNs();
+            if (candidate.freezeUntilNs <= now)
+                return;
+
+            context = candidate;
+            context.acceptedAtNs = now;
+            context.programRevision = programRevision_;
+            context.previewRevision = previewRevision_;
+            context.roleMapRevision = roleMapRevision_;
+            context.onAirLane = onAirLane;
+            context.previewLane = previewLane;
+            accepted_ = context;
+            accepted_.valid = true;
+            lastRawTake_.clear();
+            lastPacketTake_.clear();
+        }
+
+        const uint64_t seq = nextServerSeq();
+        const std::string revisions = revisionJson(context.programRevision, context.previewRevision,
+                                                    context.roleMapRevision);
+        const std::string roleMap = roleMapJson(context.onAirLane, context.previewLane);
+        std::ostringstream event;
+        event << "{\"record_type\":\"event\",\"event\":{";
+        event << commonEventFields("TakeAccepted", context, seq, "take_accepted", context.acceptedAtNs,
+                                   revisions, roleMap);
+        event << ",\"take_command_id\":\"" << escape(context.takeCommandId)
+              << "\",\"target_lane_id\":\"" << escape(context.targetLaneId)
+              << "\",\"target_scene_id\":\"" << escape(context.targetSceneId)
+              << "\",\"freeze_until_monotonic_ns\":" << context.freezeUntilNs;
+        event << "}}";
+        writeLine(event.str());
+    }
+
+    void commit(uint64_t frameId, uint64_t ptsNs, int onAirLane, int previewLane)
+    {
+        TakeContext context;
+        uint64_t previousProgram = 0;
+        uint64_t previousPreview = 0;
+        uint64_t previousRoleMap = 0;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            if (!enabled_ || !accepted_.valid)
+                return;
+            if (frameId < accepted_.frameId || ptsNs < accepted_.ptsNs)
+                return;
+
+            previousProgram = accepted_.programRevision;
+            previousPreview = accepted_.previewRevision;
+            previousRoleMap = accepted_.roleMapRevision;
+            ++programRevision_;
+            ++roleMapRevision_;
+            context = accepted_;
+            context.frameId = frameId;
+            context.ptsNs = ptsNs;
+            context.onAirLane = onAirLane;
+            context.previewLane = previewLane;
+            context.programRevision = programRevision_;
+            context.previewRevision = previewRevision_;
+            context.roleMapRevision = roleMapRevision_;
+            committed_ = context;
+            committed_.valid = true;
+            accepted_.valid = false;
+            pending_.valid = false;
+            lastRawTake_.clear();
+            lastPacketTake_.clear();
+        }
+
+        const uint64_t seq = nextServerSeq();
+        const std::string revisions = revisionJson(context.programRevision, context.previewRevision,
+                                                    context.roleMapRevision);
+        const std::string previousRevisions = revisionJson(previousProgram, previousPreview, previousRoleMap);
+        const std::string roleMap = roleMapJson(context.onAirLane, context.previewLane);
+        const std::string previousRoleMapJson = roleMapJson(context.previewLane, context.onAirLane);
+        std::ostringstream event;
+        event << "{\"record_type\":\"event\",\"event\":{";
+        event << commonEventFields("TakeCommitted", context, seq, "ready", nowNs(), revisions, roleMap,
+                                   previousRevisions, previousRoleMapJson);
+        event << ",\"take_command_id\":\"" << escape(context.takeCommandId)
+              << "\",\"target_lane_id\":\"" << escape(context.targetLaneId)
+              << "\",\"target_scene_id\":\"" << escape(context.targetSceneId)
+              << "\",\"source_lane_id\":\"" << laneId(onAirLane)
+              << "\",\"frame_id\":" << frameId << ",\"pts_ns\":" << ptsNs
+              << ",\"program_lane_id\":\"" << laneId(onAirLane)
+              << "\",\"preview_lane_id\":\"" << laneId(previewLane);
+        event << "}}";
+        writeLine(event.str());
+    }
+
+    void rawFrame(struct video_data *frame)
+    {
+        if (!frame)
+            return;
+        rawFrameCount_.fetch_add(1, std::memory_order_relaxed);
+        TakeContext context;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            if (!enabled_ || !committed_.valid || frame->timestamp < committed_.ptsNs ||
+                lastRawTake_ == committed_.takeCommandId)
+                return;
+            context = committed_;
+            lastRawTake_ = committed_.takeCommandId;
+        }
+
+        std::ostringstream observation;
+        observation << "{\"record_type\":\"observation\",\"boundary\":\"encoder_input_raw\","
+                    << "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
+                    << escape(context.runtimeInstanceId) << "\",\"command_id\":\""
+                    << escape(context.commandId) << "\",\"intent_id\":\"" << escape(context.intentId)
+                    << "\",\"take_command_id\":\"" << escape(context.takeCommandId)
+                    << "\",\"revisions\":"
+                    << revisionJson(context.programRevision, context.previewRevision, context.roleMapRevision)
+                    << ",\"frame_id\":" << context.frameId << ",\"pts_ns\":" << frame->timestamp
+                    << ",\"observed_at_monotonic_ns\":" << nowNs()
+                    << ",\"valid\":true,\"program_frame\":true,\"surface\":\"ProgramView\","
+                    << "\"consumer\":\"encoder_input\"}";
+        writeLine(observation.str());
+    }
+
+    void packet(obs_output_t *, struct encoder_packet *packet, struct encoder_packet_time *packetTime)
+    {
+        if (!packet || packet->type != OBS_ENCODER_VIDEO)
+            return;
+        packetFrameCount_.fetch_add(1, std::memory_order_relaxed);
+        TakeContext context;
+        uint64_t observed = nowNs();
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            if (!enabled_ || !committed_.valid || lastPacketTake_ == committed_.takeCommandId)
+                return;
+            if (packetTime) {
+                if (packetTime->cts < committed_.ptsNs)
+                    return;
+                if (packetTime->pir)
+                    observed = packetTime->pir;
+            }
+            context = committed_;
+            lastPacketTake_ = committed_.takeCommandId;
+        }
+
+        std::ostringstream observation;
+        observation << "{\"record_type\":\"observation\",\"boundary\":\"rtmp_first_packet\","
+                    << "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
+                    << escape(context.runtimeInstanceId) << "\",\"command_id\":\""
+                    << escape(context.commandId) << "\",\"intent_id\":\"" << escape(context.intentId)
+                    << "\",\"take_command_id\":\"" << escape(context.takeCommandId)
+                    << "\",\"revisions\":"
+                    << revisionJson(context.programRevision, context.previewRevision, context.roleMapRevision)
+                    << ",\"frame_id\":" << context.frameId << ",\"pts_ns\":" << context.ptsNs
+                    << ",\"observed_at_monotonic_ns\":" << observed
+                    << ",\"valid\":true,\"packet_index\":0,\"surface\":\"RTMP\",\"consumer\":\"rtmp\"}";
+        writeLine(observation.str());
+    }
+
+    void snapshot(calldata_t *cd)
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        calldata_set_bool(cd, "valid", enabled_ && committed_.valid);
+        if (!enabled_ || !committed_.valid)
+            return;
+        calldata_set_int(cd, "server_seq", static_cast<long long>(serverSeq_));
+        calldata_set_int(cd, "frame_id", static_cast<long long>(committed_.frameId));
+        calldata_set_int(cd, "pts_ns", static_cast<long long>(committed_.ptsNs));
+        calldata_set_int(cd, "program_revision", static_cast<long long>(committed_.programRevision));
+        calldata_set_int(cd, "preview_revision", static_cast<long long>(committed_.previewRevision));
+        calldata_set_int(cd, "role_map_revision", static_cast<long long>(committed_.roleMapRevision));
+        calldata_set_string(cd, "runtime_instance_id", committed_.runtimeInstanceId.c_str());
+        calldata_set_string(cd, "command_id", committed_.commandId.c_str());
+        calldata_set_string(cd, "intent_id", committed_.intentId.c_str());
+        calldata_set_string(cd, "take_command_id", committed_.takeCommandId.c_str());
+    }
+
+private:
+    static uint64_t nowNs() { return os_gettime_ns(); }
+
+    struct GpuMetrics {
+        double utilization = 0.0;
+        double encoderUtilization = 0.0;
+        uint64_t memoryBytes = 0;
+    };
+
+    static bool queryGpuMetrics(GpuMetrics &metrics)
+    {
+        // nvidia-smi is the driver's supported process-independent telemetry
+        // boundary for this runtime.  Keep the command constant (there is no
+        // user-controlled shell fragment) and fail closed when the driver or
+        // one of the requested counters is unavailable.  A resource record
+        // with invented zeroes would make a missing GPU look healthy and would
+        // incorrectly satisfy the strict #246 resource gate.
+        const char *command =
+            "nvidia-smi --query-gpu=utilization.gpu,utilization.encoder,memory.used "
+            "--format=csv,noheader,nounits";
+#ifdef _WIN32
+        FILE *pipe = _popen(command, "r");
+#else
+        FILE *pipe = popen(command, "r");
+#endif
+        if (!pipe)
+            return false;
+
+        char line[256] = {};
+        const bool read = std::fgets(line, sizeof(line), pipe) != nullptr;
+#ifdef _WIN32
+        _pclose(pipe);
+#else
+        pclose(pipe);
+#endif
+        if (!read)
+            return false;
+
+        char *cursor = line;
+        char *end = nullptr;
+        const double gpu = std::strtod(cursor, &end);
+        if (end == cursor)
+            return false;
+        cursor = end;
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == ',')
+            ++cursor;
+        const double encoder = std::strtod(cursor, &end);
+        if (end == cursor)
+            return false;
+        cursor = end;
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == ',')
+            ++cursor;
+        const double memoryMb = std::strtod(cursor, &end);
+        if (end == cursor || !std::isfinite(gpu) || !std::isfinite(encoder) || !std::isfinite(memoryMb) ||
+            gpu < 0.0 || encoder < 0.0 || memoryMb < 0.0)
+            return false;
+
+        metrics.utilization = gpu;
+        metrics.encoderUtilization = encoder;
+        metrics.memoryBytes = static_cast<uint64_t>(memoryMb * 1024.0 * 1024.0);
+        return true;
+    }
+
+    static uint32_t resourceIntervalMs()
+    {
+        uint32_t interval = 500;
+        if (const char *value = std::getenv("PULSAR_TRACE_RESOURCE_INTERVAL_MS")) {
+            char *end = nullptr;
+            const unsigned long parsed = std::strtoul(value, &end, 10);
+            if (end && *end == '\0' && parsed >= 100 && parsed <= 10000)
+                interval = static_cast<uint32_t>(parsed);
+        }
+        return interval;
+    }
+
+    void startResourceSampler()
+    {
+        resourceStop_.store(false, std::memory_order_release);
+        resourceThread_ = std::thread([this] { resourceLoop(); });
+    }
+
+    void stopResourceSampler()
+    {
+        resourceStop_.store(true, std::memory_order_release);
+        if (resourceThread_.joinable())
+            resourceThread_.join();
+        if (resourceCpuInfo_) {
+            os_cpu_usage_info_destroy(resourceCpuInfo_);
+            resourceCpuInfo_ = nullptr;
+        }
+    }
+
+    void resourceLoop()
+    {
+        const uint32_t interval = resourceIntervalMs();
+        resourceCpuInfo_ = os_cpu_usage_info_start();
+        if (!resourceCpuInfo_)
+            blog(LOG_WARNING, "[pulsar-runtime-telemetry] process CPU sampler unavailable");
+
+        bool gpuWarningLogged = false;
+        while (!resourceStop_.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(interval));
+            if (resourceStop_.load(std::memory_order_acquire))
+                break;
+
+            GpuMetrics gpu;
+            if (!queryGpuMetrics(gpu)) {
+                if (!gpuWarningLogged) {
+                    blog(LOG_WARNING,
+                         "[pulsar-runtime-telemetry] resource sample skipped: nvidia-smi GPU counters unavailable");
+                    gpuWarningLogged = true;
+                }
+                continue;
+            }
+
+            const double cpu = resourceCpuInfo_ ? os_cpu_usage_info_query(resourceCpuInfo_) : -1.0;
+            if (cpu < 0.0 || !std::isfinite(cpu))
+                continue;
+            const double frameRenderMs = static_cast<double>(obs_get_average_frame_time_ns()) / 1000000.0;
+            if (!std::isfinite(frameRenderMs) || frameRenderMs < 0.0)
+                continue;
+
+            const uint64_t rawFrames = rawFrameCount_.load(std::memory_order_relaxed);
+            const uint64_t encodedFrames = packetFrameCount_.load(std::memory_order_relaxed);
+            const uint64_t queueDepth = rawFrames > encodedFrames ? rawFrames - encodedFrames : 0;
+            const bool cef = truthy(std::getenv("PULSAR_WORKLOAD_CEF"));
+
+            std::string mode;
+            std::string runtime;
+            bool wgc = false;
+            {
+                std::lock_guard<std::mutex> lock(stateMutex_);
+                if (!enabled_ || resourceMode_.empty())
+                    continue;
+                mode = resourceMode_;
+                runtime = runtimeInstanceId_;
+                wgc = wgcWorkload_;
+            }
+
+            std::ostringstream sample;
+            sample << "{\"record_type\":\"resource_sample\",\"sample_mode\":\"" << mode
+                   << "\",\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
+                   << escape(runtime) << "\",\"observed_at_monotonic_ns\":" << nowNs()
+                   << ",\"frame_render_ms\":" << std::setprecision(9) << frameRenderMs
+                   << ",\"resident_bytes\":" << os_get_proc_resident_size()
+                   << ",\"cpu_percent\":" << std::setprecision(6) << cpu
+                   << ",\"gpu_percent\":" << gpu.utilization
+                   << ",\"encoder_queue_depth\":" << queueDepth
+                   << ",\"wgc_cpu_percent\":" << (wgc ? cpu : 0.0)
+                   << ",\"cef_cpu_percent\":" << (cef ? cpu : 0.0)
+                   << ",\"nvenc_gpu_percent\":" << gpu.encoderUtilization
+                   << ",\"gpu_memory_bytes\":" << gpu.memoryBytes
+                   << ",\"notes\":\"obs-platform process counters; nvidia-smi GPU counters\"}";
+            writeLine(sample.str());
+        }
+    }
+
+    static bool truthy(const char *value)
+    {
+        if (!value)
+            return false;
+        std::string lower;
+        for (const char *p = value; *p; ++p)
+            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(*p))));
+        return lower == "1" || lower == "true" || lower == "on" || lower == "yes";
+    }
+
+    static bool validIdentifier(const char *value)
+    {
+        if (!value || !*value || std::strlen(value) > 128)
+            return false;
+        if (!(std::isalnum(static_cast<unsigned char>(*value))))
+            return false;
+        for (const char *p = value; *p; ++p) {
+            const unsigned char c = static_cast<unsigned char>(*p);
+            if (!(std::isalnum(c) || c == '.' || c == '_' || c == ':' || c == '-'))
+                return false;
+        }
+        return true;
+    }
+
+    static bool validSceneId(const char *value)
+    {
+        if (!value || !*value || std::strlen(value) > 256)
+            return false;
+        for (const unsigned char *p = reinterpret_cast<const unsigned char *>(value); *p; ++p) {
+            if (*p < 0x20)
+                return false;
+        }
+        return true;
+    }
+
+    static std::string environmentOr(const char *name, const std::string &fallback)
+    {
+        const char *value = std::getenv(name);
+        return value && *value ? value : fallback;
+    }
+
+    static std::string escape(const std::string &value)
+    {
+        std::string out;
+        out.reserve(value.size() + 8);
+        for (unsigned char c : value) {
+            switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"': out += "\\\""; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    std::ostringstream hex;
+                    hex << "\\u00" << std::hex << static_cast<unsigned int>(c);
+                    out += hex.str();
+                } else {
+                    out.push_back(static_cast<char>(c));
+                }
+            }
+        }
+        return out;
+    }
+
+    static const char *laneId(int lane) { return lane == 0 ? "A" : "B"; }
+
+    static std::string revisionJson(uint64_t program, uint64_t preview, uint64_t roleMap)
+    {
+        std::ostringstream out;
+        out << "{\"program\":" << program << ",\"preview\":" << preview << ",\"role_map\":" << roleMap
+            << "}";
+        return out.str();
+    }
+
+    static std::string roleMapJson(int onAirLane, int previewLane)
+    {
+        std::ostringstream out;
+        out << "{\"on_air\":\"" << laneId(onAirLane) << "\",\"preview\":\"" << laneId(previewLane)
+            << "\"}";
+        return out.str();
+    }
+
+    static std::string commonEventFields(const char *eventType, const TakeContext &context, uint64_t serverSeq,
+                                         const char *state, uint64_t observed, const std::string &revisions,
+                                         const std::string &roleMap, const std::string &previousRevisions = {},
+                                         const std::string &previousRoleMap = {})
+    {
+        std::ostringstream out;
+        out << "\"contract\":\"pulsar.scene-switch.v1\",\"schema_version\":1,\"message_type\":\"event\","
+            << "\"event_type\":\"" << eventType << "\",\"command_id\":\"" << escape(context.commandId)
+            << "\",\"intent_id\":\"" << escape(context.intentId) << "\",\"runtime_instance_id\":\""
+            << escape(context.runtimeInstanceId) << "\",\"server_seq\":" << serverSeq << ",\"state\":\""
+            << state << "\",\"previous_revisions\":"
+            << (previousRevisions.empty() ? revisions : previousRevisions) << ",\"revisions\":" << revisions
+            << ",\"role_map\":" << roleMap;
+        if (!previousRoleMap.empty())
+            out << ",\"previous_role_map\":" << previousRoleMap;
+        out << ",\"observed_at_monotonic_ns\":" << observed << ",\"payload_sha256\":\""
+            << escape(context.payloadSha256) << "\"";
+        return out.str();
+    }
+
+    uint64_t nextServerSeq()
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        return ++serverSeq_;
+    }
+
+    std::string sessionJson(const char *encoderFamily, const obs_video_info &video, bool wgcWorkload) const
+    {
+        const bool nvenc = encoderFamily && std::strcmp(encoderFamily, "nvenc") == 0;
+        const bool cef = truthy(std::getenv("PULSAR_WORKLOAD_CEF"));
+        const std::string buildRevision = environmentOr("PULSAR_BUILD_REVISION", "local-build");
+        const std::string commandLine = environmentOr("PULSAR_TRACE_COMMAND", "pulsar-headless runtime producer");
+        const std::string host = environmentOr("PULSAR_TRACE_HOST", "unknown-host");
+        const std::string gpu = environmentOr("PULSAR_TRACE_GPU", "unknown-gpu");
+        unsigned long long warmup = 100;
+        if (const char *value = std::getenv("PULSAR_TRACE_WARMUP_TAKES")) {
+            char *end = nullptr;
+            const unsigned long long parsed = std::strtoull(value, &end, 10);
+            if (end && *end == '\0' && parsed <= 1000000)
+                warmup = parsed;
+        }
+        std::ostringstream out;
+        out << "{\"record_type\":\"session\",\"schema\":\"pulsar.take-latency.v1\","
+            << "\"runtime_instance_id\":\"" << escape(runtimeInstanceId_) << "\",\"session_id\":\""
+            << escape(sessionId_) << "\",\"codec\":\"" << (nvenc ? "nvenc" : "x264")
+            << "\",\"warmup_takes\":" << warmup << ",\"video\":{"
+            << "\"width\":" << video.base_width << ",\"height\":" << video.base_height
+            << ",\"fps_num\":" << video.fps_num << ",\"fps_den\":" << video.fps_den << "},"
+            << "\"workload\":{"
+            << "\"wgc\":" << (wgcWorkload ? "true" : "false") << ",\"cef\":" << (cef ? "true" : "false")
+            << ",\"nvenc\":" << (nvenc ? "true" : "false") << "},"
+            << "\"capture_paths\":[\"encoder_input_raw\",\"directshow_return\",\"rtmp_first_packet\","
+            << "\"decoded_first_frame\",\"antenna_first_frame\"],"
+            << "\"resource_reference\":{"
+            << "\"extra_frame_render_ms\":0.091,\"extra_resident_bytes\":3130000},"
+            << "\"build_revision\":\"" << escape(buildRevision) << "\",\"command_line\":\""
+            << escape(commandLine) << "\",\"hardware\":{"
+            << "\"host\":\"" << escape(host) << "\",\"gpu\":\"" << escape(gpu) << "},"
+            << "\"evidence_kind\":\"runtime\"}";
+        return out.str();
+    }
+
+    void writeLine(const std::string &line)
+    {
+        if (line.empty() || tracePath_.empty())
+            return;
+        std::lock_guard<std::mutex> lock(fileMutex_);
+#ifdef _WIN32
+        if (traceMutex_)
+            WaitForSingleObject(traceMutex_, INFINITE);
+#endif
+        std::ofstream output(tracePath_, std::ios::binary | std::ios::app);
+        if (output.good())
+            output << line << '\n';
+        output.close();
+#ifdef _WIN32
+        if (traceMutex_)
+            ReleaseMutex(traceMutex_);
+#endif
+    }
+
+    static void BeginTake(void *param, calldata_t *cd)
+    {
+        auto *self = static_cast<PulsarRuntimeTelemetry *>(param);
+        if (self)
+            self->begin(cd);
+    }
+
+    static void SnapshotFrame(void *param, calldata_t *cd)
+    {
+        auto *self = static_cast<PulsarRuntimeTelemetry *>(param);
+        if (self)
+            self->snapshot(cd);
+    }
+
+    static void CancelTake(void *param, calldata_t *)
+    {
+        auto *self = static_cast<PulsarRuntimeTelemetry *>(param);
+        if (self)
+            self->cancelPending();
+    }
+
+    void begin(calldata_t *cd)
+    {
+        const char *command = calldata_string(cd, "command_id");
+        const char *intent = calldata_string(cd, "intent_id");
+        const char *runtime = calldata_string(cd, "runtime_instance_id");
+        const char *take = calldata_string(cd, "take_command_id");
+        const char *lane = calldata_string(cd, "target_lane_id");
+        const char *scene = calldata_string(cd, "target_scene_id");
+        const char *digest = calldata_string(cd, "payload_sha256");
+        const long long freeze = calldata_int(cd, "freeze_until_monotonic_ns");
+        bool available = false;
+        bool accepted = false;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            available = enabled_;
+            pending_ = {};
+            if (available && validIdentifier(command) && validIdentifier(intent) && validIdentifier(runtime) &&
+                validIdentifier(take) && validSceneId(scene) && validIdentifier(digest) &&
+                (std::strcmp(lane ? lane : "", "A") == 0 || std::strcmp(lane ? lane : "", "B") == 0) &&
+                runtime == runtimeInstanceId_ && freeze > 0 && std::strlen(digest) == 64 && isLowerHex(digest)) {
+                pending_.valid = true;
+                pending_.commandId = command;
+                pending_.intentId = intent;
+                pending_.runtimeInstanceId = runtime;
+                pending_.takeCommandId = take;
+                pending_.targetLaneId = lane;
+                pending_.targetSceneId = scene;
+                pending_.payloadSha256 = digest;
+                pending_.freezeUntilNs = static_cast<uint64_t>(freeze);
+                accepted = true;
+            }
+        }
+        calldata_set_bool(cd, "available", available);
+        calldata_set_bool(cd, "accepted", accepted);
+    }
+
+    static bool isLowerHex(const char *value)
+    {
+        if (!value)
+            return false;
+        for (size_t i = 0; value[i]; ++i) {
+            const unsigned char c = static_cast<unsigned char>(value[i]);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+                return false;
+        }
+        return true;
+    }
+
+    std::mutex stateMutex_;
+    std::mutex fileMutex_;
+    bool enabled_ = false;
+    std::string tracePath_;
+    std::string runtimeInstanceId_;
+    std::string sessionId_;
+    std::string resourceMode_;
+    bool wgcWorkload_ = false;
+    uint64_t serverSeq_ = 0;
+    uint64_t programRevision_ = 0;
+    uint64_t previewRevision_ = 0;
+    uint64_t roleMapRevision_ = 0;
+    TakeContext pending_;
+    TakeContext accepted_;
+    TakeContext committed_;
+    std::string lastRawTake_;
+    std::string lastPacketTake_;
+    std::atomic<uint64_t> rawFrameCount_{0};
+    std::atomic<uint64_t> packetFrameCount_{0};
+    std::atomic<bool> resourceStop_{true};
+    std::thread resourceThread_;
+    os_cpu_usage_info_t *resourceCpuInfo_ = nullptr;
+#ifdef _WIN32
+    HANDLE traceMutex_ = nullptr;
+#endif
+};
+
+PulsarRuntimeTelemetry g_runtimeTelemetry;
+
+static void pulsar_runtime_raw_video_callback(void *, struct video_data *frame)
+{
+    g_runtimeTelemetry.rawFrame(frame);
+}
+
+static void pulsar_runtime_packet_callback(obs_output_t *output, struct encoder_packet *packet,
+                                           struct encoder_packet_time *packetTime, void *)
+{
+    g_runtimeTelemetry.packet(output, packet, packetTime);
+}
 
 class PulsarFrontendAPI : public obs_frontend_callbacks {
 public:
@@ -401,6 +1195,7 @@ public:
     {
         if (!scene)
             return;
+        bool changed = false;
         {
             std::lock_guard<std::mutex> lk(dualLaneMutex);
             if (dualLaneCutPending.load()) {
@@ -420,12 +1215,16 @@ public:
                     obs_source_release(previewSelection);
                 previewSelection = obs_source_get_ref(scene);
                 dualLaneInvariantLocked("set-preview");
+                changed = true;
             } else {
                 if (previewScene)
                     obs_source_release(previewScene);
                 previewScene = obs_source_get_ref(scene);
+                changed = true;
             }
         }
+        if (changed)
+            g_runtimeTelemetry.previewRevisionChanged();
         emit(OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED);
     }
 
@@ -1423,13 +2222,17 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
 bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
 {
     std::lock_guard<std::mutex> lk(dualLaneMutex);
-    if (!dualLaneReady || !scene || !dualLaneInvariantLocked("queue-before"))
+    if (!dualLaneReady || !scene || !dualLaneInvariantLocked("queue-before")) {
+        g_runtimeTelemetry.cancelPending();
         return false;
+    }
     if (dualLaneCutPending.load()) {
+        g_runtimeTelemetry.cancelPending();
         blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: another Cut is pending");
         return false;
     }
     if (scene != previewSelection) {
+        g_runtimeTelemetry.cancelPending();
         blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: scene is not the frozen Preview selection");
         return false;
     }
@@ -1442,9 +2245,16 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
                                     OnDualLaneCutCommitted, this)) {
         dualLaneCutPending.store(false);
         g_dualLaneControlBridge.set_pending(false);
+        g_runtimeTelemetry.cancelPending();
         blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: atomic frame-boundary slot is busy");
         return false;
     }
+
+    // The adapter observes the same ingress after the atomic queue accepted it;
+    // it never changes whether the Cut is admitted.  It validates that the
+    // caller's envelope names the actual frozen Preview scene/lane before it
+    // publishes TakeAccepted.
+    g_runtimeTelemetry.accept(scene, onAirLane, previewLane);
 
     blog(LOG_INFO, "[pulsar-dual-lane] TakeAccepted preview_lane=%d onair_lane=%d "
          "OnAirRoot=%p PreviewRoot=%p ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p "
@@ -1486,6 +2296,8 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
         if (!self->dualLaneInvariantLocked("commit"))
             blog(LOG_ERROR, "[pulsar-dual-lane] commit invariant failed");
     }
+
+    g_runtimeTelemetry.commit(frameId, ptsNs, committedOnAirLane, committedPreviewLane);
 
     blog(LOG_INFO, "[pulsar-dual-lane] TakeCommitted count=%llu frame_id=%llu pts_ns=%llu "
          "onair_lane=%d preview_lane=%d OnAirRoot=%p PreviewRoot=%p "
@@ -1898,8 +2710,15 @@ bool PulsarFrontendAPI::setup()
     // its initial producer.  ProgramView is the existing main canvas/video_t;
     // PreviewView is the single auxiliary mix.  Production encoder/Program
     // return stay on the main video, while Preview return uses the auxiliary.
-    if (!setupDualLane(scene))
+    // Resource reference campaigns intentionally measure the legacy single
+    // canvas before the dual-lane topology is allocated.  This is opt-in and
+    // only reachable with an explicit trace resource mode; normal runtime
+    // starts retain the dual-lane setup and Cut semantics.
+    if (PulsarRuntimeTelemetry::resourceReferenceRequested()) {
+        blog(LOG_INFO, "[pulsar-runtime-telemetry] reference resource mode: retaining legacy single canvas");
+    } else if (!setupDualLane(scene)) {
         blog(LOG_WARNING, "[pulsar-frontend-stub] dual-lane setup unavailable; keeping legacy canvas path");
+    }
     obs_scene_release(scene);
     scene = nullptr;
 
@@ -2060,6 +2879,37 @@ bool PulsarFrontendAPI::setup()
              replayMaxTimeSec, replayMaxSizeMb);
     }
 
+    // #246: install the producer callbacks only when a runtime trace was
+    // explicitly requested.  The raw callback is attached to libobs's main
+    // Program mix (the same video_t used by the encoder); the packet callback
+    // is attached to the actual rtmp_output, so a downstream decoder can
+    // never be mistaken for the RTMP first-packet boundary.
+    obs_video_info telemetryVideo = {};
+    if (obs_get_video_info(&telemetryVideo)) {
+        const bool wgcWorkload = captureSource && std::getenv("PULSAR_CAPTURE_WINDOW") &&
+                                  *std::getenv("PULSAR_CAPTURE_WINDOW");
+        g_runtimeTelemetry.initialize(encoderFamily.c_str(), telemetryVideo, wgcWorkload);
+        if (g_runtimeTelemetry.enabled()) {
+            obs_add_raw_video_callback(nullptr, pulsar_runtime_raw_video_callback, nullptr);
+            if (streamOutput)
+                obs_output_add_packet_callback(streamOutput, pulsar_runtime_packet_callback, nullptr);
+            blog(LOG_INFO, "[pulsar-runtime-telemetry] ProgramView/raw and RTMP packet callbacks installed");
+
+            // A trace campaign may opt into the real ProgramReturn producer;
+            // ordinary headless starts keep this output dormant.  The
+            // DirectShow filter remains an independent consumer and must be
+            // started by the campaign/host, so this only creates the shared
+            // queue at the producer boundary.
+            if (programReturnOutput && g_runtimeTelemetry.environmentTruthy(std::getenv("PULSAR_PROGRAM_RETURN_AUTOSTART"))) {
+                if (!obs_output_start(programReturnOutput))
+                    blog(LOG_WARNING, "[pulsar-runtime-telemetry] ProgramReturn autostart declined: %s",
+                         obs_output_get_last_error(programReturnOutput));
+                else
+                    blog(LOG_INFO, "[pulsar-runtime-telemetry] ProgramReturn producer autostarted");
+            }
+        }
+    }
+
     return true;
 }
 
@@ -2077,6 +2927,16 @@ void PulsarFrontendAPI::teardown()
     // is released. The bridge contains no frontend pointer, so a late proc
     // lookup cannot dereference this object after teardown.
     g_dualLaneControlBridge.deactivate();
+
+    // Stop callbacks before releasing their output/video owners.  The global
+    // telemetry proc remains installed but is disabled, so a late module call
+    // is harmless and does not retain this frontend object.
+    if (g_runtimeTelemetry.enabled()) {
+        obs_remove_raw_video_callback(pulsar_runtime_raw_video_callback, nullptr);
+        if (streamOutput)
+            obs_output_remove_packet_callback(streamOutput, pulsar_runtime_packet_callback, nullptr);
+    }
+    g_runtimeTelemetry.shutdown();
 
     // Drain active outputs gracefully before release. A user who Ctrl+C's
     // mid-recording would otherwise hit obs_output_release on a live
@@ -2898,6 +3758,7 @@ extern "C" void pulsar_frontend_init(void)
     // on plugins that aren't loaded yet, so it lives in setup() called from
     // pulsar_frontend_finished_loading() once obs_post_load_modules has run.
     g_dualLaneControlBridge.install();
+    g_runtimeTelemetry.install();
     auto *api = new PulsarFrontendAPI();
     g_api = api;
     obs_frontend_set_callbacks_internal(api);

@@ -21,8 +21,11 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <util/profiler.hpp>
 #endif
 
+#include <limits>
+
 #include "RequestHandler.h"
 #include "pulsar-dual-lane-control.h"
+#include "pulsar-runtime-telemetry.h"
 
 namespace {
 
@@ -33,6 +36,42 @@ bool IsReadOnlyRequest(const std::string &requestType)
 	// is treated as potentially mutating. This keeps a newly added command from
 	// bypassing the Preview freeze by accident.
 	return requestType.rfind("Get", 0) == 0;
+}
+
+// The public scene/transition request shape remains unchanged.  A latency
+// campaign may add this private, opt-in envelope to the request data so the
+// runtime can carry command/intent identity through the legacy ingress.  It is
+// consumed before the handler invokes obs_frontend_set_current_scene(); an
+// invalid envelope is ignored for telemetry and never changes Cut semantics.
+void BeginRuntimeTakeTelemetry(const Request &request)
+{
+    if (request.RequestType != "SetCurrentProgramScene" && request.RequestType != "TriggerStudioModeTransition")
+        return;
+    if (!request.RequestData.is_object() || !request.RequestData.contains("pulsarTelemetry") ||
+        !request.RequestData["pulsarTelemetry"].is_object())
+        return;
+
+    const json &metadata = request.RequestData["pulsarTelemetry"];
+    const char *requiredStrings[] = {"command_id", "intent_id", "runtime_instance_id", "take_command_id",
+                                     "target_lane_id", "target_scene_id", "payload_sha256"};
+    std::string values[7];
+    for (size_t i = 0; i < 7; ++i) {
+        const auto it = metadata.find(requiredStrings[i]);
+        if (it == metadata.end() || !it->is_string())
+            return;
+        values[i] = it->get<std::string>();
+    }
+
+    const auto freezeIt = metadata.find("freeze_until_monotonic_ns");
+    if (freezeIt == metadata.end() || !freezeIt->is_number_unsigned())
+        return;
+    const uint64_t freeze = freezeIt->get<uint64_t>();
+    if (freeze > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+        return;
+
+    pulsar_runtime_telemetry::begin_take(values[0].c_str(), values[1].c_str(), values[2].c_str(), values[3].c_str(),
+                                         values[4].c_str(), values[5].c_str(), static_cast<int64_t>(freeze),
+                                         values[6].c_str());
 }
 
 } // namespace
@@ -250,7 +289,13 @@ RequestResult RequestHandler::ProcessRequest(const Request &request)
 		return RequestResult::Error(RequestStatus::UnknownRequestType, "Your request type is not valid.");
 	}
 
-	return std::bind(handler, this, std::placeholders::_1)(request);
+    BeginRuntimeTakeTelemetry(request);
+    RequestResult result = std::bind(handler, this, std::placeholders::_1)(request);
+    // queueDualLaneCut consumes a valid envelope synchronously.  Retire any
+    // envelope left by a rejected/non-Take route before another request can
+    // inherit its command/intent identity.
+    pulsar_runtime_telemetry::cancel_take();
+    return result;
 }
 
 std::vector<std::string> RequestHandler::GetRequestList()

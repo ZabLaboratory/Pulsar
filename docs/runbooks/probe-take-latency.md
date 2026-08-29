@@ -122,6 +122,26 @@ The default gate is 100 measured Takes, 100 warm-up Takes, and 10 resource
 samples per resource mode. Use smaller thresholds only in unit tests; fixture
 campaigns are reported as `FIXTURE_ONLY` and can never be a runtime pass.
 
+The runtime resource producer samples OBS's platform process counters and the
+driver's `nvidia-smi` counters. To measure both topologies in one correlated
+trace, run a short reference process first, then append the dual-lane campaign
+with the same runtime ID:
+
+```powershell
+python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc `
+  --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 `
+  --resource-mode reference --resource-only
+python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 `
+  --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 `
+  --trace-append --resource-mode dual_lane
+```
+
+`reference` is an explicit legacy single-canvas run; it does not emit Take
+events. The second invocation appends its real scene-switch events and
+dual-lane observations without adding a second session record. If the platform
+or GPU counters are unavailable, the native producer leaves the resource set
+incomplete and the parser reports `UNPROVEN` rather than filling zeroes.
+
 Exit codes are:
 
 - `0`: all required runtime criteria pass;

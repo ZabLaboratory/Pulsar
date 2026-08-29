@@ -15,6 +15,14 @@ Run the two acceptance campaigns independently against the same build::
 
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder x264 --takes 100
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100
+    python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 \
+        --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001
+    python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc \
+        --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 \
+        --resource-mode reference --resource-only
+    python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 \
+        --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 \
+        --trace-append --resource-mode dual_lane
 
 Exit codes are 0 (pass), 1 (assertion/runtime failure), 2 (usage or missing
 WebSocket dependency), and 3 (typed environment skip, for example no binary
@@ -23,7 +31,13 @@ the raw NV12 time-code probe remains the pixel-level proof for no mixed frame.
 
 The process boundary is deliberate: no libobs/OBS DLL is loaded and no native
 object is accessed from Python.  Only obs-websocket v5 JSON frames and the
-Pulsar child process's structured diagnostics are used.
+Pulsar child process's structured diagnostics are used.  With ``--trace``, the
+same public requests carry an explicit, opt-in transaction envelope; the
+runtime writes session/events/raw/RTMP records and starts the ProgramReturn
+producer for an independent DirectShow consumer.  ``--resource-mode`` enables
+the native OBS/platform resource sampler; use ``--resource-only`` for the
+single-canvas reference phase and ``--trace-append --resource-mode dual_lane``
+for the correlated dual-lane phase.
 """
 
 from __future__ import annotations
@@ -135,10 +149,29 @@ def compute_auth(password: str, salt: str, challenge: str) -> str:
 class PulsarProcess:
     """Spawn Pulsar and retain structured stdout for identity assertions."""
 
-    def __init__(self, exe: pathlib.Path, encoder: str, record_dir: pathlib.Path) -> None:
+    def __init__(
+        self,
+        exe: pathlib.Path,
+        encoder: str,
+        record_dir: pathlib.Path,
+        trace_path: pathlib.Path | None = None,
+        runtime_id: str | None = None,
+        resource_mode: str | None = None,
+        trace_append: bool = False,
+        resource_interval_ms: int = 500,
+        capture_window: str | None = None,
+        cef_workload: bool = False,
+    ) -> None:
         self.exe = exe
         self.encoder = encoder
         self.record_dir = record_dir
+        self.trace_path = trace_path
+        self.runtime_id = runtime_id or f"runtime-{secrets.token_hex(8)}"
+        self.resource_mode = resource_mode
+        self.trace_append = trace_append
+        self.resource_interval_ms = resource_interval_ms
+        self.capture_window = capture_window
+        self.cef_workload = cef_workload
         self.port = choose_port()
         self.password = secrets.token_urlsafe(24)
         self.proc: subprocess.Popen[str] | None = None
@@ -152,11 +185,41 @@ class PulsarProcess:
         env["PULSAR_PASSWORD"] = self.password
         env["PULSAR_RECORD_DIR"] = str(self.record_dir)
         env["PULSAR_VIDEO_ENCODER"] = self.encoder
+        if self.trace_path is not None:
+            env["PULSAR_TRACE_PATH"] = str(self.trace_path)
+            env["PULSAR_RUNTIME_INSTANCE_ID"] = self.runtime_id
+            env["PULSAR_TRACE_SESSION_ID"] = f"{self.runtime_id}-{self.encoder}"
+            env["PULSAR_TRACE_WARMUP_TAKES"] = str(100)
+            env["PULSAR_TRACE_COMMAND"] = "scripts/probe-dual-lane.py --trace"
+            if self.resource_mode is not None:
+                env["PULSAR_TRACE_RESOURCE_MODE"] = self.resource_mode
+            else:
+                env.pop("PULSAR_TRACE_RESOURCE_MODE", None)
+            env["PULSAR_TRACE_RESOURCE_INTERVAL_MS"] = str(self.resource_interval_ms)
+            if self.trace_append:
+                env["PULSAR_TRACE_APPEND"] = "1"
+            else:
+                env.pop("PULSAR_TRACE_APPEND", None)
+            if self.resource_mode == "dual_lane":
+                env["PULSAR_PROGRAM_RETURN_AUTOSTART"] = "1"
+            else:
+                env.pop("PULSAR_PROGRAM_RETURN_AUTOSTART", None)
+            if self.resource_mode == "reference":
+                env["PULSAR_DISABLE_DUAL_LANE"] = "1"
+            else:
+                env.pop("PULSAR_DISABLE_DUAL_LANE", None)
         if self.encoder == "nvenc":
             # p1 is accepted by the current NVENC family and makes an
             # accidental x264 fallback visible in the boot log check below.
             env["PULSAR_VIDEO_PRESET"] = "p1"
-        env.pop("PULSAR_CAPTURE_WINDOW", None)
+        if self.capture_window:
+            env["PULSAR_CAPTURE_WINDOW"] = self.capture_window
+        else:
+            env.pop("PULSAR_CAPTURE_WINDOW", None)
+        if self.cef_workload:
+            env["PULSAR_WORKLOAD_CEF"] = "1"
+        else:
+            env.pop("PULSAR_WORKLOAD_CEF", None)
         env.pop("PULSAR_MIC_DEVICE_ID", None)
 
         creationflags = 0x08000000 if os.name == "nt" else 0
@@ -596,6 +659,97 @@ async def create_scene(inbox: Inbox, ws: Any, scene: str, input_name: str, color
     await create_input(inbox, ws, scene, input_name, color)
 
 
+def take_telemetry_data(process: PulsarProcess, number: int, target_scene: str) -> dict[str, Any]:
+    """Build the opt-in #246 envelope carried through the legacy Take route."""
+
+    command_id = f"take-{number:03d}"
+    intent_id = f"intent-{number:03d}"
+    target_lane = "B" if number % 2 else "A"
+    # Python's monotonic_ns on Windows is backed by QueryPerformanceCounter,
+    # the same clock domain used by libobs os_gettime_ns and the DirectShow
+    # filter.  Keep the deadline comfortably beyond the request/graphics hop.
+    freeze_until = time.monotonic_ns() + 2_000_000_000
+    command = {
+        "requestType": "TriggerStudioModeTransition",
+        "requestData": {"sceneName": target_scene},
+        "command_id": command_id,
+        "intent_id": intent_id,
+        "runtime_instance_id": process.runtime_id,
+        "take_command_id": command_id,
+        "target_lane_id": target_lane,
+        "target_scene_id": target_scene,
+        "freeze_until_monotonic_ns": freeze_until,
+    }
+    digest = hashlib.sha256(
+        json.dumps(command, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "pulsarTelemetry": {
+            "command_id": command_id,
+            "intent_id": intent_id,
+            "runtime_instance_id": process.runtime_id,
+            "take_command_id": command_id,
+            "target_lane_id": target_lane,
+            "target_scene_id": target_scene,
+            "freeze_until_monotonic_ns": freeze_until,
+            "payload_sha256": digest,
+        }
+    }
+
+
+async def collect_resource_samples(
+    process: PulsarProcess, mode: str, minimum_samples: int, timeout: float
+) -> int:
+    """Keep a traced runtime alive until its native resource sampler has emitted samples.
+
+    The resource records are produced by the runtime's OBS/platform counters and
+    nvidia-smi adapter, not reconstructed from Python timing.  This helper only
+    performs the lifecycle/availability check and never writes evidence itself.
+    """
+
+    ready_match = process.wait_for(READY_RE, timeout=60)
+    ws_url = ready_match.group(1)
+    if ready_match.group(2) != process.password:
+        raise ProbeFailure("PULSAR_READY password did not match the generated probe secret")
+
+    async with websockets.connect(
+        ws_url, subprotocols=["obswebsocket.json"], open_timeout=15
+    ) as ws:
+        await identify(ws, process.password)
+        deadline = time.monotonic() + timeout
+        while True:
+            if process.trace_path is None:
+                raise ProbeFailure("resource sampling requires --trace")
+            count = 0
+            try:
+                with process.trace_path.open("r", encoding="utf-8") as handle:
+                    for line in handle:
+                        try:
+                            record = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if (
+                            record.get("record_type") == "resource_sample"
+                            and record.get("sample_mode") == mode
+                            and record.get("runtime_instance_id") == process.runtime_id
+                        ):
+                            count += 1
+            except FileNotFoundError:
+                count = 0
+            if count >= minimum_samples:
+                return count
+            if time.monotonic() >= deadline:
+                if process.proc is not None and process.proc.poll() is None:
+                    raise ProbeSkip(
+                        "native resource sampler produced no complete samples; "
+                        "verify nvidia-smi and platform counters on this host"
+                    )
+                raise ProbeFailure(
+                    f"runtime exited before collecting {minimum_samples} {mode} resource samples"
+                )
+            await asyncio.sleep(0.25)
+
+
 async def assert_distinct_selected_scenes(
     inbox: Inbox,
     ws: Any,
@@ -743,7 +897,10 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
                     ws,
                     "take-1-freeze-batch",
                     [
-                        {"requestType": "TriggerStudioModeTransition"},
+                        {
+                            "requestType": "TriggerStudioModeTransition",
+                            "requestData": take_telemetry_data(process, number, target),
+                        },
                         {
                             "requestType": "CreateInput",
                             "requestData": {
@@ -773,6 +930,7 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
                     ws,
                     "TriggerStudioModeTransition",
                     f"take-{number}",
+                    take_telemetry_data(process, number, target),
                 )
                 assert_success(response, f"TriggerStudioModeTransition({number})")
             commit = parse_commit(process.wait_for_commit(number, timeout=15))
@@ -894,9 +1052,63 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--exe", type=pathlib.Path, default=DEFAULT_EXE)
     parser.add_argument("--encoder", choices=("x264", "nvenc"), required=True)
     parser.add_argument("--takes", type=int, default=100)
+    parser.add_argument(
+        "--trace",
+        type=pathlib.Path,
+        help="opt-in #246 JSONL trace path; enables runtime event/raw/RTMP producer hooks",
+    )
+    parser.add_argument("--runtime-id", help="runtime_instance_id for --trace (default: generated)")
+    parser.add_argument(
+        "--resource-mode",
+        choices=("reference", "dual_lane"),
+        help="enable native resource samples in this mode; reference is a single-canvas run",
+    )
+    parser.add_argument(
+        "--resource-only",
+        action="store_true",
+        help="collect native resource samples without driving scene-switch Takes",
+    )
+    parser.add_argument(
+        "--resource-samples",
+        type=int,
+        default=10,
+        help="minimum native resource samples for --resource-only (default: 10)",
+    )
+    parser.add_argument(
+        "--resource-interval-ms",
+        type=int,
+        default=500,
+        help="native resource sample interval, 100..10000 ms (default: 500)",
+    )
+    parser.add_argument(
+        "--trace-append",
+        action="store_true",
+        help="append to an existing runtime trace (used for reference+dual_lane campaigns)",
+    )
+    parser.add_argument(
+        "--capture-window",
+        help="WGC window descriptor to pass through for an instrumented workload",
+    )
+    parser.add_argument(
+        "--cef-workload",
+        action="store_true",
+        help="declare the configured CEF workload in the runtime session metadata",
+    )
     args = parser.parse_args(argv)
     if args.takes < 1:
         parser.error("--takes must be >= 1")
+    if args.runtime_id and args.trace is None:
+        parser.error("--runtime-id requires --trace")
+    if args.resource_mode and args.trace is None:
+        parser.error("--resource-mode requires --trace")
+    if args.resource_only and not args.resource_mode:
+        parser.error("--resource-only requires --resource-mode")
+    if args.trace_append and args.trace is None:
+        parser.error("--trace-append requires --trace")
+    if args.resource_samples < 1:
+        parser.error("--resource-samples must be >= 1")
+    if not 100 <= args.resource_interval_ms <= 10000:
+        parser.error("--resource-interval-ms must be between 100 and 10000")
     return args
 
 
@@ -906,10 +1118,39 @@ def run(args: argparse.Namespace) -> int:
         return EXIT_SKIP
 
     with tempfile.TemporaryDirectory(prefix="pulsar-dual-lane-") as record_dir_text:
-        process = PulsarProcess(args.exe.resolve(), args.encoder, pathlib.Path(record_dir_text))
+        trace_path = args.trace.resolve() if args.trace is not None else None
+        if trace_path is not None:
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+        process = PulsarProcess(
+            args.exe.resolve(),
+            args.encoder,
+            pathlib.Path(record_dir_text),
+            trace_path,
+            args.runtime_id,
+            args.resource_mode,
+            args.trace_append,
+            args.resource_interval_ms,
+            args.capture_window,
+            args.cef_workload,
+        )
         try:
             process.spawn()
-            print(f"dual-lane probe: encoder={args.encoder} takes={args.takes} exe={args.exe}")
+            print(
+                f"dual-lane probe: encoder={args.encoder} takes={args.takes} exe={args.exe}"
+                + (f" trace={trace_path}" if trace_path is not None else "")
+                + (f" resource_mode={args.resource_mode}" if args.resource_mode else "")
+            )
+            if args.resource_only:
+                count = asyncio.run(
+                    collect_resource_samples(
+                        process,
+                        args.resource_mode,
+                        args.resource_samples,
+                        timeout=max(30.0, args.resource_samples * args.resource_interval_ms / 1000.0 + 15.0),
+                    )
+                )
+                print(f"PASS: collected {count} native {args.resource_mode} resource samples")
+                return 0
             commits = asyncio.run(drive(process, args.takes))
             print(
                 f"PASS: {len(commits)} Takes; LaneA/LaneB, main ProgramView/PreviewView and "
