@@ -1,0 +1,22 @@
+{
+  "issue": 247,
+  "validated_candidate": "248a2a20c1ccadc0bbff78925b3e7b938cd9e22e",
+  "merged_main": "9b809d15eba5c7953a00b0c79aaab3c6ab0dc363",
+  "artifact": {
+    "run_id": "33274722347",
+    "build_job_id": "99159379156",
+    "artifact_id": "9721252624",
+    "name": "pulsar-rundir",
+    "sha256": "1104db1c58948a2b98546b134b163ac52f6eb507e1156dbea79025f50ec1f7a5",
+    "exe_sha256": "B410F7F2FBE1E9CC0D4E44C86B67D94A78FD3B2D9D9AD923F2C870148777206A"
+  },
+  "campaign": {
+    "cycles": 100,
+    "vendor_attempts": 1700,
+    "last_frame_id": 907,
+    "last_pts_ns": 1353052967672996,
+    "cache_capacity": 4096,
+    "trace_sha256": "50950226AB39D3A80DF559D409BF8F1632F0D84FB9885E7F980D3B83C7677B47"
+  },
+  "not_measured": ["directshow", "rtmp", "decoded", "antenna"]
+}
