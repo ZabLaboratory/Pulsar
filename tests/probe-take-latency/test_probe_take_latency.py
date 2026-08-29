@@ -286,6 +286,54 @@ def test_frame_regression_and_commit_after_deadline_fail_closed():
         probe.analyze_trace(probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
 
 
+def test_post_swap_regression_records_exact_commit_but_fault_rejects_campaign():
+    records = _take_records(2)
+    commits = [
+        item["event"]
+        for item in records
+        if item.get("record_type") == "event" and item["event"]["event_type"] == "TakeCommitted"
+    ]
+    prior = commits[0]
+    regressed = commits[1]
+    candidate_frame = prior["frame_id"] - 1
+    candidate_pts = prior["pts_ns"] - 1
+    regressed["frame_id"] = candidate_frame
+    regressed["pts_ns"] = candidate_pts
+
+    # The v1 event schema validates shape and correlation, not the cross-event
+    # monotonic invariant.  Preserve the exact values so the analyzer is the
+    # component that rejects the inter-commit regression.
+    parsed = probe.parse_records(records)
+    parsed_regressed = next(
+        event for event in parsed.events if event["event_type"] == "TakeCommitted" and event["take_command_id"] == "take-002"
+    )
+    assert parsed_regressed["frame_id"] == candidate_frame
+    assert parsed_regressed["pts_ns"] == candidate_pts
+    assert not any(event["event_type"] == "TakeAborted" for event in parsed.events)
+    with pytest.raises(probe.EvidenceError, match="FRAME_ORDER_INVALID"):
+        probe.analyze_trace(parsed, minimum_takes=2, minimum_warmup=0, minimum_resource_samples=2)
+
+    fault = {
+        "record_type": "integrity_fault",
+        "fault_type": "frame_or_pts_regression",
+        "runtime_instance_id": RUNTIME,
+        "command_id": regressed["command_id"],
+        "intent_id": regressed["intent_id"],
+        "take_command_id": regressed["take_command_id"],
+        "observed_frame_id": candidate_frame,
+        "observed_pts_ns": candidate_pts,
+        "last_committed_frame_id": prior["frame_id"],
+        "last_committed_pts_ns": prior["pts_ns"],
+        "physical_swap_committed": True,
+        "fail_stop": True,
+    }
+    records_with_fault = deepcopy(records)
+    records_with_fault.append(fault)
+    assert sum(record.get("record_type") == "integrity_fault" for record in records_with_fault) == 1
+    with pytest.raises(probe.EvidenceError, match="INTEGRITY_FAULT"):
+        probe.parse_records(records_with_fault)
+
+
 def test_resource_comparison_reports_over_reference_without_relabeling_it_as_capacity():
     records = _take_records(3)
     for record in records:

@@ -100,6 +100,18 @@ without pretending that a commit occurred. Accepted and committed events are
 placed in a FIFO writer queue; disk I/O runs on its worker and cannot inflate
 the acceptance-to-frame latency.
 
+If the frame-boundary callback observes a frame ID or PTS below the last
+telemetry commit, the physical swap has already happened: the callback runs
+after `obs_view_queue_atomic_swap`. The producer therefore reconciles its
+state to the actual post-swap role map and emits a `TakeCommitted` carrying the
+exact observed frame/PTS and incremented revisions; it never fabricates a
+monotone boundary and never emits `TakeAborted` or claims a physical rollback.
+It then emits one out-of-contract `integrity_fault` process record with the
+candidate and prior frame/PTS and latches a fail-stop. The parser rejects any
+trace containing that record, and subsequent Takes are rejected until restart
+or explicit reconciliation. Duplicate callbacks for the accepted Take are
+ignored; the physical role map remains the one reported by the callback.
+
 The pre-network encoded callback uses the same correlation fields, with
 `boundary=encoded_first_packet`, `surface=EncoderOutput`,
 `consumer=encoder_callback`, and `packet_index=0`. It still carries the frame

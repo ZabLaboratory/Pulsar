@@ -499,6 +499,16 @@ def parse_records(records: Iterable[Mapping[str, Any]], *, source: str = "<memor
             if session is None:
                 raise EvidenceError("SCHEMA_INVALID", "resource sample appeared before session", line=line_number)
             resources.append(_validate_resource(raw, session, line=line_number))
+        elif record_type == "integrity_fault":
+            # This record is deliberately outside the scene-switch and
+            # take-latency schemas.  It is a process-integrity stop signal,
+            # never admissible evidence; fail closed before any report can
+            # classify the preceding exact TakeCommitted as a pass.
+            raise EvidenceError(
+                "INTEGRITY_FAULT",
+                "runtime emitted an out-of-contract integrity fault; campaign evidence is rejected",
+                line=line_number,
+            )
         else:
             raise EvidenceError("SCHEMA_INVALID", f"unsupported record_type {record_type!r}", line=line_number)
     if session is None:

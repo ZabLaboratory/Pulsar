@@ -132,6 +132,24 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert queue.index("obs_view_queue_atomic_swap") < queue.index("g_runtimeTelemetry.markAccepted")
     assert 'g_runtimeTelemetry.rejectReserved("atomic_swap_rejected")' in queue
     assert "reservationStillOwned" in queue
+    assert "g_runtimeTelemetry.integrityFaulted()" in queue
+    assert queue.index("g_runtimeTelemetry.integrityFaulted()") < queue.index("g_runtimeTelemetry.reserve")
+
+    commit_start = frontend.index("void commit(")
+    commit = frontend[commit_start : frontend.index("void rawFrame", commit_start)]
+    assert "frameId < committed_.frameId || ptsNs < committed_.ptsNs" in commit
+    assert "context.onAirLane = onAirLane" in commit
+    assert "context.previewLane = previewLane" in commit
+    assert "committed_ = context" in commit
+    assert "accepted_.valid = false" in commit
+    assert "degraded_ = true" in commit
+    assert "integrity_fault" in commit
+    assert '"physical_swap_committed\\":true' in commit
+    assert 'commonEventFields("TakeCommitted"' in commit
+    assert 'commonEventFields("TakeAborted"' not in commit
+    assert '"reason\\":\"frame_or_pts_regression\"' not in commit
+    assert commit.count('commonEventFields("TakeCommitted"') == 1
+    assert commit.count("writeLine(fault.str())") == 1
 
     assert "BeginRuntimeTakeTelemetry" in websocket
     assert "pulsar_runtime_telemetry::begin_take" in websocket

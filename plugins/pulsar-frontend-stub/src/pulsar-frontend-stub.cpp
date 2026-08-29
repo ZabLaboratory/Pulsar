@@ -264,6 +264,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             enabled_ = false;
+            degraded_ = false;
             pending_ = {};
             reserved_ = {};
             accepted_ = {};
@@ -393,6 +394,7 @@ public:
         stopTraceWriter();
         std::lock_guard<std::mutex> lock(stateMutex_);
         enabled_ = false;
+        degraded_ = false;
         pending_ = {};
         reserved_ = {};
         accepted_ = {};
@@ -405,6 +407,16 @@ public:
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         return enabled_;
+    }
+
+    // A post-swap telemetry integrity fault is fail-stop: the physical role
+    // map is already changed, so accepting another Take would make the trace
+    // and the live route diverge further.  The caller uses this read-only
+    // guard while holding dualLaneMutex before it queues any new swap.
+    bool integrityFaulted()
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        return degraded_;
     }
 
     bool environmentTruthy(const char *value) const { return truthy(value); }
@@ -484,6 +496,8 @@ public:
             std::lock_guard<std::mutex> lock(stateMutex_);
             if (!enabled_) {
                 rejectReason = "producer_disabled";
+            } else if (degraded_) {
+                rejectReason = "telemetry_degraded";
             } else if (!pending_.valid) {
                 rejectReason = "no_pending_ingress";
             } else if (reserved_.valid || accepted_.valid) {
@@ -589,32 +603,76 @@ public:
         uint64_t previousProgram = 0;
         uint64_t previousPreview = 0;
         uint64_t previousRoleMap = 0;
+        uint64_t previousCommittedFrame = 0;
+        uint64_t previousCommittedPts = 0;
+        int previousOnAirLane = 0;
+        int previousPreviewLane = 1;
+        bool frameOrPtsRegression = false;
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
-            if (!enabled_ || !accepted_.valid)
+            if (!enabled_ || !accepted_.valid) {
+                // The accepted context is terminal after either a successful
+                // Commit or a post-swap integrity fault.  A duplicate
+                // frame-boundary callback therefore has a defined no-op
+                // outcome and cannot emit a second terminal event.
+                blog(LOG_DEBUG,
+                     "[pulsar-runtime-telemetry] commit ignored: no accepted telemetry take");
                 return;
-            if (frameId < accepted_.frameId || ptsNs < accepted_.ptsNs)
-                return;
-
+            }
             previousProgram = accepted_.programRevision;
             previousPreview = accepted_.previewRevision;
             previousRoleMap = accepted_.roleMapRevision;
-            ++programRevision_;
-            ++roleMapRevision_;
-            context = accepted_;
-            context.frameId = frameId;
-            context.ptsNs = ptsNs;
-            context.onAirLane = onAirLane;
-            context.previewLane = previewLane;
-            context.programRevision = programRevision_;
-            context.previewRevision = previewRevision_;
-            context.roleMapRevision = roleMapRevision_;
-            committed_ = context;
-            committed_.valid = true;
-            accepted_.valid = false;
-            pending_.valid = false;
-            lastRawTake_.clear();
-            lastPacketTake_.clear();
+            previousOnAirLane = accepted_.onAirLane;
+            previousPreviewLane = accepted_.previewLane;
+            if (committed_.valid &&
+                (frameId < committed_.frameId || ptsNs < committed_.ptsNs)) {
+                // Compare against the last committed physical frame, not the
+                // zero-initialised fields of a newly accepted context.  Clear
+                // the accepted context while holding stateMutex_ so a racing
+                // duplicate callback cannot create another terminal event.
+                context = accepted_;
+                context.frameId = frameId;
+                context.ptsNs = ptsNs;
+                previousCommittedFrame = committed_.frameId;
+                previousCommittedPts = committed_.ptsNs;
+                // The callback is invoked after obs_view_queue_atomic_swap has
+                // applied the physical role change.  Reconcile telemetry to
+                // that actual post-swap map and latch fail-stop.  The exact
+                // regressed values are retained in TakeCommitted so the
+                // evidence cannot imply a fabricated monotone boundary.
+                ++programRevision_;
+                ++roleMapRevision_;
+                context.programRevision = programRevision_;
+                context.previewRevision = previewRevision_;
+                context.roleMapRevision = roleMapRevision_;
+                context.onAirLane = onAirLane;
+                context.previewLane = previewLane;
+                committed_ = context;
+                committed_.valid = true;
+                accepted_.valid = false;
+                pending_.valid = false;
+                lastRawTake_.clear();
+                lastPacketTake_.clear();
+                degraded_ = true;
+                frameOrPtsRegression = true;
+            } else {
+                ++programRevision_;
+                ++roleMapRevision_;
+                context = accepted_;
+                context.frameId = frameId;
+                context.ptsNs = ptsNs;
+                context.onAirLane = onAirLane;
+                context.previewLane = previewLane;
+                context.programRevision = programRevision_;
+                context.previewRevision = previewRevision_;
+                context.roleMapRevision = roleMapRevision_;
+                committed_ = context;
+                committed_.valid = true;
+                accepted_.valid = false;
+                pending_.valid = false;
+                lastRawTake_.clear();
+                lastPacketTake_.clear();
+            }
         }
 
         const uint64_t seq = nextServerSeq();
@@ -622,7 +680,7 @@ public:
                                                     context.roleMapRevision);
         const std::string previousRevisions = revisionJson(previousProgram, previousPreview, previousRoleMap);
         const std::string roleMap = roleMapJson(context.onAirLane, context.previewLane);
-        const std::string previousRoleMapJson = roleMapJson(context.previewLane, context.onAirLane);
+        const std::string previousRoleMapJson = roleMapJson(previousOnAirLane, previousPreviewLane);
         std::ostringstream event;
         event << "{\"record_type\":\"event\",\"event\":{";
         event << commonEventFields("TakeCommitted", context, seq, "ready", nowNs(), revisions, roleMap,
@@ -630,12 +688,46 @@ public:
         event << ",\"take_command_id\":\"" << escape(context.takeCommandId)
               << "\",\"target_lane_id\":\"" << escape(context.targetLaneId)
               << "\",\"target_scene_id\":\"" << escape(context.targetSceneId)
-              << "\",\"source_lane_id\":\"" << laneId(onAirLane)
+              << "\",\"source_lane_id\":\"" << laneId(context.onAirLane)
               << "\",\"frame_id\":" << frameId << ",\"pts_ns\":" << ptsNs
-              << ",\"program_lane_id\":\"" << laneId(onAirLane)
-              << "\",\"preview_lane_id\":\"" << laneId(previewLane);
+              << ",\"program_lane_id\":\"" << laneId(context.onAirLane)
+              << "\",\"preview_lane_id\":\"" << laneId(context.previewLane);
         event << "}}";
         writeLine(event.str());
+
+        if (frameOrPtsRegression) {
+            // This is intentionally not a scene-switch v1 event.  The role
+            // swap already happened, so a TakeAborted event would falsely
+            // describe the physical route.  The parser rejects this record
+            // type and therefore cannot accept the campaign as valid.
+            std::ostringstream fault;
+            fault << "{\"record_type\":\"integrity_fault\","
+                  << "\"fault_type\":\"frame_or_pts_regression\","
+                  << "\"runtime_instance_id\":\"" << escape(context.runtimeInstanceId)
+                  << "\",\"command_id\":\"" << escape(context.commandId)
+                  << "\",\"intent_id\":\"" << escape(context.intentId)
+                  << "\",\"take_command_id\":\"" << escape(context.takeCommandId)
+                  << "\",\"observed_frame_id\":" << frameId
+                  << ",\"observed_pts_ns\":" << ptsNs
+                  << ",\"last_committed_frame_id\":" << previousCommittedFrame
+                  << ",\"last_committed_pts_ns\":" << previousCommittedPts
+                  << ",\"physical_swap_committed\":true"
+                  << ",\"fail_stop\":true"
+                  << ",\"observed_at_monotonic_ns\":" << nowNs()
+                  << ",\"revisions\":" << revisions
+                  << ",\"role_map\":" << roleMap
+                  << ",\"message\":\"telemetry frame/PTS regressed after physical swap;"
+                  << " exact values reconciled and future Takes fail-stopped\"}";
+            writeLine(fault.str());
+            blog(LOG_ERROR,
+                 "[pulsar-runtime-telemetry] integrity fault: frame/PTS regression after physical swap; "
+                 "take_command_id=%s candidate_frame=%llu candidate_pts=%llu "
+                 "last_committed_frame=%llu last_committed_pts=%llu; no rollback; fail-stop enabled",
+                 context.takeCommandId.c_str(), static_cast<unsigned long long>(frameId),
+                 static_cast<unsigned long long>(ptsNs),
+                 static_cast<unsigned long long>(previousCommittedFrame),
+                 static_cast<unsigned long long>(previousCommittedPts));
+        }
     }
 
     void rawFrame(struct video_data *frame)
@@ -1251,6 +1343,7 @@ private:
     std::mutex stateMutex_;
     std::mutex fileMutex_;
     bool enabled_ = false;
+    bool degraded_ = false;
     std::string tracePath_;
     std::string runtimeInstanceId_;
     std::string sessionId_;
@@ -2570,6 +2663,12 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
             blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: scene is not the frozen Preview selection");
             return false;
         }
+        if (g_runtimeTelemetry.integrityFaulted()) {
+            g_runtimeTelemetry.cancelPending();
+            blog(LOG_ERROR,
+                 "[pulsar-dual-lane] Take rejected: runtime telemetry integrity fail-stop is degraded");
+            return false;
+        }
 
         // Reserve the role pair under the lane mutex, but do not perform any
         // trace-file I/O while it is held.  The reservation blocks public
@@ -3641,6 +3740,11 @@ void PulsarFrontendAPI::obs_frontend_set_current_scene(obs_source_t *scene)
         std::lock_guard<std::mutex> lk(dualLaneMutex);
         if (dualLaneReady && dualLaneCutPending.load()) {
             blog(LOG_WARNING, "[pulsar-dual-lane] Program mutation rejected while Take is pending");
+            return;
+        }
+        if (dualLaneReady && g_runtimeTelemetry.integrityFaulted()) {
+            blog(LOG_ERROR,
+                 "[pulsar-dual-lane] scene switch rejected: runtime telemetry integrity fail-stop is degraded");
             return;
         }
         if (dualLaneReady && programSelection == scene)
