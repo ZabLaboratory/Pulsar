@@ -41,9 +41,9 @@ def test_canonical_runtime_producer_patch_is_present_and_scoped() -> None:
     assert text.startswith("From ")
     assert "Subject: [PATCH] feat(telemetry): emit correlated runtime trace boundaries" in text
     assert "5 files changed" in text
-    assert "Agent-Role: Conduit" in text
-    assert "Agent-Thread: 01a04c0d-9c4e-7432-b187-42ef69146677" in text
-    assert "Work-Unit: ZabLaboratory/Pulsar#246" in text
+    assert "Agent-Role: Eleven" in text
+    assert "Agent-Thread: /root" in text
+    assert "Work-Unit: ZabLaboratory/Pulsar#246-eleven-security-bounds-20260829" in text
     assert "Issue: 246" in text
 
     paths = set(re.findall(r"^diff --git a/([^ ]+) b/[^\n]+$", text, flags=re.MULTILINE))
@@ -178,6 +178,129 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "copy_telemetry_counter" in patch
     assert "INT64_MAX" in patch
     assert "queue_rejected" in frontend
+
+
+def _bounded_identifier_model(value: bytes, capacity: int = 129) -> tuple[str, str] | None:
+    """Model the DirectShow boundary contract for adversarial metadata bytes."""
+
+    terminator = value.find(b"\0", 0, capacity)
+    if terminator < 0:
+        return None
+
+    raw = value[:terminator]
+    escaped: list[str] = []
+    for byte in raw:
+        escaped.append(
+            {
+                0x08: r"\b",
+                0x0C: r"\f",
+                0x0A: r"\n",
+                0x0D: r"\r",
+                0x09: r"\t",
+                0x5C: r"\\",
+                0x22: r'\"',
+            }.get(byte, chr(byte))
+        )
+        if byte < 0x20 and byte not in {0x08, 0x09, 0x0A, 0x0C, 0x0D}:
+            return None
+    return raw.decode("latin-1"), "".join(escaped)
+
+
+def _layout_model(
+    available: int,
+    offsets: tuple[int, int, int],
+    frame_header_size: int,
+    frame_size: int,
+    header_size: int = 80,
+) -> bool:
+    if available < header_size or frame_header_size < 0 or frame_size < 0:
+        return False
+    previous = 0
+    for index, offset in enumerate(offsets):
+        if offset < header_size or offset % 32 or (index and offset <= previous):
+            return False
+        end = offset + frame_header_size + frame_size
+        if end > available:
+            return False
+        previous = offset
+    return True
+
+
+def test_directshow_metadata_boundary_is_bounded_and_json_safe() -> None:
+    patch = PATCH.read_text(encoding="utf-8")
+
+    # These source-level guards bind the behavioral model below to the actual
+    # four fixed-size fields and reject the former unbounded C-string helper.
+    assert "static bool trace_prepare_identifier(const char *value, size_t capacity" in patch
+    assert r"std::memchr(value, '\0', capacity)" in patch
+    assert "trace_escape(" not in patch
+    for field in ("runtime_instance_id", "command_id", "intent_id", "take_command_id"):
+        assert f"metadata.{field}, sizeof(metadata.{field})" in patch
+    assert "case '\\b': escaped += \"\\\\b\";" in patch
+    assert "case '\\f': escaped += \"\\\\f\";" in patch
+    assert "if (ch < 0x20)" in patch
+    assert "return false;" in patch[patch.index("trace_prepare_identifier"):patch.index("append_trace_line")]
+    assert "append_trace_line(observation.str(), runtime_id)" in patch
+    assert "last_trace_take == take_command_id" in patch
+
+    fields = ("runtime_instance_id", "command_id", "intent_id", "take_command_id")
+    for field in fields:
+        assert _bounded_identifier_model(b"A" * 129) is None, field
+        assert _bounded_identifier_model(b"A" * 128 + b"\0") == ("A" * 128, "A" * 128)
+
+    controls = b"\b\f\n\r\t\\\"ok\0"
+    modeled = _bounded_identifier_model(controls)
+    assert modeled is not None
+    raw, escaped = modeled
+    assert escaped == r"\b\f\n\r\t\\\"ok"
+    parsed = json.loads('{"identifier":"' + escaped + '"}')
+    assert parsed["identifier"] == raw
+    assert _bounded_identifier_model(b"bad\x01\0") is None
+
+
+def test_shared_queue_metadata_layout_rejects_incoherent_mappings_without_legacy_drift() -> None:
+    patch = PATCH.read_text(encoding="utf-8")
+
+    assert "#define VIDEO_QUEUE_METADATA_VERSION 1U" in patch
+    assert "uint32_t frame_metadata_version;" in patch
+    assert "uint32_t reserved[6];" in patch
+    assert "static bool queue_mapping_size" in patch
+    assert "VirtualQuery" in patch
+    assert "static bool queue_metadata_layout" in patch
+    assert "Never reinterpret a partially populated/unknown extension as legacy." in patch
+    assert "static bool queue_layout_valid" in patch
+    assert "vq->mapping_size = mapping_size" in patch
+    assert "header.frame_metadata_version = metadata_enabled ? VIDEO_QUEUE_METADATA_VERSION : 0;" in patch
+    assert "#define LEGACY_FRAME_HEADER_SIZE 32U" in patch
+    assert (
+        "const uint32_t frame_header_size = metadata_enabled ? FRAME_HEADER_SIZE : LEGACY_FRAME_HEADER_SIZE;"
+        in patch
+    )
+    assert "vq->frame[i] = ((uint8_t *)vq->header) + off + vq->frame_header_size;" in patch
+    assert "!queue_mapping_size(vq.header, &vq.mapping_size)" in patch
+    assert "UnmapViewOfFile(vq.header);" in patch
+
+    # Exercise the arithmetic used to decide whether every slot is contained
+    # in the mapped view; malformed metadata must not be reinterpreted.
+    valid_offsets = (96, 736, 1376)
+    assert _layout_model(2048, valid_offsets, 576, 32)
+    assert not _layout_model(1983, valid_offsets, 576, 32)
+    assert not _layout_model(2048, (96, 96, 1376), 576, 32)
+    assert not _layout_model(2048, (96, 736, 1375), 576, 32)
+    assert not _layout_model(2048, valid_offsets, 576, 700)
+
+    def metadata_mode(header_size: int, version: int) -> tuple[int, bool] | None:
+        if header_size == 0 and version == 0:
+            return 32, False
+        if header_size == 576 and version == 1:
+            return 576, True
+        return None
+
+    assert metadata_mode(0, 0) == (32, False)
+    assert metadata_mode(576, 1) == (576, True)
+    assert metadata_mode(576, 0) is None
+    assert metadata_mode(0, 1) is None
+    assert metadata_mode(32, 1) is None
 
 
 def test_take_committed_runtime_json_closes_preview_lane_quote() -> None:

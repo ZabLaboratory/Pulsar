@@ -1,26 +1,32 @@
-From fedd758838cb1036adb2d7805bbf67592e7442f2 Mon Sep 17 00:00:00 2001
-From: ClodoCapeo <159788250+ClodoCapeo@users.noreply.github.com>
-Date: Sat, 29 Aug 2026 09:14:20 +0200
+From c0b08f1d4a645ca59d210b6d46a185d87dea18ba Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Sat, 29 Aug 2026 17:05:25 +0200
 Subject: [PATCH] feat(telemetry): emit correlated runtime trace boundaries
 
-Persist the runtime producer changes in the shared queue implementation consumed by the modern CMake target. Keep the legacy queue layout for unextended callers while carrying correlation metadata through ProgramReturn and PreviewReturn, and record the actual raw, DirectShow, and encoded-output boundaries. Reject invalid signed telemetry counters before they can wrap into unsigned metadata.
+Persist the runtime producer on the modern shared queue while rejecting malformed DirectShow metadata before any unbounded read or trace serialization. Preserve the legacy queue layout and fail closed on unknown metadata versions or incoherent mappings.
 
-Agent-Role: Conduit
-Agent-Thread: 01a04c0d-9c4e-7432-b187-42ef69146677
-Work-Unit: ZabLaboratory/Pulsar#246
+Agent-Role: Eleven
+
+Agent-Thread: /root
+
+Work-Unit: ZabLaboratory/Pulsar#246-eleven-security-bounds-20260829
+
 Issue: 246
+
 ADR-Revision: draft-r2-dual-lane-20260828
-Evidence: runtime-telemetry-producer-static-checks; modern-shared-queue-build-fix; signed-counter-fail-closed
+
+Evidence: csf_8f564977366045d762be66e4; bounded-directshow-identifiers; mapping-layout-validation
 ---
- .../virtualcam-module/virtualcam-filter.cpp   | 104 +++++++++++++++++-
+ .../virtualcam-module/virtualcam-filter.cpp   | 136 ++++++++-
  .../virtualcam-module/virtualcam-filter.hpp   |   5 +-
- plugins/win-dshow/virtualcam.c                |  86 ++++++++++++++-
- .../shared-memory-queue.c                     |  84 +++++++++++---
- .../shared-memory-queue.h                     |  25 +++++
- 5 files changed, 282 insertions(+), 22 deletions(-)
+ plugins/win-dshow/virtualcam.c                |  86 +++++-
+ .../shared-memory-queue.c                     | 262 +++++++++++++++---
+ .../shared-memory-queue.h                     |  26 ++
+ 5 files changed, 476 insertions(+), 39 deletions(-)
 
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
-index b304fdf40..8be1b6c04 100644
+index b304fdf40..7117b8167 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 +++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 @@ -7,6 +7,8 @@
@@ -41,7 +47,7 @@ index b304fdf40..8be1b6c04 100644
  {
  	thread_start = CreateEvent(nullptr, true, false, nullptr);
  	thread_stop = CreateEvent(nullptr, true, false, nullptr);
-@@ -340,23 +342,115 @@ void VCamFilter::Frame(uint64_t ts)
+@@ -340,23 +342,147 @@ void VCamFilter::Frame(uint64_t ts)
  
  	/* Actual output */
  	uint8_t *ptr;
@@ -94,28 +100,46 @@ index b304fdf40..8be1b6c04 100644
 +	return (ticks / hz) * 1000000000ULL + ((ticks % hz) * 1000000000ULL) / hz;
 +}
 +
-+static std::string trace_escape(const char *value)
++static bool trace_prepare_identifier(const char *value, size_t capacity, std::string &raw,
++					     std::string &escaped)
 +{
-+	std::string out;
-+	if (!value)
-+		return out;
-+	for (const unsigned char *p = (const unsigned char *)value; *p; ++p) {
-+		switch (*p) {
-+		case '\\': out += "\\\\"; break;
-+		case '"': out += "\\\""; break;
-+		case '\n': out += "\\n"; break;
-+		case '\r': out += "\\r"; break;
-+		case '\t': out += "\\t"; break;
-+		default: out.push_back((char)*p); break;
++	raw.clear();
++	escaped.clear();
++	if (!value || !capacity)
++		return false;
++
++	const void *terminator = std::memchr(value, '\0', capacity);
++	if (!terminator)
++		return false;
++
++	const size_t length = static_cast<const char *>(terminator) - value;
++	raw.assign(value, length);
++	escaped.reserve(length);
++	for (const unsigned char ch : raw) {
++		switch (ch) {
++		case '\\': escaped += "\\\\"; break;
++		case '"': escaped += "\\\""; break;
++		case '\b': escaped += "\\b"; break;
++		case '\f': escaped += "\\f"; break;
++		case '\n': escaped += "\\n"; break;
++		case '\r': escaped += "\\r"; break;
++		case '\t': escaped += "\\t"; break;
++		default:
++			/* JSON cannot contain any other C0 byte literally.  Rejecting
++			 * before building the line keeps every emitted JSONL parseable. */
++			if (ch < 0x20)
++				return false;
++			escaped.push_back((char)ch);
++			break;
 +		}
  	}
-+	return out;
++	return true;
 +}
 +
-+static void append_trace_line(const std::string &line, const char *runtime_id)
++static void append_trace_line(const std::string &line, const std::string &runtime_id)
 +{
 +	const char *path = getenv("PULSAR_TRACE_PATH");
-+	if (!path || !*path || !runtime_id || !*runtime_id)
++	if (!path || !*path || runtime_id.empty())
 +		return;
 +
 +	const std::string mutex_name = std::string("Local\\Pulsar.") + runtime_id + ".Trace";
@@ -139,25 +163,39 @@ index b304fdf40..8be1b6c04 100644
 +
 +void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metadata &metadata)
 +{
-+	if (!metadata.valid || metadata.take_command_id[0] == '\0' ||
-+		last_trace_take == metadata.take_command_id)
++	std::string runtime_id;
++	std::string runtime_id_json;
++	std::string command_id;
++	std::string command_id_json;
++	std::string intent_id;
++	std::string intent_id_json;
++	std::string take_command_id;
++	std::string take_command_id_json;
++	if (!metadata.valid ||
++		!trace_prepare_identifier(metadata.runtime_instance_id, sizeof(metadata.runtime_instance_id), runtime_id,
++					  runtime_id_json) ||
++		!trace_prepare_identifier(metadata.command_id, sizeof(metadata.command_id), command_id, command_id_json) ||
++		!trace_prepare_identifier(metadata.intent_id, sizeof(metadata.intent_id), intent_id, intent_id_json) ||
++		!trace_prepare_identifier(metadata.take_command_id, sizeof(metadata.take_command_id), take_command_id,
++					  take_command_id_json) ||
++		take_command_id.empty() || last_trace_take == take_command_id)
 +		return;
 +
 +	std::ostringstream observation;
 +	observation << "{\"record_type\":\"observation\",\"boundary\":\"directshow_return\","
 +			<< "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
-+			<< trace_escape(metadata.runtime_instance_id) << "\",\"command_id\":\""
-+			<< trace_escape(metadata.command_id) << "\",\"intent_id\":\""
-+			<< trace_escape(metadata.intent_id) << "\",\"take_command_id\":\""
-+			<< trace_escape(metadata.take_command_id) << "\",\"revisions\":{"
++			<< runtime_id_json << "\",\"command_id\":\""
++			<< command_id_json << "\",\"intent_id\":\""
++			<< intent_id_json << "\",\"take_command_id\":\""
++			<< take_command_id_json << "\",\"revisions\":{"
 +			<< "\"program\":" << metadata.program_revision << ",\"preview\":"
 +			<< metadata.preview_revision << ",\"role_map\":" << metadata.role_map_revision << "},"
 +			<< "\"frame_id\":" << metadata.frame_id << ",\"pts_ns\":" << metadata.pts_ns
 +			<< ",\"observed_at_monotonic_ns\":" << trace_monotonic_ns()
 +			<< ",\"valid\":true,\"program_frame\":true,\"surface\":\"ProgramReturn\","
 +			<< "\"consumer\":\"DirectShow\"}";
-+	append_trace_line(observation.str(), metadata.runtime_instance_id);
-+	last_trace_take = metadata.take_command_id;
++	append_trace_line(observation.str(), runtime_id);
++	last_trace_take = take_command_id;
  }
  
  void VCamFilter::ShowDefaultFrame(uint8_t *ptr)
@@ -318,18 +356,30 @@ index 7b2cb3bf8..2d587319c 100644
  
  struct obs_output_info virtualcam_info = {
 diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.c b/shared/obs-shared-memory-queue/shared-memory-queue.c
-index b0f2662aa..59d6908a0 100644
+index b0f2662aa..8a1257e3d 100644
 --- a/shared/obs-shared-memory-queue/shared-memory-queue.c
 +++ b/shared/obs-shared-memory-queue/shared-memory-queue.c
-@@ -21,22 +21,37 @@ struct queue_header {
+@@ -2,6 +2,8 @@
+ #include "shared-memory-queue.h"
+ #include "tiny-nv12-scale.h"
+ 
++#include <stddef.h>
++
+ #define VIDEO_NAME L"OBSVirtualCamVideo"
+ 
+ enum queue_type {
+@@ -21,54 +23,206 @@ struct queue_header {
  	uint32_t cy;
  	uint64_t interval;
  
 -	uint32_t reserved[8];
-+	/* Zero for the legacy queue layout; FRAME_HEADER_SIZE for queues that
-+	 * carry the #246 runtime correlation envelope. */
++	/* Zero for the legacy queue layout; FRAME_HEADER_SIZE plus
++	 * VIDEO_QUEUE_METADATA_VERSION for queues that carry the #246 runtime
++	 * correlation envelope.  These two fields occupy the first two legacy
++	 * reserved words, so the 80-byte header ABI is unchanged. */
 +	uint32_t frame_header_size;
-+	uint32_t reserved[7];
++	uint32_t frame_metadata_version;
++	uint32_t reserved[6];
  };
  
  struct video_queue {
@@ -344,11 +394,134 @@ index b0f2662aa..59d6908a0 100644
  	int dup_counter;
  	bool is_writer;
 +	bool metadata_enabled;
++	bool layout_valid;
++	size_t mapping_size;
++	uint32_t frame_header_size;
  };
  
- #define ALIGN_SIZE(size, align) size = (((size) + (align - 1)) & (~(align - 1)))
+-#define ALIGN_SIZE(size, align) size = (((size) + (align - 1)) & (~(align - 1)))
 -#define FRAME_HEADER_SIZE 32
++#define LEGACY_FRAME_HEADER_SIZE 32U
 +#define FRAME_HEADER_SIZE ((uint32_t)sizeof(struct video_queue_frame_metadata))
++
++static bool queue_frame_size(uint32_t cx, uint32_t cy, size_t *frame_size)
++{
++	const size_t width = (size_t)cx;
++	const size_t height = (size_t)cy;
++	if (!width || !height || width > (size_t)-1 / height)
++		return false;
++
++	const size_t pixels = width * height;
++	if (pixels > (size_t)-1 - pixels / 2)
++		return false;
++
++	*frame_size = pixels + pixels / 2;
++	return true;
++}
++
++static bool queue_add_dword(DWORD *size, size_t addition)
++{
++	if (!size || addition > (size_t)UINT32_MAX - (size_t)*size)
++		return false;
++	*size += (DWORD)addition;
++	return true;
++}
++
++static bool queue_align_dword(DWORD *size)
++{
++	if (!size || *size > UINT32_MAX - 31U)
++		return false;
++	*size = (*size + 31U) & ~31U;
++	return true;
++}
++
++static bool queue_metadata_layout(const struct queue_header *header, uint32_t *frame_header_size,
++					 bool *metadata_enabled)
++{
++	if (!header || !frame_header_size || !metadata_enabled)
++		return false;
++
++	if (header->frame_header_size == 0 && header->frame_metadata_version == 0) {
++		*frame_header_size = LEGACY_FRAME_HEADER_SIZE;
++		*metadata_enabled = false;
++		return true;
++	}
++
++	if (header->frame_header_size == FRAME_HEADER_SIZE &&
++		header->frame_metadata_version == VIDEO_QUEUE_METADATA_VERSION) {
++		*frame_header_size = FRAME_HEADER_SIZE;
++		*metadata_enabled = true;
++		return true;
++	}
++
++	/* Never reinterpret a partially populated/unknown extension as legacy. */
++	return false;
++}
++
++static bool queue_mapping_size(const void *mapping, size_t *mapping_size)
++{
++	MEMORY_BASIC_INFORMATION info = {0};
++	if (!mapping || !mapping_size || VirtualQuery(mapping, &info, sizeof(info)) != sizeof(info) ||
++		info.BaseAddress != mapping || info.State != MEM_COMMIT || info.RegionSize < sizeof(struct queue_header))
++		return false;
++
++	*mapping_size = (size_t)info.RegionSize;
++	return true;
++}
++
++static bool queue_layout_valid(const struct queue_header *header, size_t mapping_size,
++				       uint32_t frame_header_size)
++{
++	size_t frame_size;
++	if (!header || mapping_size < sizeof(*header) || header->type != SHARED_QUEUE_TYPE_VIDEO ||
++		!queue_frame_size(header->cx, header->cy, &frame_size))
++		return false;
++
++	uint32_t previous_offset = 0;
++	for (size_t i = 0; i < 3; ++i) {
++		const uint32_t offset = header->offsets[i];
++		if (offset < sizeof(*header) || (offset & 31U) != 0 || (i && offset <= previous_offset))
++			return false;
++
++		size_t cursor = (size_t)offset;
++		if (cursor > mapping_size || (size_t)frame_header_size > mapping_size - cursor)
++			return false;
++		cursor += frame_header_size;
++		if (frame_size > mapping_size - cursor)
++			return false;
++		previous_offset = offset;
++	}
++
++	return true;
++}
++
++static bool queue_initialize_layout(struct video_queue *vq, size_t mapping_size)
++{
++	uint32_t frame_header_size = 0;
++	bool metadata_enabled = false;
++	if (!vq || !queue_metadata_layout(vq->header, &frame_header_size, &metadata_enabled) ||
++		!queue_layout_valid(vq->header, mapping_size, frame_header_size))
++		return false;
++
++	vq->mapping_size = mapping_size;
++	vq->frame_header_size = frame_header_size;
++	vq->metadata_enabled = metadata_enabled;
++	vq->layout_valid = true;
++	return true;
++}
++
++static void queue_set_frame_pointers(struct video_queue *vq)
++{
++	for (size_t i = 0; i < 3; ++i) {
++		const uint32_t off = vq->header->offsets[i];
++		vq->metadata[i] = vq->metadata_enabled ?
++			(struct video_queue_frame_metadata *)(((uint8_t *)vq->header) + off) : NULL;
++		vq->timestamp[i] = vq->metadata_enabled ? &vq->metadata[i]->timestamp :
++			(uint64_t *)(((uint8_t *)vq->header) + off);
++		vq->frame[i] = ((uint8_t *)vq->header) + off + vq->frame_header_size;
++	}
++	vq->ready_to_read = true;
++}
 +
 +static bool queue_uses_metadata(const wchar_t *name)
 +{
@@ -362,70 +535,115 @@ index b0f2662aa..59d6908a0 100644
  
  video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t interval,
  									 const wchar_t *name)
-@@ -44,6 +59,7 @@ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t inter
+ {
  	struct video_queue vq = {0};
  	struct video_queue *pvq;
- 	DWORD frame_size = cx * cy * 3 / 2;
-+	const uint32_t frame_header_size = queue_uses_metadata(name) ? FRAME_HEADER_SIZE : sizeof(uint64_t);
+-	DWORD frame_size = cx * cy * 3 / 2;
++	size_t frame_size;
++	const bool metadata_enabled = queue_uses_metadata(name);
++	const uint32_t frame_header_size = metadata_enabled ? FRAME_HEADER_SIZE : LEGACY_FRAME_HEADER_SIZE;
  	uint32_t offset_frame[3];
  	DWORD size;
  
-@@ -52,15 +68,15 @@ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t inter
- 	ALIGN_SIZE(size, 32);
++	if (!queue_frame_size(cx, cy, &frame_size) || frame_size > UINT32_MAX)
++		return NULL;
++
+ 	size = sizeof(struct queue_header);
+ 
+-	ALIGN_SIZE(size, 32);
++	if (!queue_align_dword(&size))
++		return NULL;
  
  	offset_frame[0] = size;
 -	size += frame_size + FRAME_HEADER_SIZE;
-+	size += frame_size + frame_header_size;
- 	ALIGN_SIZE(size, 32);
+-	ALIGN_SIZE(size, 32);
++	if (!queue_add_dword(&size, frame_size) || !queue_add_dword(&size, frame_header_size) ||
++		!queue_align_dword(&size))
++		return NULL;
  
  	offset_frame[1] = size;
 -	size += frame_size + FRAME_HEADER_SIZE;
-+	size += frame_size + frame_header_size;
- 	ALIGN_SIZE(size, 32);
+-	ALIGN_SIZE(size, 32);
++	if (!queue_add_dword(&size, frame_size) || !queue_add_dword(&size, frame_header_size) ||
++		!queue_align_dword(&size))
++		return NULL;
  
  	offset_frame[2] = size;
 -	size += frame_size + FRAME_HEADER_SIZE;
-+	size += frame_size + frame_header_size;
- 	ALIGN_SIZE(size, 32);
+-	ALIGN_SIZE(size, 32);
++	if (!queue_add_dword(&size, frame_size) || !queue_add_dword(&size, frame_header_size) ||
++		!queue_align_dword(&size))
++		return NULL;
  
  	struct queue_header header = {0};
-@@ -69,7 +85,9 @@ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t inter
+ 
+ 	header.state = SHARED_QUEUE_STATE_STARTING;
++	header.type = SHARED_QUEUE_TYPE_VIDEO;
  	header.cx = cx;
  	header.cy = cy;
  	header.interval = interval;
-+	header.frame_header_size = frame_header_size == FRAME_HEADER_SIZE ? FRAME_HEADER_SIZE : 0;
++	header.frame_header_size = metadata_enabled ? FRAME_HEADER_SIZE : 0;
++	header.frame_metadata_version = metadata_enabled ? VIDEO_QUEUE_METADATA_VERSION : 0;
  	vq.is_writer = true;
-+	vq.metadata_enabled = header.frame_header_size == FRAME_HEADER_SIZE;
  
  	for (size_t i = 0; i < 3; i++) {
- 		uint32_t off = offset_frame[i];
-@@ -94,11 +112,15 @@ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t inter
+@@ -94,14 +248,16 @@ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t inter
  		return NULL;
  	}
  	memcpy(vq.header, &header, sizeof(header));
-+	vq.metadata_enabled = header.frame_header_size == FRAME_HEADER_SIZE;
- 
- 	for (size_t i = 0; i < 3; i++) {
- 		uint32_t off = offset_frame[i];
+-
+-	for (size_t i = 0; i < 3; i++) {
+-		uint32_t off = offset_frame[i];
 -		vq.ts[i] = (uint64_t *)(((uint8_t *)vq.header) + off);
 -		vq.frame[i] = ((uint8_t *)vq.header) + off + FRAME_HEADER_SIZE;
-+		vq.metadata[i] = vq.metadata_enabled ?
-+			(struct video_queue_frame_metadata *)(((uint8_t *)vq.header) + off) : NULL;
-+		vq.timestamp[i] = vq.metadata_enabled ? &vq.metadata[i]->timestamp :
-+			(uint64_t *)(((uint8_t *)vq.header) + off);
-+		vq.frame[i] = ((uint8_t *)vq.header) + off + frame_header_size;
++	if (!queue_initialize_layout(&vq, (size_t)size)) {
++		UnmapViewOfFile(vq.header);
++		CloseHandle(vq.handle);
++		return NULL;
  	}
++
++	queue_set_frame_pointers(&vq);
  	pvq = malloc(sizeof(vq));
  	if (!pvq) {
-@@ -123,6 +145,7 @@ video_queue_t *video_queue_open_named(const wchar_t *name)
++		UnmapViewOfFile(vq.header);
  		CloseHandle(vq.handle);
  		return NULL;
  	}
-+	vq.metadata_enabled = vq.header->frame_header_size == FRAME_HEADER_SIZE;
+@@ -124,8 +280,16 @@ video_queue_t *video_queue_open_named(const wchar_t *name)
+ 		return NULL;
+ 	}
  
++	if (!queue_mapping_size(vq.header, &vq.mapping_size) ||
++		!queue_initialize_layout(&vq, vq.mapping_size)) {
++		UnmapViewOfFile(vq.header);
++		CloseHandle(vq.handle);
++		return NULL;
++	}
++
  	struct video_queue *pvq = malloc(sizeof(vq));
  	if (!pvq) {
-@@ -167,7 +190,8 @@ void video_queue_get_info(video_queue_t *vq, uint32_t *cx, uint32_t *cy, uint64_
++		UnmapViewOfFile(vq.header);
+ 		CloseHandle(vq.handle);
+ 		return NULL;
+ 	}
+@@ -159,51 +323,77 @@ void video_queue_close(video_queue_t *vq)
+ 
+ void video_queue_get_info(video_queue_t *vq, uint32_t *cx, uint32_t *cy, uint64_t *interval)
+ {
++	if (!vq || !vq->layout_valid)
++		return;
++
+ 	struct queue_header *qh = vq->header;
+-	*cx = qh->cx;
+-	*cy = qh->cy;
+-	*interval = qh->interval;
++	if (cx)
++		*cx = qh->cx;
++	if (cy)
++		*cy = qh->cy;
++	if (interval)
++		*interval = qh->interval;
+ }
  
  #define get_idx(inc) ((unsigned long)inc % 3)
  
@@ -433,9 +651,12 @@ index b0f2662aa..59d6908a0 100644
 +void video_queue_write_ex(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp,
 +				  const struct video_queue_frame_metadata *metadata)
  {
++	if (!vq || !vq->layout_valid || !vq->is_writer || !data || !linesize)
++		return;
++
  	struct queue_header *qh = vq->header;
  	long inc = ++qh->write_idx;
-@@ -175,14 +199,29 @@ void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, ui
+ 
  	unsigned long idx = get_idx(inc);
  	size_t size = linesize[0] * qh->cy;
  
@@ -465,23 +686,22 @@ index b0f2662aa..59d6908a0 100644
 +
  enum queue_state video_queue_state(video_queue_t *vq)
  {
- 	if (!vq) {
-@@ -193,8 +232,12 @@ enum queue_state video_queue_state(video_queue_t *vq)
+-	if (!vq) {
++	if (!vq || !vq->layout_valid) {
+ 		return SHARED_QUEUE_STATE_INVALID;
+ 	}
+ 
+ 	enum queue_state state = (enum queue_state)vq->header->state;
  	if (!vq->ready_to_read && state == SHARED_QUEUE_STATE_READY) {
- 		for (size_t i = 0; i < 3; i++) {
- 			size_t off = vq->header->offsets[i];
+-		for (size_t i = 0; i < 3; i++) {
+-			size_t off = vq->header->offsets[i];
 -			vq->ts[i] = (uint64_t *)(((uint8_t *)vq->header) + off);
 -			vq->frame[i] = ((uint8_t *)vq->header) + off + FRAME_HEADER_SIZE;
-+			vq->metadata[i] = vq->metadata_enabled ?
-+				(struct video_queue_frame_metadata *)(((uint8_t *)vq->header) + off) : NULL;
-+			vq->timestamp[i] = vq->metadata_enabled ? &vq->metadata[i]->timestamp :
-+				(uint64_t *)(((uint8_t *)vq->header) + off);
-+			vq->frame[i] = ((uint8_t *)vq->header) + off +
-+				(vq->metadata_enabled ? FRAME_HEADER_SIZE : sizeof(uint64_t));
- 		}
- 		vq->ready_to_read = true;
+-		}
+-		vq->ready_to_read = true;
++		queue_set_frame_pointers(vq);
  	}
-@@ -202,7 +245,8 @@ enum queue_state video_queue_state(video_queue_t *vq)
+ 
  	return state;
  }
  
@@ -489,9 +709,15 @@ index b0f2662aa..59d6908a0 100644
 +bool video_queue_read_ex(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_t *ts,
 +				 struct video_queue_frame_metadata *metadata)
  {
++	if (metadata)
++		memset(metadata, 0, sizeof(*metadata));
++	if (!vq || !vq->layout_valid || !vq->ready_to_read || !scale || !dst)
++		return false;
++
  	struct queue_header *qh = vq->header;
  	long inc = qh->read_idx;
-@@ -222,8 +266,20 @@ bool video_queue_read(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_
+ 
+@@ -222,8 +412,18 @@ bool video_queue_read(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_
  
  	unsigned long idx = get_idx(inc);
  
@@ -499,8 +725,6 @@ index b0f2662aa..59d6908a0 100644
 +	if (metadata) {
 +		if (vq->metadata_enabled)
 +			*metadata = vq->metadata[idx][0];
-+		else
-+			memset(metadata, 0, sizeof(*metadata));
 +	}
 +	if (ts)
 +		*ts = *vq->timestamp[idx];
@@ -514,10 +738,10 @@ index b0f2662aa..59d6908a0 100644
 +	return video_queue_read_ex(vq, scale, dst, ts, NULL);
 +}
 diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.h b/shared/obs-shared-memory-queue/shared-memory-queue.h
-index 41c4cee5c..5a9187abc 100644
+index 41c4cee5c..029e73084 100644
 --- a/shared/obs-shared-memory-queue/shared-memory-queue.h
 +++ b/shared/obs-shared-memory-queue/shared-memory-queue.h
-@@ -13,6 +13,27 @@ struct nv12_scale;
+@@ -13,6 +13,28 @@ struct nv12_scale;
  typedef struct video_queue video_queue_t;
  typedef struct nv12_scale nv12_scale_t;
  
@@ -527,6 +751,7 @@ index 41c4cee5c..5a9187abc 100644
 + * the legacy queue timestamp layout; old callers can continue using
 + * video_queue_read()/video_queue_write(). */
 +#define VIDEO_QUEUE_IDENTIFIER_CAPACITY 129
++#define VIDEO_QUEUE_METADATA_VERSION 1U
 +struct video_queue_frame_metadata {
 +	uint64_t timestamp;
 +	uint64_t frame_id;
@@ -545,7 +770,7 @@ index 41c4cee5c..5a9187abc 100644
  enum queue_state {
  	SHARED_QUEUE_STATE_INVALID,
  	SHARED_QUEUE_STATE_STARTING,
-@@ -29,8 +50,12 @@ extern void video_queue_close(video_queue_t *vq);
+@@ -29,8 +51,12 @@ extern void video_queue_close(video_queue_t *vq);
  
  extern void video_queue_get_info(video_queue_t *vq, uint32_t *cx, uint32_t *cy, uint64_t *interval);
  extern void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp);

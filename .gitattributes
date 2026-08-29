@@ -8,6 +8,7 @@
 
 # Patches must stay byte-stable.
 *.patch -text
+*.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
 
 # Binary types.
 *.png   binary
