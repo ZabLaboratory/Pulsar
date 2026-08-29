@@ -67,14 +67,20 @@ DEFAULT_EXE = (
 )
 
 READY_RE = re.compile(r"PULSAR_READY ws=(\S+) password=(\S+)")
+# Keep accepting the bracketed diagnostics emitted by older builds while also
+# accepting the logger's structured separator form.  The latter is the exact
+# shape used by the current binary: ``pulsar-dual-lane | ready``.
+DUAL_LANE_LOG_PREFIX = r"(?:\[pulsar-dual-lane\]|pulsar-dual-lane\s*\|)"
 DUAL_READY_RE = re.compile(
-    r"\[pulsar-dual-lane\] ready LaneA=(\S+) LaneB=(\S+) "
+    DUAL_LANE_LOG_PREFIX
+    + r"\s*ready LaneA=(\S+) LaneB=(\S+) "
     r"ProgramView=(\S+) PreviewView=(\S+) ProgramVideo=(\S+) PreviewVideo=(\S+) "
     r"MainView=(\S+) MainVideo=(\S+)"
 )
 ENCODER_RE = re.compile(r"video encoder allocated: family=(\S+) id=(\S+)")
 COMMIT_RE = re.compile(
-    r"\[pulsar-dual-lane\] TakeCommitted count=(\d+) frame_id=(\d+) "
+    DUAL_LANE_LOG_PREFIX
+    + r"\s*TakeCommitted count=(\d+) frame_id=(\d+) "
     r"pts_ns=(\d+) onair_lane=(-?\d+) preview_lane=(-?\d+) "
     r"OnAirRoot=(\S+) PreviewRoot=(\S+) ProgramView=(\S+) "
     r"PreviewView=(\S+) ProgramVideo=(\S+) PreviewVideo=(\S+) "

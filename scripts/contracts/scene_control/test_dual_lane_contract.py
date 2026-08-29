@@ -9,6 +9,8 @@ and a teardown barrier for an extracted (in-flight) swap.
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 
 
@@ -16,6 +18,7 @@ _ROOT = Path(__file__).resolve().parents[3]
 _FRONTEND = _ROOT / "plugins/pulsar-frontend-stub/src/pulsar-frontend-stub.cpp"
 _DUAL_LANE_PATCH = _ROOT / "patches/0009-feat-libobs-add-frame-boundary-dual-lane-swaps.patch"
 _RUNTIME_PROBE = _ROOT / "scripts/probe-dual-lane.py"
+_OUTPUT_EFFECT_PROBE = _ROOT / "scripts/probe-output-effect.py"
 
 
 def _read(path: Path) -> str:
@@ -26,6 +29,15 @@ def _between(source: str, start: str, end: str) -> str:
     start_at = source.index(start)
     end_at = source.index(end, start_at + len(start))
     return source[start_at:end_at]
+
+
+def _load_probe(path: Path, module_name: str):
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_physical_roots_are_fixed_and_roles_point_at_their_lane() -> None:
@@ -160,6 +172,42 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert "encoder video_t bound once to ProgramView" in probe
     assert "MainView=(\\S+) MainVideo=(\\S+)" in probe
     assert "ProgramView is not the libobs main view" in probe
+
+
+def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:
+    probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_for_contract")
+    fields = (
+        "LaneA=0x1 LaneB=0x2 ProgramView=0x3 PreviewView=0x4 "
+        "ProgramVideo=0x5 PreviewVideo=0x6 MainView=0x3 MainVideo=0x5"
+    )
+    for prefix in ("[pulsar-dual-lane] ready", "pulsar-dual-lane | ready"):
+        match = probe.DUAL_READY_RE.search(f"{prefix} {fields}")
+        assert match is not None
+        assert probe.parse_ready(match).program_view == "3"
+
+    commit_fields = (
+        "count=1 frame_id=42 pts_ns=9001 onair_lane=0 preview_lane=1 "
+        "OnAirRoot=0x1 PreviewRoot=0x2 ProgramView=0x3 PreviewView=0x4 "
+        "ProgramVideo=0x5 PreviewVideo=0x6 MainView=0x3 MainVideo=0x5"
+    )
+    for prefix in ("[pulsar-dual-lane] TakeCommitted", "pulsar-dual-lane | TakeCommitted"):
+        match = probe.COMMIT_RE.search(f"{prefix} {commit_fields}")
+        assert match is not None
+        assert probe.parse_commit(match).frame_id == 42
+
+
+def test_output_effect_probe_settles_record_stop_before_next_case() -> None:
+    source = _read(_OUTPUT_EFFECT_PROBE)
+    helper = _between(source, "async def wait_record_and_output_inactive", "async def case_replay")
+    nominal_record = _between(source, "async def case_record_nominal", "async def case_generic_refused")
+    nominal_generic = _between(source, "async def case_generic_nominal", "def assert_bounded")
+
+    assert "GetOutputStatus" in helper
+    assert 'c.req("GetRecordStatus")' in helper
+    assert "STOP_SETTLE_S" in helper
+    assert "await asyncio.sleep(0.2)" in helper
+    assert 'wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopRecord(nominal)")' in nominal_record
+    assert 'wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopOutput(nominal)")' in nominal_generic
 
 
 def test_core_swap_is_frame_boundary_and_rejects_concurrent_requests() -> None:

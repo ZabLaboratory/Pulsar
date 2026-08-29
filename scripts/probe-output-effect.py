@@ -54,9 +54,10 @@ Cases (each one is a genuine refusal on the spawned binary, not a mock):
 
   E. Positive control + latency bound (Resolution criterion 3), in a second
      child with a writable record dir: StartRecord succeeds AND
-     GetRecordStatus.outputActive is true, StopRecord succeeds, and no
-     start/stop request took longer than MAX_REQUEST_MS. The verification
-     must not have turned any request into a wait for activation.
+     GetRecordStatus.outputActive is true, StopRecord succeeds, and both live
+     status views settle inactive before the next positive leg (G). No
+     start/stop request took longer than MAX_REQUEST_MS; the verification must
+     not have turned any request into a wait for activation.
 
   F. Generic outputs, refusal leg (follow-up to #120, same defect class).
      StartOutput / StopOutput / ToggleOutput address an output BY NAME and
@@ -390,6 +391,31 @@ async def output_status(c: Client, name: str) -> dict:
     return data
 
 
+async def wait_record_and_output_inactive(c: Client, output_name: str, action: str) -> None:
+    """Wait for a successful stop to become visible through both status paths.
+
+    ``StopRecord``/``StopOutput`` may legitimately return while the muxer is
+    still finalising.  Poll the two live status views until both agree that the
+    output is inactive, with the same bounded settle window used by the
+    generic-output case.  This keeps the next case from racing the previous
+    muxer without turning the request itself into a readiness sleep.
+    """
+
+    deadline = time.monotonic() + STOP_SETTLE_S
+    while True:
+        status = await output_status(c, output_name)
+        _, _, _, record_status, _ = await c.req("GetRecordStatus")
+        if not status.get("outputActive") and not record_status.get("outputActive"):
+            return
+        if time.monotonic() >= deadline:
+            raise Failure(
+                f"{action} reported success but the output is still active {STOP_SETTLE_S:.0f}s later "
+                f"(GetOutputStatus={status.get('outputActive')!r}, "
+                f"GetRecordStatus={record_status.get('outputActive')!r})"
+            )
+        await asyncio.sleep(0.2)
+
+
 async def case_replay(c: Client) -> None:
     print("-- A. replay buffer (encoders attached but idle off-air, #117)")
     ok, code, comment, _, ms = await c.req("StartReplayBuffer")
@@ -500,7 +526,8 @@ async def case_record_nominal(c: Client) -> None:
     note_latency("StopRecord(nominal)", ms)
     if not ok:
         raise Failure(f"StopRecord failed on an active recording: {code} {comment}")
-    print(f"   OK  StopRecord succeeded (outputPath={data.get('outputPath')!r})")
+    await wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopRecord(nominal)")
+    print(f"   OK  StopRecord succeeded (outputPath={data.get('outputPath')!r}) and both views agree the output stopped")
 
 
 async def case_generic_refused(c: Client) -> None:
@@ -588,19 +615,7 @@ async def case_generic_nominal(c: Client) -> None:
     # A Pending verdict is a legitimate Success (ffmpeg_muxer flushes and
     # finalises the mp4 asynchronously), so give the effect a bounded window
     # to become observable -- but demand that it DOES become observable.
-    deadline = time.monotonic() + STOP_SETTLE_S
-    while True:
-        status = await output_status(c, GENERIC_RECORD_OUTPUT)
-        _, _, _, record_status, _ = await c.req("GetRecordStatus")
-        if not status.get("outputActive") and not record_status.get("outputActive"):
-            break
-        if time.monotonic() >= deadline:
-            raise Failure(
-                f"StopOutput reported success but the output is still active {STOP_SETTLE_S:.0f}s later "
-                f"(GetOutputStatus={status.get('outputActive')!r}, "
-                f"GetRecordStatus={record_status.get('outputActive')!r})"
-            )
-        await asyncio.sleep(0.2)
+    await wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopOutput(nominal)")
     print("   OK  StopOutput succeeded AND both views agree the output really stopped")
 
 
