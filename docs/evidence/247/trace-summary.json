@@ -1,0 +1,68 @@
+{
+  "format": "probe-247-scene-switch-summary.v1",
+  "derivation": {
+    "method": "compact, non-replayable summary of the retained exact runtime outputs; counts marked unavailable were not present in the retained trace",
+    "retained_trace": "exact-run.json#/campaign/trace_sha256",
+    "trace_records": 203,
+    "runtime_instance_id": "probe247-248a-trace",
+    "build_revision_ref": "exact-run.json#/validated_candidate"
+  },
+  "vendor_campaign": {
+    "real_call_vendor_request_transmissions": 1700,
+    "schema_validation": "Every response and VendorEvent payload was checked with Draft 2020-12 against scripts/contracts/scene_switch_v1/schema.json.",
+    "per_category_count": "NOT_RETAINED",
+    "command_result_matrix": [
+      {"category": "exact_duplicate_and_replay", "observed_result": "original accepted response replayed byte-identically, including post-commit Take retry"},
+      {"category": "conflicting_command_id_reuse", "observed_result": "IDEMPOTENCY_CONFLICT; no role/revision/route mutation"},
+      {"category": "stale_revision", "observed_result": "REVISION_STALE; role map and revisions unchanged"},
+      {"category": "stale_server_seq_and_double_take", "observed_result": "one Take accepted, the competing Take rejected SERVER_SEQ_STALE; one terminal commit"},
+      {"category": "invalid_schema_and_cross_fields", "observed_result": "rejected before state mutation"},
+      {"category": "wrong_runtime", "observed_result": "RUNTIME_MISMATCH; no state mutation"},
+      {"category": "preview_mutation_during_freeze", "observed_result": "PREVIEW_FROZEN; Program and role map unchanged while Take pending"},
+      {"category": "abort_race", "observed_result": "TakeAccepted then one terminal TakeAborted; role map and revisions unchanged"},
+      {"category": "prepare_timeout", "observed_result": "one-shot TIMEOUT; runtime returned ready with role map and revisions unchanged"},
+      {"category": "cache_saturation", "observed_result": "dedicated process reached 4096 entries; known exact replay remained available and a new key failed closed without mutation"}
+    ]
+  },
+  "exactly_one_commit": {
+    "accepted_intents": 100,
+    "take_committed_events": 100,
+    "unique_committed_intents": 100,
+    "unsettled_take_ids": 0,
+    "server_seq_first": 1,
+    "server_seq_last": 200,
+    "strictly_monotonic_commit_frame_and_pts": true,
+    "basis": "The retained x264 trace contains one TakeAccepted and one TakeCommitted event for each intent-001..intent-100."
+  },
+  "commit_samples": [
+    {"take_command_id": "take-001", "intent_id": "intent-001", "server_seq": 2, "frame_id": 496, "pts_ns": 1353516669282794, "previous_role_map": {"on_air": "A", "preview": "B"}, "role_map": {"on_air": "B", "preview": "A"}, "program_lane_id": "B", "preview_lane_id": "A"},
+    {"take_command_id": "take-025", "intent_id": "intent-025", "server_seq": 50, "frame_id": 553, "pts_ns": 1353517619282756, "previous_role_map": {"on_air": "A", "preview": "B"}, "role_map": {"on_air": "B", "preview": "A"}, "program_lane_id": "B", "preview_lane_id": "A"},
+    {"take_command_id": "take-050", "intent_id": "intent-050", "server_seq": 100, "frame_id": 578, "pts_ns": 1353518035949406, "previous_role_map": {"on_air": "B", "preview": "A"}, "role_map": {"on_air": "A", "preview": "B"}, "program_lane_id": "A", "preview_lane_id": "B"},
+    {"take_command_id": "take-075", "intent_id": "intent-075", "server_seq": 150, "frame_id": 603, "pts_ns": 1353518452616056, "previous_role_map": {"on_air": "A", "preview": "B"}, "role_map": {"on_air": "B", "preview": "A"}, "program_lane_id": "B", "preview_lane_id": "A"},
+    {"take_command_id": "take-100", "intent_id": "intent-100", "server_seq": 200, "frame_id": 628, "pts_ns": 1353518869282706, "previous_role_map": {"on_air": "B", "preview": "A"}, "role_map": {"on_air": "A", "preview": "B"}, "program_lane_id": "A", "preview_lane_id": "B"}
+  ],
+  "route_and_pixel_evidence": {
+    "semantic_route_identity": "ProgramView -> Program lane and PreviewView -> Preview lane; every retained commit sample has distinct program_lane_id and preview_lane_id and swaps the previous role map.",
+    "process_pointer_identity": "NOT_RETAINED (pointer values are process-specific and were intentionally not treated as portable identifiers)",
+    "wgc_cef_strict_no_blank": {
+      "topology": {"wgc": 2, "cef": 2, "lanes": ["A", "B"]},
+      "wgc_a": {"distinct_pixels": 797, "nonblack_fraction": 1.0},
+      "cef_a": {"distinct_pixels": 843, "nonblack_fraction": 1.0},
+      "wgc_b": {"distinct_pixels": 790, "nonblack_fraction": 1.0},
+      "cef_b": {"distinct_pixels": 846, "nonblack_fraction": 1.0},
+      "allow_blank": false
+    },
+    "frame_hashes": {
+      "scope": "CEF-only decoded RGBA screenshot bytes; three sampled boundaries linked to the completed 100-cycle runtime campaign, not WGC or every-frame evidence",
+      "sampled_boundaries": [
+        {"boundary": "before_take_001", "role_map": {"on_air": "A", "preview": "B"}, "program_lane": "A", "program_sha256": "153eb0e17c827693b09380a9e9585dbaa9a3742d6acbe1286ccc3d8a727c00e0", "preview_lane": "B", "preview_sha256": "f808299446c9fe92f188775c43648c3ec5df775f89632549fc2ee7cc1e7fd965"},
+        {"boundary": "after_take_001", "frame_id": 311, "pts_ns": 1355731756232160, "role_map": {"on_air": "B", "preview": "A"}, "program_lane": "B", "program_sha256": "f808299446c9fe92f188775c43648c3ec5df775f89632549fc2ee7cc1e7fd965", "preview_lane": "A", "preview_sha256": "153eb0e17c827693b09380a9e9585dbaa9a3742d6acbe1286ccc3d8a727c00e0"},
+        {"boundary": "after_take_100", "frame_id": 1532, "pts_ns": 1355752106231346, "role_map": {"on_air": "A", "preview": "B"}, "program_lane": "A", "program_sha256": "153eb0e17c827693b09380a9e9585dbaa9a3742d6acbe1286ccc3d8a727c00e0", "preview_lane": "B", "preview_sha256": "f808299446c9fe92f188775c43648c3ec5df775f89632549fc2ee7cc1e7fd965"}
+      ]
+    }
+  },
+  "measurement_boundary": {
+    "measured": ["runtime ProgramView frame_id/PTS", "WGC+CEF source pixel variance", "local x264 recording"],
+    "not_measured": ["directshow", "rtmp", "decoded", "antenna"]
+  }
+}
