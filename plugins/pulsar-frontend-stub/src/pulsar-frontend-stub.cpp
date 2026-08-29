@@ -37,10 +37,10 @@
 //                                         (which deletes it via the
 //                                         destructor running teardown()).
 //
-// Scenes are bound to libobs main mixer channel 0 via
-// obs_set_output_source(0, ...) on setup AND on every set_current_scene.
-// Without this binding, the encoder receives no frames and obs_output_start
-// declines silently with last_error=null.
+// The dual-lane path uses the libobs-owned main view/video as the stable
+// Program surface and one auxiliary view/video as Preview.  A Cut swaps their
+// channel-0 roots at the graphics boundary.  The legacy single-lane fallback
+// continues to bind channel 0 with obs_set_output_source().
 //
 // Event sources mix two patterns: explicit emission for state mutations
 // (SCENE_CHANGED on set_current_scene, STUDIO_MODE_* on
@@ -1099,8 +1099,8 @@ bool PulsarFrontendAPI::dualLaneInvariantLocked(const char *where) const
     const bool valid = onAirLane >= 0 && onAirLane < 2 && previewLane >= 0 && previewLane < 2 &&
                        onAirLane != previewLane && laneSources[onAirLane] == currentScene &&
                        laneSources[previewLane] == previewScene && laneItems[0] && laneItems[1] &&
-                       programSelection && previewSelection && programView && previewView &&
-                       programVideo && previewVideo;
+                       programSelection && previewSelection && programView == obs_get_main_view() &&
+                       programVideo == obs_get_video() && previewView && programVideo && previewVideo;
     if (!valid) {
         blog(LOG_ERROR,
              "[pulsar-dual-lane] invariant failed at %s: onair_lane=%d preview_lane=%d "
@@ -1212,18 +1212,21 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
     onAirLane = 0;
     previewLane = 1;
 
-    programView = obs_view_create();
+    // Program is the libobs-owned main view.  It is already part of the main
+    // render loop and its video_t is the object returned by obs_get_video(),
+    // which preserves legacy stats/outputs and gives the encoder one stable
+    // binding.  Only Preview needs an auxiliary hot view.
+    programView = obs_get_main_view();
     previewView = obs_view_create();
     if (!programView || !previewView) {
         blog(LOG_ERROR, "[pulsar-dual-lane] failed to create ProgramView/PreviewView");
-        if (programView) {
-            obs_view_destroy(programView);
-            programView = nullptr;
-        }
+        // programView aliases libobs's main canvas and is never destroyed by
+        // the frontend.  Only the auxiliary Preview view is owned here.
         if (previewView) {
             obs_view_destroy(previewView);
             previewView = nullptr;
         }
+        programView = nullptr;
         if (currentScene) {
             obs_source_release(currentScene);
             currentScene = nullptr;
@@ -1249,14 +1252,14 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
         return false;
     }
 
-    programVideo = obs_view_add(programView);
+    programVideo = obs_get_video();
     previewVideo = obs_view_add(previewView);
     if (!programVideo || !previewVideo) {
         blog(LOG_ERROR, "[pulsar-dual-lane] failed to add stable view mixes");
-        obs_view_remove(programView);
-        obs_view_remove(previewView);
-        obs_view_destroy(programView);
-        obs_view_destroy(previewView);
+        if (previewView) {
+            obs_view_remove(previewView);
+            obs_view_destroy(previewView);
+        }
         programView = nullptr;
         previewView = nullptr;
         programVideo = nullptr;
@@ -1304,13 +1307,9 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
         blog(LOG_INFO, "[pulsar-dual-lane] encoder video_t bound once to ProgramView");
     }
 
-    // Preserve the old main-canvas compatibility surface for plugins that
-    // still query obs_get_video(), while all production downstream bindings
-    // use ProgramView above.  This is a setup-time bind, not a Take path.
-    if (nativeStingerEnabled)
-        bindTransitionOutput(currentTransition, currentScene);
-    else
-        obs_set_output_source(0, currentScene);
+    // ProgramView aliases the main canvas, so channel 0 is already the legacy
+    // output source and obs_get_video()/GetStats observe programVideo directly.
+    // Do not create a third mix or rebind the main route after setup.
 
     dualLaneReady = true;
     if (!dualLaneInvariantLocked("setup")) {
@@ -1318,9 +1317,10 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
         return false;
     }
     blog(LOG_INFO, "[pulsar-dual-lane] ready LaneA=%p LaneB=%p ProgramView=%p PreviewView=%p "
-         "ProgramVideo=%p PreviewVideo=%p",
+         "ProgramVideo=%p PreviewVideo=%p MainView=%p MainVideo=%p",
          (void *)laneSources[0], (void *)laneSources[1], (void *)programView, (void *)previewView,
-         (void *)programVideo, (void *)previewVideo);
+         (void *)programVideo, (void *)previewVideo, (void *)obs_get_main_view(),
+         (void *)obs_get_video());
     return true;
 }
 
@@ -1349,9 +1349,11 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
     }
 
     blog(LOG_INFO, "[pulsar-dual-lane] TakeAccepted preview_lane=%d onair_lane=%d "
-         "OnAirRoot=%p PreviewRoot=%p ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p",
+         "OnAirRoot=%p PreviewRoot=%p ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p "
+         "MainView=%p MainVideo=%p",
          previewLane, onAirLane, (void *)currentScene, (void *)previewScene, (void *)programView,
-         (void *)previewView, (void *)programVideo, (void *)previewVideo);
+         (void *)previewView, (void *)programVideo, (void *)previewVideo, (void *)obs_get_main_view(),
+         (void *)obs_get_video());
     return true;
 }
 
@@ -1364,7 +1366,6 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
     uint64_t committedCount = 0;
     int committedOnAirLane = -1;
     int committedPreviewLane = -1;
-    obs_source_t *legacyProgramScene = nullptr;
     {
         std::lock_guard<std::mutex> lk(self->dualLaneMutex);
         if (!self->dualLaneCutPending.load())
@@ -1385,27 +1386,17 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
         self->dualLaneCutPending.store(false);
         if (!self->dualLaneInvariantLocked("commit"))
             blog(LOG_ERROR, "[pulsar-dual-lane] commit invariant failed");
-        if (!self->nativeStingerEnabled)
-            legacyProgramScene = obs_source_get_ref(self->currentScene);
-    }
-
-    // Keep the legacy main-canvas compatibility surface aligned with the new
-    // OnAir root at the same graphics boundary.  ProgramView remains the
-    // encoder's stable binding; this is only for callers that still inspect
-    // obs_get_video().  The dormant native-transition path owns channel 0 and
-    // is intentionally left untouched here.
-    if (legacyProgramScene) {
-        obs_set_output_source(0, legacyProgramScene);
-        obs_source_release(legacyProgramScene);
     }
 
     blog(LOG_INFO, "[pulsar-dual-lane] TakeCommitted count=%llu frame_id=%llu pts_ns=%llu "
          "onair_lane=%d preview_lane=%d OnAirRoot=%p PreviewRoot=%p "
-         "ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p",
+         "ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p "
+         "MainView=%p MainVideo=%p",
          static_cast<unsigned long long>(committedCount), static_cast<unsigned long long>(frameId),
          static_cast<unsigned long long>(ptsNs), committedOnAirLane, committedPreviewLane,
          (void *)self->currentScene, (void *)self->previewScene, (void *)self->programView,
-         (void *)self->previewView, (void *)self->programVideo, (void *)self->previewVideo);
+         (void *)self->previewView, (void *)self->programVideo, (void *)self->previewVideo,
+         (void *)obs_get_main_view(), (void *)obs_get_video());
     self->emit(OBS_FRONTEND_EVENT_SCENE_CHANGED);
     self->emit(OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED);
 }
@@ -1546,11 +1537,11 @@ bool PulsarFrontendAPI::setup()
     // The Preview return is the same raw-output primitive with a distinct
     // output name.  The win-dshow patch maps that name to its own queue and
     // filter, so consumers never alias ProgramReturn.
-    previewReturnOutput = obs_output_create("program_return_output", "PulsarPreviewReturn", nullptr, nullptr);
+    previewReturnOutput = obs_output_create("preview_return_output", "PulsarPreviewReturn", nullptr, nullptr);
     if (previewReturnOutput) {
         if (obs_output_get_flags(previewReturnOutput) == 0) {
             obs_output_release(previewReturnOutput);
-            previewReturnOutput = obs_output_create("program_return_output", "PulsarPreviewReturn", nullptr, nullptr);
+            previewReturnOutput = obs_output_create("preview_return_output", "PulsarPreviewReturn", nullptr, nullptr);
         }
         if (previewReturnOutput)
             blog(LOG_WARNING, "[pulsar-frontend-stub] preview return output allocated; awaiting stable PreviewView");
@@ -1805,9 +1796,9 @@ bool PulsarFrontendAPI::setup()
     }
 
     // Build the two independent hot roots only after the bootstrap scene has
-    // its initial producer.  The copies are then bound to stable ProgramView
-    // and PreviewView mixes; all production encoders/returns consume those
-    // mixes rather than the legacy main canvas.
+    // its initial producer.  ProgramView is the existing main canvas/video_t;
+    // PreviewView is the single auxiliary mix.  Production encoder/Program
+    // return stay on the main video, while Preview return uses the auxiliary.
     if (!setupDualLane(scene))
         blog(LOG_WARNING, "[pulsar-frontend-stub] dual-lane setup unavailable; keeping legacy canvas path");
     obs_scene_release(scene);
@@ -2070,9 +2061,9 @@ void PulsarFrontendAPI::teardown()
         previewReturnOutput = nullptr;
     }
     if (programView) {
-        obs_view_remove(programView);
-        obs_view_set_source(programView, 0, nullptr);
-        obs_view_destroy(programView);
+        // ProgramView aliases libobs's main canvas.  Channel 0 was cleared
+        // above, but the main view/video remains owned by libobs for the rest
+        // of the OBS context lifetime; never remove or destroy it here.
         programView = nullptr;
         programVideo = nullptr;
     }
@@ -2259,9 +2250,9 @@ void PulsarFrontendAPI::obs_frontend_set_current_scene(obs_source_t *scene)
             if (!dualLaneInvariantLocked("direct-after"))
                 return;
         }
-        // Keep the legacy main canvas on the stable physical OnAir root. The
-        // encoder is attached to ProgramView and is never rebound here.
-        obs_set_output_source(0, currentScene);
+        // ProgramView is the libobs main view, so its channel 0 already holds
+        // the stable physical OnAir root.  Mutating the lane composition does
+        // not rebind the view or the encoder video_t.
         emit(OBS_FRONTEND_EVENT_SCENE_CHANGED);
         return;
     }

@@ -300,11 +300,18 @@ index e4688e67d..e7b27ef6b 100644
  
  	obs->name_store_owned = !store;
  	obs->name_store = store ? store : profiler_name_store_create();
+@@ -1827,1 +1827,6 @@ obs_source_t *obs_get_output_source(uint32_t channel)
++obs_view_t *obs_get_main_view(void)
++{
++	return &obs->data.main_canvas->view;
++}
++
+ obs_source_t *obs_get_output_source(uint32_t channel)
 diff --git a/libobs/obs.h b/libobs/obs.h
 index 57844b056..251833af8 100644
 --- a/libobs/obs.h
 +++ b/libobs/obs.h
-@@ -967,6 +967,31 @@ EXPORT void obs_view_set_source(obs_view_t *view, uint32_t channel, obs_source_t
+@@ -967,6 +967,34 @@ EXPORT void obs_view_set_source(obs_view_t *view, uint32_t channel, obs_source_t
  /** Gets the source currently in use for this view context */
  EXPORT obs_source_t *obs_view_get_source(obs_view_t *view, uint32_t channel);
  
@@ -332,6 +339,9 @@ index 57844b056..251833af8 100644
 +
 +/** Cancel the pending pair swap, if any, without changing either view. */
 +EXPORT void obs_view_cancel_atomic_swap(void);
++
++/** Returns the non-owning main OBS view used by obs_get_video(). */
++EXPORT obs_view_t *obs_get_main_view(void);
 +
  /** Renders the sources of this view context */
  EXPORT void obs_view_render(obs_view_t *view);
@@ -491,12 +501,17 @@ diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
 index 85e28afd9..5a280b22e 100644
 --- a/plugins/win-dshow/virtualcam.c
 +++ b/plugins/win-dshow/virtualcam.c
-@@ -43,7 +43,9 @@ static void queue_name_for_output(obs_output_t *output, wchar_t *destination, si
+@@ -43,7 +43,13 @@ static void queue_name_for_output(obs_output_t *output, wchar_t *destination, si
  {
  	const char *output_name = obs_output_get_name(output);
- 	const bool program_return = output_name && strcmp(output_name, "PulsarProgramReturn") == 0;
+-	const bool program_return = output_name && strcmp(output_name, "PulsarProgramReturn") == 0;
++	const char *output_id = obs_output_get_id(output);
++	const bool has_output_id = output_id && *output_id;
++	const bool program_return = has_output_id ? strcmp(output_id, "program_return_output") == 0
++							 : output_name && strcmp(output_name, "PulsarProgramReturn") == 0;
 -	const wchar_t *legacy_name = program_return ? L"OBSPulsarProgramReturnVideo" : L"OBSVirtualCamVideo";
-+	const bool preview_return = output_name && strcmp(output_name, "PulsarPreviewReturn") == 0;
++	const bool preview_return = has_output_id ? strcmp(output_id, "preview_return_output") == 0
++							 : output_name && strcmp(output_name, "PulsarPreviewReturn") == 0;
 +	const wchar_t *legacy_name = preview_return ? L"OBSPulsarPreviewReturnVideo"
 +						   : program_return ? L"OBSPulsarProgramReturnVideo" : L"OBSVirtualCamVideo";
  	const char *runtime_id = getenv("PULSAR_RUNTIME_INSTANCE_ID");
@@ -518,7 +533,7 @@ index 85e28afd9..5a280b22e 100644
  };
 +
 +struct obs_output_info preview_return_info = {
-+	.id = "program_return_output",
++	.id = "preview_return_output",
 +	.flags = OBS_OUTPUT_VIDEO,
 +	.get_name = virtualcam_name,
 +	.create = virtualcam_create,
@@ -529,4 +544,3 @@ index 85e28afd9..5a280b22e 100644
 +};
 -- 
 2.54.0.windows.1
-

@@ -69,14 +69,16 @@ DEFAULT_EXE = (
 READY_RE = re.compile(r"PULSAR_READY ws=(\S+) password=(\S+)")
 DUAL_READY_RE = re.compile(
     r"\[pulsar-dual-lane\] ready LaneA=(\S+) LaneB=(\S+) "
-    r"ProgramView=(\S+) PreviewView=(\S+) ProgramVideo=(\S+) PreviewVideo=(\S+)"
+    r"ProgramView=(\S+) PreviewView=(\S+) ProgramVideo=(\S+) PreviewVideo=(\S+) "
+    r"MainView=(\S+) MainVideo=(\S+)"
 )
 ENCODER_RE = re.compile(r"video encoder allocated: family=(\S+) id=(\S+)")
 COMMIT_RE = re.compile(
     r"\[pulsar-dual-lane\] TakeCommitted count=(\d+) frame_id=(\d+) "
     r"pts_ns=(\d+) onair_lane=(-?\d+) preview_lane=(-?\d+) "
     r"OnAirRoot=(\S+) PreviewRoot=(\S+) ProgramView=(\S+) "
-    r"PreviewView=(\S+) ProgramVideo=(\S+) PreviewVideo=(\S+)"
+    r"PreviewView=(\S+) ProgramVideo=(\S+) PreviewVideo=(\S+) "
+    r"MainView=(\S+) MainVideo=(\S+)"
 )
 
 CANVAS_W = 1920
@@ -321,6 +323,8 @@ class ReadyIdentity:
     preview_view: str
     program_video: str
     preview_video: str
+    main_view: str
+    main_video: str
 
 
 @dataclass(frozen=True)
@@ -336,6 +340,8 @@ class Commit:
     preview_view: str
     program_video: str
     preview_video: str
+    main_view: str
+    main_video: str
 
 
 def normalise_pointer(value: str) -> str:
@@ -344,7 +350,7 @@ def normalise_pointer(value: str) -> str:
 
 
 def parse_ready(match: re.Match[str]) -> ReadyIdentity:
-    return ReadyIdentity(*(normalise_pointer(match.group(i)) for i in range(1, 7)))
+    return ReadyIdentity(*(normalise_pointer(match.group(i)) for i in range(1, 9)))
 
 
 def parse_commit(match: re.Match[str]) -> Commit:
@@ -360,6 +366,8 @@ def parse_commit(match: re.Match[str]) -> Commit:
         preview_view=normalise_pointer(match.group(9)),
         program_video=normalise_pointer(match.group(10)),
         preview_video=normalise_pointer(match.group(11)),
+        main_view=normalise_pointer(match.group(12)),
+        main_video=normalise_pointer(match.group(13)),
     )
 
 
@@ -387,6 +395,16 @@ def validate_commit(identity: ReadyIdentity, previous: Commit | None, commit: Co
         identity.preview_video,
     ):
         raise ProbeFailure(f"ProgramVideo/PreviewVideo identity changed: {commit}")
+    if (identity.program_view, identity.program_video) != (
+        identity.main_view,
+        identity.main_video,
+    ):
+        raise ProbeFailure(f"Program surface is not libobs main view/video: {identity}")
+    if (commit.main_view, commit.main_video) != (
+        identity.main_view,
+        identity.main_video,
+    ):
+        raise ProbeFailure(f"main view/video identity changed: {commit}")
     if previous is not None:
         if commit.count != previous.count + 1:
             raise ProbeFailure(f"non-contiguous Take count: previous={previous} current={commit}")
@@ -502,6 +520,10 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
         raise ProbeFailure(f"ProgramView and PreviewView are aliased: {identity}")
     if identity.program_video == identity.preview_video:
         raise ProbeFailure(f"ProgramVideo and PreviewVideo are aliased: {identity}")
+    if identity.program_view != identity.main_view:
+        raise ProbeFailure(f"ProgramView is not the libobs main view: {identity}")
+    if identity.program_video != identity.main_video:
+        raise ProbeFailure(f"ProgramVideo is not obs_get_video(): {identity}")
 
     encoder_match = process.wait_for(ENCODER_RE, timeout=60)
     actual_family = encoder_match.group(1).lower()
@@ -656,7 +678,7 @@ def run(args: argparse.Namespace) -> int:
             print(f"dual-lane probe: encoder={args.encoder} takes={args.takes} exe={args.exe}")
             commits = asyncio.run(drive(process, args.takes))
             print(
-                f"PASS: {len(commits)} Takes; LaneA/LaneB, ProgramView/PreviewView and "
+                f"PASS: {len(commits)} Takes; LaneA/LaneB, main ProgramView/PreviewView and "
                 "ProgramVideo/PreviewVideo remained stable; frame_id/PTS monotone"
             )
             return 0
