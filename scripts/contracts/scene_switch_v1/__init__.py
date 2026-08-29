@@ -41,7 +41,7 @@ EVENT_TYPES: Final = (
     "TakeAborted",
     "CommandRejected",
 )
-ABORT_REASONS: Final = ("operator", "timeout", "shutdown", "superseded")
+ABORT_REASONS: Final = ("operator", "timeout", "shutdown", "superseded", "queue_rejected")
 ERROR_CODES: Final = (
     "SCHEMA_INVALID",
     "RUNTIME_MISMATCH",
@@ -318,7 +318,12 @@ def _validate_event_common(obj: Mapping[str, Any], event_type: str) -> dict[str,
         "payload_sha256",
     }
     common_required = common_allowed - {"previous_role_map"}
-    _require_exact_keys(obj, common_required, common_allowed | _EVENT_FIELDS[event_type], "event")
+    _require_exact_keys(
+        obj,
+        common_required,
+        common_allowed | _EVENT_FIELDS[event_type] | _EVENT_OPTIONAL_FIELDS.get(event_type, set()),
+        "event",
+    )
     if obj.get("contract") != CONTRACT:
         raise SceneSwitchValidationError("SCHEMA_INVALID", "event contract or schema_version is not v1")
     _require_schema_version(obj.get("schema_version"), "event.schema_version")
@@ -379,6 +384,10 @@ _EVENT_FIELDS: Final[dict[str, set[str]]] = {
     "CommandRejected": {"error_code", "error_message", "error_details", "expected_revisions", "expected_server_seq"},
 }
 
+_EVENT_OPTIONAL_FIELDS: Final[dict[str, set[str]]] = {
+    "TakeAborted": {"last_committed_frame_id", "last_committed_pts_ns"},
+}
+
 
 def validate_event(event: Mapping[str, Any]) -> dict[str, Any]:
     """Validate and copy an event, including event-specific required fields."""
@@ -403,7 +412,9 @@ def validate_event(event: Mapping[str, Any]) -> dict[str, Any]:
         "observed_at_monotonic_ns",
         "payload_sha256",
     }
-    _require_exact_keys(obj, required | _EVENT_FIELDS[event_type], required | _EVENT_FIELDS[event_type] | {"previous_role_map"}, "event")
+    required_fields = required | _EVENT_FIELDS[event_type]
+    allowed_fields = required_fields | _EVENT_OPTIONAL_FIELDS.get(event_type, set()) | {"previous_role_map"}
+    _require_exact_keys(obj, required_fields, allowed_fields, "event")
     result = _validate_event_common(obj, event_type)
 
     if event_type == "PrepareAccepted":
@@ -458,6 +469,9 @@ def validate_event(event: Mapping[str, Any]) -> dict[str, Any]:
         if obj["reason"] not in ABORT_REASONS:
             raise SceneSwitchValidationError("SCHEMA_INVALID", "event.reason is not supported by v1")
         result["reason"] = obj["reason"]
+        for field in ("last_committed_frame_id", "last_committed_pts_ns"):
+            if field in obj:
+                result[field] = _require_non_negative_int(obj[field], f"event.{field}")
     else:
         if obj["error_code"] not in ERROR_CODES:
             raise SceneSwitchValidationError("SCHEMA_INVALID", "event.error_code is not supported by v1")

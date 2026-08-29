@@ -21,10 +21,24 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <util/profiler.hpp>
 #endif
 
+#include <cstdint>
+#include <limits>
+#include <string>
+
+#include <util/platform.h>
+
 #include "RequestHandler.h"
 #include "pulsar-dual-lane-control.h"
+#include "pulsar-runtime-telemetry.h"
 
 namespace {
+
+std::string DeadlineDelta(uint64_t deadline, uint64_t now)
+{
+    if (deadline >= now)
+        return std::string("+") + std::to_string(deadline - now);
+    return std::string("-") + std::to_string(now - deadline);
+}
 
 bool IsReadOnlyRequest(const std::string &requestType)
 {
@@ -33,6 +47,75 @@ bool IsReadOnlyRequest(const std::string &requestType)
 	// is treated as potentially mutating. This keeps a newly added command from
 	// bypassing the Preview freeze by accident.
 	return requestType.rfind("Get", 0) == 0;
+}
+
+// The public scene/transition request shape remains unchanged.  A latency
+// campaign may add this private, opt-in envelope to the request data so the
+// runtime can carry command/intent identity through the legacy ingress.  It is
+// consumed before the handler invokes obs_frontend_set_current_scene(); an
+// invalid envelope is ignored for telemetry and never changes Cut semantics.
+struct RuntimeTelemetryIngress {
+    bool requested = false;
+    bool envelopeValid = false;
+    pulsar_runtime_telemetry::BeginTakeStatus status;
+    const char *failure = nullptr;
+};
+
+RuntimeTelemetryIngress BeginRuntimeTakeTelemetry(const Request &request)
+{
+    RuntimeTelemetryIngress ingress;
+    if (request.RequestType != "SetCurrentProgramScene" && request.RequestType != "TriggerStudioModeTransition")
+        return ingress;
+    if (!request.RequestData.is_object() || !request.RequestData.contains("pulsarTelemetry") ||
+        !request.RequestData["pulsarTelemetry"].is_object())
+        return ingress;
+
+    ingress.requested = true;
+
+    const json &metadata = request.RequestData["pulsarTelemetry"];
+    const char *requiredStrings[] = {"command_id", "intent_id", "runtime_instance_id", "take_command_id",
+                                     "target_lane_id", "target_scene_id", "payload_sha256"};
+    std::string values[7];
+    for (size_t i = 0; i < 7; ++i) {
+        const auto it = metadata.find(requiredStrings[i]);
+        if (it == metadata.end() || !it->is_string()) {
+            ingress.failure = "missing_or_non_string_field";
+            blog(LOG_ERROR, "[pulsar-runtime-telemetry] ingress envelope invalid request=%s reason=%s field=%s",
+                 request.RequestType.c_str(), ingress.failure, requiredStrings[i]);
+            return ingress;
+        }
+        values[i] = it->get<std::string>();
+    }
+
+    const auto freezeIt = metadata.find("freeze_until_monotonic_ns");
+    if (freezeIt == metadata.end() || !freezeIt->is_number_unsigned()) {
+        ingress.failure = "missing_or_non_unsigned_freeze_deadline";
+        blog(LOG_ERROR, "[pulsar-runtime-telemetry] ingress envelope invalid request=%s reason=%s",
+             request.RequestType.c_str(), ingress.failure);
+        return ingress;
+    }
+    const uint64_t freeze = freezeIt->get<uint64_t>();
+    if (freeze > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+        ingress.failure = "freeze_deadline_out_of_range";
+        blog(LOG_ERROR, "[pulsar-runtime-telemetry] ingress envelope invalid request=%s reason=%s",
+             request.RequestType.c_str(), ingress.failure);
+        return ingress;
+    }
+
+    ingress.envelopeValid = true;
+    const uint64_t ingressNowNs = os_gettime_ns();
+    const std::string ingressDelta = DeadlineDelta(freeze, ingressNowNs);
+    ingress.status = pulsar_runtime_telemetry::begin_take_status(
+        values[0].c_str(), values[1].c_str(), values[2].c_str(), values[3].c_str(), values[4].c_str(),
+        values[5].c_str(), static_cast<int64_t>(freeze), values[6].c_str());
+    blog(ingress.status.accepted ? LOG_INFO : LOG_ERROR,
+         "[pulsar-runtime-telemetry] ingress request=%s command_id=%s "
+         "freeze_until_monotonic_ns=%llu ingress_now_monotonic_ns=%llu deadline_delta_ns=%s "
+         "called=%d available=%d accepted=%d",
+         request.RequestType.c_str(), values[0].c_str(), static_cast<unsigned long long>(freeze),
+         static_cast<unsigned long long>(ingressNowNs), ingressDelta.c_str(), ingress.status.called,
+         ingress.status.available, ingress.status.accepted);
+    return ingress;
 }
 
 } // namespace
@@ -250,7 +333,20 @@ RequestResult RequestHandler::ProcessRequest(const Request &request)
 		return RequestResult::Error(RequestStatus::UnknownRequestType, "Your request type is not valid.");
 	}
 
-	return std::bind(handler, this, std::placeholders::_1)(request);
+    const RuntimeTelemetryIngress telemetry = BeginRuntimeTakeTelemetry(request);
+    RequestResult result = std::bind(handler, this, std::placeholders::_1)(request);
+    if (telemetry.requested && telemetry.envelopeValid && !telemetry.status.accepted) {
+        blog(LOG_ERROR,
+             "[pulsar-runtime-telemetry] ingress not accepted request=%s called=%d available=%d accepted=%d; "
+             "the resulting Cut is intentionally not counted as runtime evidence",
+             request.RequestType.c_str(), telemetry.status.called, telemetry.status.available,
+             telemetry.status.accepted);
+    }
+    // queueDualLaneCut consumes a valid envelope synchronously.  Retire any
+    // envelope left by a rejected/non-Take route before another request can
+    // inherit its command/intent identity.
+    pulsar_runtime_telemetry::cancel_take();
+    return result;
 }
 
 std::vector<std::string> RequestHandler::GetRequestList()
