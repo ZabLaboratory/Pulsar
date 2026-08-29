@@ -2382,9 +2382,12 @@ private:
 #ifdef _WIN32
         BCRYPT_ALG_HANDLE alg = nullptr; BCRYPT_HASH_HANDLE hash = nullptr;
         DWORD objectLen = 0, bytes = 0; std::vector<unsigned char> object, digest(32);
-        if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0 ||
-            BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLen), sizeof(objectLen), &bytes, 0) != 0)
+        if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0)
             return {};
+        if (BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLen), sizeof(objectLen), &bytes, 0) != 0) {
+            BCryptCloseAlgorithmProvider(alg, 0);
+            return {};
+        }
         object.resize(objectLen);
         const bool ok = BCryptCreateHash(alg, &hash, object.data(), objectLen, nullptr, 0, 0) == 0 &&
             BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char *>(text.data())), static_cast<ULONG>(text.size()), 0) == 0 &&
@@ -2414,7 +2417,8 @@ private:
         if (type == "Prepare") {
             allowed.insert("target"); allowed.insert("timeout_ms");
             for (const auto &it : in.items()) if (!allowed.count(it.key())) { error = "Prepare command contains unknown or cross-type fields"; return false; }
-            if (!in.contains("target") || !in.contains("timeout_ms") || !in["target"].is_object() || in["target"].size() != 2 || !in["target"].contains("lane_id") || !in["target"].contains("scene_id") || !in["target"]["lane_id"].is_string() || (in["target"]["lane_id"] != "A" && in["target"]["lane_id"] != "B") || !in["target"]["scene_id"].is_string() || in["target"]["scene_id"].get<std::string>().empty() || in["target"]["scene_id"].get<std::string>().size() > 256 || !integer(in["timeout_ms"], n) || n < 1 || n > 60000) { error = "Prepare payload is invalid"; return false; }
+            const bool sceneHasControl = in["target"].is_object() && in["target"].contains("scene_id") && in["target"]["scene_id"].is_string() && std::any_of(in["target"]["scene_id"].get<std::string>().begin(), in["target"]["scene_id"].get<std::string>().end(), [](unsigned char c) { return c < 0x20 || c == 0x7F; });
+            if (!in.contains("target") || !in.contains("timeout_ms") || !in["target"].is_object() || in["target"].size() != 2 || !in["target"].contains("lane_id") || !in["target"].contains("scene_id") || !in["target"]["lane_id"].is_string() || (in["target"]["lane_id"] != "A" && in["target"]["lane_id"] != "B") || !in["target"]["scene_id"].is_string() || in["target"]["scene_id"].get<std::string>().empty() || in["target"]["scene_id"].get<std::string>().size() > 256 || sceneHasControl || !integer(in["timeout_ms"], n) || n < 1 || n > 60000) { error = "Prepare payload is invalid"; return false; }
         } else if (type == "Take") {
             allowed.insert("prepared_command_id"); allowed.insert("timeout_ms");
             for (const auto &it : in.items()) if (!allowed.count(it.key())) { error = "Take command contains unknown or cross-type fields"; return false; }
@@ -2474,7 +2478,14 @@ private:
         auto prior = outcomes_.find(key);
         if (prior != outcomes_.end()) { if (prior->second.first == digest) { respond(response, prior->second.second); return; } Pending p{key,command["command_id"],command["intent_id"],command["runtime_instance_id"],digest,"",""}; json event=reject(p,"IDEMPOTENCY_CONFLICT","command_id was already used with a different payload",{{"original_payload_sha256",prior->second.first},{"received_payload_sha256",digest}}); emit(event); respond(response,event); return; }
         Pending p{key,command["command_id"],command["intent_id"],command["runtime_instance_id"],digest,"",""};
-        if (p.runtimeId != runtimeId_) { json event=reject(p,"RUNTIME_MISMATCH","command runtime_instance_id does not belong to this runtime"); outcomes_[key]={digest,event}; emit(event); respond(response,event); return; }
+        // A foreign runtime can never mutate this process.  Do not retain its
+        // caller-controlled key: doing so would turn RUNTIME_MISMATCH into an
+        // unbounded remote-memory allocation surface.
+        if (p.runtimeId != runtimeId_) { json event=reject(p,"RUNTIME_MISMATCH","command runtime_instance_id does not belong to this runtime"); emit(event); respond(response,event); return; }
+        // Process-lifetime idempotency history is intentionally bounded. Once
+        // full, every new command fails closed before any lane mutation; known
+        // command IDs remain replayable exactly and are never evicted.
+        if (outcomes_.size() >= kMaxOutcomes) { json event=reject(p,"SCHEMA_INVALID","idempotency history capacity reached; restart runtime before a new command",{{"max_entries",kMaxOutcomes}}); emit(event); respond(response,event); return; }
         if (command["expected_revisions"] != revisions_) { json event=reject(p,"REVISION_STALE","expected revisions do not match the current runtime revisions",{{"expected_revisions",command["expected_revisions"]},{"actual_revisions",revisions_}}); outcomes_[key]={digest,event}; emit(event); respond(response,event); return; }
         if (command.contains("expected_server_seq") && command["expected_server_seq"] != serverSeq_) { json event=reject(p,"SERVER_SEQ_STALE","expected server sequence does not match the current runtime sequence"); outcomes_[key]={digest,event}; emit(event); respond(response,event); return; }
         const std::string type = command["command_type"];
@@ -2530,6 +2541,7 @@ private:
     std::mutex mutex_; obs_websocket_vendor vendor_ = nullptr; bool running_ = false;
     std::string runtimeId_ = [] { const char *v=std::getenv("PULSAR_RUNTIME_INSTANCE_ID"); return (v && *v) ? std::string(v) : std::string("pulsar-runtime"); }();
     uint64_t serverSeq_ = 0; json revisions_={{"program",0},{"preview",0},{"role_map",0}}; json roleMap_={{"on_air","A"},{"preview","B"}}; std::string state_="ready";
+    static constexpr size_t kMaxOutcomes = 4096;
     std::optional<Pending> pendingPrepare_, pendingTake_; std::map<std::string,std::pair<std::string,json>> outcomes_;
 };
 

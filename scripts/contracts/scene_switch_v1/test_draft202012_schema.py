@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
+import pytest
+
+from . import SceneSwitchValidationError, validate_command
 
 
 HERE = Path(__file__).parent
@@ -31,3 +34,18 @@ def test_abort_queue_rejected_requires_both_last_committed_observations() -> Non
     }
     validator = Draft202012Validator(SCHEMA)
     assert not list(validator.iter_errors(command))
+
+
+@pytest.mark.parametrize("scene_id", ["scene\u0000shadow", "scene\nnext", "scene\x7fhidden"])
+def test_scene_identifier_rejects_control_characters_in_schema_and_reference(scene_id: str) -> None:
+    command = {
+        "contract": "pulsar.scene-switch.v1", "schema_version": 1,
+        "message_type": "command", "command_type": "Prepare",
+        "command_id": "prepare-control", "intent_id": "intent-control",
+        "runtime_instance_id": "runtime-control",
+        "expected_revisions": {"program": 0, "preview": 0, "role_map": 0},
+        "target": {"lane_id": "B", "scene_id": scene_id}, "timeout_ms": 1000,
+    }
+    assert list(Draft202012Validator(SCHEMA).iter_errors(command))
+    with pytest.raises(SceneSwitchValidationError):
+        validate_command(command)

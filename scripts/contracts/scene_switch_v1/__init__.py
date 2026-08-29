@@ -208,7 +208,10 @@ def _validate_target(value: Any) -> dict[str, str]:
     lane = obj["lane_id"]
     if lane not in LANE_IDS:
         raise SceneSwitchValidationError("SCHEMA_INVALID", "target.lane_id must be 'A' or 'B'")
-    return {"lane_id": lane, "scene_id": _require_string(obj["scene_id"], "target.scene_id")}
+    scene_id = _require_string(obj["scene_id"], "target.scene_id")
+    if len(scene_id) > 256 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in scene_id):
+        raise SceneSwitchValidationError("SCHEMA_INVALID", "target.scene_id contains a control character or exceeds 256 characters")
+    return {"lane_id": lane, "scene_id": scene_id}
 
 
 def validate_command(command: Mapping[str, Any]) -> dict[str, Any]:

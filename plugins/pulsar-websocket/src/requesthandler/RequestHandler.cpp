@@ -49,6 +49,20 @@ bool IsReadOnlyRequest(const std::string &requestType)
 	return requestType.rfind("Get", 0) == 0;
 }
 
+// Abort is intentionally not labelled read-only: it mutates the scene-switch
+// state, but must reach that adapter to cancel a frozen, pre-boundary Take.
+// This is the sole controlled bypass of the generic dual-lane mutation lease.
+// GetState is included because it is the adapter's explicit observation API.
+bool IsControlledSceneSwitchPendingBypass(const Request &request)
+{
+	if (request.RequestType != "CallVendorRequest" || !request.RequestData.is_object())
+		return false;
+	if (request.RequestData.value("vendorName", "") != "pulsar-scene-switch")
+		return false;
+	const std::string nested = request.RequestData.value("requestType", "");
+	return nested == "Abort" || nested == "GetState";
+}
+
 // The public scene/transition request shape remains unchanged.  A latency
 // campaign may add this private, opt-in envelope to the request data so the
 // runtime can carry command/intent identity through the legacy ingress.  It is
@@ -314,7 +328,9 @@ RequestResult RequestHandler::ProcessRequest(const Request &request)
 	// it is unknown to this build: future mutation-capable handlers cannot
 	// silently bypass AC-04. The lease serializes the whole handler invocation
 	// so a mutation already in flight completes before a Cut publishes pending.
-	pulsar_dual_lane_control::MutationLease mutationLease(!IsReadOnlyRequest(request.RequestType));
+	const bool controlledSceneSwitchBypass = IsControlledSceneSwitchPendingBypass(request);
+	pulsar_dual_lane_control::MutationLease mutationLease(
+		!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass);
 	if (!mutationLease.allowed())
 		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
 					    "PREVIEW_FROZEN: WebSocket mutation rejected while a dual-lane Take is pending.");

@@ -64,3 +64,5 @@ def test_runtime_adapter_guards_the_exact_v1_lifecycle_edges() -> None:
     assert "Abort intent_id differs from Take" in source
     assert 'const json previous = revisions_;' in source
     assert "sceneSwitchClearPrepared" in source
+    assert "kMaxOutcomes = 4096" in source
+    assert "RUNTIME_MISMATCH into an" in source
