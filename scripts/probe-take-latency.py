@@ -16,9 +16,10 @@ boundaries below:
 ``directshow_return``
     First valid Program frame observed on the ProgramReturn DirectShow
     surface (AC-08).  This is a separate boundary, never a raw substitute.
-``rtmp_first_packet``
-    First RTMP packet.  It is reported independently and is not a decoded
-    frame guarantee (AC-12).
+``encoded_first_packet``
+    First packet handed to the encoder-output callback.  This is a
+    pre-network boundary; it is not an RTMP ingress or decoded-frame
+    guarantee.  RTMP reception remains an external Probe measurement.
 ``decoded_first_frame`` / ``antenna_first_frame``
     Optional diagnostic timings.  They are reported, but have no SLO here.
 
@@ -84,19 +85,19 @@ ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 BOUNDARIES = (
     "encoder_input_raw",
     "directshow_return",
-    "rtmp_first_packet",
+    "encoded_first_packet",
     "decoded_first_frame",
     "antenna_first_frame",
 )
 REQUIRED_BOUNDARIES = (
     "encoder_input_raw",
     "directshow_return",
-    "rtmp_first_packet",
+    "encoded_first_packet",
 )
 SLO_MS = {
     "encoder_input_raw": 50.0,
     "directshow_return": 75.0,
-    "rtmp_first_packet": 15.0,
+    "encoded_first_packet": 15.0,
 }
 RESOURCE_REFERENCE = {
     "extra_frame_render_ms": 0.091,
@@ -106,12 +107,10 @@ RESOURCE_MODES = ("reference", "dual_lane")
 RESOURCE_METRICS = (
     "frame_render_ms",
     "resident_bytes",
-    "cpu_percent",
-    "gpu_percent",
-    "encoder_queue_depth",
-    "wgc_cpu_percent",
-    "cef_cpu_percent",
-    "nvenc_gpu_percent",
+    "process_cpu_percent",
+    "host_gpu_percent",
+    "callback_backlog_estimate",
+    "encoder_utilization_percent",
 )
 
 SESSION_REQUIRED = {
@@ -128,6 +127,8 @@ SESSION_REQUIRED = {
     "build_revision",
     "command_line",
     "hardware",
+    "producer_topology",
+    "producer_count",
     "evidence_kind",
 }
 SESSION_OPTIONAL = {"comparison_id", "notes", "source_types"}
@@ -155,9 +156,14 @@ OBSERVATION_ALLOWED = OBSERVATION_REQUIRED | OBSERVATION_OPTIONAL
 RESOURCE_REQUIRED = {
     "record_type",
     "sample_mode",
+    "measurement_phase",
     "clock_domain",
     "runtime_instance_id",
     "observed_at_monotonic_ns",
+    "build_revision",
+    "hardware",
+    "producer_topology",
+    "producer_count",
     *RESOURCE_METRICS,
 }
 RESOURCE_OPTIONAL = {"gpu_memory_bytes", "notes"}
@@ -281,7 +287,7 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
         ):
             raise EvidenceError(
                 "SCHEMA_INVALID",
-                "runtime session.source_types must list the successfully bound workload source kinds",
+                "runtime session.source_types must list the declared workload source kinds; the probe must separately prove their binding",
                 line=line,
             )
         if len(set(source_types)) != len(source_types):
@@ -307,7 +313,37 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
             "resource reference must remain +0.091 ms/frame and +3.13 MB (3,130,000 decimal bytes)",
             line=line,
         )
-    _object(obj["hardware"], "session.hardware", line=line)
+    hardware = _object(obj["hardware"], "session.hardware", line=line)
+    _exact_keys(hardware, {"host", "gpu"}, {"host", "gpu"}, "session.hardware", line=line)
+    for key in ("host", "gpu"):
+        label = _string(hardware[key], f"session.hardware.{key}", line=line)
+        if len(label) > 128 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in label):
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                f"session.hardware.{key} must be a printable label of at most 128 characters",
+                line=line,
+            )
+        if obj["evidence_kind"] == "runtime" and label in ("unknown-host", "unknown-gpu"):
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                f"runtime session.hardware.{key} must identify the actual host/adapter",
+                line=line,
+            )
+    producer_topology = obj["producer_topology"]
+    if producer_topology not in ("single_lane_reference", "dual_lane_ab"):
+        raise EvidenceError(
+            "SCHEMA_INVALID",
+            "session.producer_topology must be single_lane_reference or dual_lane_ab",
+            line=line,
+        )
+    producer_count = _integer(obj["producer_count"], "session.producer_count", line=line)
+    expected_count = 1 if producer_topology == "single_lane_reference" else 2
+    if producer_count != expected_count:
+        raise EvidenceError(
+            "SCHEMA_INVALID",
+            "session.producer_count does not match session.producer_topology",
+            line=line,
+        )
     return result
 
 
@@ -322,6 +358,14 @@ def _validate_event_record(value: Any, session: Mapping[str, Any], *, line: int 
         raise EvidenceError("EVENT_INVALID", str(exc), line=line) from exc
     if event["runtime_instance_id"] != session["runtime_instance_id"]:
         raise EvidenceError("CORRELATION_INVALID", "event runtime_instance_id differs from session", line=line)
+    if event["event_type"] == "TakeAborted" and event["reason"] == "queue_rejected":
+        terminal_fields = ("last_committed_frame_id", "last_committed_pts_ns")
+        if any(field not in event for field in terminal_fields):
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "queue_rejected TakeAborted must expose last committed frame/PTS together",
+                line=line,
+            )
     return event
 
 
@@ -350,7 +394,7 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
     expected = {
         "encoder_input_raw": ("ProgramView", "encoder_input"),
         "directshow_return": ("ProgramReturn", "DirectShow"),
-        "rtmp_first_packet": ("RTMP", "rtmp"),
+        "encoded_first_packet": ("EncoderOutput", "encoder_callback"),
         "decoded_first_frame": ("RTMP", "decoder"),
         "antenna_first_frame": ("Antenna", "antenna"),
     }[obj["boundary"]]
@@ -366,9 +410,9 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
         _boolean(obj["program_frame"], "observation.program_frame", line=line)
         if obj["valid"] and not obj["program_frame"]:
             raise EvidenceError("BOUNDARY_INVALID", "a valid raw/DirectShow sample must be a Program frame", line=line)
-    if obj["boundary"] == "rtmp_first_packet":
+    if obj["boundary"] == "encoded_first_packet":
         if "packet_index" not in obj or _integer(obj["packet_index"], "observation.packet_index", line=line) != 0:
-            raise EvidenceError("BOUNDARY_INVALID", "rtmp_first_packet requires packet_index=0", line=line)
+            raise EvidenceError("BOUNDARY_INVALID", "encoded_first_packet requires packet_index=0", line=line)
     if "frame_hash" in obj:
         _string(obj["frame_hash"], "observation.frame_hash", line=line)
     return result
@@ -382,17 +426,45 @@ def _validate_resource(value: Any, session: Mapping[str, Any], *, line: int | No
         raise EvidenceError("SCHEMA_INVALID", "resource record_type must be resource_sample", line=line)
     if obj["sample_mode"] not in RESOURCE_MODES:
         raise EvidenceError("SCHEMA_INVALID", "resource sample_mode must be reference or dual_lane", line=line)
+    if obj["measurement_phase"] != obj["sample_mode"]:
+        raise EvidenceError(
+            "SCHEMA_INVALID",
+            "resource measurement_phase must equal sample_mode",
+            line=line,
+        )
     if obj["clock_domain"] != "monotonic_ns":
         raise EvidenceError("SCHEMA_INVALID", "resource samples must use clock_domain=monotonic_ns", line=line)
     _string(obj["runtime_instance_id"], "resource.runtime_instance_id", identifier=True, line=line)
     if obj["runtime_instance_id"] != session["runtime_instance_id"]:
         raise EvidenceError("CORRELATION_INVALID", "resource runtime_instance_id differs from session", line=line)
+    build_revision = _string(obj["build_revision"], "resource.build_revision", line=line)
+    if build_revision != session["build_revision"]:
+        raise EvidenceError("CORRELATION_INVALID", "resource build_revision differs from session", line=line)
+    hardware = _object(obj["hardware"], "resource.hardware", line=line)
+    _exact_keys(hardware, {"host", "gpu"}, {"host", "gpu"}, "resource.hardware", line=line)
+    if hardware != session["hardware"]:
+        raise EvidenceError("CORRELATION_INVALID", "resource hardware identity differs from session", line=line)
+    producer_topology = obj["producer_topology"]
+    if producer_topology not in ("single_lane_reference", "dual_lane_ab"):
+        raise EvidenceError("SCHEMA_INVALID", "resource producer_topology is unsupported", line=line)
+    producer_count = _integer(obj["producer_count"], "resource.producer_count", line=line)
+    expected_count = 1 if producer_topology == "single_lane_reference" else 2
+    if producer_count != expected_count:
+        raise EvidenceError(
+            "SCHEMA_INVALID",
+            "resource.producer_count does not match resource.producer_topology",
+            line=line,
+        )
+    expected_topology = "single_lane_reference" if obj["sample_mode"] == "reference" else "dual_lane_ab"
+    if producer_topology != expected_topology:
+        raise EvidenceError(
+            "CORRELATION_INVALID",
+            "resource producer topology does not match measurement phase",
+            line=line,
+        )
     _integer(obj["observed_at_monotonic_ns"], "resource.observed_at_monotonic_ns", line=line)
     for key in RESOURCE_METRICS:
-        if key == "encoder_queue_depth":
-            _integer(obj[key], f"resource.{key}", line=line)
-        else:
-            _number(obj[key], f"resource.{key}", line=line)
+        _number(obj[key], f"resource.{key}", line=line)
     if "gpu_memory_bytes" in obj:
         _integer(obj["gpu_memory_bytes"], "resource.gpu_memory_bytes", line=line)
     return result
@@ -545,6 +617,8 @@ def analyze_trace(
     committed: dict[str, dict[str, Any]] = {}
     aborted: dict[str, dict[str, Any]] = {}
     rejected_count = 0
+    latest_committed_frame = 0
+    latest_committed_pts = 0
     for event in ordered_events:
         event_type = event["event_type"]
         if event_type == "TakeAccepted":
@@ -559,20 +633,40 @@ def analyze_trace(
             if take_id in committed:
                 raise EvidenceError("CORRELATION_INVALID", f"TakeCommitted repeated for {take_id}")
             committed[take_id] = event
+            if event["frame_id"] < latest_committed_frame or event["pts_ns"] < latest_committed_pts:
+                raise EvidenceError("FRAME_ORDER_INVALID", f"TakeCommitted frame ID/PTS regressed at Take {take_id}")
+            latest_committed_frame = event["frame_id"]
+            latest_committed_pts = event["pts_ns"]
         elif event_type == "TakeAborted":
             take_id = event["take_command_id"]
             if take_id in aborted:
                 raise EvidenceError("CORRELATION_INVALID", f"TakeAborted repeated for {take_id}")
             aborted[take_id] = event
+            if event["reason"] == "queue_rejected":
+                terminal_frame = event["last_committed_frame_id"]
+                terminal_pts = event["last_committed_pts_ns"]
+                if terminal_frame != latest_committed_frame or terminal_pts != latest_committed_pts:
+                    raise EvidenceError(
+                        "FRAME_ORDER_INVALID",
+                        f"queue_rejected TakeAborted does not expose the latest committed frame/PTS for Take {take_id}",
+                    )
         elif event_type == "CommandRejected":
             rejected_count += 1
 
     unknown_commits = sorted(set(committed) - set(accepted))
     unknown_aborts = sorted(set(aborted) - set(accepted))
-    if unknown_commits or unknown_aborts:
+    # A physical frame queue rejection is terminal before TakeAccepted: the
+    # runtime deliberately never timestamps an admission that libobs refused.
+    # It is still correlated by take_command_id and must carry the terminal
+    # frame/PTS, while all other aborts require a prior acceptance.
+    invalid_unaccepted_aborts = sorted(
+        take_id for take_id in unknown_aborts if aborted[take_id]["reason"] != "queue_rejected"
+    )
+    if unknown_commits or invalid_unaccepted_aborts:
         raise EvidenceError(
             "CORRELATION_INVALID",
-            f"outcome references unknown Take(s): committed={unknown_commits}, aborted={unknown_aborts}",
+            "outcome references unknown Take(s): "
+            f"committed={unknown_commits}, aborted={invalid_unaccepted_aborts}",
         )
 
     unsettled: list[str] = []
@@ -664,7 +758,7 @@ def analyze_trace(
 
     first_by_take_boundary: dict[tuple[str, str], dict[str, Any]] = {}
     for boundary, observations in selected.items():
-        if boundary == "rtmp_first_packet":
+        if boundary == "encoded_first_packet":
             valid_packet_counts: dict[str, int] = {}
             for observation in observations:
                 take_id = observation["take_command_id"]
@@ -673,7 +767,7 @@ def analyze_trace(
             if duplicate_packets:
                 raise EvidenceError(
                     "CORRELATION_INVALID",
-                    f"more than one valid first RTMP packet for Take(s) {duplicate_packets}",
+                    f"more than one valid first encoded packet for Take(s) {duplicate_packets}",
                 )
         for observation in sorted(observations, key=lambda value: (value["observed_at_monotonic_ns"], value["frame_id"], value["pts_ns"])):
             key = (observation["take_command_id"], boundary)
@@ -743,7 +837,7 @@ def analyze_trace(
             "unsettled_take_count": len(unsettled),
             "all_events_contract_validated": True,
         },
-        "AC-12": {"boundary": "rtmp_first_packet", **latency["rtmp_first_packet"]},
+        "AC-12": {"boundary": "encoded_first_packet", **latency["encoded_first_packet"]},
         "AC-13": {
             "status": resource_report["status"],
             "resource": resource_report,
@@ -790,6 +884,7 @@ def analyze_trace(
         "notes": [
             "Latency starts at TakeAccepted.observed_at_monotonic_ns and ends at the first valid post-commit observation for the named boundary.",
             "DirectShow return and encoder/raw input are separate boundaries; neither is inferred from the other.",
+            "encoded_first_packet is the pre-network encoder callback; RTMP receiver ingress is an external Probe boundary.",
             "Decoded and antenna timings are diagnostic only and carry no acceptance SLO.",
             "A fixture report is never a runtime acceptance; run the same command against a runtime trace with evidence_kind=runtime.",
         ],

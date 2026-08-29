@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime probe for Pulsar's hot A/B scene lanes (issue #244).
+"""Runtime probe for Pulsar's hot A/B scene lanes (issue #246).
 
 The probe drives the public obs-websocket v5 boundary only.  It starts with
 one logical scene on air, alternates a second scene into Preview, and commits
@@ -16,17 +16,17 @@ Run the two acceptance campaigns independently against the same build::
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder x264 --takes 100
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 \
-        --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001
-    python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 \
         --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 \
         --build-revision <candidate-sha> --capture-window <visible-title:class:exe> \
         --cef-workload
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc \
         --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 \
-        --resource-mode reference --resource-only
+        --build-revision <candidate-sha> --capture-window <visible-title:class:exe> \
+        --cef-workload --resource-mode reference --resource-only
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 \
         --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 \
-        --trace-append --resource-mode dual_lane
+        --build-revision <candidate-sha> --capture-window <visible-title:class:exe> \
+        --cef-workload --trace-append --resource-mode dual_lane
 
 Exit codes are 0 (pass), 1 (assertion/runtime failure), 2 (usage or missing
 WebSocket dependency), and 3 (typed environment skip, for example no binary
@@ -37,11 +37,11 @@ The process boundary is deliberate: no libobs/OBS DLL is loaded and no native
 object is accessed from Python.  Only obs-websocket v5 JSON frames and the
 Pulsar child process's structured diagnostics are used.  With ``--trace``, the
 same public requests carry an explicit, opt-in transaction envelope; the
-runtime writes session/events/raw/RTMP records and starts the ProgramReturn
-producer for an independent DirectShow consumer.  ``--resource-mode`` enables
+runtime writes session/events/raw/encoded-output records and starts the
+ProgramReturn producer for an independent DirectShow consumer.  ``--resource-mode`` enables
 the native OBS/platform resource sampler; use ``--resource-only`` for the
-single-canvas reference phase and ``--trace-append --resource-mode dual_lane``
-for the correlated dual-lane phase.
+single-producer-pair reference phase and ``--trace-append --resource-mode dual_lane``
+for the correlated two-pair A/B phase.
 
 The --cef-workload mode starts an ephemeral loopback HTTP server for a
 deterministic page and requires --capture-window to name an actual visible WGC
@@ -135,9 +135,13 @@ INPUT_B_FROZEN = "probe-dual-lane-frozen-B"
 COLOR_RED_ABGR = 0xFF0000FF
 COLOR_GREEN_ABGR = 0xFF00FF00
 COLOR_BLUE_ABGR = 0xFFFF0000
-CAPTURE_SOURCE_NAME = "PulsarCapture"
-CEF_SOURCE_NAME = "PulsarCefWorkload"
-BOOTSTRAP_SCENE_NAME = "Default"
+# These are deliberately different from the frontend's Default bootstrap
+# inputs.  Each public lane receives its own producer instance; the probe never
+# treats Default's bootstrap sources or workload flags as evidence.
+LANE_SOURCE_NAMES = {
+    "A": {"window_capture": "probe-dual-lane-wgc-A", "browser_source": "probe-dual-lane-cef-A"},
+    "B": {"window_capture": "probe-dual-lane-wgc-B", "browser_source": "probe-dual-lane-cef-B"},
+}
 SOURCE_SCREENSHOT_DEADLINE_S = 20.0
 SOURCE_SCREENSHOT_INTERVAL_S = 0.5
 
@@ -158,6 +162,15 @@ p{margin:0;font-size:27px;color:#9bd8e8;letter-spacing:2px}
 </style></head><body><main><div class=\"bar\"></div><h1>PULSAR CEF #246</h1><p>deterministic local browser_source workload</p><div class=\"tiles\"><div class=\"tile a\"></div><div class=\"tile b\"></div><div class=\"tile c\"></div></div></main></body></html>"""
 
 
+def cef_page_html(lane: str | None = None) -> bytes:
+    """Return the deterministic page, visibly tagged for public lane A/B."""
+
+    if lane not in ("A", "B"):
+        return CEF_PAGE_HTML
+    marker = f"PULSAR CEF #246 / LANE {lane}".encode("ascii")
+    return CEF_PAGE_HTML.replace(b"PULSAR CEF #246</h1>", marker + b"</h1>")
+
+
 class _DeterministicCefHandler(http.server.BaseHTTPRequestHandler):
     """Serve one immutable page and keep the probe's HTTP boundary quiet."""
 
@@ -165,20 +178,26 @@ class _DeterministicCefHandler(http.server.BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] != "/pulsar-cef-246.html":
             self.send_error(404)
             return
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        lane = next((part.split("=", 1)[1] for part in query.split("&") if part.startswith("lane=")), None)
+        body = cef_page_html(lane)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(CEF_PAGE_HTML)))
+        self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(CEF_PAGE_HTML)
+        self.wfile.write(body)
 
     def do_HEAD(self) -> None:  # noqa: N802 - stdlib handler API
         if self.path.split("?", 1)[0] != "/pulsar-cef-246.html":
             self.send_error(404)
             return
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        lane = next((part.split("=", 1)[1] for part in query.split("&") if part.startswith("lane=")), None)
+        body = cef_page_html(lane)
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(CEF_PAGE_HTML)))
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
 
     def log_message(self, _format: str, *_args: Any) -> None:
@@ -228,6 +247,35 @@ def choose_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _valid_hardware_label(value: str | None, kind: str) -> str:
+    if not value or not value.strip() or len(value) > 128 or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise ProbeFailure(f"trace {kind} identity must be a non-empty printable label of at most 128 characters")
+    if value in ("unknown-host", "unknown-gpu"):
+        raise ProbeFailure(f"trace {kind} identity must identify the actual host/adapter")
+    return value
+
+
+def resolve_trace_hardware(host: str | None = None, gpu: str | None = None) -> tuple[str, str]:
+    """Resolve the exact host/GPU identity stamped into every resource sample."""
+
+    resolved_host = _valid_hardware_label(host or os.environ.get("PULSAR_TRACE_HOST") or socket.gethostname(), "host")
+    resolved_gpu = gpu or os.environ.get("PULSAR_TRACE_GPU")
+    if not resolved_gpu:
+        try:
+            raw = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                stderr=subprocess.STDOUT,
+                timeout=10,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            raise ProbeSkip(f"cannot resolve a real NVIDIA GPU identity with nvidia-smi: {exc}") from exc
+        resolved_gpu = next((line.strip() for line in raw.splitlines() if line.strip()), None)
+    return resolved_host, _valid_hardware_label(resolved_gpu, "GPU")
+
+
 def compute_auth(password: str, salt: str, challenge: str) -> str:
     secret = base64.b64encode(
         hashlib.sha256((password + salt).encode("utf-8")).digest()
@@ -254,6 +302,8 @@ class PulsarProcess:
         cef_workload: bool = False,
         build_revision: str | None = None,
         cef_url: str | None = None,
+        trace_host: str | None = None,
+        trace_gpu: str | None = None,
     ) -> None:
         self.exe = exe
         self.encoder = encoder
@@ -267,6 +317,12 @@ class PulsarProcess:
         self.cef_workload = cef_workload
         self.build_revision = build_revision or os.environ.get("PULSAR_BUILD_REVISION")
         self.cef_url = cef_url or os.environ.get("PULSAR_CEF_URL")
+        self.trace_host = trace_host
+        self.trace_gpu = trace_gpu
+        self.producer_topology = (
+            "single_lane_reference" if resource_mode == "reference" else "dual_lane_ab"
+        )
+        self.producer_count = 1 if resource_mode == "reference" else 2
         self.port = choose_port()
         self.password = secrets.token_urlsafe(24)
         self.proc: subprocess.Popen[str] | None = None
@@ -290,6 +346,16 @@ class PulsarProcess:
             env["PULSAR_RUNTIME_INSTANCE_ID"] = self.runtime_id
             env["PULSAR_TRACE_SESSION_ID"] = f"{self.runtime_id}-{self.encoder}"
             env["PULSAR_BUILD_REVISION"] = self.build_revision
+            env["PULSAR_TRACE_HOST"] = _valid_hardware_label(self.trace_host, "host")
+            env["PULSAR_TRACE_GPU"] = _valid_hardware_label(self.trace_gpu, "GPU")
+            env["PULSAR_TRACE_PRODUCER_TOPOLOGY"] = self.producer_topology
+            env["PULSAR_TRACE_PRODUCER_COUNT"] = str(self.producer_count)
+            # The trace probe owns the public WGC/CEF producer instances it
+            # creates after PULSAR_READY.  Tell the frontend not to allocate a
+            # duplicate PulsarCapture/PulsarCefWorkload pair in Default; the
+            # probe's registration/settings/pixel checks are the readiness
+            # evidence for the declared topology.
+            env["PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD"] = "1"
             env["PULSAR_TRACE_WARMUP_TAKES"] = str(100)
             env["PULSAR_TRACE_COMMAND"] = "scripts/probe-dual-lane.py --trace"
             if self.resource_mode is not None:
@@ -309,6 +375,10 @@ class PulsarProcess:
                 env["PULSAR_DISABLE_DUAL_LANE"] = "1"
             else:
                 env.pop("PULSAR_DISABLE_DUAL_LANE", None)
+        else:
+            # Do not let a caller's trace-only owner flag leak into an
+            # ordinary non-traced run.
+            env.pop("PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD", None)
         if self.encoder == "nvenc":
             # p1 is accepted by the current NVENC family and makes an
             # accidental x264 fallback visible in the boot log check below.
@@ -344,6 +414,18 @@ class PulsarProcess:
         )
         self.thread = threading.Thread(target=self._pump, name="pulsar-probe-log", daemon=True)
         self.thread.start()
+
+    def cef_url_for_lane(self, lane: str) -> str:
+        if lane not in ("A", "B") or not self.cef_url:
+            raise ProbeFailure(f"cannot build a CEF URL for lane {lane!r}")
+        # The ephemeral loopback server uses the query marker to render a
+        # visible A/B label.  An operator-supplied URL is kept byte-for-byte
+        # intact: source names/items still prove duplication without silently
+        # changing an external application's URL semantics.
+        if "127.0.0.1:" in self.cef_url or "localhost:" in self.cef_url:
+            separator = "&" if "?" in self.cef_url else "?"
+            return f"{self.cef_url}{separator}lane={lane}"
+        return self.cef_url
 
     def _pump(self) -> None:
         assert self.proc is not None and self.proc.stdout is not None
@@ -927,6 +1009,36 @@ async def create_input(inbox: Inbox, ws: Any, scene: str, input_name: str, color
     assert_success(response, f"CreateInput({scene})")
 
 
+async def create_workload_input(
+    inbox: Inbox,
+    ws: Any,
+    scene: str,
+    lane: str,
+    input_kind: str,
+    input_settings: dict[str, Any],
+) -> str:
+    """Create one real producer instance in a public A/B scene."""
+
+    if lane not in ("A", "B") or input_kind not in ("window_capture", "browser_source"):
+        raise ProbeFailure(f"invalid public workload source: lane={lane!r} kind={input_kind!r}")
+    input_name = LANE_SOURCE_NAMES[lane][input_kind]
+    response = await request(
+        inbox,
+        ws,
+        "CreateInput",
+        f"create-workload-{input_kind}-{lane}",
+        {
+            "sceneName": scene,
+            "inputName": input_name,
+            "inputKind": input_kind,
+            "inputSettings": input_settings,
+            "sceneItemEnabled": True,
+        },
+    )
+    assert_success(response, f"CreateInput({input_kind}, lane {lane}, scene {scene})")
+    return input_name
+
+
 async def assert_scene_item_presence(
     inbox: Inbox, ws: Any, scene: str, input_name: str, expected: bool, operation: str
 ) -> None:
@@ -955,29 +1067,108 @@ async def create_scene(inbox: Inbox, ws: Any, scene: str, input_name: str, color
     await create_input(inbox, ws, scene, input_name, color)
 
 
-async def verify_workload_sources(inbox: Inbox, ws: Any, process: PulsarProcess) -> None:
-    """Prove the configured WGC/CEF workload is bound and emitting pixels.
+async def create_public_lane_scenes(
+    inbox: Inbox, ws: Any, process: PulsarProcess, *, lanes: tuple[str, ...] = ("A", "B")
+) -> None:
+    """Create selected public lanes and duplicate real producers per lane.
 
-    ``PULSAR_WORKLOAD_CEF`` and ``PULSAR_CAPTURE_WINDOW`` are inputs to the
-    runtime, not evidence by themselves.  This check walks the public
-    obs-websocket boundary: source registration, read-back settings, enabled
-    Default-scene items, and decoded source screenshots.  A CEF campaign also
-    requires an explicitly supplied visible WGC target so a metadata-only
-    workload can never pass.
+    The reference topology deliberately contains only lane A.  The dual-lane
+    topology contains both A and B, so source registration itself cannot
+    accidentally make the single-canvas baseline pay for a hidden producer.
     """
 
-    required: list[tuple[str, str]] = []
-    if process.capture_window:
-        required.append((CAPTURE_SOURCE_NAME, "window_capture"))
-    if process.cef_workload:
-        if not process.capture_window:
-            raise ProbeFailure("--cef-workload requires --capture-window for a visible WGC target")
-        required.append((CEF_SOURCE_NAME, "browser_source"))
+    if lanes not in (("A",), ("A", "B")):
+        raise ProbeFailure(f"public lane topology must be ('A',) or ('A', 'B'), got {lanes!r}")
+    if process.producer_count != len(lanes):
+        raise ProbeFailure(
+            f"process topology metadata disagrees with requested lanes: "
+            f"producer_count={process.producer_count}, lanes={lanes!r}"
+        )
+
+    scene_specs = {
+        "A": (SCENE_A, INPUT_A, COLOR_RED_ABGR),
+        "B": (SCENE_B, INPUT_B, COLOR_GREEN_ABGR),
+    }
+    for lane in lanes:
+        scene, input_name, colour = scene_specs[lane]
+        await create_scene(inbox, ws, scene, input_name, colour)
+    if process.cef_workload and not process.capture_window:
+        raise ProbeFailure("--cef-workload requires --capture-window for a visible WGC target")
+
+    for lane in lanes:
+        scene = scene_specs[lane][0]
+        if process.capture_window:
+            await create_workload_input(
+                inbox,
+                ws,
+                scene,
+                lane,
+                "window_capture",
+                {
+                    "window": process.capture_window,
+                    "method": 2,
+                    "cursor": True,
+                    "client_area": True,
+                },
+            )
+        if process.cef_workload:
+            await create_workload_input(
+                inbox,
+                ws,
+                scene,
+                lane,
+                "browser_source",
+                {
+                    "url": process.cef_url_for_lane(lane),
+                    "is_local_file": False,
+                    "width": CANVAS_W,
+                    "height": CANVAS_H,
+                    "fps_custom": True,
+                    "fps": 60,
+                    "shutdown": False,
+                    "restart_when_active": False,
+                    "webpage_control_level": 0,
+                },
+            )
+async def verify_workload_sources(
+    inbox: Inbox,
+    ws: Any,
+    process: PulsarProcess,
+    *,
+    lanes: tuple[str, ...] = ("A", "B"),
+    require_pixels: bool = True,
+) -> None:
+    """Prove distinct WGC/CEF producers are attached to the selected lanes.
+
+    Workload flags and the frontend's Default bootstrap inputs are not evidence.
+    The probe reads back every A/B input kind/settings, checks exact scene-item
+    ownership, and decodes a screenshot from every producer while A is Program
+    and B is Preview.  The local CEF server renders a visible lane marker, so
+    the two browser producers are also distinguishable rather than merely
+    duplicate registrations.
+    """
+
+    if lanes not in (("A",), ("A", "B")):
+        raise ProbeFailure(f"public lane topology must be ('A',) or ('A', 'B'), got {lanes!r}")
+    if process.producer_count != len(lanes):
+        raise ProbeFailure(
+            f"process topology metadata disagrees with verification lanes: "
+            f"producer_count={process.producer_count}, lanes={lanes!r}"
+        )
+
+    required: list[tuple[str, str, str]] = []
+    for lane in lanes:
+        if process.capture_window:
+            required.append((lane, "window_capture", LANE_SOURCE_NAMES[lane]["window_capture"]))
+        if process.cef_workload:
+            if not process.capture_window:
+                raise ProbeFailure("--cef-workload requires --capture-window for a visible WGC target")
+            required.append((lane, "browser_source", LANE_SOURCE_NAMES[lane]["browser_source"]))
     if not required:
         return
 
-    response = await request(inbox, ws, "GetInputList", "workload-input-list")
-    assert_success(response, "GetInputList(workload)")
+    response = await request(inbox, ws, "GetInputList", "workload-input-list-ab")
+    assert_success(response, "GetInputList(A/B workload)")
     input_data = response.get("responseData") or response
     inputs = input_data.get("inputs") or []
     by_name = {
@@ -985,10 +1176,22 @@ async def verify_workload_sources(inbox: Inbox, ws: Any, process: PulsarProcess)
         for item in inputs
         if isinstance(item, dict) and isinstance(item.get("inputName"), str)
     }
-    for source_name, expected_kind in required:
+    if lanes == ("A",):
+        hidden_reference_sources = {
+            LANE_SOURCE_NAMES["B"][kind]
+            for kind in ("window_capture", "browser_source")
+            if process.capture_window or (kind == "browser_source" and process.cef_workload)
+        }
+        leaked = sorted(source_name for source_name in hidden_reference_sources if source_name in by_name)
+        if leaked:
+            raise ProbeFailure(
+                "single-lane reference unexpectedly registered hidden B producers: "
+                f"{leaked!r}"
+            )
+    for lane, expected_kind, source_name in required:
         item = by_name.get(source_name)
         if item is None:
-            raise ProbeFailure(f"runtime did not register required source {source_name!r}")
+            raise ProbeFailure(f"runtime did not register public lane {lane} source {source_name!r}")
         actual_kind = item.get("inputKind") or item.get("unversionedInputKind")
         if actual_kind != expected_kind:
             raise ProbeFailure(
@@ -998,7 +1201,7 @@ async def verify_workload_sources(inbox: Inbox, ws: Any, process: PulsarProcess)
             inbox,
             ws,
             "GetInputSettings",
-            f"workload-settings-{source_name}",
+            f"workload-settings-{lane}-{expected_kind}",
             {"inputName": source_name},
         )
         assert_success(settings_response, f"GetInputSettings({source_name})")
@@ -1007,45 +1210,62 @@ async def verify_workload_sources(inbox: Inbox, ws: Any, process: PulsarProcess)
         if expected_kind == "window_capture":
             if settings.get("window") != process.capture_window:
                 raise ProbeFailure(
-                    f"WGC target was not bound exactly: got {settings.get('window')!r}, "
+                    f"WGC target was not bound exactly for lane {lane}: got {settings.get('window')!r}, "
                     f"expected {process.capture_window!r}"
                 )
             if settings.get("method") not in (2, "2"):
-                raise ProbeFailure(f"WGC source did not retain method=2: {settings!r}")
+                raise ProbeFailure(f"WGC source {source_name!r} did not retain method=2: {settings!r}")
         else:
-            if settings.get("url") != process.cef_url:
+            expected_url = process.cef_url_for_lane(lane)
+            if settings.get("url") != expected_url:
                 raise ProbeFailure(
-                    f"CEF URL was not bound exactly: got {settings.get('url')!r}, expected {process.cef_url!r}"
+                    f"CEF URL for lane {lane} was not bound exactly: got {settings.get('url')!r}, "
+                    f"expected {expected_url!r}"
                 )
             if settings.get("is_local_file") is True:
-                raise ProbeFailure("CEF workload unexpectedly treated its HTTP page as a local file")
+                raise ProbeFailure(f"CEF source {source_name!r} unexpectedly became a local file")
 
-    scene_response = await request(
-        inbox,
-        ws,
-        "GetSceneItemList",
-        "workload-default-scene-items",
-        {"sceneName": BOOTSTRAP_SCENE_NAME},
-    )
-    assert_success(scene_response, "GetSceneItemList(Default workload)")
-    scene_data = scene_response.get("responseData") or scene_response
-    enabled_items = {
-        item.get("sourceName")
-        for item in scene_data.get("sceneItems") or []
-        if isinstance(item, dict) and item.get("sceneItemEnabled", True)
-    }
-    for source_name, _expected_kind in required:
-        if source_name not in enabled_items:
-            raise ProbeFailure(f"source {source_name!r} is not an enabled item in {BOOTSTRAP_SCENE_NAME!r}")
+    items_by_scene: dict[str, set[str]] = {}
+    selected_scenes = tuple(SCENE_A if lane == "A" else SCENE_B for lane in lanes)
+    for scene in selected_scenes:
+        scene_response = await request(
+            inbox,
+            ws,
+            "GetSceneItemList",
+            f"workload-scene-items-{scene}",
+            {"sceneName": scene},
+        )
+        assert_success(scene_response, f"GetSceneItemList({scene} workload)")
+        scene_data = scene_response.get("responseData") or scene_response
+        scene_items = scene_data.get("sceneItems") or []
+        items_by_scene[scene] = {
+            item.get("sourceName")
+            for item in scene_items
+            if isinstance(item, dict) and item.get("sceneItemEnabled", True)
+        }
+    for lane, _kind, source_name in required:
+        own_scene = SCENE_A if lane == "A" else SCENE_B
+        other_scene = SCENE_B if lane == "A" else SCENE_A
+        if source_name not in items_by_scene[own_scene]:
+            raise ProbeFailure(f"source {source_name!r} is not an enabled item in public {lane} scene")
+        if other_scene in items_by_scene and source_name in items_by_scene[other_scene]:
+            raise ProbeFailure(f"source {source_name!r} leaked into the other public lane scene")
 
-    if process.cef_workload:
-        await wait_for_nonblack_source(inbox, ws, CEF_SOURCE_NAME, require_variance=True)
-    if process.capture_window:
-        await wait_for_nonblack_source(inbox, ws, CAPTURE_SOURCE_NAME, require_variance=False)
+    if require_pixels:
+        for lane, kind, source_name in required:
+            await wait_for_nonblack_source(
+                inbox,
+                ws,
+                source_name,
+                require_variance=kind == "browser_source",
+            )
     print(
-        "   workload topology verified: "
-        + ", ".join(f"{name}:{kind}" for name, kind in required)
-        + " (bound scene items + non-black frames)"
+        "   public workload topology verified: duplicated producer instances "
+        f"WGC={sum(kind == 'window_capture' for _lane, kind, _name in required)}, "
+        f"CEF={sum(kind == 'browser_source' for _lane, kind, _name in required)}; "
+        f"topology={process.producer_topology} producer_count={process.producer_count} "
+        f"lanes={','.join(lanes)}; scene ownership + settings + screenshots "
+        "(Default bootstrap excluded)"
     )
 
 
@@ -1167,7 +1387,41 @@ async def collect_resource_samples(
         ws_url, subprotocols=["obswebsocket.json"], open_timeout=15
     ) as ws:
         await identify(ws, process.password)
-        await verify_workload_sources(Inbox(), ws, process)
+        inbox = Inbox()
+        lanes = ("A",) if mode == "reference" else ("A", "B")
+        await create_public_lane_scenes(inbox, ws, process, lanes=lanes)
+        response = await request(
+            inbox,
+            ws,
+            "SetCurrentProgramScene",
+            "resource-set-program-A",
+            {"sceneName": SCENE_A},
+        )
+        assert_success(response, "SetCurrentProgramScene(A, resource)")
+        if mode == "dual_lane":
+            response = await request(
+                inbox,
+                ws,
+                "SetStudioModeEnabled",
+                "resource-enable-studio",
+                {"studioModeEnabled": True},
+            )
+            assert_success(response, "SetStudioModeEnabled(true, resource)")
+            response = await request(
+                inbox,
+                ws,
+                "SetCurrentPreviewScene",
+                "resource-set-preview-B",
+                {"sceneName": SCENE_B},
+            )
+            assert_success(response, "SetCurrentPreviewScene(B, resource)")
+            await verify_workload_sources(inbox, ws, process, lanes=lanes)
+        elif process.capture_window or process.cef_workload:
+            # The reference phase intentionally creates and measures one
+            # producer pair on A.  The dual phase creates and measures both
+            # producer pairs on A/B; no hidden B registration contaminates the
+            # baseline.
+            await verify_workload_sources(inbox, ws, process, lanes=lanes, require_pixels=False)
         deadline = time.monotonic() + timeout
         while True:
             if process.trace_path is None:
@@ -1266,9 +1520,7 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
     ) as ws:
         await identify(ws, process.password)
         inbox = Inbox()
-        await verify_workload_sources(inbox, ws, process)
-        await create_scene(inbox, ws, SCENE_A, INPUT_A, COLOR_RED_ABGR)
-        await create_scene(inbox, ws, SCENE_B, INPUT_B, COLOR_GREEN_ABGR)
+        await create_public_lane_scenes(inbox, ws, process, lanes=("A", "B"))
 
         # Establish a known program before studio mode.  The non-studio path
         # mutates the active lane composition but keeps the physical root.
@@ -1292,6 +1544,15 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
             {"studioModeEnabled": True},
         )
         assert_success(response, "SetStudioModeEnabled(true)")
+        response = await request(
+            inbox,
+            ws,
+            "SetCurrentPreviewScene",
+            "set-initial-preview",
+            {"sceneName": SCENE_B},
+        )
+        assert_success(response, "SetCurrentPreviewScene(B)")
+        await verify_workload_sources(inbox, ws, process, lanes=("A", "B"))
 
         # Start a real local recording before the first Cut.  This makes the
         # encoder active for the whole campaign and exercises the exact
@@ -1531,7 +1792,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--trace",
         type=pathlib.Path,
-        help="opt-in #246 JSONL trace path; enables runtime event/raw/RTMP producer hooks",
+        help="opt-in #246 JSONL trace path; enables runtime event/raw/encoded-output producer hooks",
     )
     parser.add_argument(
         "--build-revision",
@@ -1539,6 +1800,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="exact 40-character lowercase candidate SHA stamped into a --trace session (or PULSAR_BUILD_REVISION)",
     )
     parser.add_argument("--runtime-id", help="runtime_instance_id for --trace (default: generated)")
+    parser.add_argument(
+        "--trace-host",
+        default=os.environ.get("PULSAR_TRACE_HOST"),
+        help="exact host label stamped into runtime resource samples (or PULSAR_TRACE_HOST)",
+    )
+    parser.add_argument(
+        "--trace-gpu",
+        default=os.environ.get("PULSAR_TRACE_GPU"),
+        help="exact GPU adapter label stamped into runtime resource samples (or PULSAR_TRACE_GPU)",
+    )
     parser.add_argument(
         "--resource-mode",
         choices=("reference", "dual_lane"),
@@ -1597,6 +1868,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--trace requires --build-revision to be the exact 40-character lowercase candidate SHA")
     if args.cef_workload and not args.capture_window:
         parser.error("--cef-workload requires --capture-window for a visible WGC target")
+    if args.trace is not None and (not args.capture_window or not args.cef_workload):
+        parser.error("--trace requires --capture-window and --cef-workload for external A/B producer evidence")
     if args.resource_samples < 1:
         parser.error("--resource-samples must be >= 1")
     if not 100 <= args.resource_interval_ms <= 10000:
@@ -1613,6 +1886,9 @@ def run(args: argparse.Namespace) -> int:
         trace_path = args.trace.resolve() if args.trace is not None else None
         if trace_path is not None:
             trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_host = trace_gpu = None
+        if trace_path is not None:
+            trace_host, trace_gpu = resolve_trace_hardware(args.trace_host, args.trace_gpu)
         cef_server = None
         if args.cef_workload and not args.cef_url:
             cef_server = DeterministicCefServer()
@@ -1631,6 +1907,8 @@ def run(args: argparse.Namespace) -> int:
             args.cef_workload,
             args.build_revision,
             cef_url,
+            trace_host,
+            trace_gpu,
         )
         try:
             process.spawn()

@@ -16,7 +16,7 @@ interpolation over the sorted sample values; the rank is `(n - 1) * q`.
 | --- | --- | --- | --- |
 | `encoder_input_raw` | `ProgramView` / `encoder_input` | First valid Program frame received at the encoder/raw input. | AC-07, p95 `<=50 ms` |
 | `directshow_return` | `ProgramReturn` / `DirectShow` | First valid Program frame observed by the DirectShow return consumer. | AC-08, p95 `<=75 ms` |
-| `rtmp_first_packet` | `RTMP` / `rtmp` | First packet on the RTMP output (`packet_index=0`). | AC-12, p95 compared with `<=15 ms` baseline |
+| `encoded_first_packet` | `EncoderOutput` / `encoder_callback` | First encoded video packet handed to the encoder-output callback (`packet_index=0`), before any network or RTMP receiver. | AC-12, p95 compared with `<=15 ms` baseline |
 | `decoded_first_frame` | `RTMP` / `decoder` | First decoded frame, diagnostic only. | No SLO |
 | `antenna_first_frame` | `Antenna` / `antenna` | First antenna/player frame, diagnostic only. | No SLO |
 
@@ -46,15 +46,17 @@ metadata:
   "warmup_takes": 100,
   "video": {"width": 1920, "height": 1080, "fps_num": 60, "fps_den": 1},
   "workload": {"wgc": true, "cef": true, "nvenc": true},
-  "capture_paths": ["encoder_input_raw", "directshow_return", "rtmp_first_packet"],
+  "capture_paths": ["encoder_input_raw", "directshow_return", "encoded_first_packet"],
   "source_types": ["window_capture", "browser_source"],
   "resource_reference": {
     "extra_frame_render_ms": 0.091,
     "extra_resident_bytes": 3130000
   },
-  "build_revision": "0123456789abcdef0123456789abcdef01234567",
+  "build_revision": "<40-lowercase-hex-candidate-SHA>",
   "command_line": "<redacted reproducible command>",
   "hardware": {"host": "<host>", "gpu": "<adapter/driver>"},
+  "producer_topology": "dual_lane_ab",
+  "producer_count": 2,
   "evidence_kind": "runtime"
 }
 ```
@@ -88,17 +90,45 @@ An observation record has the following required fields (plus optional
 }
 ```
 
-The first RTMP packet uses the same correlation fields, with
-`boundary=rtmp_first_packet`, `surface=RTMP`, `consumer=rtmp`, and
-`packet_index=0`. It still carries the frame ID/PTS associated with the packet;
-the script refuses a packet-only timestamp that cannot be correlated to the
-Take frame boundary.
+If the atomic queue rejects a reserved Take, the producer emits a terminal
+`TakeAborted` event with `reason=queue_rejected` and the
+`last_committed_frame_id`/`last_committed_pts_ns` pair. No `TakeAccepted` is
+emitted for that candidate: the acceptance timestamp is assigned only after
+the queue primitive returns success. The pair identifies the last committed
+frame before the rejected reservation and makes the terminal path observable
+without pretending that a commit occurred. Accepted and committed events are
+placed in a FIFO writer queue; disk I/O runs on its worker and cannot inflate
+the acceptance-to-frame latency.
+
+The pre-network encoded callback uses the same correlation fields, with
+`boundary=encoded_first_packet`, `surface=EncoderOutput`,
+`consumer=encoder_callback`, and `packet_index=0`. It still carries the frame
+ID/PTS associated with the packet; the script refuses a packet-only timestamp
+that cannot be correlated to the Take frame boundary. RTMP receiver ingress is
+an external Probe measurement and must not be labelled as this boundary.
 
 Resource samples use `sample_mode=reference` and `sample_mode=dual_lane` and
-record process/render, WGC, CEF, NVENC, and encoder queue metrics. The report
+record `frame_render_ms`, `resident_bytes`, `process_cpu_percent`,
+`host_gpu_percent`, `callback_backlog_estimate`, and
+`encoder_utilization_percent`. The report
 computes actual deltas from the two sample sets and shows them beside the
 known `+0.091 ms/frame` and `+3.13 MB` references. It never declares runtime
 capacity from the reference alone.
+
+Every resource sample also carries `measurement_phase`, the exact candidate
+`build_revision`, `hardware.host`/`hardware.gpu`, and the explicit
+`producer_topology`/`producer_count` for that phase. The parser rejects a
+sample whose phase/topology pair is inconsistent, or whose build, hardware,
+or runtime identity differs from the session, so reference and dual-lane
+measurements cannot be silently mixed.
+
+The reference driver creates one independent `window_capture` and one
+independent `browser_source` producer on public scene A only. The dual-lane
+driver creates two independent producers of each requested kind, one pair in
+each public A/B scene. It verifies registration, settings, enabled scene
+ownership, and a decoded screenshot from each source after A is Program and B
+is Preview. The frontend's `Default` bootstrap sources and workload flags are
+not accepted as proof of the A/B topology.
 
 ## Reproducible execution
 
@@ -111,8 +141,9 @@ flags in the session record.
 ```powershell
 # Run the runtime producer/instrumentation for x264 and save x264.jsonl.
 # Repeat with PULSAR_VIDEO_ENCODER=nvenc and save nvenc.jsonl.
-# The DirectShow reader and RTMP packet hook must write observations using the
-# same runtime/session IDs and monotonic clock; do not merge wall-clock logs.
+# The DirectShow reader and encoder-output callback must write observations
+# using the same runtime/session IDs and monotonic clock; RTMP receiver timing
+# is an external Probe measurement and must not be merged from wall-clock logs.
 
 python scripts/probe-take-latency.py `
   --trace artifacts/246/x264.jsonl artifacts/246/nvenc.jsonl `
@@ -131,14 +162,20 @@ with the same runtime ID:
 ```powershell
 python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc `
   --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 `
-  --resource-mode reference --resource-only
+  --build-revision <candidate-sha> --capture-window <visible-title:class:exe> `
+  --cef-workload --resource-mode reference --resource-only
 python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 `
   --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 `
-  --trace-append --resource-mode dual_lane
+  --build-revision <candidate-sha> --capture-window <visible-title:class:exe> `
+  --cef-workload --trace-append --resource-mode dual_lane
 ```
 
 `reference` is an explicit legacy single-canvas run; it does not emit Take
-events. The second invocation appends its real scene-switch events and
+events. Both invocations require a real visible WGC target and the local CEF
+workload. The driver sets `PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD=1`, so the
+frontend suppresses its `Default` bootstrap WGC/CEF sources and the probe alone
+creates one producer pair on A for `reference`, or two independent pairs on A/B
+for `dual_lane`. The second invocation appends its real scene-switch events and
 dual-lane observations without adding a second session record. If the platform
 or GPU counters are unavailable, the native producer leaves the resource set
 incomplete and the parser reports `UNPROVEN` rather than filling zeroes.

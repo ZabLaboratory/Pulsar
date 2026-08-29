@@ -63,10 +63,12 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -76,6 +78,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <util/platform.h>
@@ -224,6 +227,12 @@ class PulsarRuntimeTelemetry {
     };
 
 public:
+    ~PulsarRuntimeTelemetry()
+    {
+        stopResourceSampler();
+        stopTraceWriter();
+    }
+
     void install()
     {
         proc_handler_t *global = obs_get_proc_handler();
@@ -248,42 +257,84 @@ public:
                     bool cefWorkload, bool wgcSourceBound)
     {
         stopResourceSampler();
+        stopTraceWriter();
 
-        std::lock_guard<std::mutex> lock(stateMutex_);
-        enabled_ = false;
-        pending_ = {};
-        accepted_ = {};
-        committed_ = {};
-        lastRawTake_.clear();
-        lastPacketTake_.clear();
-        serverSeq_ = 0;
-        programRevision_ = 0;
-        previewRevision_ = 0;
-        roleMapRevision_ = 0;
-        rawFrameCount_.store(0, std::memory_order_relaxed);
-        packetFrameCount_.store(0, std::memory_order_relaxed);
-        resourceMode_.clear();
-        wgcWorkload_ = false;
-        cefWorkload_ = false;
-        buildRevision_.clear();
+        // Retire any previous runtime before validating the next trace
+        // configuration.  This keeps a failed reinitialization fail-closed.
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            enabled_ = false;
+            pending_ = {};
+            reserved_ = {};
+            accepted_ = {};
+            committed_ = {};
+            lastRawTake_.clear();
+            lastPacketTake_.clear();
+            serverSeq_ = 0;
+            programRevision_ = 0;
+            previewRevision_ = 0;
+            roleMapRevision_ = 0;
+            rawFrameCount_.store(0, std::memory_order_relaxed);
+            packetFrameCount_.store(0, std::memory_order_relaxed);
+            resourceMode_.clear();
+            wgcWorkload_ = false;
+            cefWorkload_ = false;
+            buildRevision_.clear();
+            traceHost_.clear();
+            traceGpu_.clear();
+            producerTopology_.clear();
+            producerCount_ = 0;
+        }
 
         const char *tracePath = std::getenv("PULSAR_TRACE_PATH");
         const char *runtimeId = std::getenv("PULSAR_RUNTIME_INSTANCE_ID");
         const char *buildRevision = std::getenv("PULSAR_BUILD_REVISION");
-        if (!tracePath || !*tracePath || !validIdentifier(runtimeId))
-            return;
-        if (!validBuildRevision(buildRevision)) {
+        const char *traceHost = std::getenv("PULSAR_TRACE_HOST");
+        const char *traceGpu = std::getenv("PULSAR_TRACE_GPU");
+        const char *producerTopology = std::getenv("PULSAR_TRACE_PRODUCER_TOPOLOGY");
+        const char *producerCount = std::getenv("PULSAR_TRACE_PRODUCER_COUNT");
+        char *producerCountEnd = nullptr;
+        const unsigned long parsedProducerCount = producerCount
+                                                         ? std::strtoul(producerCount, &producerCountEnd, 10)
+                                                         : 0;
+        const bool producerCountValid = producerCount && producerCountEnd && *producerCountEnd == '\0' &&
+                                        parsedProducerCount >= 1 && parsedProducerCount <= 2;
+        const bool producerTopologyValid = producerTopology &&
+                                           (std::strcmp(producerTopology, "single_lane_reference") == 0 ||
+                                            std::strcmp(producerTopology, "dual_lane_ab") == 0);
+        if (!tracePath || !*tracePath || !validIdentifier(runtimeId) || !validBuildRevision(buildRevision) ||
+            !validHardwareLabel(traceHost) || !validHardwareLabel(traceGpu) || !producerTopologyValid ||
+            !producerCountValid ||
+            ((std::strcmp(producerTopology, "single_lane_reference") == 0 && parsedProducerCount != 1) ||
+             (std::strcmp(producerTopology, "dual_lane_ab") == 0 && parsedProducerCount != 2))) {
             blog(LOG_WARNING,
-                 "[pulsar-runtime-telemetry] trace disabled: PULSAR_BUILD_REVISION must be the exact 40-character lowercase candidate SHA");
+                 "[pulsar-runtime-telemetry] trace disabled: exact build, host/GPU, and producer topology metadata are required");
             return;
         }
 
-        runtimeInstanceId_ = runtimeId;
-        tracePath_ = tracePath;
-        buildRevision_ = buildRevision;
-        sessionId_ = environmentOr("PULSAR_TRACE_SESSION_ID", runtimeInstanceId_ + "-" + std::to_string(nowNs()));
-        if (!validIdentifier(sessionId_.c_str()))
-            sessionId_ = runtimeInstanceId_ + "-session";
+        std::string session;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            runtimeInstanceId_ = runtimeId;
+            tracePath_ = tracePath;
+            buildRevision_ = buildRevision;
+            traceHost_ = traceHost;
+            traceGpu_ = traceGpu;
+            producerTopology_ = producerTopology;
+            producerCount_ = static_cast<uint64_t>(parsedProducerCount);
+            sessionId_ = environmentOr("PULSAR_TRACE_SESSION_ID", runtimeInstanceId_ + "-" + std::to_string(nowNs()));
+            if (!validIdentifier(sessionId_.c_str()))
+                sessionId_ = runtimeInstanceId_ + "-session";
+
+            const char *resourceMode = std::getenv("PULSAR_TRACE_RESOURCE_MODE");
+            if (resourceMode && (std::strcmp(resourceMode, "reference") == 0 ||
+                                 std::strcmp(resourceMode, "dual_lane") == 0)) {
+                resourceMode_ = resourceMode;
+            }
+            wgcWorkload_ = wgcWorkload;
+            cefWorkload_ = cefWorkload;
+            session = sessionJson(encoderFamily, video, wgcWorkload, cefWorkload, wgcSourceBound);
+        }
 
 #ifdef _WIN32
         const std::string mutexName = "Local\\Pulsar." + runtimeInstanceId_ + ".Trace";
@@ -309,29 +360,41 @@ public:
                     ReleaseMutex(traceMutex_);
 #endif
             }
-            writeLine(sessionJson(encoderFamily, video, wgcWorkload, cefWorkload, wgcSourceBound));
+            // The state/lane locks are intentionally not held while opening
+            // or appending JSONL.  The writer queue is asynchronous: this
+            // enqueue is the only work the control path performs for the
+            // session record, and the worker performs the actual file I/O.
         }
 
-        enabled_ = true;
-        wgcWorkload_ = wgcWorkload;
-        cefWorkload_ = cefWorkload;
-        const char *resourceMode = std::getenv("PULSAR_TRACE_RESOURCE_MODE");
-        if (resourceMode && (std::strcmp(resourceMode, "reference") == 0 ||
-                             std::strcmp(resourceMode, "dual_lane") == 0)) {
-            resourceMode_ = resourceMode;
+        if (!startTraceWriter() || (!hasExisting && !enqueueLine(session))) {
+            stopTraceWriter();
+            blog(LOG_WARNING, "[pulsar-runtime-telemetry] trace disabled: FIFO writer unavailable");
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            enabled_ = true;
         }
         blog(LOG_INFO, "[pulsar-runtime-telemetry] trace enabled path=%s runtime_instance_id=%s session_id=%s",
              tracePath_.c_str(), runtimeInstanceId_.c_str(), sessionId_.c_str());
-        if (!resourceMode_.empty())
+        bool hasResourceMode = false;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            hasResourceMode = !resourceMode_.empty();
+        }
+        if (hasResourceMode)
             startResourceSampler();
     }
 
     void shutdown()
     {
         stopResourceSampler();
+        stopTraceWriter();
         std::lock_guard<std::mutex> lock(stateMutex_);
         enabled_ = false;
         pending_ = {};
+        reserved_ = {};
         accepted_ = {};
         committed_ = {};
         lastRawTake_.clear();
@@ -366,27 +429,54 @@ public:
         pending_.valid = false;
     }
 
-    void cancelAccepted(const char *reason)
+    void rejectReserved(const char *reason)
     {
-        std::string takeCommandId;
+        TakeContext context;
+        uint64_t lastCommittedFrameId = 0;
+        uint64_t lastCommittedPtsNs = 0;
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
-            if (!accepted_.valid)
+            if (!reserved_.valid)
                 return;
-            takeCommandId = accepted_.takeCommandId;
+            context = reserved_;
+            if (committed_.valid) {
+                lastCommittedFrameId = committed_.frameId;
+                lastCommittedPtsNs = committed_.ptsNs;
+            }
+            reserved_.valid = false;
             accepted_.valid = false;
             lastRawTake_.clear();
             lastPacketTake_.clear();
         }
-        blog(LOG_ERROR, "[pulsar-runtime-telemetry] TakeAccepted canceled reason=%s take_command_id=%s",
-             reason ? reason : "unspecified", takeCommandId.c_str());
+
+        // A queue rejection is terminal without a preceding TakeAccepted: the
+        // physical frame-boundary operation never admitted the candidate.  The
+        // event is emitted after releasing stateMutex_ and, in particular,
+        // never while the frontend's dualLaneMutex is held.  Retain the last
+        // committed frame/PTS so the rejection cannot be mistaken for a
+        // producer reset.
+        const uint64_t seq = nextServerSeq();
+        const std::string revisions = revisionJson(context.programRevision, context.previewRevision,
+                                                    context.roleMapRevision);
+        const std::string roleMap = roleMapJson(context.onAirLane, context.previewLane);
+        std::ostringstream event;
+        event << "{\"record_type\":\"event\",\"event\":{";
+        event << commonEventFields("TakeAborted", context, seq, "ready", nowNs(), revisions, roleMap);
+        event << ",\"take_command_id\":\"" << escape(context.takeCommandId)
+              << "\",\"reason\":\"queue_rejected\""
+              << ",\"last_committed_frame_id\":" << lastCommittedFrameId
+              << ",\"last_committed_pts_ns\":" << lastCommittedPtsNs << "}}";
+        writeLine(event.str());
+        blog(LOG_ERROR, "[pulsar-runtime-telemetry] Take reservation rejected reason=%s take_command_id=%s",
+             reason ? reason : "unspecified", context.takeCommandId.c_str());
     }
 
-    // Called before the libobs atomic swap is queued.  Installing and
-    // publishing accepted_ first makes the callback's first possible commit
-    // observe the corresponding TakeAccepted.  A malformed/missing metadata
-    // envelope never blocks the Cut; it simply leaves this Take uninstrumented.
-    bool accept(obs_source_t *scene, int onAirLane, int previewLane)
+    // Called while the lane mutex is held, before the libobs atomic swap is
+    // queued.  This only reserves state and consumes the ingress envelope; it
+    // deliberately emits no event and performs no trace-file operation.  The
+    // reservation is promoted to accepted only after the queue primitive
+    // returns success.
+    bool reserve(obs_source_t *scene, int onAirLane, int previewLane)
     {
         TakeContext context;
         const char *rejectReason = nullptr;
@@ -396,11 +486,12 @@ public:
                 rejectReason = "producer_disabled";
             } else if (!pending_.valid) {
                 rejectReason = "no_pending_ingress";
+            } else if (reserved_.valid || accepted_.valid) {
+                rejectReason = "take_already_reserved";
             } else {
-                // Consume the ingress envelope on every queue outcome.  A failed
-                // or non-Take request must never leave metadata available for a
-                // later scene mutation; accepted_ is the separate context held
-                // until the graphics commit callback.
+                // Consume the ingress envelope on every queue outcome.  A
+                // failed or non-Take request must never leave metadata
+                // available for a later scene mutation.
                 TakeContext candidate = pending_;
                 pending_.valid = false;
                 if (candidate.targetLaneId != laneId(previewLane)) {
@@ -423,8 +514,8 @@ public:
                             context.roleMapRevision = roleMapRevision_;
                             context.onAirLane = onAirLane;
                             context.previewLane = previewLane;
-                            accepted_ = context;
-                            accepted_.valid = true;
+                            reserved_ = context;
+                            reserved_.valid = true;
                             lastRawTake_.clear();
                             lastPacketTake_.clear();
                         }
@@ -436,6 +527,31 @@ public:
         if (rejectReason) {
             blog(LOG_ERROR, "[pulsar-runtime-telemetry] accept rejected reason=%s", rejectReason);
             return false;
+        }
+
+        return context.valid;
+    }
+
+    // Promote a successfully queued reservation while dualLaneMutex is still
+    // held.  The state transition and FIFO enqueue are deliberately free of
+    // filesystem I/O.  Because the acceptance line enters the FIFO before
+    // the queue callback can publish TakeCommitted, the worker preserves the
+    // Accepted-before-Commit order without charging disk latency to the
+    // TakeAccepted timestamp.
+    bool markAccepted()
+    {
+        TakeContext context;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            if (!enabled_ || !reserved_.valid || accepted_.valid)
+                return false;
+            context = reserved_;
+            context.acceptedAtNs = nowNs();
+            accepted_ = context;
+            accepted_.valid = true;
+            reserved_ = {};
+            lastRawTake_.clear();
+            lastPacketTake_.clear();
         }
 
         const uint64_t seq = nextServerSeq();
@@ -451,8 +567,20 @@ public:
               << "\",\"target_scene_id\":\"" << escape(context.targetSceneId)
               << "\",\"freeze_until_monotonic_ns\":" << context.freezeUntilNs;
         event << "}}";
-        writeLine(event.str());
-        return true;
+        if (enqueueLine(event.str()))
+            return true;
+
+        // The FIFO can only reject an enqueue during teardown or failed
+        // initialization.  Retire the accepted state so a missing Accepted
+        // line can never be followed by a correlated Commit observation.
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            if (accepted_.valid && accepted_.takeCommandId == context.takeCommandId)
+                accepted_.valid = false;
+        }
+        blog(LOG_ERROR, "[pulsar-runtime-telemetry] TakeAccepted FIFO enqueue failed take_command_id=%s",
+             context.takeCommandId.c_str());
+        return false;
     }
 
     void commit(uint64_t frameId, uint64_t ptsNs, int onAirLane, int previewLane)
@@ -562,7 +690,7 @@ public:
         }
 
         std::ostringstream observation;
-        observation << "{\"record_type\":\"observation\",\"boundary\":\"rtmp_first_packet\","
+        observation << "{\"record_type\":\"observation\",\"boundary\":\"encoded_first_packet\","
                     << "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
                     << escape(context.runtimeInstanceId) << "\",\"command_id\":\""
                     << escape(context.commandId) << "\",\"intent_id\":\"" << escape(context.intentId)
@@ -571,16 +699,23 @@ public:
                     << revisionJson(context.programRevision, context.previewRevision, context.roleMapRevision)
                     << ",\"frame_id\":" << context.frameId << ",\"pts_ns\":" << context.ptsNs
                     << ",\"observed_at_monotonic_ns\":" << observed
-                    << ",\"valid\":true,\"packet_index\":0,\"surface\":\"RTMP\",\"consumer\":\"rtmp\"}";
+                    << ",\"valid\":true,\"packet_index\":0,\"surface\":\"EncoderOutput\",\"consumer\":\"encoder_callback\"}";
         writeLine(observation.str());
     }
 
     void snapshot(calldata_t *cd)
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
-        calldata_set_bool(cd, "valid", enabled_ && committed_.valid);
-        if (!enabled_ || !committed_.valid)
+        const bool countersFit = fitsCalldataInt(serverSeq_) && fitsCalldataInt(committed_.frameId) &&
+                                 fitsCalldataInt(committed_.ptsNs) && fitsCalldataInt(committed_.programRevision) &&
+                                 fitsCalldataInt(committed_.previewRevision) && fitsCalldataInt(committed_.roleMapRevision);
+        const bool valid = enabled_ && committed_.valid && countersFit;
+        calldata_set_bool(cd, "valid", valid);
+        if (!valid) {
+            if (enabled_ && committed_.valid && !countersFit)
+                blog(LOG_ERROR, "[pulsar-runtime-telemetry] snapshot refused uint64 counter outside signed calldata range");
             return;
+        }
         calldata_set_int(cd, "server_seq", static_cast<long long>(serverSeq_));
         calldata_set_int(cd, "frame_id", static_cast<long long>(committed_.frameId));
         calldata_set_int(cd, "pts_ns", static_cast<long long>(committed_.ptsNs));
@@ -720,16 +855,22 @@ private:
             const uint64_t queueDepth = rawFrames > encodedFrames ? rawFrames - encodedFrames : 0;
             std::string mode;
             std::string runtime;
-            bool wgc = false;
-            bool cef = false;
+            std::string buildRevision;
+            std::string host;
+            std::string gpuName;
+            std::string producerTopology;
+            uint64_t producerCount = 0;
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
                 if (!enabled_ || resourceMode_.empty())
                     continue;
                 mode = resourceMode_;
                 runtime = runtimeInstanceId_;
-                wgc = wgcWorkload_;
-                cef = cefWorkload_;
+                buildRevision = buildRevision_;
+                host = traceHost_;
+                gpuName = traceGpu_;
+                producerTopology = producerTopology_;
+                producerCount = producerCount_;
             }
 
             std::ostringstream sample;
@@ -738,14 +879,18 @@ private:
                    << escape(runtime) << "\",\"observed_at_monotonic_ns\":" << nowNs()
                    << ",\"frame_render_ms\":" << std::setprecision(9) << frameRenderMs
                    << ",\"resident_bytes\":" << os_get_proc_resident_size()
-                   << ",\"cpu_percent\":" << std::setprecision(6) << cpu
-                   << ",\"gpu_percent\":" << gpu.utilization
-                   << ",\"encoder_queue_depth\":" << queueDepth
-                   << ",\"wgc_cpu_percent\":" << (wgc ? cpu : 0.0)
-                   << ",\"cef_cpu_percent\":" << (cef ? cpu : 0.0)
-                   << ",\"nvenc_gpu_percent\":" << gpu.encoderUtilization
+                   << ",\"process_cpu_percent\":" << std::setprecision(6) << cpu
+                   << ",\"host_gpu_percent\":" << gpu.utilization
+                   << ",\"callback_backlog_estimate\":" << queueDepth
+                   << ",\"encoder_utilization_percent\":" << gpu.encoderUtilization
                    << ",\"gpu_memory_bytes\":" << gpu.memoryBytes
-                   << ",\"notes\":\"obs-platform process counters; nvidia-smi GPU counters\"}";
+                   << ",\"measurement_phase\":\"" << mode
+                   << "\",\"build_revision\":\"" << escape(buildRevision)
+                   << "\",\"hardware\":{\"host\":\"" << escape(host)
+                   << "\",\"gpu\":\"" << escape(gpuName)
+                   << "\"},\"producer_topology\":\"" << escape(producerTopology)
+                   << "\",\"producer_count\":" << producerCount
+                   << ",\"notes\":\"frame time is OBS average; process CPU is this runtime; host GPU and encoder utilization are nvidia-smi device counters; callback backlog is a producer/packet counter estimate\"}";
             writeLine(sample.str());
         }
     }
@@ -772,6 +917,27 @@ private:
                 return false;
         }
         return true;
+    }
+
+    static bool validHardwareLabel(const char *value)
+    {
+        if (!value || !*value || std::strlen(value) > 128)
+            return false;
+        // Host/GPU labels are diagnostic metadata, not identifiers.  Permit
+        // spaces and driver punctuation, but reject controls/newlines and the
+        // placeholders that would make a resource comparison unverifiable.
+        if (std::strcmp(value, "unknown-host") == 0 || std::strcmp(value, "unknown-gpu") == 0)
+            return false;
+        for (const unsigned char *p = reinterpret_cast<const unsigned char *>(value); *p; ++p) {
+            if (*p < 0x20 || *p == 0x7f)
+                return false;
+        }
+        return true;
+    }
+
+    static bool fitsCalldataInt(uint64_t value)
+    {
+        return value <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
     }
 
     static bool validSceneId(const char *value)
@@ -882,8 +1048,6 @@ private:
     {
         const bool nvenc = encoderFamily && std::strcmp(encoderFamily, "nvenc") == 0;
         const std::string commandLine = environmentOr("PULSAR_TRACE_COMMAND", "pulsar-headless runtime producer");
-        const std::string host = environmentOr("PULSAR_TRACE_HOST", "unknown-host");
-        const std::string gpu = environmentOr("PULSAR_TRACE_GPU", "unknown-gpu");
         unsigned long long warmup = 100;
         if (const char *value = std::getenv("PULSAR_TRACE_WARMUP_TAKES")) {
             char *end = nullptr;
@@ -902,7 +1066,7 @@ private:
             << "\"workload\":{"
             << "\"wgc\":" << (wgcWorkload ? "true" : "false") << ",\"cef\":" << (cefWorkload ? "true" : "false")
             << ",\"nvenc\":" << (nvenc ? "true" : "false") << "},"
-            << "\"capture_paths\":[\"encoder_input_raw\",\"directshow_return\",\"rtmp_first_packet\","
+            << "\"capture_paths\":[\"encoder_input_raw\",\"directshow_return\",\"encoded_first_packet\","
             << "\"decoded_first_frame\",\"antenna_first_frame\"],"
             << "\"source_types\":[";
         bool firstSourceType = true;
@@ -920,12 +1084,83 @@ private:
             << "\"extra_frame_render_ms\":0.091,\"extra_resident_bytes\":3130000},"
             << "\"build_revision\":" << quoted(buildRevision_) << ",\"command_line\":"
             << quoted(commandLine) << ",\"hardware\":{"
-            << "\"host\":" << quoted(host) << ",\"gpu\":" << quoted(gpu) << "},"
+            << "\"host\":" << quoted(traceHost_) << ",\"gpu\":" << quoted(traceGpu_) << "},"
+            << "\"producer_topology\":" << quoted(producerTopology_)
+            << ",\"producer_count\":" << producerCount_ << ","
             << "\"evidence_kind\":" << quoted("runtime") << "}";
         return out.str();
     }
 
+    bool startTraceWriter()
+    {
+        std::lock_guard<std::mutex> lock(writerMutex_);
+        if (writerThread_.joinable())
+            return false;
+        writerStopping_ = false;
+        writerAccepting_ = true;
+        writerThread_ = std::thread([this] { traceWriterLoop(); });
+        return true;
+    }
+
+    void stopTraceWriter()
+    {
+        {
+            std::lock_guard<std::mutex> lock(writerMutex_);
+            writerAccepting_ = false;
+            writerStopping_ = true;
+        }
+        writerCv_.notify_all();
+        if (writerThread_.joinable())
+            writerThread_.join();
+        {
+            std::lock_guard<std::mutex> lock(writerMutex_);
+            writerQueue_.clear();
+            writerStopping_ = false;
+        }
+#ifdef _WIN32
+        if (traceMutex_) {
+            CloseHandle(traceMutex_);
+            traceMutex_ = nullptr;
+        }
+#endif
+    }
+
+    void traceWriterLoop()
+    {
+        for (;;) {
+            std::string line;
+            {
+                std::unique_lock<std::mutex> lock(writerMutex_);
+                writerCv_.wait(lock, [this] { return writerStopping_ || !writerQueue_.empty(); });
+                if (writerQueue_.empty() && writerStopping_)
+                    return;
+                line = std::move(writerQueue_.front());
+                writerQueue_.pop_front();
+            }
+            writeLineFile(line);
+        }
+    }
+
+    bool enqueueLine(const std::string &line)
+    {
+        if (line.empty())
+            return true;
+        {
+            std::lock_guard<std::mutex> lock(writerMutex_);
+            if (!writerAccepting_)
+                return false;
+            writerQueue_.push_back(line);
+        }
+        writerCv_.notify_one();
+        return true;
+    }
+
     void writeLine(const std::string &line)
+    {
+        (void)enqueueLine(line);
+    }
+
+    void writeLineFile(const std::string &line)
     {
         if (line.empty() || tracePath_.empty())
             return;
@@ -1020,6 +1255,10 @@ private:
     std::string runtimeInstanceId_;
     std::string sessionId_;
     std::string buildRevision_;
+    std::string traceHost_;
+    std::string traceGpu_;
+    std::string producerTopology_;
+    uint64_t producerCount_ = 0;
     std::string resourceMode_;
     bool wgcWorkload_ = false;
     bool cefWorkload_ = false;
@@ -1028,6 +1267,7 @@ private:
     uint64_t previewRevision_ = 0;
     uint64_t roleMapRevision_ = 0;
     TakeContext pending_;
+    TakeContext reserved_;
     TakeContext accepted_;
     TakeContext committed_;
     std::string lastRawTake_;
@@ -1037,6 +1277,12 @@ private:
     std::atomic<bool> resourceStop_{true};
     std::thread resourceThread_;
     os_cpu_usage_info_t *resourceCpuInfo_ = nullptr;
+    std::mutex writerMutex_;
+    std::condition_variable writerCv_;
+    std::deque<std::string> writerQueue_;
+    std::thread writerThread_;
+    bool writerAccepting_ = false;
+    bool writerStopping_ = false;
 #ifdef _WIN32
     HANDLE traceMutex_ = nullptr;
 #endif
@@ -2299,48 +2545,88 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
 
 bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
 {
-    std::lock_guard<std::mutex> lk(dualLaneMutex);
-    if (!dualLaneReady || !scene || !dualLaneInvariantLocked("queue-before")) {
-        g_runtimeTelemetry.cancelPending();
-        return false;
-    }
-    if (dualLaneCutPending.load()) {
-        g_runtimeTelemetry.cancelPending();
-        blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: another Cut is pending");
-        return false;
-    }
-    if (scene != previewSelection) {
-        g_runtimeTelemetry.cancelPending();
-        blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: scene is not the frozen Preview selection");
-        return false;
+    obs_source_t *queuedPreview = nullptr;
+    obs_source_t *queuedOnAir = nullptr;
+    obs_view_t *queuedProgramView = nullptr;
+    obs_view_t *queuedPreviewView = nullptr;
+    int queuedOnAirLane = -1;
+    int queuedPreviewLane = -1;
+    bool queued = false;
+    bool telemetryReserved = false;
+    bool telemetryAccepted = false;
+    {
+        std::lock_guard<std::mutex> lk(dualLaneMutex);
+        if (!dualLaneReady || !scene || !dualLaneInvariantLocked("queue-before")) {
+            g_runtimeTelemetry.cancelPending();
+            return false;
+        }
+        if (dualLaneCutPending.load()) {
+            g_runtimeTelemetry.cancelPending();
+            blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: another Cut is pending");
+            return false;
+        }
+        if (scene != previewSelection) {
+            g_runtimeTelemetry.cancelPending();
+            blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: scene is not the frozen Preview selection");
+            return false;
+        }
+
+        // Reserve the role pair under the lane mutex, but do not perform any
+        // trace-file I/O while it is held.  The reservation blocks public
+        // mutations through the bridge and remains valid until the queue
+        // primitive is called below.
+        dualLaneCutPending.store(true);
+        g_dualLaneControlBridge.set_pending(true);
+        queuedPreview = previewScene;
+        queuedOnAir = currentScene;
+        queuedProgramView = programView;
+        queuedPreviewView = previewView;
+        queuedOnAirLane = onAirLane;
+        queuedPreviewLane = previewLane;
+
+        // Reserve the metadata while the same role mutex protects the pair.
+        // This consumes state only; no event is timestamped or written until
+        // libobs accepts the frame-boundary queue operation.
+        telemetryReserved = g_runtimeTelemetry.reserve(scene, queuedOnAirLane, queuedPreviewLane);
+        const bool reservationStillOwned =
+            dualLaneReady && dualLaneCutPending.load() && currentScene == queuedOnAir &&
+            previewScene == queuedPreview && onAirLane == queuedOnAirLane &&
+            previewLane == queuedPreviewLane && programView == queuedProgramView &&
+            previewView == queuedPreviewView;
+        if (reservationStillOwned) {
+            queued = obs_view_queue_atomic_swap(
+                queuedProgramView, 0, queuedPreview, queuedPreviewView, 0, queuedOnAir,
+                OnDualLaneCutCommitted, this);
+        }
+        if (queued) {
+            // The primitive has admitted the pair.  Mark acceptance and put
+            // its event in the asynchronous FIFO before releasing the lane
+            // mutex; this operation performs no filesystem I/O.
+            telemetryAccepted = telemetryReserved && g_runtimeTelemetry.markAccepted();
+        }
+        if (!queued) {
+            dualLaneCutPending.store(false);
+            g_dualLaneControlBridge.set_pending(false);
+        }
     }
 
-    // Set the guard before accepting telemetry so a concurrent Preview
-    // mutation cannot pass between acceptance and the graphics callback.
-    dualLaneCutPending.store(true);
-    g_dualLaneControlBridge.set_pending(true);
-    // Publish TakeAccepted before handing the pair to libobs.  The callback
-    // may be scheduled immediately by the queue primitive; installing the
-    // accepted context after the queue would permit TakeCommitted to race
-    // ahead of it.  Telemetry is observational and never rejects the Cut.
-    const bool telemetryAccepted = g_runtimeTelemetry.accept(scene, onAirLane, previewLane);
-    if (!obs_view_queue_atomic_swap(programView, 0, previewScene, previewView, 0, currentScene,
-                                    OnDualLaneCutCommitted, this)) {
-        dualLaneCutPending.store(false);
-        g_dualLaneControlBridge.set_pending(false);
-        if (telemetryAccepted)
-            g_runtimeTelemetry.cancelAccepted("atomic_swap_rejected");
+    if (!queued) {
+        // No TakeAccepted is emitted: the atomic queue did not admit the
+        // candidate.  A reserved trace gets a correlated terminal rejection
+        // after the lane mutex is released, with the last committed frame/PTS.
+        if (telemetryReserved)
+            g_runtimeTelemetry.rejectReserved("atomic_swap_rejected");
         g_runtimeTelemetry.cancelPending();
         blog(LOG_WARNING, "[pulsar-dual-lane] Take rejected: atomic frame-boundary slot is busy");
         return false;
     }
 
-    if (!telemetryAccepted) {
-        // Cut semantics stay unchanged; the trace producer records the
-        // deterministic reason and the probe fails closed instead of treating
-        // this uncorrelated Cut as evidence.
+    if (telemetryReserved && !telemetryAccepted) {
+        // The physical queue succeeded but the opt-in trace FIFO was already
+        // unavailable (normally teardown).  Do not let the following commit
+        // masquerade as a correlated runtime measurement.
         blog(LOG_ERROR,
-             "[pulsar-runtime-telemetry] atomic Cut queued without TakeAccepted; runtime evidence is invalid");
+             "[pulsar-runtime-telemetry] atomic Cut queued without TakeAccepted FIFO admission; runtime evidence is invalid");
     }
 
     blog(LOG_INFO, "[pulsar-dual-lane] TakeAccepted preview_lane=%d onair_lane=%d "
@@ -2417,8 +2703,10 @@ bool PulsarFrontendAPI::setup()
         return false;
     }
     currentScene = obs_source_get_ref(obs_scene_get_source(scene));
-    // Keep the scene handle until the stable A/B wrappers are bound after the
-    // bootstrap capture source is attached below.
+    // Keep the scene handle until the stable A/B wrappers are bound after any
+    // bootstrap source is attached below.  Trace campaigns can explicitly
+    // delegate workload ownership to the probe, in which case Default remains
+    // a scene shell and contributes no WGC/CEF producer.
     scenes.push_back(obs_source_get_ref(currentScene));
 
     // Default transition (fade).
@@ -2776,21 +3064,39 @@ bool PulsarFrontendAPI::setup()
     // descriptor follows obs's "<title>:<class>:<exe>" format. PULSAR_CAPTURE_WINDOW
     // overrides the default; when unset we leave the source unbound (it
     // produces black frames but the pipeline still encodes / records).
-    OBSDataAutoRelease captureSettings = obs_data_create();
-    if (const char *envWindow = std::getenv("PULSAR_CAPTURE_WINDOW"); envWindow && *envWindow) {
-        obs_data_set_string(captureSettings, "window", envWindow);
-        blog(LOG_INFO, "[pulsar-frontend-stub] window_capture target: %s", envWindow);
+    //
+    // A traced #246 run sets PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD=1.  In that
+    // mode the probe owns the public A/B producers and the Default bootstrap
+    // must not create a second WGC instance against the same target.  The
+    // runtime session still declares the requested source kind below; source
+    // registration/readiness is proven by the probe's A/B GetInput* and
+    // screenshot checks, never by this declaration or by Default.
+    const bool externalLaneWorkload =
+        g_runtimeTelemetry.environmentTruthy(std::getenv("PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD"));
+    const char *captureWindowEnv = std::getenv("PULSAR_CAPTURE_WINDOW");
+    const bool captureWindowRequested = captureWindowEnv && *captureWindowEnv;
+    const bool cefWorkloadRequested =
+        g_runtimeTelemetry.environmentTruthy(std::getenv("PULSAR_WORKLOAD_CEF"));
+    if (externalLaneWorkload) {
+        blog(LOG_INFO,
+             "[pulsar-frontend-stub] external lane workload owner: suppressing Default PulsarCapture/PulsarCefWorkload; probe must bind public A/B producers");
     } else {
-        blog(LOG_INFO, "[pulsar-frontend-stub] window_capture has no target (set PULSAR_CAPTURE_WINDOW); will produce black frames");
-    }
-    obs_data_set_int(captureSettings, "method", 2);    // WGC -- works against most modern apps incl. CEF/Electron
-    obs_data_set_bool(captureSettings, "cursor", true);
-    obs_data_set_bool(captureSettings, "client_area", true);
-    captureSource = obs_source_create("window_capture", "PulsarCapture", captureSettings, nullptr);
-    if (!captureSource) {
-        blog(LOG_WARNING, "[pulsar-frontend-stub] window_capture source unavailable");
-    } else if (scene) {
-        captureItem = obs_scene_add(scene, captureSource);
+        OBSDataAutoRelease captureSettings = obs_data_create();
+        if (captureWindowRequested) {
+            obs_data_set_string(captureSettings, "window", captureWindowEnv);
+            blog(LOG_INFO, "[pulsar-frontend-stub] window_capture target: %s", captureWindowEnv);
+        } else {
+            blog(LOG_INFO, "[pulsar-frontend-stub] window_capture has no target (set PULSAR_CAPTURE_WINDOW); will produce black frames");
+        }
+        obs_data_set_int(captureSettings, "method", 2);    // WGC -- works against most modern apps incl. CEF/Electron
+        obs_data_set_bool(captureSettings, "cursor", true);
+        obs_data_set_bool(captureSettings, "client_area", true);
+        captureSource = obs_source_create("window_capture", "PulsarCapture", captureSettings, nullptr);
+        if (!captureSource) {
+            blog(LOG_WARNING, "[pulsar-frontend-stub] window_capture source unavailable");
+        } else if (scene) {
+            captureItem = obs_scene_add(scene, captureSource);
+        }
     }
 
     // #246 resource campaigns can request a real CEF workload in addition to
@@ -2799,14 +3105,14 @@ bool PulsarFrontendAPI::setup()
     // resolves to the bundled pulsar-browser/CEF implementation rather than a
     // metadata-only flag.  It remains an ordinary visible scene item, which
     // keeps BrowserSource's CEF lifecycle and render/tick costs in the same
-    // Program composition observed by the raw/DirectShow/RTMP boundaries.
-    if (g_runtimeTelemetry.environmentTruthy(std::getenv("PULSAR_WORKLOAD_CEF"))) {
+    // Program composition observed by the raw/DirectShow/encoded-output boundaries.
+    if (cefWorkloadRequested && !externalLaneWorkload) {
         obs_video_info cefVideo = {};
         obs_get_video_info(&cefVideo);
         const int cefWidth = cefVideo.base_width > 0 ? cefVideo.base_width : 1920;
         const int cefHeight = cefVideo.base_height > 0 ? cefVideo.base_height : 1080;
         const int cefFps = cefVideo.fps_num > 0 && cefVideo.fps_den > 0
-                               ? std::max(1, cefVideo.fps_num / cefVideo.fps_den)
+                               ? (std::max)(1, cefVideo.fps_num / cefVideo.fps_den)
                                : 60;
         const char *configuredUrl = std::getenv("PULSAR_CEF_URL");
         // Keep an explicit deterministic fallback for direct runtime launches.
@@ -2846,6 +3152,9 @@ bool PulsarFrontendAPI::setup()
             obs_source_release(cefSource);
             cefSource = nullptr;
         }
+    } else if (cefWorkloadRequested) {
+        blog(LOG_INFO,
+             "[pulsar-frontend-stub] external lane workload owner: suppressing Default PulsarCefWorkload; probe must bind public A/B browser_source producers");
     }
 
     // Build the two independent hot roots only after the bootstrap scene has
@@ -3024,20 +3333,30 @@ bool PulsarFrontendAPI::setup()
     // #246: install the producer callbacks only when a runtime trace was
     // explicitly requested.  The raw callback is attached to libobs's main
     // Program mix (the same video_t used by the encoder); the packet callback
-    // is attached to the actual rtmp_output, so a downstream decoder can
-    // never be mistaken for the RTMP first-packet boundary.
+    // is attached to the configured stream output's encoder callback.  It is a
+    // pre-network boundary; RTMP receiver/decoder timing remains external and
+    // is never inferred from this record.
     obs_video_info telemetryVideo = {};
     if (obs_get_video_info(&telemetryVideo)) {
-        const bool wgcWorkload = captureItem && std::getenv("PULSAR_CAPTURE_WINDOW") &&
-                                  *std::getenv("PULSAR_CAPTURE_WINDOW");
-        const bool cefWorkload = cefItem && cefSource;
+        // In external-owner mode these are declarations of the producer kinds
+        // that the probe will bind after PULSAR_READY, not proof that Default
+        // owns a source.  The probe's A/B registration, settings and pixels
+        // are the readiness evidence; retaining the declaration here keeps the
+        // session correlated to the requested workload without adding a third
+        // producer pair.
+        const bool wgcWorkload = externalLaneWorkload ? captureWindowRequested :
+                                  captureItem && captureWindowRequested;
+        const bool cefWorkload = externalLaneWorkload ? cefWorkloadRequested :
+                                 cefItem && cefSource;
+        const bool wgcSourceBound = externalLaneWorkload ? captureWindowRequested :
+                                    captureItem != nullptr;
         g_runtimeTelemetry.initialize(encoderFamily.c_str(), telemetryVideo, wgcWorkload, cefWorkload,
-                                      captureItem != nullptr);
+                                      wgcSourceBound);
         if (g_runtimeTelemetry.enabled()) {
             obs_add_raw_video_callback(nullptr, pulsar_runtime_raw_video_callback, nullptr);
             if (streamOutput)
                 obs_output_add_packet_callback(streamOutput, pulsar_runtime_packet_callback, nullptr);
-            blog(LOG_INFO, "[pulsar-runtime-telemetry] ProgramView/raw and RTMP packet callbacks installed");
+            blog(LOG_INFO, "[pulsar-runtime-telemetry] ProgramView/raw and encoded-output callbacks installed");
 
             // A trace campaign may opt into the real ProgramReturn producer;
             // ordinary headless starts keep this output dormant.  The

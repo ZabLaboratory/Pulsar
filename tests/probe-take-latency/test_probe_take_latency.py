@@ -64,6 +64,8 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
         "build_revision": "f" * 40 if evidence_kind == "runtime" else "fixture-build",
         "command_line": "fixture only; never a runtime acceptance",
         "hardware": {"host": "fixture", "gpu": "fixture"},
+        "producer_topology": "dual_lane_ab",
+        "producer_count": 2,
         "evidence_kind": evidence_kind,
     }
     if session["source_types"] is None:
@@ -116,7 +118,7 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
             surface, consumer = {
                 "encoder_input_raw": ("ProgramView", "encoder_input"),
                 "directshow_return": ("ProgramReturn", "DirectShow"),
-                "rtmp_first_packet": ("RTMP", "rtmp"),
+                "encoded_first_packet": ("EncoderOutput", "encoder_callback"),
                 "decoded_first_frame": ("RTMP", "decoder"),
                 "antenna_first_frame": ("Antenna", "antenna"),
             }[boundary]
@@ -138,7 +140,7 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
             }
             if boundary in ("encoder_input_raw", "directshow_return"):
                 item["program_frame"] = valid
-            if boundary == "rtmp_first_packet":
+            if boundary == "encoded_first_packet":
                 item["packet_index"] = 0
             return {"record_type": "observation", **item}
 
@@ -146,7 +148,7 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
         records.append(observation("encoder_input_raw", accepted_at + 1_000_000, frame_id - 1, pts_ns - 1))
         records.append(observation("encoder_input_raw", commit_at + int(raw_extra_ms * 1_000_000), frame_id, pts_ns))
         records.append(observation("directshow_return", commit_at + int(ds_extra_ms * 1_000_000), frame_id + 1, pts_ns + 1))
-        records.append(observation("rtmp_first_packet", commit_at + 3_000_000, frame_id, pts_ns))
+        records.append(observation("encoded_first_packet", commit_at + 3_000_000, frame_id, pts_ns))
         records.append(observation("decoded_first_frame", commit_at + 100_000_000, frame_id + 2, pts_ns + 2))
         records.append(observation("antenna_first_frame", commit_at + 120_000_000, frame_id + 3, pts_ns + 3))
         revisions = committed_revisions
@@ -165,14 +167,17 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
                     "clock_domain": "monotonic_ns",
                     "runtime_instance_id": RUNTIME,
                     "observed_at_monotonic_ns": 20_000_000_000 + sample_index * 1_000_000,
+                    "measurement_phase": mode,
+                    "build_revision": session["build_revision"],
+                    "hardware": deepcopy(session["hardware"]),
+                    "producer_topology": "single_lane_reference" if mode == "reference" else "dual_lane_ab",
+                    "producer_count": 1 if mode == "reference" else 2,
                     "frame_render_ms": render + sample_index * 0.001,
                     "resident_bytes": resident + sample_index * 1000,
-                    "cpu_percent": 15.0 + sample_index,
-                    "gpu_percent": 25.0 + sample_index,
-                    "encoder_queue_depth": sample_index,
-                    "wgc_cpu_percent": 2.0,
-                    "cef_cpu_percent": 3.0,
-                    "nvenc_gpu_percent": 4.0,
+                    "process_cpu_percent": 15.0 + sample_index,
+                    "host_gpu_percent": 25.0 + sample_index,
+                    "callback_backlog_estimate": sample_index,
+                    "encoder_utilization_percent": 4.0,
                 }
             )
     return records
@@ -192,10 +197,10 @@ def test_fixture_reports_all_boundaries_separately_and_never_runtime_pass():
     assert report["status"] == "FIXTURE_ONLY"
     assert report["latency"]["encoder_input_raw"]["count"] == 3
     assert report["latency"]["directshow_return"]["count"] == 3
-    assert report["latency"]["rtmp_first_packet"]["count"] == 3
+    assert report["latency"]["encoded_first_packet"]["count"] == 3
     assert report["latency"]["encoder_input_raw"]["p95_ms"] < 50
     assert report["latency"]["directshow_return"]["p95_ms"] < 75
-    assert report["latency"]["rtmp_first_packet"]["p95_ms"] < 15
+    assert report["latency"]["encoded_first_packet"]["p95_ms"] < 15
     assert report["resources"]["status"] == "MEASURED"
     assert report["resources"]["comparison"]["frame_render_ms"]["within_known_reference"] is True
     assert report["resources"]["comparison"]["resident_bytes"]["within_known_reference"] is True
@@ -294,6 +299,92 @@ def test_resource_comparison_reports_over_reference_without_relabeling_it_as_cap
     assert report["criteria"]["AC-13"]["capacity_not_declared_from_reference"] is True
 
 
+def test_runtime_resource_identity_and_phase_are_not_vacuous():
+    records = _take_records(3, evidence_kind="runtime")
+    resource = next(record for record in records if record.get("record_type") == "resource_sample")
+    resource["hardware"] = {"host": "other-host", "gpu": "fixture"}
+    with pytest.raises(probe.EvidenceError, match="CORRELATION_INVALID"):
+        probe.parse_records(records)
+
+    report = probe.analyze_trace(
+        _trace(0, evidence_kind="runtime"), minimum_takes=1, minimum_warmup=0, minimum_resource_samples=2
+    )
+    assert report["status"] == "UNPROVEN"
+    assert report["event_coverage"]["take_accepted"] == 0
+    assert report["criteria"]["AC-07"]["status"] == "UNPROVEN"
+
+
+def test_queue_rejected_abort_exposes_last_committed_frame_and_pts():
+    records = _take_records(1)
+    records = [
+        record
+        for record in records
+        if not (
+            record.get("record_type") == "event"
+            and record["event"]["event_type"] == "TakeCommitted"
+        )
+        and not (
+            record.get("record_type") == "observation"
+            and record.get("take_command_id") == "take-001"
+        )
+    ]
+    accepted = next(record["event"] for record in records if record.get("record_type") == "event")
+    aborted = _event_common(
+        "take-001", "intent-001", 3, accepted["observed_at_monotonic_ns"] + 6_000_000,
+        accepted["revisions"], "ready"
+    )
+    aborted.update(
+        {
+            "event_type": "TakeAborted",
+            "take_command_id": "take-001",
+            "reason": "queue_rejected",
+            "last_committed_frame_id": 0,
+            "last_committed_pts_ns": 0,
+        }
+    )
+    records.insert(2, {"record_type": "event", "event": aborted})
+    trace = probe.parse_records(records)
+    report = probe.analyze_trace(trace, minimum_takes=1, minimum_warmup=0, minimum_resource_samples=2)
+    assert report["status"] == "FIXTURE_ONLY"
+    assert report["event_coverage"]["take_aborted"] == 1
+    assert report["takes"]["committed"] == 0
+
+    bad_records = deepcopy(records)
+    bad_abort = next(
+        record["event"]
+        for record in bad_records
+        if record.get("record_type") == "event" and record["event"]["event_type"] == "TakeAborted"
+    )
+    bad_abort["last_committed_frame_id"] = 99
+    with pytest.raises(probe.EvidenceError, match="FRAME_ORDER_INVALID"):
+        probe.analyze_trace(
+            probe.parse_records(bad_records), minimum_takes=1, minimum_warmup=0, minimum_resource_samples=2
+        )
+
+
+def test_queue_rejected_abort_can_be_terminal_without_false_acceptance():
+    records = _take_records(0)
+    rejected = _event_common(
+        "take-rejected-001", "intent-rejected-001", 1, 1_000_000_000,
+        {"program": 0, "preview": 0, "role_map": 0}, "ready"
+    )
+    rejected.update(
+        {
+            "event_type": "TakeAborted",
+            "take_command_id": "take-rejected-001",
+            "reason": "queue_rejected",
+            "last_committed_frame_id": 0,
+            "last_committed_pts_ns": 0,
+        }
+    )
+    records.insert(1, {"record_type": "event", "event": rejected})
+    trace = probe.parse_records(records)
+    report = probe.analyze_trace(trace, minimum_takes=1, minimum_warmup=0, minimum_resource_samples=2)
+    assert report["event_coverage"]["take_accepted"] == 0
+    assert report["event_coverage"]["take_aborted"] == 1
+    assert report["takes"]["accepted"] == 0
+
+
 def test_duplicate_server_sequence_and_duplicate_first_packet_are_not_silently_deduped():
     records = _take_records(3)
     event = next(item for item in records if item.get("record_type") == "event")
@@ -302,9 +393,9 @@ def test_duplicate_server_sequence_and_duplicate_first_packet_are_not_silently_d
         probe.analyze_trace(probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
 
     records = _take_records(3)
-    packet = next(item for item in records if item.get("record_type") == "observation" and item.get("boundary") == "rtmp_first_packet")
+    packet = next(item for item in records if item.get("record_type") == "observation" and item.get("boundary") == "encoded_first_packet")
     records.append(deepcopy(packet))
-    with pytest.raises(probe.EvidenceError, match="more than one valid first RTMP packet"):
+    with pytest.raises(probe.EvidenceError, match="more than one valid first encoded packet"):
         probe.analyze_trace(probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
 
 

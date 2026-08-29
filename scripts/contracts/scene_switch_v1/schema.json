@@ -146,8 +146,10 @@
             "take_command_id": { "$ref": "#/$defs/id" },
             "reason": {
               "type": "string",
-              "enum": ["operator", "timeout", "shutdown", "superseded"]
-            }
+              "enum": ["operator", "timeout", "shutdown", "superseded", "queue_rejected"]
+            },
+            "last_committed_frame_id": { "$ref": "#/$defs/nonNegativeInteger" },
+            "last_committed_pts_ns": { "$ref": "#/$defs/nonNegativeInteger" }
           }
         }
       ],
@@ -307,7 +309,7 @@
             "take_command_id": { "$ref": "#/$defs/id" },
             "reason": {
               "type": "string",
-              "enum": ["operator", "timeout", "shutdown", "superseded"]
+              "enum": ["operator", "timeout", "shutdown", "superseded", "queue_rejected"]
             }
           }
         }

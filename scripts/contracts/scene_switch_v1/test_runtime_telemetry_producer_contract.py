@@ -38,9 +38,9 @@ def test_canonical_runtime_producer_patch_is_present_and_scoped() -> None:
     text = PATCH.read_text(encoding="utf-8")
     assert text.startswith("From ")
     assert "Subject: [PATCH] feat(telemetry): emit correlated runtime trace boundaries" in text
-    assert "5 files changed, 246 insertions(+), 22 deletions(-)" in text
+    assert "5 files changed" in text
     assert "Agent-Role: Conduit" in text
-    assert "Agent-Thread: /root/conduit_246_runtime_telemetry" in text
+    assert "Agent-Thread: 01a04c0d-9c4e-7432-b187-42ef69146677" in text
     assert "Work-Unit: ZabLaboratory/Pulsar#246" in text
     assert "Issue: 246" in text
 
@@ -61,6 +61,8 @@ def test_canonical_runtime_producer_patch_is_present_and_scoped() -> None:
     assert "struct video_queue_frame_metadata" in text
     assert "video_queue_read_ex" in text
     assert "video_queue_write_ex" in text
+    assert "INT64_MAX" in text
+    assert "rtmp_first_packet" not in text
     assert UPSTREAM_QUEUE_CMAKE.is_file()
     assert UPSTREAM_VCAM_CMAKE.is_file()
     queue_cmake = UPSTREAM_QUEUE_CMAKE.read_text(encoding="utf-8")
@@ -99,16 +101,37 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "pulsar_runtime_telemetry_cancel_take" in frontend
     assert "#ifdef _WIN32\n#include <windows.h>\n#endif" in frontend
     assert '\\"boundary\\":\\"encoder_input_raw\\"' in frontend
-    assert '\\"boundary\\":\\"rtmp_first_packet\\"' in frontend
+    assert '\\"boundary\\":\\"encoded_first_packet\\"' in frontend
     assert "obs_add_raw_video_callback" in frontend
     assert "obs_output_add_packet_callback" in frontend
     assert 'obs_source_create("browser_source", "PulsarCefWorkload"' in frontend
     assert "PULSAR_CEF_URL" in frontend
+    assert "PULSAR_TRACE_HOST" in frontend
+    assert "PULSAR_TRACE_GPU" in frontend
+    assert "fitsCalldataInt" in frontend
+    assert "std::numeric_limits<int64_t>::max()" in frontend
+    assert "process_cpu_percent" in frontend
+    assert "callback_backlog_estimate" in frontend
+    assert "queue_rejected" in frontend
+    assert "last_committed_frame_id" in frontend
+    assert "last_committed_pts_ns" in frontend
+    assert "startTraceWriter" in frontend
+    assert "traceWriterLoop" in frontend
+    assert "writerCv_" in frontend
+    assert "writerQueue_" in frontend
+    assert "producer_topology" in frontend
+    assert "producer_count" in frontend
     assert '\\"source_types\\":[' in frontend
+    assert "PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD" in frontend
+    assert "if (externalLaneWorkload)" in frontend
+    assert "if (cefWorkloadRequested && !externalLaneWorkload)" in frontend
+    assert "probe must bind public A/B producers" in frontend
     queue_start = frontend.index("bool PulsarFrontendAPI::queueDualLaneCut")
     queue = frontend[queue_start:]
-    assert queue.index("g_runtimeTelemetry.accept") < queue.index("obs_view_queue_atomic_swap")
-    assert 'g_runtimeTelemetry.cancelAccepted("atomic_swap_rejected")' in queue
+    assert queue.index("g_runtimeTelemetry.reserve") < queue.index("obs_view_queue_atomic_swap")
+    assert queue.index("obs_view_queue_atomic_swap") < queue.index("g_runtimeTelemetry.markAccepted")
+    assert 'g_runtimeTelemetry.rejectReserved("atomic_swap_rejected")' in queue
+    assert "reservationStillOwned" in queue
 
     assert "BeginRuntimeTakeTelemetry" in websocket
     assert "pulsar_runtime_telemetry::begin_take" in websocket
@@ -123,25 +146,30 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert '"boundary\\":\\"directshow_return' in patch
     assert "video_queue_read_ex" in patch
     assert "video_queue_write_ex" in patch
+    assert "copy_telemetry_counter" in patch
+    assert "INT64_MAX" in patch
+    assert "queue_rejected" in frontend
 
 
 def test_runtime_session_line_is_valid_json_and_has_bound_source_topology() -> None:
     # This is the exact shape emitted by sessionJson(), including the fields
     # that caught the prior missing-quote regression and prevent workload flags
     # from standing in for actual source registration.
+    candidate_sha = "0123456789abcdef" * 2 + "01234567"
     line = (
         '{\"record_type\":\"session\",\"schema\":\"pulsar.take-latency.v1\",'
         '\"runtime_instance_id\":\"runtime-nvenc-001\",\"session_id\":\"runtime-nvenc-001-nvenc\",'
         '\"codec\":\"nvenc\",\"warmup_takes\":100,'
         '\"video\":{\"width\":1920,\"height\":1080,\"fps_num\":60,\"fps_den\":1},'
         '\"workload\":{\"wgc\":true,\"cef\":true,\"nvenc\":true},'
-        '\"capture_paths\":[\"encoder_input_raw\",\"directshow_return\",\"rtmp_first_packet\",'
+        '\"capture_paths\":[\"encoder_input_raw\",\"directshow_return\",\"encoded_first_packet\",'
         '\"decoded_first_frame\",\"antenna_first_frame\"],'
         '\"source_types\":[\"window_capture\",\"browser_source\"],'
         '\"resource_reference\":{\"extra_frame_render_ms\":0.091,\"extra_resident_bytes\":3130000},'
-        '\"build_revision\":\"0123456789abcdef0123456789abcdef01234567\",'
+        f'\"build_revision\":\"{candidate_sha}\",'
         '\"command_line\":\"scripts/probe-dual-lane.py --trace\",'
         '\"hardware\":{\"host\":\"test-host\",\"gpu\":\"adapter \\\"246\\\"\"},'
+        '\"producer_topology\":\"dual_lane_ab\",\"producer_count\":2,'
         '\"evidence_kind\":\"runtime\"}'
     )
     session = json.loads(line)
@@ -152,7 +180,7 @@ def test_runtime_session_line_is_valid_json_and_has_bound_source_topology() -> N
     spec.loader.exec_module(parser)
     validated = parser._validate_session(session)
     assert validated["source_types"] == ["window_capture", "browser_source"]
-    assert validated["build_revision"] == "0123456789abcdef0123456789abcdef01234567"
+    assert validated["build_revision"] == candidate_sha
     with pytest.raises(parser.EvidenceError, match="build_revision"):
         parser._validate_session({**session, "build_revision": "local-build"})
 
@@ -166,16 +194,29 @@ def test_runtime_session_line_is_valid_json_and_has_bound_source_topology() -> N
 def test_runtime_driver_requires_real_wgc_and_local_cef_evidence() -> None:
     driver = DUAL_LANE_PROBE.read_text(encoding="utf-8")
     assert "class DeterministicCefServer" in driver
-    assert 'CAPTURE_SOURCE_NAME = "PulsarCapture"' in driver
-    assert 'CEF_SOURCE_NAME = "PulsarCefWorkload"' in driver
+    assert '"window_capture": "probe-dual-lane-wgc-A"' in driver
+    assert '"browser_source": "probe-dual-lane-cef-B"' in driver
+    assert "create_public_lane_scenes" in driver
+    assert "duplicated producer instances" in driver
+    assert "single_lane_reference" in driver
+    assert "producer_count" in driver
+    assert 'lanes = ("A",) if mode == "reference" else ("A", "B")' in driver
+    assert 'env["PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD"] = "1"' in driver
+    assert 'env.pop("PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD", None)' in driver
+    assert "resolve_trace_hardware" in driver
+    assert "PULSAR_TRACE_HOST" in driver
+    assert "PULSAR_TRACE_GPU" in driver
     assert '\"GetInputList\"' in driver
     assert '\"GetInputSettings\"' in driver
     assert '\"GetSceneItemList\"' in driver
     assert '\"GetSourceScreenshot\"' in driver
     assert "frame_is_nonblack" in driver
     assert "--cef-workload requires --capture-window" in driver
+    assert "--trace requires --capture-window and --cef-workload" in driver
     assert "BUILD_REVISION_RE.fullmatch" in driver
     assert "wait_for_trace_record" in driver
+    assert "Default" in driver  # explicitly documented as non-evidence
+    assert "workload-default-scene-items" not in driver
 
 
 def test_driver_loopback_cef_and_frame_gate_are_executable() -> None:
@@ -191,6 +232,13 @@ def test_driver_loopback_cef_and_frame_gate_are_executable() -> None:
         with urllib.request.urlopen(server.url, timeout=2) as response:
             body = response.read()
         assert body == probe.CEF_PAGE_HTML
+        with urllib.request.urlopen(f"{server.url}?lane=A", timeout=2) as response:
+            lane_a = response.read()
+        with urllib.request.urlopen(f"{server.url}?lane=B", timeout=2) as response:
+            lane_b = response.read()
+        assert lane_a != lane_b
+        assert b"LANE A" in lane_a
+        assert b"LANE B" in lane_b
     finally:
         server.close()
 

@@ -1,23 +1,23 @@
-From fc3ef389c107f6fae0c92195b1e3cd9bdfecd32b Mon Sep 17 00:00:00 2001
+From fedd758838cb1036adb2d7805bbf67592e7442f2 Mon Sep 17 00:00:00 2001
 From: ClodoCapeo <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Sat, 29 Aug 2026 09:14:20 +0200
 Subject: [PATCH] feat(telemetry): emit correlated runtime trace boundaries
 
-Persist the runtime producer changes in the shared queue implementation consumed by the modern CMake target. Keep the legacy queue layout for unextended callers while carrying correlation metadata through ProgramReturn and PreviewReturn, and record the actual raw, DirectShow, and RTMP boundaries.
+Persist the runtime producer changes in the shared queue implementation consumed by the modern CMake target. Keep the legacy queue layout for unextended callers while carrying correlation metadata through ProgramReturn and PreviewReturn, and record the actual raw, DirectShow, and encoded-output boundaries. Reject invalid signed telemetry counters before they can wrap into unsigned metadata.
 
 Agent-Role: Conduit
-Agent-Thread: /root/conduit_246_runtime_telemetry
+Agent-Thread: 01a04c0d-9c4e-7432-b187-42ef69146677
 Work-Unit: ZabLaboratory/Pulsar#246
 Issue: 246
 ADR-Revision: draft-r2-dual-lane-20260828
-Evidence: runtime-telemetry-producer-static-checks; modern-shared-queue-build-fix
+Evidence: runtime-telemetry-producer-static-checks; modern-shared-queue-build-fix; signed-counter-fail-closed
 ---
  .../virtualcam-module/virtualcam-filter.cpp   | 104 +++++++++++++++++-
  .../virtualcam-module/virtualcam-filter.hpp   |   5 +-
- plugins/win-dshow/virtualcam.c                |  50 ++++++++-
+ plugins/win-dshow/virtualcam.c                |  86 ++++++++++++++-
  .../shared-memory-queue.c                     |  84 +++++++++++---
  .../shared-memory-queue.h                     |  25 +++++
- 5 files changed, 246 insertions(+), 22 deletions(-)
+ 5 files changed, 282 insertions(+), 22 deletions(-)
 
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 index b304fdf40..8be1b6c04 100644
@@ -193,11 +193,14 @@ index 1c2035ca4..c2f098f36 100644
  	const int GetOutputBufferSize(void);
  
 diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
-index 7b2cb3bf8..5306e819d 100644
+index 7b2cb3bf8..2d587319c 100644
 --- a/plugins/win-dshow/virtualcam.c
 +++ b/plugins/win-dshow/virtualcam.c
-@@ -5,12 +5,14 @@
+@@ -3,14 +3,17 @@
+ #include <string.h>
+ #include <stdio.h>
  #include <stdlib.h>
++#include <stdint.h>
  #include <wchar.h>
  #include "util/threading.h"
 -#include "shared-memory-queue.h"
@@ -212,7 +215,7 @@ index 7b2cb3bf8..5306e819d 100644
  	volatile bool active;
  	volatile bool stopping;
  };
-@@ -39,6 +41,46 @@ static bool valid_runtime_instance_id(const char *value)
+@@ -39,6 +42,81 @@ static bool valid_runtime_instance_id(const char *value)
  	return strcmp(value, ".") != 0 && strcmp(value, "..") != 0;
  }
  
@@ -222,6 +225,17 @@ index 7b2cb3bf8..5306e819d 100644
 +		value = "";
 +	strncpy(destination, value, PULSAR_RUNTIME_TELEMETRY_IDENTIFIER_CAPACITY - 1);
 +	destination[PULSAR_RUNTIME_TELEMETRY_IDENTIFIER_CAPACITY - 1] = '\0';
++}
++
++static bool copy_telemetry_counter(uint64_t *destination, long long value)
++{
++	/* calldata_int is signed.  Never let a missing/overflowed value wrap into
++	 * uint64 metadata: a DirectShow reader would otherwise report a fabricated
++	 * frame/PTS and could admit a false boundary. */
++	if (!destination || value < 0 || value > INT64_MAX)
++		return false;
++	*destination = (uint64_t)value;
++	return true;
 +}
 +
 +/* The ProgramReturn producer is in the OBS process, while the DirectShow
@@ -242,13 +256,37 @@ index 7b2cb3bf8..5306e819d 100644
 +		return;
 +	}
 +
-+	metadata->valid = calldata_bool(&cd, "valid") ? 1U : 0U;
-+	metadata->server_seq = (uint64_t)calldata_int(&cd, "server_seq");
-+	metadata->frame_id = (uint64_t)calldata_int(&cd, "frame_id");
-+	metadata->pts_ns = (uint64_t)calldata_int(&cd, "pts_ns");
-+	metadata->program_revision = (uint64_t)calldata_int(&cd, "program_revision");
-+	metadata->preview_revision = (uint64_t)calldata_int(&cd, "preview_revision");
-+	metadata->role_map_revision = (uint64_t)calldata_int(&cd, "role_map_revision");
++	const bool valid = calldata_bool(&cd, "valid");
++	const long long server_seq = calldata_int(&cd, "server_seq");
++	const long long frame_id = calldata_int(&cd, "frame_id");
++	const long long pts_ns = calldata_int(&cd, "pts_ns");
++	const long long program_revision = calldata_int(&cd, "program_revision");
++	const long long preview_revision = calldata_int(&cd, "preview_revision");
++	const long long role_map_revision = calldata_int(&cd, "role_map_revision");
++	uint64_t converted_server_seq = 0;
++	uint64_t converted_frame_id = 0;
++	uint64_t converted_pts_ns = 0;
++	uint64_t converted_program_revision = 0;
++	uint64_t converted_preview_revision = 0;
++	uint64_t converted_role_map_revision = 0;
++	const bool counters_valid = copy_telemetry_counter(&converted_server_seq, server_seq) &&
++				    copy_telemetry_counter(&converted_frame_id, frame_id) &&
++				    copy_telemetry_counter(&converted_pts_ns, pts_ns) &&
++				    copy_telemetry_counter(&converted_program_revision, program_revision) &&
++				    copy_telemetry_counter(&converted_preview_revision, preview_revision) &&
++				    copy_telemetry_counter(&converted_role_map_revision, role_map_revision);
++	if (!valid || !counters_valid) {
++		/* metadata was zeroed above; keep valid=0 and fail closed for this slot. */
++		calldata_free(&cd);
++		return;
++	}
++	metadata->server_seq = converted_server_seq;
++	metadata->frame_id = converted_frame_id;
++	metadata->pts_ns = converted_pts_ns;
++	metadata->program_revision = converted_program_revision;
++	metadata->preview_revision = converted_preview_revision;
++	metadata->role_map_revision = converted_role_map_revision;
++	metadata->valid = 1U;
 +	copy_telemetry_identifier(metadata->runtime_instance_id, calldata_string(&cd, "runtime_instance_id"));
 +	copy_telemetry_identifier(metadata->command_id, calldata_string(&cd, "command_id"));
 +	copy_telemetry_identifier(metadata->intent_id, calldata_string(&cd, "intent_id"));
@@ -259,7 +297,7 @@ index 7b2cb3bf8..5306e819d 100644
  static void queue_name_for_output(obs_output_t *output, wchar_t *destination, size_t capacity)
  {
  	const char *output_name = obs_output_get_name(output);
-@@ -85,6 +127,8 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+@@ -85,6 +163,8 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
  {
  	struct virtualcam_data *vcam = (struct virtualcam_data *)bzalloc(sizeof(*vcam));
  	vcam->output = output;
@@ -268,7 +306,7 @@ index 7b2cb3bf8..5306e819d 100644
  	queue_name_for_output(output, vcam->queue_name, sizeof(vcam->queue_name) / sizeof(vcam->queue_name[0]));
  
  	UNUSED_PARAMETER(settings);
-@@ -174,7 +218,9 @@ static void virtual_video(void *param, struct video_data *frame)
+@@ -174,7 +254,9 @@ static void virtual_video(void *param, struct video_data *frame)
  		return;
  	}
  
@@ -520,6 +558,3 @@ index 41c4cee5c..5a9187abc 100644
  
  #ifdef __cplusplus
  }
--- 
-2.54.0.windows.1
-
