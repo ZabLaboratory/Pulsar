@@ -85,6 +85,7 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
 
     assert "pulsar_runtime_telemetry_begin_take" in frontend
     assert "pulsar_runtime_telemetry_cancel_take" in frontend
+    assert "#ifdef _WIN32\n#include <windows.h>\n#endif" in frontend
     assert '\\"boundary\\":\\"encoder_input_raw\\"' in frontend
     assert '\\"boundary\\":\\"rtmp_first_packet\\"' in frontend
     assert "obs_add_raw_video_callback" in frontend

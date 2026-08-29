@@ -80,6 +80,10 @@
 
 #include <util/platform.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "pulsar-frontend-stub.h"
 #include "pulsar-dual-lane-control.h"
 #include "pulsar-runtime-telemetry.h"
