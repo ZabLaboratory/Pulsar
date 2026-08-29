@@ -96,7 +96,10 @@ def test_runtime_probe_runs_real_cuts_and_checks_audio_isolation() -> None:
     assert "verify_recording(path_text, ffprobe)" in probe
     assert "verify_program_audio_recording(output_path, ffprobe)" in probe
     assert '"sample_rate"' in probe
-    assert '"show_packets"' in probe
+    # The probe passes ffprobe's packet switch as an argv element, then asks
+    # for the packet PTS/DTS and duration fields used by its continuity check.
+    assert '"-show_packets"' in probe
+    assert '"stream=codec_name,sample_rate:packet=pts_time,dts_time,duration_time"' in probe
     assert "AAC packet continuity" in probe
     assert 'source.get("channel")' in probe
     assert '"route_snapshots"' in probe
