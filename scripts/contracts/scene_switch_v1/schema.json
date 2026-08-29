@@ -24,7 +24,8 @@
     "sceneId": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 256
+      "maxLength": 256,
+      "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f\\u007f])[\\s\\S]+$"
     },
     "sha256": {
       "type": "string",
@@ -32,11 +33,13 @@
     },
     "nonNegativeInteger": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "maximum": 18446744073709551615
     },
     "positiveInteger": {
       "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "maximum": 18446744073709551615
     },
     "laneId": {
       "type": "string",

@@ -145,6 +145,12 @@ def test_encoder_and_stable_surfaces_are_bound_only_during_setup() -> None:
     assert "obs_view_set_source(previewView, 0, previewScene)" in setup
     assert "obs_output_set_media(programReturnOutput, programVideo" in setup
     assert "obs_output_set_media(previewReturnOutput, previewVideo" in setup
+    assert "obs_output_start(previewReturnOutput)" in setup
+    assert setup.index("obs_output_set_media(previewReturnOutput, previewVideo") < setup.index(
+        "obs_output_start(previewReturnOutput)"
+    )
+    assert "PreviewView producer started for frame-backed readiness" in setup
+    assert "failed to start PreviewView producer" in setup
     assert setup.count("obs_view_create()") == 1
     assert "programView = obs_get_main_view();" in setup
     assert "programVideo = obs_get_video();" in setup
@@ -309,12 +315,23 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
 
     assert '#include "pulsar-dual-lane-control.h"' in handler
     assert 'requestType.rfind("Get", 0) == 0' in handler
-    assert "pulsar_dual_lane_control::MutationLease mutationLease(!IsReadOnlyRequest(request.RequestType))" in handler
+    assert "IsControlledSceneSwitchPendingBypass" in handler
+    assert 'request.RequestType != "CallVendorRequest"' in handler
+    assert 'vendor->get<std::string>() != "pulsar-scene-switch"' in handler
+    assert 'return nested == "Abort" || nested == "GetState"' in handler
+    assert "vendor->is_string() || !nestedRequest->is_string()" in handler
+    assert "json::value() here" in handler
+    assert "const bool controlledSceneSwitchBypass" in handler
+    assert "!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass" in handler
     assert "RequestStatus::RequestProcessingFailed" in handler
     assert "PREVIEW_FROZEN" in handler
-    # The gate must be acquired before handler lookup, so unknown/future
-    # non-Get commands cannot bypass the freeze while pending.
-    assert handler.index("MutationLease mutationLease(!IsReadOnlyRequest") < handler.index("_handlerMap.at")
+    # The gate is central and acquired before handler lookup. The only pending
+    # bypass is the exact vendor Abort/GetState pair; Prepare/Take/Dispatch,
+    # malformed CallVendorRequest data, and every other vendor remain gated.
+    assert 'nested == "Prepare"' not in handler
+    assert 'nested == "Take"' not in handler
+    assert 'nested == "Dispatch"' not in handler
+    assert handler.index("const bool controlledSceneSwitchBypass") < handler.index("_handlerMap.at")
 
 
 def test_runtime_probe_exercises_serial_frame_preview_freeze() -> None:

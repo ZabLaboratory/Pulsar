@@ -427,12 +427,30 @@ def test_command_idempotency_is_scoped_by_runtime_instance_id() -> None:
     foreign["runtime_instance_id"] = "runtime-002"
     foreign_rejected = machine.dispatch(foreign, now_monotonic_ns=1_000_000)
     assert foreign_rejected["error_code"] == "RUNTIME_MISMATCH"
+    assert machine.snapshot()["idempotency_cache_entries"] == 0
 
     local = prepare_command("shared-command", server_seq=machine.server_seq)
     local_accepted = machine.dispatch(local, now_monotonic_ns=1_100_000)
     assert local_accepted["event_type"] == "PrepareAccepted"
     assert machine.revisions == {"program": 0, "preview": 1, "role_map": 0}
-    assert machine.dispatch(deepcopy(foreign), now_monotonic_ns=1_200_000) == foreign_rejected
+    foreign_retry = machine.dispatch(deepcopy(foreign), now_monotonic_ns=1_200_000)
+    assert foreign_retry["error_code"] == "RUNTIME_MISMATCH"
+    assert machine.snapshot()["idempotency_cache_entries"] == 1
+
+
+def test_idempotency_cache_capacity_fails_closed_without_evicting_known_outcome() -> None:
+    machine = SceneSwitchMachine("runtime-001")
+    known = prepare_command("known")
+    accepted = machine.dispatch(known, now_monotonic_ns=1_000_000)
+    # Populate only private state for this bounded-memory model test; no
+    # synthetic entry can be used to mutate a runtime route.
+    for index in range(1, 4096):
+        machine._commands[("runtime-001", f"reserved-{index}")] = ("0" * 64, accepted)
+    before = machine.snapshot()
+    rejected = machine.dispatch(prepare_command("overflow"), now_monotonic_ns=1_100_000)
+    assert rejected["error_code"] == "SCHEMA_INVALID"
+    assert machine.snapshot()["revisions"] == before["revisions"]
+    assert machine.dispatch(known, now_monotonic_ns=1_200_000) == accepted
 
 
 def test_stale_revisions_are_rejected_without_route_or_surface_mutation() -> None:
