@@ -158,7 +158,13 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "pulsar_runtime_telemetry::begin_take" in websocket
     assert "pulsar_runtime_telemetry::cancel_take" in websocket
     assert "freeze_until_monotonic_ns" in websocket
+    assert "ingress_now_monotonic_ns" in websocket
+    assert "deadline_delta_ns" in websocket
     assert "called=%d available=%d accepted=%d" in websocket
+
+    assert "freeze_until_monotonic_ns=%lld ingress_now_monotonic_ns=%llu deadline_delta_ns=%s" in frontend
+    assert "freeze_until_monotonic_ns=%llu reserve_now_monotonic_ns=%llu deadline_delta_ns=%s" in frontend
+    assert "deadline >= now" in frontend
 
     # 0010 must record the observation after the DirectShow sample has been
     # unlocked, and only for the actual ProgramReturn filter instance.
@@ -210,6 +216,72 @@ def test_runtime_session_line_is_valid_json_and_has_bound_source_topology() -> N
         assert gpu_value in line
         malformed = line.replace(gpu_value, gpu_value[:-1], 1)
         json.loads(malformed)
+
+
+def test_wire_deadline_uses_qpc_compatible_perf_counter_and_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    spec = importlib.util.spec_from_file_location("probe_dual_lane_clock_contract", DUAL_LANE_PROBE)
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = probe
+    spec.loader.exec_module(probe)
+
+    # Deliberately give monotonic_ns a different epoch.  The serialized
+    # deadline must follow perf_counter_ns, the QPC-compatible source used by
+    # libobs, and must not be repaired by adding hidden producer slack.
+    wire_now = 10_000_000_000
+    monkeypatch.setattr(probe.time, "perf_counter_ns", lambda: wire_now)
+    monkeypatch.setattr(probe.time, "monotonic_ns", lambda: 7_000_000_000)
+
+    class Process:
+        runtime_id = "runtime-clock-001"
+
+    envelope = probe.take_telemetry_data(Process(), 1, "scene-clock")
+    deadline = envelope["pulsarTelemetry"]["freeze_until_monotonic_ns"]
+    assert probe.wire_monotonic_ns() == wire_now
+    assert deadline == wire_now + probe.TAKE_FREEZE_HANDOFF_BUDGET_NS
+    assert probe.wire_deadline_delta_ns(deadline, wire_now) == probe.TAKE_FREEZE_HANDOFF_BUDGET_NS
+    assert probe.wire_deadline_covers_handoff(deadline, wire_now, handoff_ns=1_000_000_000)
+    assert not probe.wire_deadline_covers_handoff(deadline, deadline, handoff_ns=0)
+    assert probe.wire_deadline_delta_ns(deadline, deadline + 1) == -1
+
+    with pytest.raises(probe.ProbeFailure, match="signed 64-bit"):
+        probe.make_wire_deadline_ns(probe.INT64_MAX, margin_ns=1)
+
+
+def test_wire_clock_calibration_brackets_qpc_and_rejects_epoch_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = importlib.util.spec_from_file_location("probe_dual_lane_calibration_contract", DUAL_LANE_PROBE)
+    assert spec is not None and spec.loader is not None
+    probe = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = probe
+    spec.loader.exec_module(probe)
+
+    # A midpoint of the bracketed QPC samples removes the deterministic call
+    # overhead from this test while keeping the calibration arithmetic exact.
+    qpc_samples = iter((1_000_000_000, 1_000_000_100))
+    monkeypatch.setattr(probe, "_qpc_ns", lambda: next(qpc_samples))
+    monkeypatch.setattr(probe, "wire_monotonic_ns", lambda: 1_000_000_050)
+    calibrated = probe.calibrate_wire_clock(max_delta_ns=0)
+    assert calibrated == {
+        "source": "perf_counter_ns/qpc",
+        "wire_now_ns": 1_000_000_050,
+        "qpc_now_ns": 1_000_000_050,
+        "qpc_delta_ns": 0,
+    }
+
+    qpc_samples = iter((2_000_000_000, 2_000_000_100))
+    monkeypatch.setattr(probe, "_qpc_ns", lambda: next(qpc_samples))
+    monkeypatch.setattr(probe, "wire_monotonic_ns", lambda: 2_000_001_000)
+    with pytest.raises(probe.ProbeFailure, match="not aligned"):
+        probe.calibrate_wire_clock(max_delta_ns=100)
+
+    monkeypatch.setattr(probe, "_qpc_ns", lambda: None)
+    monkeypatch.setattr(probe, "wire_monotonic_ns", lambda: 3_000_000_000)
+    without_qpc = probe.calibrate_wire_clock()
+    assert without_qpc["source"] == "perf_counter_ns"
+    assert without_qpc["wire_now_ns"] == 3_000_000_000
+    assert without_qpc["qpc_delta_ns"] is None
 
 
 def test_runtime_driver_requires_real_wgc_and_local_cef_evidence() -> None:

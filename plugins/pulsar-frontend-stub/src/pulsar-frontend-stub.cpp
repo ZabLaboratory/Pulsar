@@ -493,6 +493,10 @@ public:
     {
         TakeContext context;
         const char *rejectReason = nullptr;
+        std::string diagnosticCommandId;
+        uint64_t diagnosticFreezeUntilNs = 0;
+        uint64_t diagnosticNowNs = 0;
+        bool diagnosticHasDeadline = false;
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             if (!enabled_) {
@@ -509,6 +513,10 @@ public:
                 // available for a later scene mutation.
                 TakeContext candidate = pending_;
                 pending_.valid = false;
+                diagnosticCommandId = candidate.commandId;
+                diagnosticFreezeUntilNs = candidate.freezeUntilNs;
+                diagnosticNowNs = nowNs();
+                diagnosticHasDeadline = true;
                 if (candidate.targetLaneId != laneId(previewLane)) {
                     rejectReason = "target_lane_mismatch";
                 } else {
@@ -518,12 +526,11 @@ public:
                         (!uuid || candidate.targetSceneId != uuid)) {
                         rejectReason = "target_scene_mismatch";
                     } else {
-                        const uint64_t now = nowNs();
-                        if (candidate.freezeUntilNs <= now) {
+                        if (candidate.freezeUntilNs <= diagnosticNowNs) {
                             rejectReason = "freeze_deadline_expired";
                         } else {
                             context = candidate;
-                            context.acceptedAtNs = now;
+                            context.acceptedAtNs = diagnosticNowNs;
                             context.programRevision = programRevision_;
                             context.previewRevision = previewRevision_;
                             context.roleMapRevision = roleMapRevision_;
@@ -540,8 +547,27 @@ public:
         }
 
         if (rejectReason) {
-            blog(LOG_ERROR, "[pulsar-runtime-telemetry] accept rejected reason=%s", rejectReason);
+            if (diagnosticHasDeadline) {
+                const std::string delta = deadlineDelta(diagnosticFreezeUntilNs, diagnosticNowNs);
+                blog(LOG_ERROR,
+                     "[pulsar-runtime-telemetry] accept rejected reason=%s command_id=%s "
+                     "freeze_until_monotonic_ns=%llu reserve_now_monotonic_ns=%llu deadline_delta_ns=%s",
+                     rejectReason, diagnosticCommandId.c_str(),
+                     static_cast<unsigned long long>(diagnosticFreezeUntilNs),
+                     static_cast<unsigned long long>(diagnosticNowNs), delta.c_str());
+            } else {
+                blog(LOG_ERROR, "[pulsar-runtime-telemetry] accept rejected reason=%s", rejectReason);
+            }
             return false;
+        }
+
+        if (diagnosticHasDeadline) {
+            const std::string delta = deadlineDelta(diagnosticFreezeUntilNs, diagnosticNowNs);
+            blog(LOG_INFO,
+                 "[pulsar-runtime-telemetry] accept admitted command_id=%s "
+                 "freeze_until_monotonic_ns=%llu reserve_now_monotonic_ns=%llu deadline_delta_ns=%s",
+                 diagnosticCommandId.c_str(), static_cast<unsigned long long>(diagnosticFreezeUntilNs),
+                 static_cast<unsigned long long>(diagnosticNowNs), delta.c_str());
         }
 
         return context.valid;
@@ -823,6 +849,13 @@ public:
 
 private:
     static uint64_t nowNs() { return os_gettime_ns(); }
+
+    static std::string deadlineDelta(uint64_t deadline, uint64_t now)
+    {
+        if (deadline >= now)
+            return std::string("+") + std::to_string(deadline - now);
+        return std::string("-") + std::to_string(now - deadline);
+    }
 
     struct GpuMetrics {
         double utilization = 0.0;
@@ -1303,6 +1336,7 @@ private:
         const char *scene = calldata_string(cd, "target_scene_id");
         const char *digest = calldata_string(cd, "payload_sha256");
         const long long freeze = calldata_int(cd, "freeze_until_monotonic_ns");
+        const uint64_t ingressNowNs = nowNs();
         bool available = false;
         bool accepted = false;
         {
@@ -1327,6 +1361,15 @@ private:
         }
         calldata_set_bool(cd, "available", available);
         calldata_set_bool(cd, "accepted", accepted);
+        const std::string delta = freeze > 0
+                                      ? deadlineDelta(static_cast<uint64_t>(freeze), ingressNowNs)
+                                      : std::string("invalid");
+        blog(accepted ? LOG_INFO : LOG_ERROR,
+             "[pulsar-runtime-telemetry] begin command_id=%s "
+             "freeze_until_monotonic_ns=%lld ingress_now_monotonic_ns=%llu deadline_delta_ns=%s "
+             "available=%d accepted=%d",
+             command ? command : "", freeze, static_cast<unsigned long long>(ingressNowNs), delta.c_str(),
+             available, accepted);
     }
 
     static bool isLowerHex(const char *value)

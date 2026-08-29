@@ -21,13 +21,24 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <util/profiler.hpp>
 #endif
 
+#include <cstdint>
 #include <limits>
+#include <string>
+
+#include <util/platform.h>
 
 #include "RequestHandler.h"
 #include "pulsar-dual-lane-control.h"
 #include "pulsar-runtime-telemetry.h"
 
 namespace {
+
+std::string DeadlineDelta(uint64_t deadline, uint64_t now)
+{
+    if (deadline >= now)
+        return std::string("+") + std::to_string(deadline - now);
+    return std::string("-") + std::to_string(now - deadline);
+}
 
 bool IsReadOnlyRequest(const std::string &requestType)
 {
@@ -92,13 +103,18 @@ RuntimeTelemetryIngress BeginRuntimeTakeTelemetry(const Request &request)
     }
 
     ingress.envelopeValid = true;
+    const uint64_t ingressNowNs = os_gettime_ns();
+    const std::string ingressDelta = DeadlineDelta(freeze, ingressNowNs);
     ingress.status = pulsar_runtime_telemetry::begin_take_status(
         values[0].c_str(), values[1].c_str(), values[2].c_str(), values[3].c_str(), values[4].c_str(),
         values[5].c_str(), static_cast<int64_t>(freeze), values[6].c_str());
     blog(ingress.status.accepted ? LOG_INFO : LOG_ERROR,
-         "[pulsar-runtime-telemetry] ingress request=%s command_id=%s called=%d available=%d accepted=%d",
-         request.RequestType.c_str(), values[0].c_str(), ingress.status.called, ingress.status.available,
-         ingress.status.accepted);
+         "[pulsar-runtime-telemetry] ingress request=%s command_id=%s "
+         "freeze_until_monotonic_ns=%llu ingress_now_monotonic_ns=%llu deadline_delta_ns=%s "
+         "called=%d available=%d accepted=%d",
+         request.RequestType.c_str(), values[0].c_str(), static_cast<unsigned long long>(freeze),
+         static_cast<unsigned long long>(ingressNowNs), ingressDelta.c_str(), ingress.status.called,
+         ingress.status.available, ingress.status.accepted);
     return ingress;
 }
 

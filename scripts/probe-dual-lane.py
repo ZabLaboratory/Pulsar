@@ -85,6 +85,17 @@ EXIT_FAIL = 1
 EXIT_USAGE = 2
 EXIT_SKIP = 3
 
+# The runtime's ``os_gettime_ns`` uses QueryPerformanceCounter on Windows.
+# Python's monotonic clocks are not interchangeable on every supported Python
+# build: this host exposed a monotonic_ns epoch about 2.6 s behind QPC while
+# perf_counter_ns tracked QPC.  Deadlines crossing the WebSocket/native seam
+# must therefore use the QPC-compatible source explicitly.  The two-second
+# value is an intentional, bounded hand-off budget; it is never extended by
+# the producer after ingress.
+INT64_MAX = (1 << 63) - 1
+TAKE_FREEZE_HANDOFF_BUDGET_NS = 2_000_000_000
+WIRE_CLOCK_QPC_MAX_DELTA_NS = 5_000_000
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_EXE = (
     REPO_ROOT
@@ -245,6 +256,107 @@ def choose_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def wire_monotonic_ns() -> int:
+    """Return the monotonic timestamp used in envelopes crossing into libobs.
+
+    ``perf_counter_ns`` is backed by QPC on Windows and is the source that
+    shares an epoch with libobs ``os_gettime_ns``.  ``time.monotonic()`` and
+    ``time.monotonic_ns()`` remain appropriate for local duration waits, but
+    must not be serialized into the native deadline field.
+    """
+
+    return time.perf_counter_ns()
+
+
+def _qpc_ns() -> int | None:
+    """Read QueryPerformanceCounter directly when the probe runs on Windows."""
+
+    if os.name != "nt":
+        return None
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    counter = ctypes.c_longlong()
+    frequency = ctypes.c_longlong()
+    query_counter = kernel32.QueryPerformanceCounter
+    query_counter.argtypes = [ctypes.POINTER(ctypes.c_longlong)]
+    query_counter.restype = ctypes.c_int
+    query_frequency = kernel32.QueryPerformanceFrequency
+    query_frequency.argtypes = [ctypes.POINTER(ctypes.c_longlong)]
+    query_frequency.restype = ctypes.c_int
+    if not query_frequency(ctypes.byref(frequency)) or frequency.value <= 0:
+        raise ProbeFailure("QueryPerformanceFrequency is unavailable for the wire-clock preflight")
+    if not query_counter(ctypes.byref(counter)):
+        raise ProbeFailure("QueryPerformanceCounter is unavailable for the wire-clock preflight")
+    return (counter.value * 1_000_000_000) // frequency.value
+
+
+def calibrate_wire_clock(*, max_delta_ns: int = WIRE_CLOCK_QPC_MAX_DELTA_NS) -> dict[str, int | str | None]:
+    """Verify the serialized clock tracks QPC before a traced campaign starts.
+
+    The QPC samples bracket the Python call, so their midpoint bounds call
+    overhead instead of treating scheduling delay as a clock offset.  A
+    calibration failure is a typed probe failure: accepting a trace with
+    mismatched epochs would make every freeze deadline evidence ambiguous.
+    """
+
+    if type(max_delta_ns) is not int or max_delta_ns < 0:
+        raise ProbeFailure("wire-clock calibration bound must be a non-negative integer")
+    before = _qpc_ns()
+    wire_now = wire_monotonic_ns()
+    after = _qpc_ns()
+    if before is None or after is None:
+        return {
+            "source": "perf_counter_ns",
+            "wire_now_ns": wire_now,
+            "qpc_now_ns": None,
+            "qpc_delta_ns": None,
+        }
+    qpc_midpoint = before + (after - before) // 2
+    delta = wire_now - qpc_midpoint
+    if abs(delta) > max_delta_ns:
+        raise ProbeFailure(
+            "wire clock is not aligned with QueryPerformanceCounter: "
+            f"perf_counter_ns={wire_now} qpc_midpoint_ns={qpc_midpoint} delta_ns={delta} "
+            f"bound_ns={max_delta_ns}"
+        )
+    return {
+        "source": "perf_counter_ns/qpc",
+        "wire_now_ns": wire_now,
+        "qpc_now_ns": qpc_midpoint,
+        "qpc_delta_ns": delta,
+    }
+
+
+def make_wire_deadline_ns(now_ns: int | None = None, *, margin_ns: int = TAKE_FREEZE_HANDOFF_BUDGET_NS) -> int:
+    """Create a bounded QPC-domain deadline suitable for the native bridge."""
+
+    now = wire_monotonic_ns() if now_ns is None else now_ns
+    if type(now) is not int or now < 0 or now > INT64_MAX:
+        raise ProbeFailure("wire clock value must be an integer in the signed 64-bit range")
+    if type(margin_ns) is not int or margin_ns <= 0:
+        raise ProbeFailure("freeze hand-off budget must be a positive integer")
+    if now > INT64_MAX - margin_ns:
+        raise ProbeFailure("freeze deadline would exceed the signed 64-bit native bridge range")
+    return now + margin_ns
+
+
+def wire_deadline_delta_ns(deadline_ns: int, now_ns: int) -> int:
+    """Return signed remaining time for two values in the same wire domain."""
+
+    if type(deadline_ns) is not int or type(now_ns) is not int:
+        raise ProbeFailure("wire deadline arithmetic requires integer timestamps")
+    return deadline_ns - now_ns
+
+
+def wire_deadline_covers_handoff(deadline_ns: int, now_ns: int, *, handoff_ns: int = 0) -> bool:
+    """Check a deadline without changing it or silently adding producer slack."""
+
+    if type(handoff_ns) is not int or handoff_ns < 0:
+        raise ProbeFailure("handoff budget must be a non-negative integer")
+    return wire_deadline_delta_ns(deadline_ns, now_ns) > handoff_ns
 
 
 def _valid_hardware_label(value: str | None, kind: str) -> str:
@@ -1336,10 +1448,10 @@ def take_telemetry_data(process: PulsarProcess, number: int, target_scene: str) 
     command_id = f"take-{number:03d}"
     intent_id = f"intent-{number:03d}"
     target_lane = "B" if number % 2 else "A"
-    # Python's monotonic_ns on Windows is backed by QueryPerformanceCounter,
-    # the same clock domain used by libobs os_gettime_ns and the DirectShow
-    # filter.  Keep the deadline comfortably beyond the request/graphics hop.
-    freeze_until = time.monotonic_ns() + 2_000_000_000
+    # This timestamp crosses into libobs, so it must use the QPC-compatible
+    # wire clock.  Keep the deadline comfortably beyond the request/graphics
+    # hop while retaining a bounded, observable expiry guard in the producer.
+    freeze_until = make_wire_deadline_ns()
     command = {
         "requestType": "TriggerStudioModeTransition",
         "requestData": {"sceneName": target_scene},
@@ -1911,6 +2023,16 @@ def run(args: argparse.Namespace) -> int:
             trace_gpu,
         )
         try:
+            if trace_path is not None:
+                calibration = calibrate_wire_clock()
+                print(
+                    "   wire clock preflight: "
+                    f"source={calibration['source']} "
+                    f"wire_now_ns={calibration['wire_now_ns']} "
+                    f"qpc_now_ns={calibration['qpc_now_ns']} "
+                    f"qpc_delta_ns={calibration['qpc_delta_ns']} "
+                    f"bound_ns={WIRE_CLOCK_QPC_MAX_DELTA_NS}"
+                )
             process.spawn()
             print(
                 f"dual-lane probe: encoder={args.encoder} takes={args.takes} exe={args.exe}"
