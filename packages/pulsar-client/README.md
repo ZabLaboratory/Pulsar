@@ -448,7 +448,9 @@ typed `inputMuteStateChanged` event — see "Events" below.
 
 `programRoute()` reads the explicit `program-common` / `ProgramAudio` route.
 Its `audioIdentity` and output read-back fields are stable across video Cuts;
-`tracks[].pts` reports actual encoder-fed audio PTS. r2 explicitly reports
+its `sources` entries are audio-capable source channels (channel 0, the mutable
+Program video root, is excluded), and `tracks[].pts` reports actual
+encoder-fed audio PTS. r2 explicitly reports
 `previewAudioSupported=false` and `afvSupported=false`: Preview audio/AFV is
 not inferred from the selected video scene.
 

@@ -155,7 +155,11 @@ export interface ProgramAudioOutput {
   slots: Array<{ slot: number; track: number; encoder: string }>;
 }
 
-/** One source in libobs's audio source/channel graph at route snapshot time. */
+/**
+ * One audio-capable source bound to a libobs canvas source channel at route
+ * snapshot time. Channel 0 is the mutable dual-lane video root and is never
+ * included; only channels >= 1 are part of the common Program audio route.
+ */
 export interface ProgramAudioSource {
   channel: number;
   identity: string;

@@ -53,6 +53,9 @@ def test_route_observer_reads_encoder_mixers_and_pts_and_unhooks() -> None:
     assert '"route_id", pulsar_program_audio::kRouteId' in source
     assert '"audio_identity"' in source
     assert '"audio_matches_route"' in source
+    assert "for (uint32_t channel = 1; channel < MAX_CHANNELS; ++channel)" in source
+    assert "obs_source_get_output_flags(source)" in source
+    assert "OBS_SOURCE_AUDIO" in source
     assert '"pts_regressions"' in source
     assert '"pts_monotone"' in source
     assert '"series_ns"' in source
@@ -88,4 +91,9 @@ def test_runtime_probe_runs_real_cuts_and_checks_audio_isolation() -> None:
     assert "--takes" in probe
     assert "default=100" in probe or "default=100" in probe.replace(" ", "")
     assert "verify_recording(output_path, ffprobe)" in probe
+    assert "verify_program_audio_recording(output_path, ffprobe)" in probe
+    assert '"sample_rate"' in probe
+    assert '"show_packets"' in probe
+    assert "AAC packet continuity" in probe
+    assert 'source.get("channel")' in probe
     assert '"route_snapshots"' in probe

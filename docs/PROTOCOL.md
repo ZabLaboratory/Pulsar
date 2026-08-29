@@ -313,9 +313,14 @@ reuses it for every frontend-owned audio encoder. The
 read-back evidence that an audio-capable output consumes that same bus.
 `program-return` and `preview-return` are video-only surfaces and therefore
 carry `audio_supported=false` explicitly; they are not inferred to have a
-second audio route. `sources` records the currently bound libobs audio-source
-identities by mixer channel, while `tracks[].mixer_index` identifies the actual
-encoder-fed mix (track number is `mixer_index + 1`, never an output slot).
+second audio route. `sources` records only present audio-capable sources bound
+to the main canvas source channels `1..MAX_CHANNELS-1` (currently `1..63`).
+Channel 0 is deliberately excluded: it is the mutable dual-lane video root
+that changes between `PulsarLaneA` and `PulsarLaneB` on a Cut and is not part of
+the Program audio identity. Each source entry's `channel`, `identity`, `id`,
+and `name` describes the actual audio source set. `tracks[].mixer_index`
+identifies the actual encoder-fed mix (track number is `mixer_index + 1`, never
+an output slot).
 
 Each observed track reports `blocks`, `frames`, `first_pts_ns`,
 `last_pts_ns`, `pts_samples`, `pts_regressions`, `pts_monotone`, and a bounded

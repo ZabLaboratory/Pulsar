@@ -2090,9 +2090,18 @@ public:
         obs_data_set_array(res, "outputs", outputs);
 
         OBSDataArrayAutoRelease sources = obs_data_array_create();
-        for (uint32_t channel = 0; channel < MAX_AUDIO_MIXES; ++channel) {
+        // libobs calls these source channels, not audio mixes.  Channel 0 is
+        // the dual-lane Program video root and changes from PulsarLaneA to
+        // PulsarLaneB on every other Cut.  It must never be reported as part
+        // of the common Program audio route.  Enumerate the complete canvas
+        // source-channel range and retain only sources that actually advertise
+        // OBS_SOURCE_AUDIO; this keeps the wire contract explicit even when a
+        // future frontend adds an audio input beyond the first six channels.
+        for (uint32_t channel = 1; channel < MAX_CHANNELS; ++channel) {
             OBSSourceAutoRelease source = obs_get_output_source(channel);
             if (!source)
+                continue;
+            if ((obs_source_get_output_flags(source) & OBS_SOURCE_AUDIO) == 0)
                 continue;
             OBSDataAutoRelease entry = obs_data_create();
             obs_data_set_int(entry, "channel", static_cast<long long>(channel));

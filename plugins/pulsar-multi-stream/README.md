@@ -60,7 +60,9 @@ callbacks that expose actual frames and monotone PTS evidence. The Program and
 Preview return surfaces are video-only and are explicitly marked
 `audio_supported=false`. A video Cut swaps only video roots and never changes
 the common audio route. Preview audio and AFV are unsupported in r2 and are not
-inferred from a Preview scene or output slot.
+inferred from a Preview scene or output slot. `sources` contains only
+audio-capable main-canvas source channels (1..63 in the current libobs build);
+channel 0 is the mutable dual-lane video root and is intentionally omitted.
 
 ### Kinds
 

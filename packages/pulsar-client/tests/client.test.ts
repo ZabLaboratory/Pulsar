@@ -837,6 +837,15 @@ describe("PulsarClient", () => {
       expect(route.afvSupported).toBe(false);
       expect(route.outputs[0]?.audioSupported).toBe(true);
       expect(route.outputs[0]?.audioMatchesRoute).toBe(true);
+      expect(route.sources).toEqual([
+        {
+          channel: 1,
+          identity: "0xdesktop",
+          id: "wasapi_output_capture",
+          name: "PulsarDesktopAudio",
+        },
+      ]);
+      expect(route.sources.every((source) => source.channel > 0)).toBe(true);
       expect(route.tracks[0]?.ptsMonotone).toBe(true);
       expect(route.tracks[0]?.pts.seriesNs).toEqual([
         1000000000,

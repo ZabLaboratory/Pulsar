@@ -7,6 +7,8 @@ reads the ``pulsar:GetProgramAudioRoute`` vendor contract and checks:
 
 * the explicit route id/audio identity and every present output identity stay
   stable;
+* only actual audio-capable source channels are exposed (the mutable video
+  channel 0 is never part of the audio identity);
 * actual encoder-fed mixer callbacks report frames and monotone audio PTS;
 * changing the public Preview video scene after a committed Cut does not alter
   the Program audio route or its source/output identities; and
@@ -32,7 +34,9 @@ import argparse
 import asyncio
 import importlib.util
 import json
+import math
 import pathlib
+import subprocess
 import sys
 import tempfile
 from typing import Any
@@ -167,6 +171,91 @@ def route_key(route: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def verify_program_audio_recording(path_text: str, ffprobe: str) -> None:
+    """Verify the real recording's AAC format, sample rate, and packet clock."""
+
+    # Keep the shared video/container checks as part of this stronger audio
+    # proof.  The call is intentionally retained as a distinct operation so a
+    # failure still identifies the common recording validation surface.
+    verify_recording(path_text, ffprobe)
+    path = pathlib.Path(path_text)
+
+    try:
+        raw = subprocess.check_output(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_streams",
+                "-show_packets",
+                "-show_entries",
+                "stream=codec_name,sample_rate:packet=pts_time,dts_time,duration_time",
+                "-of",
+                "json",
+                str(path),
+            ],
+            stderr=subprocess.STDOUT,
+            timeout=30,
+        )
+        info = json.loads(raw)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        raise ProbeFailure(f"ffprobe audio continuity check failed for {path}: {exc}") from exc
+
+    streams = info.get("streams", [])
+    if len(streams) != 1:
+        raise ProbeFailure(f"expected one selected audio stream, got {len(streams)}")
+    audio = streams[0]
+    if audio.get("codec_name") != "aac":
+        raise ProbeFailure(f"expected AAC audio, got {audio.get('codec_name')!r}")
+    try:
+        sample_rate = int(audio.get("sample_rate", "0"))
+    except (TypeError, ValueError):
+        sample_rate = 0
+    if sample_rate != 48000:
+        raise ProbeFailure(f"expected AAC sample rate 48000 Hz, got {audio.get('sample_rate')!r}")
+
+    packets = info.get("packets", [])
+    if not packets:
+        raise ProbeFailure("recording contains no AAC packets")
+
+    # AAC-LC frames at 48 kHz normally carry 1024 samples.  Timestamp
+    # precision and muxer edit lists can introduce small rounding differences,
+    # so allow two frame durations plus 2 ms while still rejecting a missing
+    # packet-sized interval.  A backwards timestamp is never tolerated.
+    frame_duration = 1024.0 / sample_rate
+    previous_pts: float | None = None
+    for index, packet in enumerate(packets):
+        timestamp_text = packet.get("pts_time")
+        if timestamp_text in (None, "N/A"):
+            timestamp_text = packet.get("dts_time")
+        try:
+            timestamp = float(timestamp_text)
+        except (TypeError, ValueError):
+            raise ProbeFailure(f"AAC packet {index} has no usable PTS/DTS: {packet}") from None
+        if not math.isfinite(timestamp):
+            raise ProbeFailure(f"AAC packet {index} has a non-finite PTS/DTS: {packet}")
+        if previous_pts is not None:
+            delta = timestamp - previous_pts
+            if delta < -1e-6:
+                raise ProbeFailure(
+                    f"AAC packet PTS regressed at packet {index}: "
+                    f"{previous_pts:.9f} -> {timestamp:.9f}"
+                )
+            if delta > (2.0 * frame_duration + 0.002):
+                raise ProbeFailure(
+                    f"AAC packet continuity gap at packet {index}: "
+                    f"{delta:.9f}s exceeds {2.0 * frame_duration + 0.002:.9f}s"
+                )
+        previous_pts = timestamp
+
+    print(
+        f"   AAC audio verified: codec=aac sample_rate={sample_rate} Hz, "
+        f"packets={len(packets)}, PTS monotone/continuous"
+    )
+
+
 def check_route(
     route: dict[str, Any],
     previous: dict[str, Any] | None,
@@ -203,6 +292,21 @@ def check_route(
                 raise ProbeFailure(f"{label}: audio output identity drift: {output}")
         elif output.get("audio_matches_route") is not False:
             raise ProbeFailure(f"{label}: non-audio output was not explicit: {output}")
+
+    sources = route.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ProbeFailure(f"{label}: no actual audio source entries: {route}")
+    for source in sources:
+        if not isinstance(source, dict):
+            raise ProbeFailure(f"{label}: malformed audio source entry: {source!r}")
+        channel = source.get("channel")
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel <= 0:
+            raise ProbeFailure(
+                f"{label}: video/non-audio source channel leaked into ProgramAudio: {source}"
+            )
+        for field in ("identity", "id", "name"):
+            if not isinstance(source.get(field), str) or not source.get(field):
+                raise ProbeFailure(f"{label}: audio source {field} is empty: {source}")
 
     tracks = route.get("tracks") or []
     if not tracks:
@@ -403,7 +507,7 @@ async def drive(process: Any, takes: int, evidence_path: pathlib.Path | None) ->
                 f"expected exactly {takes} contiguous TakeCommitted logs, got "
                 f"{[commit.count for commit in all_commits]}"
             )
-        verify_recording(output_path, ffprobe)
+        verify_program_audio_recording(output_path, ffprobe)
 
     if preview_mutation_key != expected_key:
         raise ProbeFailure("Preview video mutation changed the Program audio route key")
