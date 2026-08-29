@@ -109,7 +109,10 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "PULSAR_TRACE_HOST" in frontend
     assert "PULSAR_TRACE_GPU" in frontend
     assert "fitsCalldataInt" in frontend
-    assert "std::numeric_limits<int64_t>::max()" in frontend
+    assert "static_cast<uint64_t>(INT64_MAX)" in frontend
+    assert "(std::numeric_limits<int64_t>::max)()" not in frontend
+    assert "static_cast<uint32_t>(cefVideo.fps_num / cefVideo.fps_den)" in frontend
+    assert "(std::max)(1, cefVideo.fps_num / cefVideo.fps_den)" not in frontend
     assert "process_cpu_percent" in frontend
     assert "callback_backlog_estimate" in frontend
     assert "queue_rejected" in frontend

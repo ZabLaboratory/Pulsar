@@ -66,6 +66,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <ctime>
 #include <deque>
@@ -1029,7 +1030,7 @@ private:
 
     static bool fitsCalldataInt(uint64_t value)
     {
-        return value <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+        return value <= static_cast<uint64_t>(INT64_MAX);
     }
 
     static bool validSceneId(const char *value)
@@ -3211,7 +3212,8 @@ bool PulsarFrontendAPI::setup()
         const int cefWidth = cefVideo.base_width > 0 ? cefVideo.base_width : 1920;
         const int cefHeight = cefVideo.base_height > 0 ? cefVideo.base_height : 1080;
         const int cefFps = cefVideo.fps_num > 0 && cefVideo.fps_den > 0
-                               ? (std::max)(1, cefVideo.fps_num / cefVideo.fps_den)
+                               ? static_cast<int>((std::max)(
+                                     uint32_t{1}, static_cast<uint32_t>(cefVideo.fps_num / cefVideo.fps_den)))
                                : 60;
         const char *configuredUrl = std::getenv("PULSAR_CEF_URL");
         // Keep an explicit deterministic fallback for direct runtime launches.
