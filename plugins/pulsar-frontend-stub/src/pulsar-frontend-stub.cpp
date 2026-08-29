@@ -1412,11 +1412,17 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
         return false;
     }
     g_dualLaneControlBridge.activate();
-    blog(LOG_INFO, "[pulsar-dual-lane] ready LaneA=%p LaneB=%p ProgramView=%p PreviewView=%p "
-         "ProgramVideo=%p PreviewVideo=%p MainView=%p MainVideo=%p",
-         (void *)laneSources[0], (void *)laneSources[1], (void *)programView, (void *)previewView,
-         (void *)programVideo, (void *)previewVideo, (void *)obs_get_main_view(),
-         (void *)obs_get_video());
+    const bool lane_root_binding_valid = laneSources[onAirLane] == currentScene &&
+                                         laneSources[previewLane] == previewScene;
+    const bool program_main_view_valid = programView == obs_get_main_view();
+    const bool program_main_video_valid = programVideo == obs_get_video();
+    const bool preview_distinct_valid = programView != previewView && programVideo != previewVideo &&
+                                        currentScene != previewScene;
+    blog(LOG_INFO, "[pulsar-dual-lane] ready LaneA=lane-a LaneB=lane-b "
+         "lane_root_binding_valid=%d program_main_view_valid=%d program_main_video_valid=%d "
+         "preview_distinct_valid=%d",
+         lane_root_binding_valid, program_main_view_valid, program_main_video_valid,
+         preview_distinct_valid);
     return true;
 }
 
@@ -1446,12 +1452,17 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
         return false;
     }
 
+    const bool lane_root_binding_valid = laneSources[onAirLane] == currentScene &&
+                                         laneSources[previewLane] == previewScene;
+    const bool program_main_view_valid = programView == obs_get_main_view();
+    const bool program_main_video_valid = programVideo == obs_get_video();
+    const bool preview_distinct_valid = programView != previewView && programVideo != previewVideo &&
+                                        currentScene != previewScene;
     blog(LOG_INFO, "[pulsar-dual-lane] TakeAccepted preview_lane=%d onair_lane=%d "
-         "OnAirRoot=%p PreviewRoot=%p ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p "
-         "MainView=%p MainVideo=%p",
-         previewLane, onAirLane, (void *)currentScene, (void *)previewScene, (void *)programView,
-         (void *)previewView, (void *)programVideo, (void *)previewVideo, (void *)obs_get_main_view(),
-         (void *)obs_get_video());
+         "lane_root_binding_valid=%d program_main_view_valid=%d program_main_video_valid=%d "
+         "preview_distinct_valid=%d",
+         previewLane, onAirLane, lane_root_binding_valid, program_main_view_valid,
+         program_main_video_valid, preview_distinct_valid);
     return true;
 }
 
@@ -1464,6 +1475,10 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
     uint64_t committedCount = 0;
     int committedOnAirLane = -1;
     int committedPreviewLane = -1;
+    bool laneRootBindingValid = false;
+    bool programMainViewValid = false;
+    bool programMainVideoValid = false;
+    bool previewDistinctValid = false;
     {
         std::lock_guard<std::mutex> lk(self->dualLaneMutex);
         if (!self->dualLaneCutPending.load())
@@ -1481,6 +1496,13 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
         committedCount = self->cutCount;
         committedOnAirLane = self->onAirLane;
         committedPreviewLane = self->previewLane;
+        laneRootBindingValid = self->laneSources[self->onAirLane] == self->currentScene &&
+                               self->laneSources[self->previewLane] == self->previewScene;
+        programMainViewValid = self->programView == obs_get_main_view();
+        programMainVideoValid = self->programVideo == obs_get_video();
+        previewDistinctValid = self->programView != self->previewView &&
+                               self->programVideo != self->previewVideo &&
+                               self->currentScene != self->previewScene;
         self->dualLaneCutPending.store(false);
         g_dualLaneControlBridge.set_pending(false);
         if (!self->dualLaneInvariantLocked("commit"))
@@ -1488,14 +1510,11 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
     }
 
     blog(LOG_INFO, "[pulsar-dual-lane] TakeCommitted count=%llu frame_id=%llu pts_ns=%llu "
-         "onair_lane=%d preview_lane=%d OnAirRoot=%p PreviewRoot=%p "
-         "ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p "
-         "MainView=%p MainVideo=%p",
+         "onair_lane=%d preview_lane=%d lane_root_binding_valid=%d "
+         "program_main_view_valid=%d program_main_video_valid=%d preview_distinct_valid=%d",
          static_cast<unsigned long long>(committedCount), static_cast<unsigned long long>(frameId),
          static_cast<unsigned long long>(ptsNs), committedOnAirLane, committedPreviewLane,
-         (void *)self->currentScene, (void *)self->previewScene, (void *)self->programView,
-         (void *)self->previewView, (void *)self->programVideo, (void *)self->previewVideo,
-         (void *)obs_get_main_view(), (void *)obs_get_video());
+         laneRootBindingValid, programMainViewValid, programMainVideoValid, previewDistinctValid);
     self->emit(OBS_FRONTEND_EVENT_SCENE_CHANGED);
     self->emit(OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED);
 }

@@ -3,9 +3,10 @@
 
 The probe drives the public obs-websocket v5 boundary only.  It starts with
 one logical scene on air, alternates a second scene into Preview, and commits
-``--takes`` studio-mode Cuts.  Pulsar's structured dual-lane logs expose the
-physical roots, stable view/video identities, and frame-boundary frame/PTS
-commit; those values are checked for every Take.  It also mutates the public
+``--takes`` studio-mode Cuts.  Pulsar's structured dual-lane logs expose
+computed lane/surface relationship checks and frame-boundary frame/PTS
+commit; those values are checked for every Take without publishing native
+addresses. It also mutates the public
 Program and Preview scenes after their lane is bound, mutates the former
 OnAir scene after the first Take, and checks that the logical selections stay
 distinct.  The raw NV12 time-code probe remains the pixel-level proof that
@@ -23,7 +24,8 @@ the raw NV12 time-code probe remains the pixel-level proof for no mixed frame.
 
 The process boundary is deliberate: no libobs/OBS DLL is loaded and no native
 object is accessed from Python.  Only obs-websocket v5 JSON frames and the
-Pulsar child process's structured diagnostics are used.
+Pulsar child process's structured diagnostics are used; the public WebSocket
+checks and raw NV12 time-code probe provide the behavioural isolation proof.
 """
 
 from __future__ import annotations
@@ -71,6 +73,9 @@ DEFAULT_EXE = (
 )
 
 READY_RE = re.compile(r"PULSAR_READY ws=(\S+) password=(\S+)")
+SENSITIVE_LOG_VALUE_RE = re.compile(
+    r"(?i)\b(password|token|secret|stream[-_ ]?key)\s*([=:])\s*[^\s,;]+"
+)
 # Keep accepting the bracketed diagnostics emitted by older builds while also
 # accepting the logger's structured separator form.  The latter is the exact
 # shape used by the current binary: ``pulsar-dual-lane | ready``.
@@ -78,8 +83,8 @@ DUAL_LANE_LOG_PREFIX = r"(?:\[pulsar-dual-lane\]|pulsar-dual-lane\s*\|)"
 DUAL_READY_RE = re.compile(
     DUAL_LANE_LOG_PREFIX
     + r"\s*ready LaneA=(\S+) LaneB=(\S+) "
-    r"ProgramView=(\S+) PreviewView=(\S+) ProgramVideo=(\S+) PreviewVideo=(\S+) "
-    r"MainView=(\S+) MainVideo=(\S+)"
+    r"lane_root_binding_valid=(\d) program_main_view_valid=(\d) "
+    r"program_main_video_valid=(\d) preview_distinct_valid=(\d)"
 )
 ENCODER_RE = re.compile(r"video encoder allocated: family=(\S+) id=(\S+)")
 ENCODER_BIND_RE = re.compile(
@@ -89,9 +94,8 @@ COMMIT_RE = re.compile(
     DUAL_LANE_LOG_PREFIX
     + r"\s*TakeCommitted count=(\d+) frame_id=(\d+) "
     r"pts_ns=(\d+) onair_lane=(-?\d+) preview_lane=(-?\d+) "
-    r"OnAirRoot=(\S+) PreviewRoot=(\S+) ProgramView=(\S+) "
-    r"PreviewView=(\S+) ProgramVideo=(\S+) PreviewVideo=(\S+) "
-    r"MainView=(\S+) MainVideo=(\S+)"
+    r"lane_root_binding_valid=(\d) program_main_view_valid=(\d) "
+    r"program_main_video_valid=(\d) preview_distinct_valid=(\d)"
 )
 
 CANVAS_W = 1920
@@ -115,6 +119,15 @@ class ProbeFailure(RuntimeError):
 
 class ProbeSkip(RuntimeError):
     """A reproducible environment limitation, not a product pass/fail."""
+
+
+def redact_log_line(line: str) -> str:
+    """Preserve diagnostics while never echoing boot credentials in failures."""
+    return SENSITIVE_LOG_VALUE_RE.sub(r"\1\2[redacted]", line)
+
+
+def failure_tail(lines: list[str], limit: int) -> str:
+    return "\n".join(f"  | {redact_log_line(line)}" for line in lines[-limit:])
 
 
 def choose_port() -> int:
@@ -198,7 +211,7 @@ class PulsarProcess:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     status = self.proc.poll() if self.proc is not None else None
-                    tail = "\n".join(f"  | {line}" for line in self.lines[-40:])
+                    tail = failure_tail(self.lines, 40)
                     raise ProbeFailure(
                         f"timeout waiting for {pattern.pattern!r}; exit={status}\n{tail}"
                     )
@@ -214,7 +227,7 @@ class PulsarProcess:
                         return match
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    tail = "\n".join(f"  | {line}" for line in self.lines[-60:])
+                    tail = failure_tail(self.lines, 60)
                     raise ProbeFailure(f"TakeCommitted count={count} not observed\n{tail}")
                 self.condition.wait(timeout=min(0.25, remaining))
 
@@ -383,12 +396,10 @@ async def identify(ws: Any, password: str) -> None:
 class ReadyIdentity:
     lane_a: str
     lane_b: str
-    program_view: str
-    preview_view: str
-    program_video: str
-    preview_video: str
-    main_view: str
-    main_video: str
+    lane_root_binding_valid: int
+    program_main_view_valid: int
+    program_main_video_valid: int
+    preview_distinct_valid: int
 
 
 @dataclass(frozen=True)
@@ -398,23 +409,14 @@ class Commit:
     pts_ns: int
     onair_lane: int
     preview_lane: int
-    onair_root: str
-    preview_root: str
-    program_view: str
-    preview_view: str
-    program_video: str
-    preview_video: str
-    main_view: str
-    main_video: str
-
-
-def normalise_pointer(value: str) -> str:
-    pointer = value.lower().removeprefix("0x").lstrip("0")
-    return pointer or "0"
+    lane_root_binding_valid: int
+    program_main_view_valid: int
+    program_main_video_valid: int
+    preview_distinct_valid: int
 
 
 def parse_ready(match: re.Match[str]) -> ReadyIdentity:
-    return ReadyIdentity(*(normalise_pointer(match.group(i)) for i in range(1, 9)))
+    return ReadyIdentity(match.group(1), match.group(2), *(int(match.group(i)) for i in range(3, 7)))
 
 
 def parse_commit(match: re.Match[str]) -> Commit:
@@ -424,14 +426,10 @@ def parse_commit(match: re.Match[str]) -> Commit:
         pts_ns=int(match.group(3)),
         onair_lane=int(match.group(4)),
         preview_lane=int(match.group(5)),
-        onair_root=normalise_pointer(match.group(6)),
-        preview_root=normalise_pointer(match.group(7)),
-        program_view=normalise_pointer(match.group(8)),
-        preview_view=normalise_pointer(match.group(9)),
-        program_video=normalise_pointer(match.group(10)),
-        preview_video=normalise_pointer(match.group(11)),
-        main_view=normalise_pointer(match.group(12)),
-        main_video=normalise_pointer(match.group(13)),
+        lane_root_binding_valid=int(match.group(6)),
+        program_main_view_valid=int(match.group(7)),
+        program_main_video_valid=int(match.group(8)),
+        preview_distinct_valid=int(match.group(9)),
     )
 
 
@@ -440,35 +438,9 @@ def validate_commit(identity: ReadyIdentity, previous: Commit | None, commit: Co
         raise ProbeFailure(f"invalid role lanes in commit: {commit}")
     if commit.onair_lane == commit.preview_lane:
         raise ProbeFailure(f"OnAir and Preview lanes collided: {commit}")
-    lane_roots = (identity.lane_a, identity.lane_b)
-    if commit.onair_root != lane_roots[commit.onair_lane]:
-        raise ProbeFailure(
-            f"OnAir root does not match physical lane {commit.onair_lane}: {commit}"
-        )
-    if commit.preview_root != lane_roots[commit.preview_lane]:
-        raise ProbeFailure(
-            f"Preview root does not match physical lane {commit.preview_lane}: {commit}"
-        )
-    if (commit.program_view, commit.preview_view) != (
-        identity.program_view,
-        identity.preview_view,
-    ):
-        raise ProbeFailure(f"ProgramView/PreviewView identity changed: {commit}")
-    if (commit.program_video, commit.preview_video) != (
-        identity.program_video,
-        identity.preview_video,
-    ):
-        raise ProbeFailure(f"ProgramVideo/PreviewVideo identity changed: {commit}")
-    if (identity.program_view, identity.program_video) != (
-        identity.main_view,
-        identity.main_video,
-    ):
-        raise ProbeFailure(f"Program surface is not libobs main view/video: {identity}")
-    if (commit.main_view, commit.main_video) != (
-        identity.main_view,
-        identity.main_video,
-    ):
-        raise ProbeFailure(f"main view/video identity changed: {commit}")
+    if (commit.lane_root_binding_valid, commit.program_main_view_valid,
+        commit.program_main_video_valid, commit.preview_distinct_valid) != (1, 1, 1, 1):
+        raise ProbeFailure(f"TakeCommitted reported an invalid surface relation: {commit}")
     if previous is not None:
         if commit.count != previous.count + 1:
             raise ProbeFailure(f"non-contiguous Take count: previous={previous} current={commit}")
@@ -632,14 +604,9 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
     identity = parse_ready(process.wait_for(DUAL_READY_RE, timeout=60))
     if identity.lane_a == identity.lane_b:
         raise ProbeFailure(f"LaneA and LaneB are aliased: {identity}")
-    if identity.program_view == identity.preview_view:
-        raise ProbeFailure(f"ProgramView and PreviewView are aliased: {identity}")
-    if identity.program_video == identity.preview_video:
-        raise ProbeFailure(f"ProgramVideo and PreviewVideo are aliased: {identity}")
-    if identity.program_view != identity.main_view:
-        raise ProbeFailure(f"ProgramView is not the libobs main view: {identity}")
-    if identity.program_video != identity.main_video:
-        raise ProbeFailure(f"ProgramVideo is not obs_get_video(): {identity}")
+    if (identity.lane_root_binding_valid, identity.program_main_view_valid,
+        identity.program_main_video_valid, identity.preview_distinct_valid) != (1, 1, 1, 1):
+        raise ProbeFailure(f"Dual-lane ready reported an invalid surface relation: {identity}")
 
     encoder_match = process.wait_for(ENCODER_RE, timeout=60)
     actual_family = encoder_match.group(1).lower()
@@ -912,8 +879,8 @@ def run(args: argparse.Namespace) -> int:
             print(f"dual-lane probe: encoder={args.encoder} takes={args.takes} exe={args.exe}")
             commits = asyncio.run(drive(process, args.takes))
             print(
-                f"PASS: {len(commits)} Takes; LaneA/LaneB, main ProgramView/PreviewView and "
-                "ProgramVideo/PreviewVideo remained stable; frame_id/PTS monotone"
+                f"PASS: {len(commits)} Takes; computed lane/surface relations remained valid; "
+                "frame_id/PTS monotone"
             )
             return 0
         except ProbeSkip as exc:

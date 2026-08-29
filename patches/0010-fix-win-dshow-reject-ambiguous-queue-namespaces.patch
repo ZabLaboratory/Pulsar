@@ -1,0 +1,433 @@
+From dec3a608e9f107f1d5dbf38ee10f200d86fe9a0f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Sat, 29 Aug 2026 13:38:43 +0200
+Subject: [PATCH] fix(win-dshow): reject ambiguous queue namespaces
+
+Use one C-compatible decision helper for the DirectShow producer and consumer. Explicit invalid runtime configuration now disables the mapping before any named queue can be opened or created.
+
+Agent-Role: Forge-1
+
+Agent-Thread: /root/pulsar_248_forge
+
+Work-Unit: ZabLaboratory/Pulsar#248
+
+Issue: 248
+
+ADR-Revision: draft-r2-dual-lane-20260828
+
+Evidence: directshow-namespace-tri-state-probe
+---
+ plugins/win-dshow/directshow-namespace.h      | 116 ++++++++++++++++++
+ .../virtualcam-module/virtualcam-filter.cpp   |  67 +++++-----
+ .../virtualcam-module/virtualcam-filter.hpp   |   4 +-
+ .../virtualcam-module/virtualcam-module.cpp   |   9 +-
+ plugins/win-dshow/virtualcam.c                |  53 +++-----
+ 5 files changed, 175 insertions(+), 74 deletions(-)
+ create mode 100644 plugins/win-dshow/directshow-namespace.h
+
+diff --git a/plugins/win-dshow/directshow-namespace.h b/plugins/win-dshow/directshow-namespace.h
+new file mode 100644
+index 000000000..3e17ee930
+--- /dev/null
++++ b/plugins/win-dshow/directshow-namespace.h
+@@ -0,0 +1,116 @@
++#pragma once
++
++/*
++ * Pulsar keeps the stock DirectShow names only for a process that has no
++ * runtime namespace configuration at all.  An explicit configuration that
++ * cannot name a dedicated mapping must fail closed instead of falling back
++ * into another process's legacy mapping.
++ *
++ * This header is deliberately C-compatible: the producer is C and the
++ * DirectShow consumer is C++.  It is private to win-dshow and does not add a
++ * libobs dependency to the virtual-camera DLL.
++ */
++
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdlib.h>
++#include <string.h>
++#include <windows.h>
++
++enum directshow_queue_namespace {
++	DIRECTSHOW_QUEUE_NAMESPACE_REJECT = 0,
++	DIRECTSHOW_QUEUE_NAMESPACE_LEGACY,
++	DIRECTSHOW_QUEUE_NAMESPACE_DEDICATED,
++};
++
++enum directshow_consumer_filter_kind {
++	DIRECTSHOW_CONSUMER_FILTER_STOCK = 0,
++	DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN,
++	DIRECTSHOW_CONSUMER_FILTER_PREVIEW_RETURN,
++};
++
++static inline bool directshow_environment_variable(const char *name, char *value, size_t capacity)
++{
++	/* getenv() alone cannot distinguish an unset Windows variable from one
++	 * explicitly set to empty, which is security-significant here. */
++	SetLastError(ERROR_SUCCESS);
++	DWORD size = GetEnvironmentVariableA(name, value, (DWORD)capacity);
++	if (size == 0) {
++		if (GetLastError() == ERROR_ENVVAR_NOT_FOUND)
++			return false;
++		value[0] = '\0';
++		return true;
++	}
++	if (size >= capacity) {
++		/* Environment values at the Windows limit cannot be a valid runtime
++		 * ID or alias.  Leave an explicitly invalid marker for the decision. */
++		value[0] = '!';
++		value[1] = '\0';
++	}
++	return true;
++}
++
++static inline bool directshow_runtime_instance_id_valid(const char *value)
++{
++	if (!value || !*value || strlen(value) > 64)
++		return false;
++	if (!((*value >= 'A' && *value <= 'Z') || (*value >= 'a' && *value <= 'z') ||
++	      (*value >= '0' && *value <= '9')))
++		return false;
++	for (const char *p = value; *p; ++p) {
++		if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
++		      (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' || *p == '.'))
++			return false;
++	}
++	return strcmp(value, ".") != 0 && strcmp(value, "..") != 0;
++}
++
++static inline bool directshow_legacy_alias_truthy(const char *value)
++{
++	return value && (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 ||
++			 strcmp(value, "yes") == 0 || strcmp(value, "on") == 0);
++}
++
++static inline enum directshow_queue_namespace directshow_queue_namespace_for_consumer(
++	enum directshow_consumer_filter_kind filter_kind)
++{
++	char runtime_id[32768] = {0};
++	char legacy_alias[32768] = {0};
++	const bool runtime_id_present =
++		directshow_environment_variable("PULSAR_RUNTIME_INSTANCE_ID", runtime_id, sizeof(runtime_id));
++	const bool legacy_alias_present =
++		directshow_environment_variable("PULSAR_DIRECTSHOW_LEGACY_ALIAS", legacy_alias, sizeof(legacy_alias));
++
++	if (runtime_id_present && !directshow_runtime_instance_id_valid(runtime_id))
++		return DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
++	if (runtime_id_present)
++		return legacy_alias_present && directshow_legacy_alias_truthy(legacy_alias)
++			       ? DIRECTSHOW_QUEUE_NAMESPACE_LEGACY
++			       : DIRECTSHOW_QUEUE_NAMESPACE_DEDICATED;
++
++	if (legacy_alias_present)
++		return DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
++
++	/* Only the stock OBS filter preserves the historical implicit alias.  The
++	 * Pulsar Program/Preview CLSIDs must be bound to an explicit runtime. */
++	return filter_kind == DIRECTSHOW_CONSUMER_FILTER_STOCK
++		       ? DIRECTSHOW_QUEUE_NAMESPACE_LEGACY
++		       : DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
++}
++
++static inline enum directshow_queue_namespace directshow_queue_namespace_from_environment(void)
++{
++	return directshow_queue_namespace_for_consumer(DIRECTSHOW_CONSUMER_FILTER_STOCK);
++}
++
++static inline const char *directshow_queue_namespace_name(enum directshow_queue_namespace name)
++{
++	switch (name) {
++	case DIRECTSHOW_QUEUE_NAMESPACE_LEGACY:
++		return "legacy";
++	case DIRECTSHOW_QUEUE_NAMESPACE_DEDICATED:
++		return "dedicated";
++	default:
++		return "reject";
++	}
++}
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index b304fdf40..2cde01233 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -5,7 +5,6 @@
+ #include <strsafe.h>
+ #include <inttypes.h>
+ #include <util/platform.h>
+-#include <cstdlib>
+ #include <cstring>
+ 
+ using namespace DShow;
+@@ -17,36 +16,16 @@ extern volatile long locks;
+ 
+ /* ========================================================================= */
+ 
+-static bool directshow_legacy_alias_enabled(void)
++static std::wstring queue_name_for_filter(enum directshow_queue_namespace queue_namespace,
++					  enum directshow_consumer_filter_kind filter_kind)
+ {
+-	const char *value = getenv("PULSAR_DIRECTSHOW_LEGACY_ALIAS");
+-	if (!value || !*value)
+-		return true; /* stock OBS keeps its historical virtual-camera names */
+-	return strcmp(value, "1") == 0 || strcmp(value, "true") == 0 || strcmp(value, "yes") == 0 ||
+-	       strcmp(value, "on") == 0;
+-}
+-
+-static bool valid_runtime_instance_id(const char *value)
+-{
+-	if (!value || !*value || strlen(value) > 64)
+-		return false;
+-	if (!((*value >= 'A' && *value <= 'Z') || (*value >= 'a' && *value <= 'z') ||
+-	      (*value >= '0' && *value <= '9')))
+-		return false;
+-	for (const char *p = value; *p; ++p) {
+-		if (!( (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+-		       (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' || *p == '.'))
+-			return false;
+-	}
+-	return strcmp(value, ".") != 0 && strcmp(value, "..") != 0;
+-}
+-
+-static std::wstring queue_name_for_filter(bool program_return, bool preview_return)
+-{
+-	const wchar_t *legacy_name = preview_return ? L"OBSPulsarPreviewReturnVideo"
+-						   : program_return ? L"OBSPulsarProgramReturnVideo" : L"OBSVirtualCamVideo";
++	const wchar_t *legacy_name = filter_kind == DIRECTSHOW_CONSUMER_FILTER_PREVIEW_RETURN
++						   ? L"OBSPulsarPreviewReturnVideo"
++						   : filter_kind == DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN
++							     ? L"OBSPulsarProgramReturnVideo"
++							     : L"OBSVirtualCamVideo";
+ 	const char *runtime_id = getenv("PULSAR_RUNTIME_INSTANCE_ID");
+-	if (directshow_legacy_alias_enabled() || !valid_runtime_instance_id(runtime_id))
++	if (queue_namespace != DIRECTSHOW_QUEUE_NAMESPACE_DEDICATED)
+ 		return legacy_name;
+ 
+ 	wchar_t wide_id[65] = {0};
+@@ -57,14 +36,22 @@ static std::wstring queue_name_for_filter(bool program_return, bool preview_retu
+ 	wchar_t name[256] = {0};
+ 	_snwprintf_s(name, sizeof(name) / sizeof(name[0]), _TRUNCATE,
+ 			     L"Local\\Pulsar.%ls.%ls", wide_id,
+-				     preview_return ? L"PreviewReturnVideo"
+-						     : program_return ? L"ProgramReturnVideo" : L"VirtualCamVideo");
++				     filter_kind == DIRECTSHOW_CONSUMER_FILTER_PREVIEW_RETURN
++					     ? L"PreviewReturnVideo"
++					     : filter_kind == DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN
++						     ? L"ProgramReturnVideo" : L"VirtualCamVideo");
+ 	return name;
+ }
+ 
+-VCamFilter::VCamFilter(bool program_return, bool preview_return)
+-	: OutputFilter(), queue_name(queue_name_for_filter(program_return, preview_return))
++VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
++	: OutputFilter()
+ {
++	const enum directshow_queue_namespace queue_namespace = directshow_queue_namespace_for_consumer(filter_kind);
++	queue_namespace_rejected = queue_namespace == DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
++	queue_name = queue_name_for_filter(queue_namespace, filter_kind);
++	if (queue_namespace_rejected) {
++		OutputDebugStringW(L"[pulsar-directshow] queue namespace rejected; consumer is disabled\n");
++	}
+ 	thread_start = CreateEvent(nullptr, true, false, nullptr);
+ 	thread_stop = CreateEvent(nullptr, true, false, nullptr);
+ 
+@@ -95,7 +82,8 @@ VCamFilter::VCamFilter(bool program_return, bool preview_return)
+ 	uint32_t new_obs_cy = obs_cy;
+ 	uint64_t new_obs_interval = obs_interval;
+ 
+-	vq = video_queue_open_named(queue_name.c_str());
++	if (!queue_namespace_rejected)
++		vq = video_queue_open_named(queue_name.c_str());
+ 	if (vq) {
+ 		if (video_queue_state(vq) == SHARED_QUEUE_STATE_READY) {
+ 			video_queue_get_info(vq, &new_obs_cx, &new_obs_cy, &new_obs_interval);
+@@ -249,6 +237,15 @@ void VCamFilter::Thread()
+ 
+ void VCamFilter::Frame(uint64_t ts)
+ {
++	if (queue_namespace_rejected) {
++		uint8_t *ptr;
++		if (LockSampleData(&ptr)) {
++			ShowDefaultFrame(ptr);
++			UnlockSampleData(ts, ts + obs_interval);
++		}
++		return;
++	}
++
+ 	uint32_t new_obs_cx = obs_cx;
+ 	uint32_t new_obs_cy = obs_cy;
+ 	uint64_t new_obs_interval = obs_interval;
+@@ -259,7 +256,7 @@ void VCamFilter::Frame(uint64_t ts)
+ 	   filter output! */
+ 
+ 	if (!vq) {
+-			vq = video_queue_open_named(queue_name.c_str());
++		vq = video_queue_open_named(queue_name.c_str());
+ 	}
+ 
+ 	enum queue_state state = video_queue_state(vq);
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+index 1c2035ca4..775d0893f 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <windows.h>
++#include "../directshow-namespace.h"
+ #include <cstdint>
+ #include <string>
+ #include <thread>
+@@ -34,6 +35,7 @@ class VCamFilter : public DShow::OutputFilter {
+ 
+ 	video_queue_t *vq = nullptr;
+ 	std::wstring queue_name;
++	bool queue_namespace_rejected = false;
+ 	int queue_mode = 0;
+ 	bool in_obs = false;
+ 	enum queue_state prev_state = SHARED_QUEUE_STATE_INVALID;
+@@ -65,7 +67,7 @@ protected:
+ 	const wchar_t *FilterName() const override;
+ 
+ public:
+-	VCamFilter(bool program_return, bool preview_return);
++	VCamFilter(enum directshow_consumer_filter_kind filter_kind);
+ 	~VCamFilter() override;
+ 
+ 	STDMETHODIMP Pause() override;
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-module.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-module.cpp
+index 420608bed..e65a93eae 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-module.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-module.cpp
+@@ -76,9 +76,12 @@ STDMETHODIMP VCamFactory::CreateInstance(LPUNKNOWN parent, REFIID, void **p_ptr)
+ 
+ 	if (IsEqualCLSID(cls, CLSID_OBS_VirtualVideo) || IsEqualCLSID(cls, CLSID_PulsarProgramReturnVideo) ||
+ 	    IsEqualCLSID(cls, CLSID_PulsarPreviewReturnVideo)) {
+-		const bool program_return = IsEqualCLSID(cls, CLSID_PulsarProgramReturnVideo);
+-		const bool preview_return = IsEqualCLSID(cls, CLSID_PulsarPreviewReturnVideo);
+-		*p_ptr = (void *)new VCamFilter(program_return, preview_return);
++		enum directshow_consumer_filter_kind filter_kind = DIRECTSHOW_CONSUMER_FILTER_STOCK;
++		if (IsEqualCLSID(cls, CLSID_PulsarProgramReturnVideo))
++			filter_kind = DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN;
++		else if (IsEqualCLSID(cls, CLSID_PulsarPreviewReturnVideo))
++			filter_kind = DIRECTSHOW_CONSUMER_FILTER_PREVIEW_RETURN;
++		*p_ptr = (void *)new VCamFilter(filter_kind);
+ 		return S_OK;
+ 	}
+ 
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index 7b2cb3bf8..562cb4150 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -6,40 +6,18 @@
+ #include <wchar.h>
+ #include "util/threading.h"
+ #include "shared-memory-queue.h"
++#include "directshow-namespace.h"
+ 
+ struct virtualcam_data {
+ 	obs_output_t *output;
+ 	video_queue_t *vq;
+ 	wchar_t queue_name[256];
++	bool queue_namespace_rejected;
+ 	volatile bool active;
+ 	volatile bool stopping;
+ };
+ 
+-static bool directshow_legacy_alias_enabled(void)
+-{
+-	const char *value = getenv("PULSAR_DIRECTSHOW_LEGACY_ALIAS");
+-	if (!value || !*value)
+-		return true; /* stock OBS keeps its historical virtual-camera names */
+-	return strcmp(value, "1") == 0 || strcmp(value, "true") == 0 || strcmp(value, "yes") == 0 ||
+-	       strcmp(value, "on") == 0;
+-}
+-
+-static bool valid_runtime_instance_id(const char *value)
+-{
+-	if (!value || !*value || strlen(value) > 64)
+-		return false;
+-	if (!((*value >= 'A' && *value <= 'Z') || (*value >= 'a' && *value <= 'z') ||
+-	      (*value >= '0' && *value <= '9')))
+-		return false;
+-	for (const char *p = value; *p; ++p) {
+-		if (!( (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+-		       (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' || *p == '.'))
+-			return false;
+-	}
+-	return strcmp(value, ".") != 0 && strcmp(value, "..") != 0;
+-}
+-
+-static void queue_name_for_output(obs_output_t *output, wchar_t *destination, size_t capacity)
++static bool queue_name_for_output(obs_output_t *output, wchar_t *destination, size_t capacity)
+ {
+ 	const char *output_name = obs_output_get_name(output);
+ 	const char *output_id = obs_output_get_id(output);
+@@ -50,13 +28,16 @@ static void queue_name_for_output(obs_output_t *output, wchar_t *destination, si
+ 							 : output_name && strcmp(output_name, "PulsarPreviewReturn") == 0;
+ 	const wchar_t *legacy_name = preview_return ? L"OBSPulsarPreviewReturnVideo"
+ 						   : program_return ? L"OBSPulsarProgramReturnVideo" : L"OBSVirtualCamVideo";
+-	const char *runtime_id = getenv("PULSAR_RUNTIME_INSTANCE_ID");
++	const enum directshow_queue_namespace queue_namespace = directshow_queue_namespace_from_environment();
+ 
+-	if (directshow_legacy_alias_enabled() || !valid_runtime_instance_id(runtime_id)) {
++	if (queue_namespace == DIRECTSHOW_QUEUE_NAMESPACE_REJECT)
++		return false;
++	if (queue_namespace == DIRECTSHOW_QUEUE_NAMESPACE_LEGACY) {
+ 		wcsncpy(destination, legacy_name, capacity - 1);
+ 		destination[capacity - 1] = 0;
+-		return;
++		return true;
+ 	}
++	const char *runtime_id = getenv("PULSAR_RUNTIME_INSTANCE_ID");
+ 
+ 	wchar_t wide_id[65] = {0};
+ 	/* IDs are validated as ASCII above; avoid a libobs link from this DLL. */
+@@ -66,6 +47,7 @@ static void queue_name_for_output(obs_output_t *output, wchar_t *destination, si
+ 	_snwprintf_s(destination, capacity, _TRUNCATE, L"Local\\Pulsar.%ls.%ls", wide_id,
+ 			     preview_return ? L"PreviewReturnVideo"
+ 					     : program_return ? L"ProgramReturnVideo" : L"VirtualCamVideo");
++	return true;
+ }
+ 
+ static const char *virtualcam_name(void *unused)
+@@ -85,7 +67,10 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+ {
+ 	struct virtualcam_data *vcam = (struct virtualcam_data *)bzalloc(sizeof(*vcam));
+ 	vcam->output = output;
+-	queue_name_for_output(output, vcam->queue_name, sizeof(vcam->queue_name) / sizeof(vcam->queue_name[0]));
++	vcam->queue_namespace_rejected = !queue_name_for_output(
++		output, vcam->queue_name, sizeof(vcam->queue_name) / sizeof(vcam->queue_name[0]));
++	if (vcam->queue_namespace_rejected)
++		blog(LOG_ERROR, "[pulsar-directshow] queue namespace rejected; producer is disabled");
+ 
+ 	UNUSED_PARAMETER(settings);
+ 	return vcam;
+@@ -94,6 +79,8 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+ static bool virtualcam_start(void *data)
+ {
+ 	struct virtualcam_data *vcam = (struct virtualcam_data *)data;
++	if (vcam->queue_namespace_rejected)
++		return false;
+ 	uint32_t width = obs_output_get_width(vcam->output);
+ 	uint32_t height = obs_output_get_height(vcam->output);
+ 
+@@ -127,12 +114,8 @@ static bool virtualcam_start(void *data)
+ 
+ 	os_atomic_set_bool(&vcam->active, true);
+ 	os_atomic_set_bool(&vcam->stopping, false);
+-	{
+-		const char *runtime_id = getenv("PULSAR_RUNTIME_INSTANCE_ID");
+-		blog(LOG_INFO, "Virtual output started (queue=%ls runtime_instance_id=%s legacy_alias=%s)",
+-		     vcam->queue_name, runtime_id ? runtime_id : "",
+-		     directshow_legacy_alias_enabled() ? "1" : "0");
+-	}
++	blog(LOG_INFO, "Virtual output started (queue=%ls namespace=%s)", vcam->queue_name,
++	     directshow_queue_namespace_name(directshow_queue_namespace_from_environment()));
+ 	obs_output_begin_data_capture(vcam->output, 0);
+ 	return true;
+ }
+-- 
+2.54.0.windows.1
+

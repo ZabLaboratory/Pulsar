@@ -69,6 +69,22 @@ describe("spawn()", () => {
     await handle.shutdown();
   });
 
+  it("redacts ready credentials from every user-facing log callback", async () => {
+    const lines: string[] = [];
+    const prismMessages: string[] = [];
+    const handle = await spawn({
+      binariesPath: tmp,
+      launchCommand: { exe: process.execPath, args: [FAKE_PULSAR] },
+      onLog: (_stream, line) => lines.push(line),
+      onPrismLog: (event) => prismMessages.push(event.message),
+    });
+
+    expect(lines.some((line) => line.includes("PULSAR_READY"))).toBe(true);
+    expect([...lines, ...prismMessages].some((line) => line.includes("fake-ready-password"))).toBe(false);
+    expect([...lines, ...prismMessages].some((line) => line.includes("password=[redacted]"))).toBe(true);
+    await handle.shutdown();
+  });
+
   // RC4 (ADR-005 §3.3): the fixture now emits "PULSAR_SESSION <id>" as an
   // intercalary line right before the ready marker (matching main.cpp's
   // real ordering). spawn() must reach ready without touching the watchdog
