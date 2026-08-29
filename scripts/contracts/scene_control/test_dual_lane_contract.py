@@ -365,9 +365,9 @@ def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:
 
 def test_runtime_probe_redacts_ready_credentials_from_failure_tails() -> None:
     probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_redaction")
-    secret = "unrepeatable-ready-secret"
-    tail = probe.failure_tail([f"PULSAR_READY ws=ws://127.0.0.1 password={secret}"], 40)
-    assert secret not in tail
+    fixture_value = "controlled-redaction-fixture"
+    tail = probe.failure_tail([f"PULSAR_READY ws=ws://127.0.0.1 password={fixture_value}"], 40)
+    assert fixture_value not in tail
     assert "password=[redacted]" in tail
 
 
