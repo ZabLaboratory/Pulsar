@@ -166,7 +166,7 @@ def _require_string(value: Any, name: str, *, max_length: int = 256, identifier:
 
 def _require_non_negative_int(value: Any, name: str, *, positive: bool = False) -> int:
     integer = _coerce_json_integer(value)
-    if integer is None or integer < (1 if positive else 0):
+    if integer is None or integer < (1 if positive else 0) or integer > 18446744073709551615:
         bound = "a positive integer" if positive else "a non-negative integer"
         raise SceneSwitchValidationError("SCHEMA_INVALID", f"{name} must be {bound}")
     return integer

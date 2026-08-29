@@ -2371,7 +2371,7 @@ private:
     {
         if (v.is_number_unsigned()) { out = v.get<uint64_t>(); return true; }
         if (v.is_number_integer() && v.get<int64_t>() >= 0) { out = static_cast<uint64_t>(v.get<int64_t>()); return true; }
-        if (v.is_number_float()) { double n = v.get<double>(); if (std::isfinite(n) && n >= 0 && std::floor(n) == n) { out = static_cast<uint64_t>(n); return true; } }
+        if (v.is_number_float()) { double n = v.get<double>(); if (std::isfinite(n) && n >= 0 && n < 18446744073709551616.0 && std::floor(n) == n) { out = static_cast<uint64_t>(n); return true; } }
         return false;
     }
     static uint64_t nowNs() { return os_gettime_ns(); }

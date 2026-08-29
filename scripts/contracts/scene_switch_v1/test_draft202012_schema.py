@@ -49,3 +49,20 @@ def test_scene_identifier_rejects_control_characters_in_schema_and_reference(sce
     assert list(Draft202012Validator(SCHEMA).iter_errors(command))
     with pytest.raises(SceneSwitchValidationError):
         validate_command(command)
+
+
+def test_uint64_bounds_reject_max_plus_one_and_scientific_overflow() -> None:
+    template = {
+        "contract": "pulsar.scene-switch.v1", "schema_version": 1,
+        "message_type": "command", "command_type": "Prepare",
+        "command_id": "prepare-limit", "intent_id": "intent-limit",
+        "runtime_instance_id": "runtime-limit",
+        "expected_revisions": {"program": 0, "preview": 0, "role_map": 0},
+        "target": {"lane_id": "B", "scene_id": "safe-scene"}, "timeout_ms": 1000,
+    }
+    for value in (18446744073709551616, 1e300):
+        command = json.loads(json.dumps(template))
+        command["expected_revisions"]["program"] = value
+        assert list(Draft202012Validator(SCHEMA).iter_errors(command))
+        with pytest.raises(SceneSwitchValidationError):
+            validate_command(command)

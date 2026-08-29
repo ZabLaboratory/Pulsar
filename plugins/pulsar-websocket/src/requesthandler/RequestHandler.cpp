@@ -57,9 +57,19 @@ bool IsControlledSceneSwitchPendingBypass(const Request &request)
 {
 	if (request.RequestType != "CallVendorRequest" || !request.RequestData.is_object())
 		return false;
-	if (request.RequestData.value("vendorName", "") != "pulsar-scene-switch")
+	const auto vendor = request.RequestData.find("vendorName");
+	const auto nestedRequest = request.RequestData.find("requestType");
+	// This classifier runs before CallVendorRequest's normal ValidateString
+	// checks. Never use json::value() here: a present non-string otherwise
+	// throws from the worker thread and turns malformed remote input into a
+	// process-level availability failure. Such data must simply stay gated and
+	// then receive the ordinary request validation error.
+	if (vendor == request.RequestData.end() || nestedRequest == request.RequestData.end() ||
+	    !vendor->is_string() || !nestedRequest->is_string())
 		return false;
-	const std::string nested = request.RequestData.value("requestType", "");
+	if (vendor->get<std::string>() != "pulsar-scene-switch")
+		return false;
+	const std::string nested = nestedRequest->get<std::string>();
 	return nested == "Abort" || nested == "GetState";
 }
 

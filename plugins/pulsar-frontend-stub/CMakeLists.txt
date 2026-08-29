@@ -28,12 +28,18 @@ set(PULSAR_FRONTEND_API_LIB       "${PULSAR_UPSTREAM_DIR}/build_x64/frontend/api
 file(GLOB _pulsar_obs_deps LIST_DIRECTORIES true
      "${PULSAR_UPSTREAM_DIR}/.deps/obs-deps-*-x64")
 list(FILTER _pulsar_obs_deps EXCLUDE REGEX "obs-deps-qt6-")
+list(SORT _pulsar_obs_deps)
+list(LENGTH _pulsar_obs_deps _pulsar_obs_deps_count)
+if(_pulsar_obs_deps_count EQUAL 0)
+    message(FATAL_ERROR "No non-Qt x64 obs-deps directory found. Build upstream configure first.")
+endif()
 list(GET _pulsar_obs_deps 0 PULSAR_OBS_DEPS)
 if(NOT EXISTS "${PULSAR_OBS_DEPS}/include/nlohmann/json.hpp")
     message(FATAL_ERROR
         "nlohmann_json headers not found in ${PULSAR_OBS_DEPS}. Build upstream configure first.")
 endif()
 list(APPEND CMAKE_PREFIX_PATH "${PULSAR_OBS_DEPS}")
+set(nlohmann_json_DIR "${PULSAR_OBS_DEPS}/lib/cmake/nlohmann_json")
 find_package(nlohmann_json 3.11 REQUIRED)
 
 if(NOT EXISTS "${PULSAR_LIBOBS_LIB}")

@@ -25,6 +25,9 @@ def test_runtime_vendor_is_dedicated_and_only_uses_call_vendor_surface() -> None
 def test_frontend_declares_its_own_json_dependency() -> None:
     cmake = FRONTEND_CMAKE.read_text(encoding="utf-8")
     assert "obs-deps-*-x64" in cmake
+    assert "list(LENGTH _pulsar_obs_deps _pulsar_obs_deps_count)" in cmake
+    assert "No non-Qt x64 obs-deps directory found" in cmake
+    assert 'set(nlohmann_json_DIR "${PULSAR_OBS_DEPS}/lib/cmake/nlohmann_json")' in cmake
     assert 'find_package(nlohmann_json 3.11 REQUIRED)' in cmake
     assert "nlohmann_json::nlohmann_json" in cmake
 

@@ -311,8 +311,10 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert 'requestType.rfind("Get", 0) == 0' in handler
     assert "IsControlledSceneSwitchPendingBypass" in handler
     assert 'request.RequestType != "CallVendorRequest"' in handler
-    assert 'request.RequestData.value("vendorName", "") != "pulsar-scene-switch"' in handler
+    assert 'vendor->get<std::string>() != "pulsar-scene-switch"' in handler
     assert 'return nested == "Abort" || nested == "GetState"' in handler
+    assert "vendor->is_string() || !nestedRequest->is_string()" in handler
+    assert "json::value() here" in handler
     assert "const bool controlledSceneSwitchBypass" in handler
     assert "!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass" in handler
     assert "RequestStatus::RequestProcessingFailed" in handler
