@@ -147,7 +147,11 @@ index 9aa321407..86a465208 100644
 +	}
 +
 +	pthread_mutex_lock(&obs->video.atomic_swap_mutex);
-+	if (obs->video.pending_atomic_swap || obs->video.atomic_swap_inflight) {
++	/* The pending pointer is the admission guard.  Once the graphics thread
++	 * has detached it, a successor may queue while the previous callback is
++	 * still unwinding; atomic_swap_inflight remains solely a teardown drain
++	 * barrier. */
++	if (obs->video.pending_atomic_swap) {
 +		pthread_mutex_unlock(&obs->video.atomic_swap_mutex);
 +		release_atomic_swap(swap);
 +		return false;
@@ -328,8 +332,9 @@ index 57844b056..251833af8 100644
 + * Queue an atomic source swap for two independent view channels.
 + *
 + * The two channels are replaced together immediately before a graphics frame
-+ * is rendered.  At most one swap may be pending; callers must retry after the
-+ * callback if the function returns false.  The queued sources are referenced
++ * is rendered.  At most one swap may be pending; a successor may be queued
++ * after the graphics thread detaches the prior request, even while its
++ * completion callback is still unwinding.  The queued sources are referenced
 + * until the swap is applied or cancelled.
 + */
 +EXPORT bool obs_view_queue_atomic_swap(obs_view_t *first_view, uint32_t first_channel,

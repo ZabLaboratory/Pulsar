@@ -325,7 +325,9 @@ def test_core_swap_is_frame_boundary_and_rejects_concurrent_requests() -> None:
     assert "pthread_cond_wait(&obs->video.atomic_swap_cond" in patch
     assert "pthread_cond_broadcast(&obs->video.atomic_swap_cond)" in patch
     assert "pthread_equal(pthread_self(), obs->video.video_thread)" in patch
-    assert "obs->video.pending_atomic_swap || obs->video.atomic_swap_inflight" in patch
+    assert "if (obs->video.pending_atomic_swap) {" in patch
+    assert "obs->video.pending_atomic_swap || obs->video.atomic_swap_inflight" not in patch
+    assert "a successor may queue while the previous callback is" in patch
     assert "+obs_view_t *obs_get_main_view(void)" in patch
     assert "+EXPORT obs_view_t *obs_get_main_view(void);" in patch
 
