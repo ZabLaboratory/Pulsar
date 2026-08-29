@@ -260,14 +260,18 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedPulsar> {
 
   const handleLine = (stream: "stdout" | "stderr", line: string) => {
     if (line.length === 0) return;
-    if (opts.onLog) opts.onLog(stream, line);
+    // PULSAR_READY carries the WebSocket password.  Keep the raw line only
+    // inside this boot parser; every application-visible callback receives a
+    // redacted copy.
+    const publicLine = redactNativeLine(line);
+    if (opts.onLog) opts.onLog(stream, publicLine);
     opts.onPrismLog?.({
       schemaVersion: 1,
       severity: /error|fail|fatal|refus|declin|unavail/i.test(line) ? "error" : /warn|skip|partial/i.test(line) ? "warning" : "info",
       domain: "service",
       source: "pulsar.process",
       code: "PULSAR_PROCESS_LOG",
-      message: redactNativeLine(line),
+      message: publicLine,
       context: { stream },
       details: {},
     });

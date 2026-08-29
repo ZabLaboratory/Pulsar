@@ -83,6 +83,7 @@ httpServer.listen(0, "127.0.0.1", () => {
   // ADR-005 §3.3: session correlation line, on its own, before the
   // sentinel -- spawn() must skip over it (RC4).
   process.stdout.write(`PULSAR_SESSION fake-session-${Date.now()}\n`);
+  process.stdout.write("PULSAR_READY ws=ws://127.0.0.1 password=fake-ready-password\n");
 
   // The marker spawn() greps for. Format must match exactly.
   process.stdout.write(

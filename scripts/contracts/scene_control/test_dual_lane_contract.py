@@ -13,12 +13,15 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 _ROOT = Path(__file__).resolve().parents[3]
 _FRONTEND = _ROOT / "plugins/pulsar-frontend-stub/src/pulsar-frontend-stub.cpp"
 _CONTROL_BRIDGE = _ROOT / "plugins/pulsar-frontend-stub/include/pulsar-dual-lane-control.h"
 _WEBSOCKET_HANDLER = _ROOT / "plugins/pulsar-websocket/src/requesthandler/RequestHandler.cpp"
 _DUAL_LANE_PATCH = _ROOT / "patches/0009-feat-libobs-add-frame-boundary-dual-lane-swaps.patch"
+_DIRECTSHOW_NAMESPACE_PATCH = _ROOT / "patches/0010-fix-win-dshow-reject-ambiguous-queue-namespaces.patch"
 _RUNTIME_PROBE = _ROOT / "scripts/probe-dual-lane.py"
 _OUTPUT_EFFECT_PROBE = _ROOT / "scripts/probe-output-effect.py"
 
@@ -187,17 +190,64 @@ def test_program_and_preview_return_outputs_have_distinct_ids_and_bindings() -> 
     assert "PulsarPreviewReturn" in queue_hunk
 
 
+def test_directshow_namespace_decision_is_shared_and_rejects_before_queue_sinks() -> None:
+    patch = _read(_DIRECTSHOW_NAMESPACE_PATCH)
+    header = _between(
+        patch,
+        "+enum directshow_queue_namespace {",
+        "diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp",
+    )
+    producer = _between(
+        patch,
+        "diff --git a/plugins/win-dshow/virtualcam.c",
+        "-- \n",
+    )
+    consumer = _between(
+        patch,
+        "diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp",
+        "diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp",
+    )
+
+    assert "DIRECTSHOW_QUEUE_NAMESPACE_REJECT" in header
+    assert "DIRECTSHOW_QUEUE_NAMESPACE_LEGACY" in header
+    assert "DIRECTSHOW_QUEUE_NAMESPACE_DEDICATED" in header
+    assert "GetEnvironmentVariableA" in header
+    assert "runtime_id_present && !directshow_runtime_instance_id_valid(runtime_id)" in header
+    assert "return legacy_alias_present ? DIRECTSHOW_QUEUE_NAMESPACE_REJECT" in header
+    assert "directshow_queue_namespace_from_environment" in producer
+    assert "directshow_queue_namespace_from_environment" in consumer
+    assert "+\tif (vcam->queue_namespace_rejected)\n+\t\treturn false;" in producer
+    assert consumer.index("+\tif (!queue_namespace_rejected)\n+\t\tvq = video_queue_open_named") < consumer.index(
+        "+\t\tvq = video_queue_open_named"
+    )
+    frame = _between(consumer, "void VCamFilter::Frame(uint64_t ts)", "enum queue_state state")
+    assert "if (queue_namespace_rejected)" in frame
+    assert frame.index("if (queue_namespace_rejected)") < frame.index(
+        "+\t\tvq = video_queue_open_named"
+    )
+
+    root_cmake = _read(_ROOT / "CMakeLists.txt")
+    assert "add_subdirectory(tests/directshow-namespace-probe)" in root_cmake
+
+
 def test_take_logs_roles_frame_identity_and_stable_downstream_objects() -> None:
     source = _read(_FRONTEND)
     assert "TakeAccepted" in source
     assert "TakeCommitted" in source
     assert "frame_id=%llu" in source
     assert "pts_ns=%llu" in source
-    assert "OnAirRoot=%p PreviewRoot=%p" in source
-    assert "ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p " in source
-    assert "MainView=%p MainVideo=%p" in source
-    assert "obs_get_main_view()" in source
-    assert "obs_get_video()" in source
+    assert "lane_root_binding_valid=%d" in source
+    assert "program_main_view_valid=%d" in source
+    assert "program_main_video_valid=%d" in source
+    assert "preview_distinct_valid=%d" in source
+    assert "laneSources[onAirLane] == currentScene" in source
+    assert "programView == obs_get_main_view()" in source
+    assert "programVideo == obs_get_video()" in source
+    assert "programView != previewView" in source
+    ready = _between(source, 'blog(LOG_INFO, "[pulsar-dual-lane] ready', "return true;")
+    accepted = _between(source, 'blog(LOG_INFO, "[pulsar-dual-lane] TakeAccepted', "return true;")
+    committed = _between(source, 'blog(LOG_INFO, "[pulsar-dual-lane] TakeCommitted', "self->emit(")
+    assert "%p" not in ready + accepted + committed
 
 
 def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> None:
@@ -210,8 +260,8 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert "OBS_WEBSOCKET_OUTPUT_STOPPED" in probe
     assert "-count_frames" in probe
     assert "encoder video_t bound once to ProgramView" in probe
-    assert "MainView=(\\S+) MainVideo=(\\S+)" in probe
-    assert "ProgramView is not the libobs main view" in probe
+    assert "lane_root_binding_valid=(\\d) program_main_view_valid=(\\d)" in probe
+    assert "TakeCommitted reported an invalid surface relation" in probe
 
 
 def test_runtime_probe_exercises_live_mutation_and_post_take_isolation() -> None:
@@ -275,13 +325,13 @@ def test_runtime_probe_exercises_serial_frame_preview_freeze() -> None:
 def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:
     probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_for_contract")
     fields = (
-        "LaneA=0x1 LaneB=0x2 ProgramView=0x3 PreviewView=0x4 "
-        "ProgramVideo=0x5 PreviewVideo=0x6 MainView=0x3 MainVideo=0x5"
+        "LaneA=lane-a LaneB=lane-b lane_root_binding_valid=1 "
+        "program_main_view_valid=1 program_main_video_valid=1 preview_distinct_valid=1"
     )
     for prefix in ("[pulsar-dual-lane] ready", "pulsar-dual-lane | ready"):
         match = probe.DUAL_READY_RE.search(f"{prefix} {fields}")
         assert match is not None
-        assert probe.parse_ready(match).program_view == "3"
+        assert probe.parse_ready(match).program_main_view_valid == 1
         bind_match = probe.ENCODER_BIND_RE.search(
             f"{prefix.split(' ready', 1)[0]} encoder video_t bound once to ProgramView"
         )
@@ -289,17 +339,36 @@ def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:
 
     commit_fields = (
         "count=1 frame_id=42 pts_ns=9001 onair_lane=0 preview_lane=1 "
-        "OnAirRoot=0x1 PreviewRoot=0x2 ProgramView=0x3 PreviewView=0x4 "
-        "ProgramVideo=0x5 PreviewVideo=0x6 MainView=0x3 MainVideo=0x5"
+        "lane_root_binding_valid=1 program_main_view_valid=1 "
+        "program_main_video_valid=1 preview_distinct_valid=1"
     )
     for prefix in ("[pulsar-dual-lane] TakeCommitted", "pulsar-dual-lane | TakeCommitted"):
         match = probe.COMMIT_RE.search(f"{prefix} {commit_fields}")
         assert match is not None
         assert probe.parse_commit(match).frame_id == 42
 
+    invalid_commit = probe.COMMIT_RE.search(
+        "[pulsar-dual-lane] TakeCommitted count=1 frame_id=42 pts_ns=9001 "
+        "onair_lane=0 preview_lane=1 lane_root_binding_valid=0 "
+        "program_main_view_valid=1 program_main_video_valid=1 preview_distinct_valid=1"
+    )
+    assert invalid_commit is not None
+    invalid_ready = probe.DUAL_READY_RE.search("[pulsar-dual-lane] ready " + fields)
+    assert invalid_ready is not None
+    with pytest.raises(probe.ProbeFailure, match="invalid surface relation"):
+        probe.validate_commit(probe.parse_ready(invalid_ready), None, probe.parse_commit(invalid_commit))
+
     source = _read(_RUNTIME_PROBE)
     assert "ENCODER_BIND_RE.search(line)" in source
     assert '"[pulsar-dual-lane] encoder video_t bound once to ProgramView"' not in source
+
+
+def test_runtime_probe_redacts_ready_credentials_from_failure_tails() -> None:
+    probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_redaction")
+    secret = "unrepeatable-ready-secret"
+    tail = probe.failure_tail([f"PULSAR_READY ws=ws://127.0.0.1 password={secret}"], 40)
+    assert secret not in tail
+    assert "password=[redacted]" in tail
 
 
 def test_output_effect_probe_settles_record_stop_before_next_case() -> None:
