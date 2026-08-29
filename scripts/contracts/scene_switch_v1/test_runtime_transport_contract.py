@@ -55,6 +55,12 @@ def test_runtime_adapter_guards_the_exact_v1_lifecycle_edges() -> None:
     assert "Prepare command contains unknown or cross-type fields" in source
     assert "Take command contains unknown or cross-type fields" in source
     assert "Abort command contains unknown or cross-type fields" in source
+    assert 'allowed.insert("last_committed_frame_id")' in source
+    assert 'allowed.insert("last_committed_pts_ns")' in source
+    assert 'in["reason"] == "queue_rejected"' in source
+    assert "size() > 256" in source
+    assert "required command_type disagree" in source
     assert 'if (pendingTake_ || state_ == "take_accepted")' in source
     assert "Abort intent_id differs from Take" in source
     assert 'const json previous = revisions_;' in source
+    assert "sceneSwitchClearPrepared" in source

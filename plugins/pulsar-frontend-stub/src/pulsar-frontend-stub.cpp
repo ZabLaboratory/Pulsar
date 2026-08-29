@@ -1462,6 +1462,7 @@ public:
     bool sceneSwitchPrepare(const std::string &commandId, char laneId, const std::string &sceneId);
     bool sceneSwitchTake(const std::string &takeCommandId);
     bool sceneSwitchAbort(const std::string &takeCommandId);
+    void sceneSwitchClearPrepared(const std::string &commandId);
     static void OnSceneSwitchPreviewVideoFrame(void *param, struct video_data *frame);
 
     // ---------- main window / system tray (no GUI) ----------
@@ -2295,6 +2296,17 @@ public:
         obs_remove_tick_callback(&Tick, this);
         running_ = false;
         std::unique_lock<std::mutex> lock(mutex_);
+        const std::string pendingTake = pendingTake_ ? pendingTake_->commandId : "";
+        lock.unlock();
+        const bool cancelled = !pendingTake.empty() && g_api && g_api->sceneSwitchAbort(pendingTake);
+        lock.lock();
+        if (cancelled && pendingTake_ && pendingTake_->commandId == pendingTake) {
+            Pending take = *pendingTake_;
+            pendingTake_.reset();
+            pendingPrepare_.reset();
+            state_ = "ready";
+            emit(eventFor("TakeAborted", take, {{"take_command_id", take.commandId}, {"reason", "shutdown"}}, "ready"));
+        }
         pendingPrepare_.reset();
         pendingTake_.reset();
     }
@@ -2399,21 +2411,26 @@ private:
         if (type == "Prepare") {
             allowed.insert("target"); allowed.insert("timeout_ms");
             for (const auto &it : in.items()) if (!allowed.count(it.key())) { error = "Prepare command contains unknown or cross-type fields"; return false; }
-            if (!in.contains("target") || !in.contains("timeout_ms") || !in["target"].is_object() || in["target"].size() != 2 || !in["target"].contains("lane_id") || !in["target"].contains("scene_id") || !in["target"]["lane_id"].is_string() || (in["target"]["lane_id"] != "A" && in["target"]["lane_id"] != "B") || !in["target"]["scene_id"].is_string() || in["target"]["scene_id"].get<std::string>().empty() || !integer(in["timeout_ms"], n) || n < 1 || n > 60000) { error = "Prepare payload is invalid"; return false; }
+            if (!in.contains("target") || !in.contains("timeout_ms") || !in["target"].is_object() || in["target"].size() != 2 || !in["target"].contains("lane_id") || !in["target"].contains("scene_id") || !in["target"]["lane_id"].is_string() || (in["target"]["lane_id"] != "A" && in["target"]["lane_id"] != "B") || !in["target"]["scene_id"].is_string() || in["target"]["scene_id"].get<std::string>().empty() || in["target"]["scene_id"].get<std::string>().size() > 256 || !integer(in["timeout_ms"], n) || n < 1 || n > 60000) { error = "Prepare payload is invalid"; return false; }
         } else if (type == "Take") {
             allowed.insert("prepared_command_id"); allowed.insert("timeout_ms");
             for (const auto &it : in.items()) if (!allowed.count(it.key())) { error = "Take command contains unknown or cross-type fields"; return false; }
             if (!in.contains("prepared_command_id") || !in.contains("timeout_ms") || !validId(in["prepared_command_id"]) || !integer(in["timeout_ms"], n) || n < 1 || n > 60000) { error = "Take payload is invalid"; return false; }
         } else if (type == "Abort") {
-            allowed.insert("take_command_id"); allowed.insert("reason");
+            allowed.insert("take_command_id"); allowed.insert("reason"); allowed.insert("last_committed_frame_id"); allowed.insert("last_committed_pts_ns");
             for (const auto &it : in.items()) if (!allowed.count(it.key())) { error = "Abort command contains unknown or cross-type fields"; return false; }
-            if (!in.contains("take_command_id") || !in.contains("reason") || !validId(in["take_command_id"]) || !in["reason"].is_string() || (in["reason"] != "operator" && in["reason"] != "timeout" && in["reason"] != "shutdown" && in["reason"] != "superseded" && in["reason"] != "queue_rejected")) { error = "Abort payload is invalid"; return false; }
+            const bool hasLastFrame = in.contains("last_committed_frame_id"); const bool hasLastPts = in.contains("last_committed_pts_ns");
+            if (!in.contains("take_command_id") || !in.contains("reason") || !validId(in["take_command_id"]) || !in["reason"].is_string() || (in["reason"] != "operator" && in["reason"] != "timeout" && in["reason"] != "shutdown" && in["reason"] != "superseded" && in["reason"] != "queue_rejected") || (hasLastFrame && !integer(in["last_committed_frame_id"], n)) || (hasLastPts && !integer(in["last_committed_pts_ns"], n)) || (in["reason"] == "queue_rejected" && (!hasLastFrame || !hasLastPts))) { error = "Abort payload is invalid"; return false; }
         } else { error = "command_type is not supported by v1"; return false; }
         out = in;
         out["schema_version"] = 1;
         for (auto key : {"program","preview","role_map"}) { integer(in["expected_revisions"][key], n); out["expected_revisions"][key] = n; }
         if (in.contains("expected_server_seq")) { integer(in["expected_server_seq"], n); out["expected_server_seq"] = n; }
         if (type == "Prepare" || type == "Take") { integer(in["timeout_ms"], n); out["timeout_ms"] = n; }
+        if (type == "Abort") {
+            if (in.contains("last_committed_frame_id")) { integer(in["last_committed_frame_id"], n); out["last_committed_frame_id"] = n; }
+            if (in.contains("last_committed_pts_ns")) { integer(in["last_committed_pts_ns"], n); out["last_committed_pts_ns"] = n; }
+        }
         return true;
     }
     json eventFor(const char *type, const Pending &p, json extra = json::object(), const char *state = nullptr, json previous = json())
@@ -2446,11 +2463,9 @@ private:
         json raw; try { raw = json::parse(obs_data_get_json(request)); } catch (...) { raw = json::object(); }
         json command; std::string error;
         std::unique_lock<std::mutex> lock(mutex_);
-        if (requestType && raw.is_object()) {
-            if (!raw.contains("command_type")) raw["command_type"] = requestType;
-            else if (raw["command_type"] != requestType) { raw = json::object(); error = "vendor request type and command_type disagree"; }
-        }
-        if (!normalize(raw, command, error)) { Pending invalid{"invalid","invalid-command","invalid-intent",runtimeId_,"", "", ""}; json event = reject(invalid, "SCHEMA_INVALID", error); emit(event); respond(response,event); return; }
+        if (requestType && raw.is_object() && (!raw.contains("command_type") || raw["command_type"] != requestType))
+            error = "vendor request type and required command_type disagree";
+        if (!error.empty() || !normalize(raw, command, error)) { std::string digest=sha256(raw.dump()); if (digest.empty()) digest.assign(64, '0'); Pending invalid{"invalid","invalid-command","invalid-intent",runtimeId_,digest, "", ""}; json event = reject(invalid, "SCHEMA_INVALID", error); emit(event); respond(response,event); return; }
         const std::string key = command["runtime_instance_id"].get<std::string>() + "\n" + command["command_id"].get<std::string>();
         const std::string digest = sha256(command.dump());
         auto prior = outcomes_.find(key);
@@ -2500,7 +2515,7 @@ private:
     void expire()
     {
         std::unique_lock<std::mutex> lock(mutex_); const uint64_t now=nowNs();
-        if (pendingPrepare_ && !pendingTake_ && now >= pendingPrepare_->deadlineNs) { Pending p=*pendingPrepare_; pendingPrepare_.reset(); state_="ready"; json e=reject(p,"TIMEOUT","Preview did not render before deadline"); emit(e); }
+        if (pendingPrepare_ && !pendingTake_ && now >= pendingPrepare_->deadlineNs) { Pending p=*pendingPrepare_; pendingPrepare_.reset(); state_="ready"; if (g_api) g_api->sceneSwitchClearPrepared(p.commandId); json e=reject(p,"TIMEOUT","Preview did not render before deadline"); emit(e); }
         if (!pendingTake_ || now < pendingTake_->deadlineNs) return;
         const std::string id=pendingTake_->commandId; lock.unlock(); const bool cancelled=g_api && g_api->sceneSwitchAbort(id); lock.lock();
         if (cancelled && pendingTake_ && pendingTake_->commandId==id) { Pending p=*pendingTake_; pendingTake_.reset(); pendingPrepare_.reset(); state_="ready"; json e=eventFor("TakeAborted",p,{{"take_command_id",p.commandId},{"reason","timeout"}},"ready"); emit(e); }
@@ -3058,6 +3073,13 @@ bool PulsarFrontendAPI::sceneSwitchAbort(const std::string &takeCommandId)
     g_runtimeTelemetry.cancelPending();
     sceneSwitchPendingTakeId.clear();
     return true;
+}
+
+void PulsarFrontendAPI::sceneSwitchClearPrepared(const std::string &commandId)
+{
+    std::lock_guard<std::mutex> lock(dualLaneMutex);
+    if (sceneSwitchPreparedCommandId == commandId)
+        sceneSwitchPreparedCommandId.clear();
 }
 
 void PulsarFrontendAPI::OnSceneSwitchPreviewVideoFrame(void *param, struct video_data *frame)
