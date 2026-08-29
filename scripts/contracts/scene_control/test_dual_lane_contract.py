@@ -184,6 +184,10 @@ def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:
         match = probe.DUAL_READY_RE.search(f"{prefix} {fields}")
         assert match is not None
         assert probe.parse_ready(match).program_view == "3"
+        bind_match = probe.ENCODER_BIND_RE.search(
+            f"{prefix.split(' ready', 1)[0]} encoder video_t bound once to ProgramView"
+        )
+        assert bind_match is not None
 
     commit_fields = (
         "count=1 frame_id=42 pts_ns=9001 onair_lane=0 preview_lane=1 "
@@ -194,6 +198,10 @@ def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:
         match = probe.COMMIT_RE.search(f"{prefix} {commit_fields}")
         assert match is not None
         assert probe.parse_commit(match).frame_id == 42
+
+    source = _read(_RUNTIME_PROBE)
+    assert "ENCODER_BIND_RE.search(line)" in source
+    assert '"[pulsar-dual-lane] encoder video_t bound once to ProgramView"' not in source
 
 
 def test_output_effect_probe_settles_record_stop_before_next_case() -> None:

@@ -78,6 +78,9 @@ DUAL_READY_RE = re.compile(
     r"MainView=(\S+) MainVideo=(\S+)"
 )
 ENCODER_RE = re.compile(r"video encoder allocated: family=(\S+) id=(\S+)")
+ENCODER_BIND_RE = re.compile(
+    DUAL_LANE_LOG_PREFIX + r"\s*encoder video_t bound once to ProgramView"
+)
 COMMIT_RE = re.compile(
     DUAL_LANE_LOG_PREFIX
     + r"\s*TakeCommitted count=(\d+) frame_id=(\d+) "
@@ -586,7 +589,7 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
         bind_lines = [
             line
             for line in process.snapshot()
-            if "[pulsar-dual-lane] encoder video_t bound once to ProgramView" in line
+            if ENCODER_BIND_RE.search(line)
         ]
         if len(bind_lines) != 1:
             raise ProbeFailure(
@@ -652,7 +655,7 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
         bind_index = next(
             index
             for index, line in enumerate(process.snapshot())
-            if "[pulsar-dual-lane] encoder video_t bound once to ProgramView" in line
+            if ENCODER_BIND_RE.search(line)
         )
         if bind_index >= first_commit_index:
             raise ProbeFailure("encoder video_t bind was not completed before the first Take")
