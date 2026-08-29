@@ -20,13 +20,15 @@ FRONTEND_SOURCE = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-fr
 WEBSOCKET_SOURCE = ROOT / "plugins" / "pulsar-websocket" / "src" / "requesthandler" / "RequestHandler.cpp"
 ABI_HEADER = ROOT / "plugins" / "pulsar-frontend-stub" / "include" / "pulsar-runtime-telemetry-abi.h"
 BRIDGE_HEADER = ROOT / "plugins" / "pulsar-frontend-stub" / "include" / "pulsar-runtime-telemetry.h"
+UPSTREAM_QUEUE_CMAKE = ROOT / "upstream" / "shared" / "obs-shared-memory-queue" / "CMakeLists.txt"
+UPSTREAM_VCAM_CMAKE = ROOT / "upstream" / "plugins" / "win-dshow" / "virtualcam-module" / "CMakeLists.txt"
 
 
 def test_canonical_runtime_producer_patch_is_present_and_scoped() -> None:
     text = PATCH.read_text(encoding="utf-8")
     assert text.startswith("From ")
     assert "Subject: [PATCH] feat(telemetry): emit correlated runtime trace boundaries" in text
-    assert "5 files changed, 245 insertions(+), 21 deletions(-)" in text
+    assert "5 files changed, 246 insertions(+), 22 deletions(-)" in text
     assert "Agent-Role: Conduit" in text
     assert "Agent-Thread: /root/conduit_246_runtime_telemetry" in text
     assert "Work-Unit: ZabLaboratory/Pulsar#246" in text
@@ -34,12 +36,25 @@ def test_canonical_runtime_producer_patch_is_present_and_scoped() -> None:
 
     paths = set(re.findall(r"^diff --git a/([^ ]+) b/[^\n]+$", text, flags=re.MULTILINE))
     assert paths == {
-        "plugins/win-dshow/shared-memory-queue.c",
-        "plugins/win-dshow/shared-memory-queue.h",
         "plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp",
         "plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp",
         "plugins/win-dshow/virtualcam.c",
+        "shared/obs-shared-memory-queue/shared-memory-queue.c",
+        "shared/obs-shared-memory-queue/shared-memory-queue.h",
     }
+
+    # The modern CMake target owns the shared queue implementation.  The patch
+    # must extend that target and make virtualcam.c consume the same public
+    # header; changing the duplicate legacy copy would compile no code here.
+    assert "-#include \"shared-memory-queue.h\"" in text
+    assert "+#include <shared-memory-queue.h>" in text
+    assert UPSTREAM_QUEUE_CMAKE.is_file()
+    assert UPSTREAM_VCAM_CMAKE.is_file()
+    queue_cmake = UPSTREAM_QUEUE_CMAKE.read_text(encoding="utf-8")
+    vcam_cmake = UPSTREAM_VCAM_CMAKE.read_text(encoding="utf-8")
+    assert "target_sources(obs-shared-memory-queue INTERFACE shared-memory-queue.c shared-memory-queue.h)" in queue_cmake
+    assert "target_include_directories(obs-shared-memory-queue INTERFACE \"${CMAKE_CURRENT_SOURCE_DIR}\")" in queue_cmake
+    assert "OBS::shared-memory-queue" in vcam_cmake
 
 
 def test_runtime_telemetry_headers_and_cmake_include_paths_are_wired() -> None:
