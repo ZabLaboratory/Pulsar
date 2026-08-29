@@ -75,6 +75,7 @@
 
 #include "pulsar-frontend-stub.h"
 #include "pulsar-dual-lane-control.h"
+#include "pulsar-program-audio.h"
 #include "pulsar-stream-egress.h"
 
 namespace {
@@ -898,6 +899,13 @@ private:
     obs_view_t *previewView = nullptr;
     video_t *previewVideo = nullptr;
 
+    // The r2 audio graph is deliberately independent of the two video lanes.
+    // Keep the process' libobs audio_t captured once at setup and reuse this
+    // exact pointer for every encoded Program surface.  A Cut only swaps
+    // video roots; it must never select or recreate this route.  The raw
+    // Program/Preview return outputs are video-only and do not consume audio.
+    audio_t *programAudio = nullptr;
+
     // ADR-005 §3.5 / #186: attempt lifecycle for pulsar:OutputAttemptSettled,
     // one pair per output this binary owns directly (multi-stream's own
     // destinations track the same thing on Destination itself, see
@@ -1389,10 +1397,23 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
 
     // These are the only media bindings for the two stable raw surfaces.  In
     // particular, no output media is rebound by a Cut.
+    if (!programAudio)
+        programAudio = obs_get_audio();
+    if (!programAudio) {
+        blog(LOG_ERROR, "[pulsar-program-audio] common Program route unavailable: libobs audio is null");
+        return false;
+    }
     if (programReturnOutput)
-        obs_output_set_media(programReturnOutput, programVideo, obs_get_audio());
+        // The return filter is a video-only output; keeping its audio media
+        // slot null makes the lack of a second Preview/return audio route
+        // explicit at the libobs boundary.
+        obs_output_set_media(programReturnOutput, programVideo, nullptr);
     if (previewReturnOutput)
-        obs_output_set_media(previewReturnOutput, previewVideo, obs_get_audio());
+        // Preview has a distinct video surface, but r2 intentionally has no
+        // independent Preview audio/AFV route.  These return outputs are
+        // video-only; the audio argument is ignored by libobs for them.  The
+        // actual audio consumers below all bind the same common Program bus.
+        obs_output_set_media(previewReturnOutput, previewVideo, nullptr);
 
     // The encoder is intentionally bound once, before any output can start.
     // obs_encoder_set_video rejects active/initialized encoders; the dual-lane
@@ -1413,10 +1434,11 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
     }
     g_dualLaneControlBridge.activate();
     blog(LOG_INFO, "[pulsar-dual-lane] ready LaneA=%p LaneB=%p ProgramView=%p PreviewView=%p "
-         "ProgramVideo=%p PreviewVideo=%p MainView=%p MainVideo=%p",
+         "ProgramVideo=%p PreviewVideo=%p MainView=%p MainVideo=%p "
+         "ProgramAudioRoute=%s ProgramAudio=%p PreviewAudioPolicy=common",
          (void *)laneSources[0], (void *)laneSources[1], (void *)programView, (void *)previewView,
          (void *)programVideo, (void *)previewVideo, (void *)obs_get_main_view(),
-         (void *)obs_get_video());
+         (void *)obs_get_video(), pulsar_program_audio::kRouteId, (void *)programAudio);
     return true;
 }
 
@@ -1490,18 +1512,32 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
     blog(LOG_INFO, "[pulsar-dual-lane] TakeCommitted count=%llu frame_id=%llu pts_ns=%llu "
          "onair_lane=%d preview_lane=%d OnAirRoot=%p PreviewRoot=%p "
          "ProgramView=%p PreviewView=%p ProgramVideo=%p PreviewVideo=%p "
-         "MainView=%p MainVideo=%p",
+         "MainView=%p MainVideo=%p ProgramAudioRoute=%s ProgramAudio=%p",
          static_cast<unsigned long long>(committedCount), static_cast<unsigned long long>(frameId),
          static_cast<unsigned long long>(ptsNs), committedOnAirLane, committedPreviewLane,
          (void *)self->currentScene, (void *)self->previewScene, (void *)self->programView,
          (void *)self->previewView, (void *)self->programVideo, (void *)self->previewVideo,
-         (void *)obs_get_main_view(), (void *)obs_get_video());
+         (void *)obs_get_main_view(), (void *)obs_get_video(),
+         pulsar_program_audio::kRouteId, (void *)self->programAudio);
     self->emit(OBS_FRONTEND_EVENT_SCENE_CHANGED);
     self->emit(OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED);
 }
 
 bool PulsarFrontendAPI::setup()
 {
+    // Capture the process-wide libobs audio bus once.  Every r2 output and
+    // audio encoder below must use this exact identity; it is intentionally
+    // not derived from the current Program/Preview video lane.
+    programAudio = obs_get_audio();
+    if (!programAudio) {
+        blog(LOG_ERROR, "[pulsar-program-audio] setup failed: libobs audio is unavailable");
+        return false;
+    }
+    blog(LOG_INFO, "[pulsar-program-audio] route_id=%s route_name=%s audio=%p "
+         "cut_policy=%s preview_audio_supported=false afv_supported=false",
+         pulsar_program_audio::kRouteId, pulsar_program_audio::kRouteName,
+         (void *)programAudio, pulsar_program_audio::kCutPolicy);
+
     // Issue #129: close the loop libobs expects the FRONTEND to close on
     // source removal (see OnSourceRemove). Connected before anything else is
     // created so no removal can slip through, disconnected in teardown().
@@ -1837,7 +1873,12 @@ bool PulsarFrontendAPI::setup()
                  "for track %d", track);
             continue;
         }
-        obs_encoder_set_audio(enc, obs_get_audio());
+        if (!programAudio) {
+            blog(LOG_WARNING, "[pulsar-program-audio] failed to bind common route to audio track %d",
+                 track);
+        } else {
+            obs_encoder_set_audio(enc, programAudio);
+        }
         audioEncoders[track - 1] = enc;
         blog(LOG_INFO, "[pulsar-frontend-stub] aac track %d configured: %d kbps "
              "(mixer index %d)", track, trackBitrate, track - 1);
@@ -2222,6 +2263,10 @@ void PulsarFrontendAPI::teardown()
         obs_source_release(micAudioSource);
         micAudioSource = nullptr;
     }
+    // Non-owning route identity; libobs owns the audio bus.  Clear it after
+    // every encoder/output has released its reference so no late frontend
+    // callback can mistake a torn-down bus for a live Program route.
+    programAudio = nullptr;
 
     for (obs_source_t *&lane : laneSources) {
         if (!lane)
@@ -2845,7 +2890,7 @@ void PulsarFrontendAPI::obs_frontend_start_virtualcam(void)
         blog(LOG_INFO,
              "[pulsar-frontend-stub] virtual cam SOURCE mode -> 'ZabVirtualCamSource'");
     }
-    obs_output_set_media(virtualcamOutput, vcamMix, obs_get_audio());
+    obs_output_set_media(virtualcamOutput, vcamMix, programAudio);
     // ADR-005 §3.5 / #186: same attempt-open point as obs_frontend_streaming_start.
     vcamAttempt.fetch_add(1);
     vcamAttemptStartNs.store(std::chrono::steady_clock::now().time_since_epoch().count());
