@@ -2448,7 +2448,12 @@ private:
         if (type == "Prepare") {
             allowed.insert("target"); allowed.insert("timeout_ms");
             for (const auto &it : in.items()) if (!allowed.count(it.key())) { error = "Prepare command contains unknown or cross-type fields"; return false; }
-            const bool sceneHasControl = in["target"].is_object() && in["target"].contains("scene_id") && in["target"]["scene_id"].is_string() && std::any_of(in["target"]["scene_id"].get<std::string>().begin(), in["target"]["scene_id"].get<std::string>().end(), [](unsigned char c) { return c < 0x20 || c == 0x7F; });
+            // Materialize once before taking iterators: begin/end from two
+            // get<std::string>() temporaries are unrelated and invalid.
+            std::string sceneId;
+            if (in.contains("target") && in["target"].is_object() && in["target"].contains("scene_id") && in["target"]["scene_id"].is_string())
+                sceneId = in["target"]["scene_id"].get<std::string>();
+            const bool sceneHasControl = std::any_of(sceneId.begin(), sceneId.end(), [](unsigned char c) { return c < 0x20 || c == 0x7F; });
             if (!in.contains("target") || !in.contains("timeout_ms") || !in["target"].is_object() || in["target"].size() != 2 || !in["target"].contains("lane_id") || !in["target"].contains("scene_id") || !in["target"]["lane_id"].is_string() || (in["target"]["lane_id"] != "A" && in["target"]["lane_id"] != "B") || !in["target"]["scene_id"].is_string() || in["target"]["scene_id"].get<std::string>().empty() || in["target"]["scene_id"].get<std::string>().size() > 256 || sceneHasControl || !integer(in["timeout_ms"], n) || n < 1 || n > 60000) { error = "Prepare payload is invalid"; return false; }
         } else if (type == "Take") {
             allowed.insert("prepared_command_id"); allowed.insert("timeout_ms");

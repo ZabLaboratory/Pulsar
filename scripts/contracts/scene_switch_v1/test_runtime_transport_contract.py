@@ -72,6 +72,16 @@ def test_runtime_adapter_uses_supported_obs_data_response_api_and_typed_revision
     assert "!revisionCanAdvance(\"program\") || !revisionCanAdvance(\"role_map\")" in source
 
 
+def test_prepare_scene_id_control_check_uses_one_materialized_string() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    prepare = source[source.index('if (type == "Prepare")') : source.index('} else if (type == "Take")')]
+
+    assert "Materialize once before taking iterators" in prepare
+    assert 'sceneId = in["target"]["scene_id"].get<std::string>();' in prepare
+    assert "std::any_of(sceneId.begin(), sceneId.end()" in prepare
+    assert 'get<std::string>().begin(), in["target"]["scene_id"].get<std::string>().end()' not in prepare
+
+
 def test_runtime_adapter_guards_the_exact_v1_lifecycle_edges() -> None:
     source = SOURCE.read_text(encoding="utf-8")
 
