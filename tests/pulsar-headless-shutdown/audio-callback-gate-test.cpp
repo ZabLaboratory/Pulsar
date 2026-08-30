@@ -98,7 +98,29 @@ static bool test_admitted_callback_blocks_close_until_release()
 	       check(!gate.try_acquire(), "admission reopened after close");
 }
 
+static bool test_pre_obs_shutdown_fences_audio()
+{
+	BrowserAudioCallbackGate gate;
+	gate.mark_stream_started();
+	const bool admitted_before_fence = gate.try_acquire();
+
+	/* The pre-obs_shutdown barrier closes CEF admission while libobs audio is alive. */
+	gate.mark_close_callback_seen();
+	const bool admitted_after_fence = gate.try_acquire();
+	gate.mark_stream_stopped();
+	const bool claimed_while_in_flight = gate.try_claim_finalization();
+	const bool claimed_after_release = gate.release_and_try_claim();
+
+	return check(admitted_before_fence, "pre-shutdown setup did not admit its callback") &&
+	       check(!admitted_after_fence, "audio admission reopened after pre-shutdown fence") &&
+	       check(!claimed_while_in_flight, "pre-shutdown claimed with an audio callback in flight") &&
+	       check(claimed_after_release, "pre-shutdown did not claim after audio quiescence");
+}
+
 int main()
 {
-	return test_close_wins_before_admission() && test_admitted_callback_blocks_close_until_release() ? 0 : 1;
+	return test_close_wins_before_admission() && test_admitted_callback_blocks_close_until_release() &&
+	       test_pre_obs_shutdown_fences_audio()
+		       ? 0
+		       : 1;
 }

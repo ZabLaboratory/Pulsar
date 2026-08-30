@@ -55,6 +55,15 @@ def _audio_wav_data_uri() -> str:
 AUDIO_WAV_DATA_URI = _audio_wav_data_uri()
 
 
+def test_headless_fences_browser_audio_before_obs_shutdown() -> None:
+    source = (ROOT / "plugins" / "pulsar-headless" / "main.cpp").read_text(encoding="utf-8")
+    normal_shutdown = source[source.rindex("[pulsar-headless] shutting down") :]
+    frontend_shutdown = normal_shutdown.index("pulsar_frontend_shutdown();")
+    browser_fence = normal_shutdown.index("browser_pre_shutdown_ready(browser_shutdown_error)")
+    obs_shutdown = normal_shutdown.index("obs_shutdown();")
+    assert frontend_shutdown < browser_fence < obs_shutdown
+
+
 def _cef_audio_page(lane: str) -> str:
     html = f"""<!doctype html><meta charset='utf-8'>
 <style>html,body{{margin:0;width:100%;height:100%;overflow:hidden;background:#132238;color:#f6fbff;font:48px Arial}}
@@ -435,6 +444,8 @@ def main() -> int:
         "PULSAR_CEF_SHUTDOWN event=barrier_released phase=Drained browser_count=0",
         "PULSAR_CEF_SHUTDOWN event=cef_shutdown_begin browser_count=0",
         "PULSAR_CEF_SHUTDOWN event=cef_shutdown_complete browser_count=0",
+        "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin",
+        "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete",
     )
     count_constraints = {
         required_markers[0]: 2,
@@ -473,6 +484,17 @@ def main() -> int:
     shutdown_complete = positions[required_markers[6]]
     if not barrier < shutdown_begin < shutdown_complete:
         _raise_with_sanitized_tail(probe, process, f"CEF barrier/shutdown ordering invalid: {positions}")
+    pre_shutdown_begin = positions[required_markers[7]]
+    pre_shutdown_complete = positions[required_markers[8]]
+    shutting_down = max(
+        index for index, line in enumerate(lines) if "[pulsar-headless] shutting down" in line
+    )
+    if not shutting_down < pre_shutdown_begin < shutdown_complete < pre_shutdown_complete:
+        _raise_with_sanitized_tail(
+            probe,
+            process,
+            f"pre-obs-shutdown audio fence ordering invalid: {positions}",
+        )
     audio_started = {}
     audio_stopped = {}
     audio_quiescent = {}

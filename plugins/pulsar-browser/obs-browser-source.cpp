@@ -246,9 +246,9 @@ BrowserSource::BrowserSource(obs_data_t *, obs_source_t *source_)
 	first_browser = this;
 }
 
-static void ActuallyCloseBrowser(CefRefPtr<CefBrowser> cefBrowser)
+static void ActuallyCloseBrowser(CefRefPtr<CefBrowserHost> browser_host)
 {
-	if (!cefBrowser)
+	if (!browser_host)
 		return;
 
 	/*
@@ -256,8 +256,8 @@ static void ActuallyCloseBrowser(CefRefPtr<CefBrowser> cefBrowser)
          * http://magpcss.org/ceforum/viewtopic.php?f=6&t=12079
          * https://bitbucket.org/chromiumembedded/cef/issues/1363/washidden-api-got-broken-on-branch-2062)
          */
-	cefBrowser->GetHost()->WasHidden(true);
-	cefBrowser->GetHost()->CloseBrowser(true);
+	browser_host->WasHidden(true);
+	browser_host->CloseBrowser(true);
 }
 
 void BrowserSourceBeginShutdown()
@@ -386,12 +386,11 @@ void BrowserSourceBrowserClosed(int browser_id)
 	     browser_id, static_cast<unsigned long long>(browser_count));
 }
 
-bool BrowserSourceRequestBrowserClose(CefRefPtr<CefBrowser> browser)
+bool BrowserSourceRequestBrowserClose(int browser_id, CefRefPtr<CefBrowserHost> browser_host)
 {
-	if (!browser)
+	if (browser_id < 0 || !browser_host)
 		return false;
 
-	const int browser_id = browser->GetIdentifier();
 	{
 		lock_guard<mutex> lock(browser_lifecycle_mutex);
 		if (browser_sources_by_id.find(browser_id) == browser_sources_by_id.end() ||
@@ -399,7 +398,7 @@ bool BrowserSourceRequestBrowserClose(CefRefPtr<CefBrowser> browser)
 			return false;
 	}
 
-	ActuallyCloseBrowser(browser);
+	ActuallyCloseBrowser(browser_host);
 	return true;
 }
 
@@ -467,6 +466,12 @@ static void BrowserSourceRequestNextCloseOnUi()
 		BrowserSourceHandleMissingCloseBrowser(browser_id);
 		return;
 	}
+	CefRefPtr<CefBrowserHost> browser_host = browser->GetHost();
+	browser = nullptr;
+	if (!browser_host) {
+		BrowserSourceHandleMissingCloseBrowser(browser_id);
+		return;
+	}
 
 	{
 		lock_guard<mutex> lock(browser_lifecycle_mutex);
@@ -482,7 +487,11 @@ static void BrowserSourceRequestNextCloseOnUi()
 	blog(LOG_INFO,
 	     "PULSAR_CEF_SHUTDOWN event=browser_close_call browser_id=%d reason=shutdown_started",
 	     browser_id);
-	const bool requested = BrowserSourceRequestBrowserClose(browser);
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_ref_released_before_close browser_id=%d",
+	     browser_id);
+	const bool requested = BrowserSourceRequestBrowserClose(browser_id, browser_host);
+	browser_host = nullptr;
 	blog(LOG_INFO,
 	     "PULSAR_CEF_SHUTDOWN event=browser_close_return browser_id=%d requested=%d",
 	     browser_id, requested ? 1 : 0);
@@ -740,9 +749,11 @@ void BrowserSourceCloseAllBrowsers()
 
 BrowserSource::~BrowserSource()
 {
-	if (cefBrowser && !BrowserSourceShutdownStarted())
-		ActuallyCloseBrowser(cefBrowser);
-	else if (cefBrowser)
+	if (cefBrowser && !BrowserSourceShutdownStarted()) {
+		CefRefPtr<CefBrowserHost> browser_host = cefBrowser->GetHost();
+		cefBrowser = nullptr;
+		ActuallyCloseBrowser(browser_host);
+	} else if (cefBrowser)
 		BrowserSourceDestroyFatal("destructor_with_live_browser");
 	if (weak_source) {
 		obs_weak_source_release(weak_source);
@@ -801,7 +812,17 @@ void BrowserSource::Destroy()
 	if (browser_id >= 0 && wait_for_browser) {
 		if (!browser)
 			return;
-		const bool posted = QueueCEFTask([browser]() { BrowserSourceRequestBrowserClose(browser); });
+		CefRefPtr<CefBrowserHost> browser_host = browser->GetHost();
+		browser = nullptr;
+		if (!browser_host)
+			BrowserSourceDestroyFatal("cef_destroy_host_missing");
+		const bool posted = QueueCEFTask([browser_id, browser_host]() mutable {
+			blog(LOG_INFO,
+			     "PULSAR_CEF_SHUTDOWN event=browser_ref_released_before_close browser_id=%d",
+			     browser_id);
+			BrowserSourceRequestBrowserClose(browser_id, browser_host);
+			browser_host = nullptr;
+		});
 		if (!posted)
 			BrowserSourceDestroyFatal("cef_destroy_task_post_failed");
 		return;
@@ -824,9 +845,15 @@ void BrowserSource::Destroy()
 		 * remains and this task is the safe owner of the source deletion.
 		 */
 		CefRefPtr<CefBrowser> current_browser = source->GetBrowser();
-		if (current_browser &&
-		    BrowserSourceRegisterPendingBrowser(source, current_browser->GetIdentifier())) {
-			BrowserSourceRequestBrowserClose(current_browser);
+		const int current_browser_id = current_browser ? current_browser->GetIdentifier() : -1;
+		CefRefPtr<CefBrowserHost> browser_host = current_browser ? current_browser->GetHost() : nullptr;
+		current_browser = nullptr;
+		if (browser_host && BrowserSourceRegisterPendingBrowser(source, current_browser_id)) {
+			blog(LOG_INFO,
+			     "PULSAR_CEF_SHUTDOWN event=browser_ref_released_before_close browser_id=%d",
+			     current_browser_id);
+			BrowserSourceRequestBrowserClose(current_browser_id, browser_host);
+			browser_host = nullptr;
 			BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(destroy_task_state));
 			return;
 		}
@@ -893,7 +920,7 @@ void BrowserSource::ExecuteOnBrowser(BrowserFunc func, bool async)
 #ifdef ENABLE_BROWSER_QT_LOOP
 			QueueBrowserTask(cefBrowser, func);
 #else
-			QueueCEFTask([=]() { func(browser); });
+			QueueCEFTask([browser = std::move(browser), func]() mutable { func(std::move(browser)); });
 #endif
 		}
 	}
@@ -998,7 +1025,13 @@ bool BrowserSource::CreateBrowser()
 
 void BrowserSource::DestroyBrowser()
 {
-	ExecuteOnBrowser(ActuallyCloseBrowser, true);
+	ExecuteOnBrowser(
+		[](CefRefPtr<CefBrowser> browser) {
+			CefRefPtr<CefBrowserHost> browser_host = browser ? browser->GetHost() : nullptr;
+			browser = nullptr;
+			ActuallyCloseBrowser(browser_host);
+		},
+		true);
 	SetBrowser(nullptr);
 }
 

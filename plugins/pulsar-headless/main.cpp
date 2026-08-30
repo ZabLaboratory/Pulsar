@@ -965,6 +965,34 @@ bool websocket_server_ready(std::string &reason)
     return true;
 }
 
+// Browser CEF/audio teardown must complete before obs_shutdown() stops the
+// process-wide libobs audio bus.  The browser plugin owns the barrier and
+// exposes it as a private global proc so the host does not link against a DLL
+// implementation detail.
+bool browser_pre_shutdown_ready(std::string &reason)
+{
+    proc_handler_t *global_ph = obs_get_proc_handler();
+    if (!global_ph) {
+        reason = "browser_pre_shutdown_proc_handler_unavailable";
+        return false;
+    }
+
+    calldata_t cd;
+    calldata_init(&cd);
+    const bool called = proc_handler_call(global_ph, "pulsar_browser_pre_shutdown", &cd);
+    const bool success = calldata_bool(&cd, "success");
+    calldata_free(&cd);
+    if (!called) {
+        reason = "browser_pre_shutdown_proc_unavailable";
+        return false;
+    }
+    if (!success) {
+        reason = "browser_pre_shutdown_barrier_failed";
+        return false;
+    }
+    return true;
+}
+
 // V1 session boundary: each spawn gets its own port + password, never
 // trusting the persisted config.json. PULSAR_PORT and PULSAR_PASSWORD
 // override the defaults; if either is empty, we pick safe values
@@ -1270,6 +1298,19 @@ int main(int argc, char **argv)
         // The frontend callback table was installed before module loading;
         // pair its teardown with obs_shutdown on this fail-closed path too.
         pulsar_frontend_shutdown();
+        std::string browser_shutdown_error;
+        if (!browser_pre_shutdown_ready(browser_shutdown_error)) {
+            std::fprintf(stderr,
+                         "PULSAR_RUNTIME_ERROR code=browser_pre_shutdown_failed reason=%s\n",
+                         browser_shutdown_error.c_str());
+            // Do not enter obs_shutdown after the browser fence failed: that
+            // path stops libobs audio while a CEF callback may still be live.
+            runtime_state->release();
+#ifdef _WIN32
+            close_shutdown_event();
+#endif
+            return 1;
+        }
         obs_shutdown();
         return 1;
     }
@@ -1332,6 +1373,20 @@ int main(int argc, char **argv)
     blog(LOG_INFO, "[pulsar-headless] shutting down");
 
     pulsar_frontend_shutdown();
+    std::string browser_shutdown_error;
+    if (!browser_pre_shutdown_ready(browser_shutdown_error)) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=browser_pre_shutdown_failed reason=%s\n",
+                     browser_shutdown_error.c_str());
+        // A failed or missing browser proc is deliberately fail-closed.  The
+        // host must not call obs_shutdown and tear down libobs audio under a
+        // still-live CEF callback; process exit performs the final cleanup.
+        runtime_state->release();
+#ifdef _WIN32
+        close_shutdown_event();
+#endif
+        return 1;
+    }
     obs_shutdown();
 
     runtime_state->release();

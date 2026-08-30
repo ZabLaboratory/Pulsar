@@ -6,6 +6,10 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/browser-clie
      PULSAR_BROWSER_CLIENT_CPP)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/browser-client.hpp"
      PULSAR_BROWSER_CLIENT_HPP)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/browser-app.cpp"
+     PULSAR_BROWSER_APP_CPP)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-headless/main.cpp"
+     PULSAR_HEADLESS_MAIN_CPP)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/obs-browser-plugin.cpp"
      PULSAR_BROWSER_PLUGIN_CPP)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/obs-browser-source.cpp"
@@ -18,6 +22,21 @@ if(PULSAR_BROWSER_CLIENT_CPP MATCHES "audio_callbacks_closed[.]load" OR
    PULSAR_BROWSER_CLIENT_CPP MATCHES "audio_callbacks_in_flight[.]fetch_add")
     message(FATAL_ERROR
         "browser audio admission must not split gate load from in-flight accounting")
+endif()
+if(PULSAR_BROWSER_SOURCE_CPP MATCHES "ActuallyCloseBrowser[(]CefRefPtr<CefBrowser>[)]" OR
+   PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceRequestBrowserClose[(]CefRefPtr<CefBrowser>" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "CefRefPtr<CefBrowserHost> browser_host" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_ref_released_before_close" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "std::move[(]browser[)]" OR
+   NOT PULSAR_BROWSER_APP_CPP MATCHES "nextTask.func" OR
+   NOT PULSAR_BROWSER_APP_CPP MATCHES "std::move[(]nextTask.browser[)]")
+    message(FATAL_ERROR "CEF close paths must release CefBrowser before invoking the host")
+endif()
+if(NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "BrowserSourcePrepareBeforeObsShutdown" OR
+   NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "pulsar_browser_pre_shutdown" OR
+   NOT PULSAR_HEADLESS_MAIN_CPP MATCHES "browser_pre_shutdown_ready" OR
+   NOT PULSAR_HEADLESS_MAIN_CPP MATCHES "pulsar_browser_pre_shutdown")
+    message(FATAL_ERROR "libobs audio must be fenced before obs_shutdown")
 endif()
 if(NOT PULSAR_BROWSER_CLIENT_HPP MATCHES "BrowserAudioCallbackGate" OR
    NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "audio_callbacks[.]try_acquire")

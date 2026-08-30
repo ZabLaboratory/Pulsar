@@ -91,7 +91,7 @@ void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser, BrowserSource *s
 void BrowserSourceBrowserClosed(int browser_id);
 void BrowserSourceFinalizeBrowserClose(int browser_id);
 int BrowserSourceBrowserIdForSource(BrowserSource *source);
-bool BrowserSourceRequestBrowserClose(CefRefPtr<CefBrowser> browser);
+bool BrowserSourceRequestBrowserClose(int browser_id, CefRefPtr<CefBrowserHost> browser_host);
 
 struct BrowserSource {
 	BrowserSource **p_prev_next = nullptr;
