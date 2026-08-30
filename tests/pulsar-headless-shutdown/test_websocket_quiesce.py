@@ -179,11 +179,23 @@ def test_serial_frame_fixture_keeps_queue_live_after_sleep() -> None:
     source = Path(__file__).read_text(encoding="utf-8")
     run_start = source.rindex("async def _run_inflight_batch")
     frame_start = source.index("async def frame_batch", run_start)
-    frame_block = source[frame_start : source.index("tasks =", frame_start)]
+    frame_block = source[frame_start : source.index("        try:\n            # Establish", frame_start)]
     # RequestBatchHandler pops Sleep before arming sleepUntilFrame.  A valid
     # trailing request is therefore required to keep the queue non-empty and
     # keep the graphics callback in flight until the requested frame.
     assert frame_block.index('"sleepFrames": 120') < frame_block.index('"requestType": "GetStats"')
+
+
+def test_driver_arms_frame_then_single_parallel_before_handshake() -> None:
+    source = Path(__file__).read_text(encoding="utf-8")
+    run_start = source.rindex("async def _run_inflight_batch")
+    run_block = source[run_start:]
+    assert run_block.index("frame_task = asyncio.create_task(frame_batch())") < run_block.index(
+        'parallel_task = asyncio.create_task(parallel_batch(parallel_ws, "single"))'
+    )
+    assert run_block.count('parallel_batch(parallel_ws, "single")') == 1
+    assert "await asyncio.sleep(0.2)" not in run_block
+    assert run_block.index("workloads_inflight.set()") < run_block.index("await asyncio.gather(*tasks)")
 
 
 def _load_probe() -> Any:
@@ -266,30 +278,23 @@ async def _run_inflight_batch(
 ) -> None:
     async with (
         probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as poll_ws,
-        probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as parallel_ws_a,
-        probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as parallel_ws_b,
-        probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as parallel_ws_c,
-        probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as parallel_ws_d,
+        probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as parallel_ws,
         probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as frame_ws,
     ):
         await asyncio.gather(
             probe.identify(poll_ws, process.password),
-            probe.identify(parallel_ws_a, process.password),
-            probe.identify(parallel_ws_b, process.password),
-            probe.identify(parallel_ws_c, process.password),
-            probe.identify(parallel_ws_d, process.password),
+            probe.identify(parallel_ws, process.password),
             probe.identify(frame_ws, process.password),
         )
-        started = asyncio.Event()
         poller_ready = asyncio.Event()
         close_observed: list[tuple[int | None, str | None]] = []
+        tasks: list[asyncio.Task[Any]] = []
 
         async def poll_get() -> None:
             inbox = probe.Inbox()
             count = 0
             try:
                 while True:
-                    started.set()
                     await probe.request(inbox, poll_ws, "GetStats", f"quiesce-get-{count}")
                     count += 1
                     if count == 1:
@@ -303,7 +308,6 @@ async def _run_inflight_batch(
 
         async def parallel_batch(ws: Any, suffix: str) -> None:
             inbox = probe.Inbox()
-            started.set()
             try:
                 # A large valid Parallel batch keeps the thread-pool fan-out
                 # occupied long enough to race the shutdown boundary.
@@ -324,7 +328,6 @@ async def _run_inflight_batch(
 
         async def frame_batch() -> None:
             inbox = probe.Inbox()
-            started.set()
             try:
                 await probe.request_batch(
                     inbox,
@@ -350,48 +353,66 @@ async def _run_inflight_batch(
             if not shutdown_started.is_set():
                 raise RuntimeError("SerialFrame batch completed before shutdown_started")
 
-        tasks = [
-            asyncio.create_task(poll_get()),
-            asyncio.create_task(parallel_batch(parallel_ws_a, "a")),
-            asyncio.create_task(parallel_batch(parallel_ws_b, "b")),
-            asyncio.create_task(parallel_batch(parallel_ws_c, "c")),
-            asyncio.create_task(parallel_batch(parallel_ws_d, "d")),
-            asyncio.create_task(frame_batch()),
-        ]
-        await poller_ready.wait()
-        await asyncio.gather(
-            asyncio.to_thread(
+        try:
+            # Establish the poller first so the rest of the readiness protocol
+            # is proven against an authenticated, already-serving client.
+            poll_task = asyncio.create_task(poll_get())
+            tasks.append(poll_task)
+            await _await_workload_handshake(poller_ready, poll_task)
+
+            # Start the frame workload before the parallel workload.  This is
+            # intentional: waiting for parallel fan-out first can let the
+            # 120-frame callback finish before the shutdown race is armed.
+            frame_task = asyncio.create_task(frame_batch())
+            tasks.append(frame_task)
+            await asyncio.gather(
+                asyncio.to_thread(
+                    _wait_for_marker_count,
+                    process,
+                    "PULSAR_WEBSOCKET_HANDLER event=batch_enter execution_type=1",
+                    1,
+                ),
+                asyncio.to_thread(
+                    _wait_for_marker_count,
+                    process,
+                    "PULSAR_WEBSOCKET_HANDLER event=frame_callback_enter",
+                    1,
+                ),
+            )
+            if poll_task.done() or frame_task.done():
+                raise RuntimeError("poller or SerialFrame completed before parallel workload submission")
+
+            parallel_task = asyncio.create_task(parallel_batch(parallel_ws, "single"))
+            tasks.append(parallel_task)
+            await asyncio.to_thread(
                 _wait_for_marker_count,
                 process,
                 "PULSAR_WEBSOCKET_HANDLER event=batch_enter execution_type=2",
-                4,
-            ),
-            asyncio.to_thread(
-                _wait_for_marker_count,
-                process,
-                "PULSAR_WEBSOCKET_HANDLER event=batch_enter execution_type=1",
                 1,
-            ),
-            asyncio.to_thread(
-                _wait_for_marker_count,
-                process,
-                "PULSAR_WEBSOCKET_HANDLER event=frame_callback_enter",
-                1,
-            ),
-        )
-        if not started.is_set() or any(tasks[index].done() for index in range(1, 5)) or tasks[5].done():
-            raise RuntimeError("an authenticated workload completed before the shutdown handshake")
-        workloads_inflight.set()
-        # The caller signals the child concurrently from another thread.  The
-        # connections may close before responses are delivered; that is fine
-        # as long as the native drain ACK is emitted and the process exits
-        # without forced containment.
-        await asyncio.gather(*tasks)
-        if not any(code == 1001 and reason == "Server quiescing." for code, reason in close_observed):
-            raise RuntimeError(
-                "authenticated clients did not observe a typed going-away close during quiesce: "
-                f"{close_observed!r}"
             )
+            if poll_task.done() or frame_task.done() or parallel_task.done():
+                raise RuntimeError("an authenticated workload completed before the shutdown handshake")
+            workloads_inflight.set()
+
+            # The caller signals the child after workloads_inflight.  The
+            # connections may close before responses are delivered; that is
+            # fine as long as the native drain ACK is emitted and the process
+            # exits without forced containment.
+            await asyncio.gather(*tasks)
+            if not any(code == 1001 and reason == "Server quiescing." for code, reason in close_observed):
+                raise RuntimeError(
+                    "authenticated clients did not observe a typed going-away close during quiesce: "
+                    f"{close_observed!r}"
+                )
+        finally:
+            # Consume every task outcome, including failures raised before the
+            # readiness event, so the harness never hides an early exception
+            # or leaves an un-retrieved task behind.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _run_windows_integration(executable: Path) -> None:
@@ -419,10 +440,17 @@ def _run_windows_integration(executable: Path) -> None:
             task = asyncio.create_task(
                 _run_inflight_batch(probe, process, ready.group(1), workloads_inflight, shutdown_started)
             )
-            await _await_workload_handshake(workloads_inflight, task)
-            shutdown_started.set()
-            await asyncio.to_thread(process.shutdown)
-            await task
+            try:
+                await _await_workload_handshake(workloads_inflight, task)
+                shutdown_started.set()
+                await asyncio.to_thread(process.shutdown)
+                await task
+            finally:
+                # If process shutdown fails, do not leave the authenticated
+                # driver task alive or let asyncio.run discard its outcome.
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
         asyncio.run(drive())
         process.assert_shutdown_clean(require_runtime_lease=True)
