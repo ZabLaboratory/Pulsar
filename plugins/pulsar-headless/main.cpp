@@ -1000,6 +1000,24 @@ bool websocket_pre_shutdown_ready(std::string &reason)
     return true;
 }
 
+// A failed websocket quiesce is a process-integrity failure, not a recoverable
+// module error.  Returning through main would run the DLL/static destructors;
+// WebSocketServer::~WebSocketServer() calls the unbounded Stop(), which can
+// retain admitted worker threads after the host has already released its
+// runtime/alias leases.  Emit a direct, credential-free and flushed marker,
+// then bypass C++/Qt/libobs teardown entirely.  Kernel-backed leases and
+// handles are released by the operating system only once this process exits,
+// so no successor can overlap a still-live failed runtime.
+[[noreturn]] void fail_closed_websocket_quiesce(const std::string &reason)
+{
+    std::fprintf(stderr,
+                 "PULSAR_WEBSOCKET_QUIESCE event=fail_closed_exit action=process_exit reason=%s\n",
+                 reason.c_str());
+    std::fflush(stderr);
+    std::fflush(stdout);
+    std::_Exit(1);
+}
+
 // Browser CEF/audio teardown must complete before obs_shutdown() stops the
 // process-wide libobs audio bus.  The browser plugin owns the barrier and
 // exposes it as a private global proc so the host does not link against a DLL
@@ -1335,11 +1353,7 @@ int main(int argc, char **argv)
             std::fprintf(stderr,
                          "PULSAR_RUNTIME_ERROR code=websocket_pre_shutdown_failed reason=%s\n",
                          websocket_shutdown_error.c_str());
-            runtime_state->release();
-#ifdef _WIN32
-            close_shutdown_event();
-#endif
-            return 1;
+            fail_closed_websocket_quiesce(websocket_shutdown_error);
         }
         // The frontend callback table was installed before module loading;
         // fence CEF before handing that table back, then pair its teardown
@@ -1433,11 +1447,7 @@ int main(int argc, char **argv)
         std::fprintf(stderr,
                      "PULSAR_RUNTIME_ERROR code=websocket_pre_shutdown_failed reason=%s\n",
                      websocket_shutdown_error.c_str());
-        runtime_state->release();
-#ifdef _WIN32
-        close_shutdown_event();
-#endif
-        return 1;
+        fail_closed_websocket_quiesce(websocket_shutdown_error);
     }
 
     std::string browser_shutdown_error;

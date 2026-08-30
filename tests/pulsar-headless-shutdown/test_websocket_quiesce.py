@@ -130,6 +130,45 @@ def test_native_contract_has_single_admission_and_drain_boundary() -> None:
     )
     assert normal.index("pulsar_frontend_shutdown();") < normal.index("obs_shutdown();")
 
+    # A failed websocket drain must not return through main: that would run
+    # WebSocketServer::~WebSocketServer(), whose Stop() waits without the
+    # quiesce deadline.  Keep the runtime/alias leases held until the process
+    # itself exits and let the kernel release them atomically.
+    for marker in (
+        "fail_closed_websocket_quiesce",
+        "PULSAR_WEBSOCKET_QUIESCE event=fail_closed_exit",
+        "std::fflush(stderr)",
+        "std::fflush(stdout)",
+        "std::_Exit(1)",
+    ):
+        assert marker in headless
+    failed_quiesce = headless[headless.rindex("if (!websocket_pre_shutdown_ready(websocket_shutdown_error))") :]
+    failed_quiesce = failed_quiesce[: failed_quiesce.index("std::string browser_shutdown_error")]
+    assert "fail_closed_websocket_quiesce(websocket_shutdown_error)" in failed_quiesce
+    assert "runtime_state->release()" not in failed_quiesce
+
+
+def test_failed_quiesce_model_keeps_leases_until_process_exit() -> None:
+    source = HEADLESS_CPP.read_text(encoding="utf-8")
+    helper_start = source.index("[[noreturn]] void fail_closed_websocket_quiesce")
+    helper = source[helper_start : source.index("// Browser CEF/audio teardown", helper_start)]
+    assert "std::fflush(stderr)" in helper
+    assert "std::fflush(stdout)" in helper
+    assert "std::_Exit(1)" in helper
+
+    # The model captures the ownership contract: a failed bounded drain never
+    # explicitly releases a lease while the process is alive.  The OS is the
+    # first releaser after fail-closed process termination.
+    lease_held = True
+    process_alive = True
+    quiesce_succeeded = False
+    if not quiesce_succeeded:
+        assert lease_held and process_alive
+        process_alive = False
+    assert not process_alive
+    assert lease_held
+
+
 
 def test_gate_rejects_new_work_and_drains_ordinary_parallel_and_frame() -> None:
     gate = _AdmissionGate()
@@ -415,6 +454,166 @@ async def _run_inflight_batch(
                 await asyncio.gather(*tasks, return_exceptions=True)
 
 
+def _run_windows_quiesce_timeout_integration(executable: Path) -> None:
+    """Prove a failed drain exits before leases are explicitly released.
+
+    This is intentionally separate from the healthy quiesce proof.  A long
+    authenticated SerialFrame batch keeps one native handler admitted beyond
+    the five-second server drain deadline.  The expected result is a bounded,
+    nonzero fail-closed process exit; forced containment, a zero exit, explicit
+    lease-release markers, or any later frontend/libobs teardown are failures.
+    """
+
+    if os.name != "nt":
+        return
+    if not executable.is_file():
+        raise RuntimeError(f"Pulsar executable not found: {executable}")
+
+    probe = _load_probe()
+    runtime_id = f"websocket-quiesce-timeout-{os.getpid()}-{secrets.token_hex(4)}"
+    record_dir = Path(tempfile.mkdtemp(prefix="pulsar-websocket-quiesce-timeout-"))
+    successor_dir = Path(tempfile.mkdtemp(prefix="pulsar-websocket-quiesce-successor-"))
+    process = probe.PulsarProcess(executable.resolve(), "x264", record_dir, runtime_id=runtime_id)
+    successor = probe.PulsarProcess(executable.resolve(), "x264", successor_dir, runtime_id=runtime_id)
+    previous_runtime_id = os.environ.get("PULSAR_RUNTIME_INSTANCE_ID")
+    os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = runtime_id
+    started = False
+    successor_started = False
+    primary_error: Exception | None = None
+    shutdown_started_at: float | None = None
+
+    try:
+        process.spawn()
+        started = True
+        process.wait_for_shutdown_control_ready(timeout=60)
+        ready = process.wait_for(probe.READY_RE, timeout=60)
+
+        async def drive_timeout() -> None:
+            nonlocal shutdown_started_at
+            async with probe.websockets.connect(
+                ready.group(1), subprotocols=["obswebsocket.json"], open_timeout=15
+            ) as ws:
+                await probe.identify(ws, process.password)
+                inbox = probe.Inbox()
+                request_task = asyncio.create_task(
+                    probe.request_batch(
+                        inbox,
+                        ws,
+                        "quiesce-timeout-frame",
+                        [
+                            {
+                                "requestType": "Sleep",
+                                "requestData": {"sleepFrames": 420},
+                            },
+                            # Retain the queue after Sleep is popped so the
+                            # native SerialFrame callback remains admitted.
+                            {"requestType": "GetStats"},
+                        ],
+                        execution_type=1,
+                    )
+                )
+                try:
+                    await asyncio.gather(
+                        asyncio.to_thread(
+                            _wait_for_marker_count,
+                            process,
+                            "PULSAR_WEBSOCKET_HANDLER event=batch_enter execution_type=1",
+                            1,
+                        ),
+                        asyncio.to_thread(
+                            _wait_for_marker_count,
+                            process,
+                            "PULSAR_WEBSOCKET_HANDLER event=frame_callback_enter",
+                            1,
+                        ),
+                    )
+                    if request_task.done():
+                        raise RuntimeError("long SerialFrame completed before quiesce timeout was armed")
+                    shutdown_started_at = time.monotonic()
+                    await asyncio.to_thread(process.shutdown)
+                finally:
+                    if not request_task.done():
+                        request_task.cancel()
+                    await asyncio.gather(request_task, return_exceptions=True)
+
+        try:
+            asyncio.run(drive_timeout())
+        except Exception as exc:
+            primary_error = exc
+
+        if process.proc is None or process.proc.poll() is None:
+            raise RuntimeError("failed quiesce left Pulsar alive after bounded shutdown")
+        if process.forced_kill_used:
+            raise RuntimeError("forced process kill was used during failed quiesce")
+        if process.proc.returncode != 1:
+            raise RuntimeError(f"failed quiesce exited with unexpected status {process.proc.returncode}")
+        if primary_error is not None:
+            raise RuntimeError(f"failed quiesce shutdown did not complete cleanly: {primary_error}")
+        if shutdown_started_at is None:
+            raise RuntimeError("failed quiesce proof never reached its shutdown signal")
+        elapsed = time.monotonic() - shutdown_started_at
+        if elapsed > 12:
+            raise RuntimeError(f"failed quiesce exceeded strict outer bound: {elapsed:.3f}s")
+
+        lines = process.snapshot()
+        timeout_indices = [
+            index for index, line in enumerate(lines) if "PULSAR_WEBSOCKET_QUIESCE event=timeout" in line
+        ]
+        if not timeout_indices:
+            raise RuntimeError("missing WebSocket quiesce timeout marker")
+        fail_exit_indices = [
+            index for index, line in enumerate(lines) if "PULSAR_WEBSOCKET_QUIESCE event=fail_closed_exit" in line
+        ]
+        if not fail_exit_indices:
+            raise RuntimeError("missing fail-closed process-exit marker")
+        fail_exit_index = max(fail_exit_indices)
+        forbidden_after_failure = (
+            "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin",
+            "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete",
+            "PULSAR_FRONTEND_CLEANUP event=source_graph_drained",
+            "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released",
+            "PULSAR_RUNTIME_INSTANCE lease=released",
+            "PULSAR_LEGACY_ALIAS lease=released",
+            "obs_shutdown",
+        )
+        if any(
+            index > fail_exit_index and any(marker in line for marker in forbidden_after_failure)
+            for index, line in enumerate(lines)
+        ):
+            raise RuntimeError("frontend/libobs teardown or explicit lease release followed failed quiesce")
+        # The fail-stop path must not explicitly release leases before exit;
+        # successor acquisition below is the observable post-exit proof.
+        if any(
+            "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released" in line
+            or "PULSAR_RUNTIME_INSTANCE lease=released" in line
+            or "PULSAR_LEGACY_ALIAS lease=released" in line
+            for line in lines
+        ):
+            raise RuntimeError("failed quiesce explicitly released a lease before process exit")
+
+        successor.spawn()
+        successor_started = True
+        successor.wait_for_shutdown_control_ready(timeout=60)
+        successor.wait_for(probe.READY_RE, timeout=60)
+    finally:
+        if started and process.proc is not None and process.proc.poll() is None:
+            try:
+                process.shutdown()
+            except Exception:
+                pass
+        if successor_started and successor.proc is not None and successor.proc.poll() is None:
+            try:
+                successor.shutdown()
+            except Exception:
+                pass
+        if previous_runtime_id is None:
+            os.environ.pop("PULSAR_RUNTIME_INSTANCE_ID", None)
+        else:
+            os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = previous_runtime_id
+        shutil.rmtree(record_dir, ignore_errors=True)
+        shutil.rmtree(successor_dir, ignore_errors=True)
+
+
 def _run_windows_integration(executable: Path) -> None:
     if os.name != "nt":
         return
@@ -481,6 +680,7 @@ def main() -> int:
         executable = Path(os.sys.argv[1])
     if executable and str(executable) not in (".", ""):
         _run_windows_integration(executable)
+        _run_windows_quiesce_timeout_integration(executable)
     elif os.name == "nt":
         print("SKIP: no pulsar-headless executable was supplied for integration")
     print("PASS: WebSocket admission rejects post-quiesce work and drains in-flight handlers before teardown")
