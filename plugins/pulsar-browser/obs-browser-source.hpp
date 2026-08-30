@@ -91,6 +91,7 @@ struct BrowserSource {
 	BrowserSource *next = nullptr;
 
 	obs_source_t *source = nullptr;
+	obs_weak_source_t *weak_source = nullptr;
 
 	bool tex_sharing_avail = false;
 	bool create_browser = false;
@@ -181,4 +182,5 @@ struct BrowserSource {
 
 	void SetBrowser(CefRefPtr<CefBrowser> b);
 	CefRefPtr<CefBrowser> GetBrowser();
+	obs_source_t *GetStrongSource();
 };
