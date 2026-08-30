@@ -104,8 +104,8 @@ def test_native_contract_has_single_admission_and_drain_boundary() -> None:
         "no_handlers_after_ack=1",
     ):
         assert marker in server
-    assert "handlerLease]()" in server
-    assert "handlerLease]()" in protocol
+    assert "handlerLease = handlerLease]()" in server
+    assert "handlerLease = handlerLease]()" in protocol
     assert "EnterBatchHandler()" in request_batch
     assert request_batch.index("EnterBatchHandler()") < request_batch.index("if (executionType")
     assert "callbackLease" in request_batch

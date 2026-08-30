@@ -513,7 +513,7 @@ void WebSocketServer::onMessage(websocketpp::connection_hdl hdl,
 
 	auto opCode = message->get_opcode();
 	std::string payload = message->get_payload();
-	_threadPool.start(Utils::Compat::CreateFunctionRunnable([=, handlerLease]() {
+	_threadPool.start(Utils::Compat::CreateFunctionRunnable([=, handlerLease = handlerLease]() {
 		std::unique_lock<std::mutex> lock(_sessionMutex);
 		SessionPtr session;
 		try {
