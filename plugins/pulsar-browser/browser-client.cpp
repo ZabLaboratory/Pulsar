@@ -661,6 +661,14 @@ void BrowserClient::OnAudioStreamPacket(CefRefPtr<CefBrowser> browser, const flo
 
 void BrowserClient::OnAudioStreamStopped(CefRefPtr<CefBrowser> browser)
 {
+	/*
+	 * finalize_browser_close() may release close_keepalive synchronously.
+	 * Keep this callback's BrowserClient alive until CEF regains control.
+	 */
+	CefRefPtr<BrowserClient> callback_self(this);
+	(void)callback_self;
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=client_callback_keepalive_acquired browser_id=%d",
+	     browser ? browser->GetIdentifier() : -1);
 	audio_callbacks.mark_stream_stopped();
 	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=audio_stream_stopped browser_id=%d",
 	     browser ? browser->GetIdentifier() : -1);
