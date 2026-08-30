@@ -220,6 +220,44 @@ static bool test_delete_without_pending_source_does_not_complete_counter()
 	       check(state.deleted, "unarmed delete path was not marked deleted");
 }
 
+static bool test_late_browser_blocks_last_task_release()
+{
+	BrowserSourceTaskState empty;
+	empty.source = reinterpret_cast<BrowserSource *>(static_cast<std::uintptr_t>(1));
+	const bool empty_destroying = empty.begin_destroy();
+	const bool empty_armed = empty.arm_browser_ids(std::vector<int>{});
+	const BrowserSourceTaskRelease empty_delete = empty.request_delete_and_take_if_idle(true);
+
+	/* A CreateBrowser task may be admitted before Destroy and call OnAfterCreated
+	 * after the source has armed an initially empty browser-deletion barrier. */
+	BrowserSourceTaskState state;
+	state.source = reinterpret_cast<BrowserSource *>(static_cast<std::uintptr_t>(1));
+	const bool create_acquired = state.acquire(false);
+	const bool destroying = state.begin_destroy();
+	const bool armed_empty = state.arm_browser_ids(std::vector<int>{});
+	const BrowserSourceTaskRelease delete_while_create_active = state.request_delete_and_take_if_idle(true);
+	const bool late_browser_added = state.add_browser_id(404);
+	const BrowserSourceTaskRelease last_task_release = state.release_task();
+	const bool browser_finalized = state.finalize_browser_id(404);
+	const BrowserSourceTaskRelease delete_after_browser_close = state.request_delete_and_take_if_idle(true);
+	const BrowserSourceTaskRelease duplicate_release = state.release_task();
+
+	return check(empty_destroying && empty_armed && empty_delete.source != nullptr &&
+			 empty_delete.complete_destroy_task && empty.browser_delete_completed,
+		     "empty browser barrier did not complete at idle") &&
+	       check(create_acquired && destroying && armed_empty, "late-browser setup did not arm") &&
+	       check(delete_while_create_active.source == nullptr,
+		     "source deleted while its create task was active") &&
+	       check(late_browser_added, "late browser was not admitted to the armed barrier") &&
+	       check(last_task_release.source == nullptr,
+		     "last task release deleted source before late browser close") &&
+	       check(browser_finalized, "late browser did not complete the deletion barrier") &&
+	       check(delete_after_browser_close.source != nullptr &&
+			 delete_after_browser_close.complete_destroy_task,
+		     "source was not deleted after task and browser quiescence") &&
+	       check(duplicate_release.underflow, "post-delete task release did not fail closed");
+}
+
 static bool test_inverted_two_browser_finalization_waits_for_audio()
 {
 	/* Exercise the production per-source close tracker with two CEF IDs. */
@@ -262,6 +300,7 @@ int main()
 	       test_admission_then_destroy() && test_destroy_then_admission() &&
 	       test_destroy_task_releases_own_lease() &&
 	       test_delete_without_pending_source_does_not_complete_counter() &&
+	       test_late_browser_blocks_last_task_release() &&
 	       test_inverted_two_browser_finalization_waits_for_audio()
 		       ? 0
 		       : 1;

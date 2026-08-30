@@ -101,12 +101,22 @@ struct BrowserSourceTaskState {
 		return false;
 	}
 
+	bool browser_deletion_complete_locked()
+	{
+		if (!browser_delete_requested)
+			return true;
+		if (!pending_browser_ids.empty())
+			return false;
+		browser_delete_completed = true;
+		return true;
+	}
+
 	BrowserSourceTaskRelease request_delete_and_take_if_idle(bool completion_required)
 	{
 		std::lock_guard<std::mutex> lock(mutex);
 		delete_requested = true;
 		delete_completion_required |= completion_required;
-		if (active_tasks != 0 || deleted)
+		if (active_tasks != 0 || deleted || !browser_deletion_complete_locked())
 			return {};
 		deleted = true;
 		BrowserSourceTaskRelease release{source, delete_completion_required, false};
@@ -122,7 +132,7 @@ struct BrowserSourceTaskState {
 		if (active_tasks == 0)
 			return BrowserSourceTaskRelease{nullptr, false, true};
 		--active_tasks;
-		if (active_tasks != 0 || deleted)
+		if (active_tasks != 0 || deleted || !browser_deletion_complete_locked())
 			return {};
 		deleted = true;
 		BrowserSourceTaskRelease release{source, delete_completion_required, false};
@@ -136,7 +146,7 @@ struct BrowserSourceTaskState {
 		if (active_tasks == 0)
 			return BrowserSourceTaskRelease{nullptr, false, true};
 		--active_tasks;
-		if (active_tasks != 0 || !delete_requested || deleted)
+		if (active_tasks != 0 || !delete_requested || deleted || !browser_deletion_complete_locked())
 			return {};
 		deleted = true;
 		BrowserSourceTaskRelease release{source, delete_completion_required, false};

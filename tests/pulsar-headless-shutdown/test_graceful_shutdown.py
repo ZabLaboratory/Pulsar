@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ctypes
 import http.server
 import io
 import importlib.util
+import json
 import math
 import os
 from pathlib import Path
@@ -62,6 +64,18 @@ def test_headless_fences_browser_audio_before_obs_shutdown() -> None:
     browser_fence = normal_shutdown.index("browser_pre_shutdown_ready(browser_shutdown_error)")
     obs_shutdown = normal_shutdown.index("obs_shutdown();")
     assert browser_fence < frontend_shutdown < obs_shutdown
+
+
+def test_create_remove_rendezvous_is_bounded_and_test_only() -> None:
+    source = (ROOT / "plugins" / "pulsar-browser" / "obs-browser-source.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert '"PULSAR_CEF_TEST_CREATE_RENDEZVOUS"' in source
+    rendezvous = source[source.index("static void BrowserSourceTestCreateRendezvous") :]
+    assert "#ifdef _WIN32" in source[: source.index("static void BrowserSourceTestCreateRendezvous")]
+    assert "WaitForSingleObject(release_event, 5000)" in rendezvous
+    assert "event=test_create_rendezvous_ready" in rendezvous
+    assert "event=test_create_rendezvous_released" in rendezvous
 
 
 def test_frontend_drains_source_graph_before_disconnect() -> None:
@@ -174,6 +188,66 @@ class _CefAudioServer:
         self.thread = None
 
 
+class _CreateRendezvous:
+    """Manual-reset Win32 events for the one-shot create/remove interleaving."""
+
+    WAIT_OBJECT_0 = 0
+
+    def __init__(self) -> None:
+        self.base = f"Local\\pulsar-cef-create-{os.getpid()}-{secrets.token_hex(8)}"
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle_type = ctypes.c_void_p
+        self.kernel32.CreateEventW.argtypes = [
+            handle_type,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_wchar_p,
+        ]
+        self.kernel32.CreateEventW.restype = handle_type
+        self.kernel32.SetEvent.argtypes = [handle_type]
+        self.kernel32.SetEvent.restype = ctypes.c_int
+        self.kernel32.WaitForSingleObject.argtypes = [handle_type, ctypes.c_uint32]
+        self.kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        self.kernel32.CloseHandle.argtypes = [handle_type]
+        self.kernel32.CloseHandle.restype = ctypes.c_int
+        self.ready = self._create_event(self.base + ".ready")
+        try:
+            self.release = self._create_event(self.base + ".release")
+        except Exception:
+            self._close(self.ready)
+            self.ready = None
+            raise
+
+    def _create_event(self, name: str):
+        handle = self.kernel32.CreateEventW(None, 1, 0, name)
+        if not handle:
+            raise OSError(ctypes.get_last_error(), f"CreateEventW failed for {name}")
+        return handle
+
+    def wait_ready(self, timeout_ms: int = 15000) -> None:
+        if self.ready is None:
+            raise RuntimeError("create rendezvous ready event is closed")
+        result = self.kernel32.WaitForSingleObject(self.ready, timeout_ms)
+        if result != self.WAIT_OBJECT_0:
+            raise RuntimeError(f"create rendezvous ready event timed out: result={result}")
+
+    def release_create(self) -> None:
+        if self.release is None:
+            return
+        if not self.kernel32.SetEvent(self.release):
+            raise OSError(ctypes.get_last_error(), "SetEvent(create release) failed")
+
+    def _close(self, handle) -> None:
+        if handle:
+            self.kernel32.CloseHandle(handle)
+
+    def close(self) -> None:
+        self._close(self.ready)
+        self._close(self.release)
+        self.ready = None
+        self.release = None
+
+
 def _load_probe():
     spec = importlib.util.spec_from_file_location(
         "pulsar_shutdown_integration_probe", PROBE_PATH
@@ -266,7 +340,9 @@ async def _wait_for_browser_ids_for_generation(
     )
 
 
-async def _configure_two_browser_sources(probe, ws_url: str, password: str, process, server) -> set[str]:
+async def _configure_two_browser_sources(
+    probe, ws_url: str, password: str, process, server, create_rendezvous=None
+) -> set[str]:
     """Create two real CEF browser_source instances and keep recording active."""
 
     async with probe.websockets.connect(
@@ -312,15 +388,78 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
         )
         probe.assert_success(response, "CreateInput(immediate readiness)")
         readiness_generation = await _wait_for_source_created(process, source_generations_before)
-        response = await probe.request(
-            inbox,
-            ws,
-            "RemoveInput",
-            "cef-shutdown-readiness-remove-1",
-            {"inputName": readiness_input},
-        )
+        if create_rendezvous is None:
+            response = await probe.request(
+                inbox,
+                ws,
+                "RemoveInput",
+                "cef-shutdown-readiness-remove-1",
+                {"inputName": readiness_input},
+            )
+        else:
+            await asyncio.to_thread(create_rendezvous.wait_ready)
+            request_id = "cef-shutdown-readiness-remove-while-create-paused"
+            await ws.send(
+                json.dumps(
+                    {
+                        "op": 6,
+                        "d": {
+                            "requestType": "RemoveInput",
+                            "requestId": request_id,
+                            "requestData": {"inputName": readiness_input},
+                        },
+                    }
+                )
+            )
+            create_rendezvous.release_create()
+            response = await inbox.receive_until_response(ws, request_id)
         probe.assert_success(response, "RemoveInput(immediate readiness)")
         await _wait_for_source_destroyed(process, readiness_generation)
+        if create_rendezvous is not None:
+            lines = process.snapshot()
+            ready_markers = [
+                index
+                for index, line in enumerate(lines)
+                if "event=test_create_rendezvous_ready" in line
+            ]
+            released_markers = [
+                index
+                for index, line in enumerate(lines)
+                if "event=test_create_rendezvous_released" in line
+            ]
+            created_ids = _browser_ids_for_generations(process, {readiness_generation})
+            destroyed_markers = [
+                index
+                for index, line in enumerate(lines)
+                if re.search(
+                    rf"event=source_destroyed generation={re.escape(readiness_generation)}(?:\s|$)",
+                    line,
+                )
+            ]
+            closed_markers = {
+                browser_id: [
+                    index
+                    for index, line in enumerate(lines)
+                    if re.search(rf"event=browser_closed browser_id={browser_id}(?:\s|$)", line)
+                ]
+                for browser_id in created_ids
+            }
+            if (
+                len(ready_markers) != 1
+                or len(released_markers) != 1
+                or len(created_ids) != 1
+                or len(destroyed_markers) != 1
+                or any(len(indices) != 1 for indices in closed_markers.values())
+                or not all(
+                    ready_markers[0] < released_markers[0] < min(indices) < destroyed_markers[0]
+                    for indices in closed_markers.values()
+                )
+            ):
+                raise RuntimeError(
+                    "paused create/remove rendezvous did not close exactly one late browser "
+                    f"before source destruction: ready={ready_markers} released={released_markers} "
+                    f"created={sorted(created_ids)} closed={closed_markers} destroyed={destroyed_markers}"
+                )
         source_generations_before = _source_created_generations(process)
         response = await probe.request(
             inbox,
@@ -534,7 +673,10 @@ def main() -> int:
     probe = _load_probe()
     runtime_id = f"shutdown-probe-{os.getpid()}-{secrets.token_hex(4)}"
     previous_runtime_id = os.environ.get("PULSAR_RUNTIME_INSTANCE_ID")
+    previous_create_rendezvous = os.environ.get("PULSAR_CEF_TEST_CREATE_RENDEZVOUS")
+    create_rendezvous = _CreateRendezvous()
     os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = runtime_id
+    os.environ["PULSAR_CEF_TEST_CREATE_RENDEZVOUS"] = create_rendezvous.base
     record_dir = Path(tempfile.mkdtemp(prefix="pulsar-shutdown-record-"))
     cef_server = _CefAudioServer()
     cef_server.start()
@@ -558,7 +700,12 @@ def main() -> int:
         ready = process.wait_for(probe.READY_RE, timeout=60)
         durable_browser_ids = asyncio.run(
             _configure_two_browser_sources(
-                probe, ready.group(1), process.password, process, cef_server
+                probe,
+                ready.group(1),
+                process.password,
+                process,
+                cef_server,
+                create_rendezvous,
             )
         )
         real_output_started = True
@@ -566,6 +713,10 @@ def main() -> int:
         primary_error = exc
     finally:
         cleanup_errors: list[Exception] = []
+        try:
+            create_rendezvous.release_create()
+        except Exception as exc:
+            cleanup_errors.append(exc)
         try:
             process.shutdown()
         except Exception as exc:  # preserve the primary startup error
@@ -580,6 +731,14 @@ def main() -> int:
                 os.environ.pop("PULSAR_RUNTIME_INSTANCE_ID", None)
             else:
                 os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = previous_runtime_id
+            if previous_create_rendezvous is None:
+                os.environ.pop("PULSAR_CEF_TEST_CREATE_RENDEZVOUS", None)
+            else:
+                os.environ["PULSAR_CEF_TEST_CREATE_RENDEZVOUS"] = previous_create_rendezvous
+            try:
+                create_rendezvous.close()
+            except Exception as exc:
+                cleanup_errors.append(exc)
             try:
                 shutil.rmtree(record_dir)
             except Exception as exc:
