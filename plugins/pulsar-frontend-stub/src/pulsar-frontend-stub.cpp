@@ -2032,6 +2032,7 @@ private:
 
     void teardown();
     void clear_libobs_scene_data();
+    void verify_libobs_scene_data_drained();
 
     // Write a compact machine-readable rollback marker beside the recording
     // output.  This is intentionally not a scene-switch-v1 event: the
@@ -4598,14 +4599,24 @@ void PulsarFrontendAPI::clear_libobs_scene_data()
     }
 
     // Release the enumeration refs only after the second-phase prune.  The
-    // final destroy-queue drain below then observes destruction caused by both
-    // obs_source_remove() and these last releases.
+    // frontend-owned refs are released later by teardown(); the final scan
+    // must not run until those refs, views, and vectors have also gone away.
     for (obs_source_t *source : sourceRefs)
         if (source)
             obs_source_release(source);
     for (obs_source_t *scene : sceneRefs)
         if (scene)
             obs_source_release(scene);
+}
+
+void PulsarFrontendAPI::verify_libobs_scene_data_drained()
+{
+    // This is intentionally a separate phase from clear_libobs_scene_data().
+    // That phase still runs with source_remove connected and releases only
+    // its enumeration refs.  This phase is called after teardown has released
+    // every frontend member ref, so an object retained in the registry is a
+    // real orphan rather than a legitimate setup owner.
+    blog(LOG_INFO, "PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin");
 
     // Destruction is deferred by libobs.  Follow OBSBasic's contract and wait
     // until the queue reports empty.  This is a synchronous upstream
@@ -4877,6 +4888,11 @@ void PulsarFrontendAPI::teardown()
     }
     release_source_vec(scenes);
     release_source_vec(transitions);
+
+    // Only now are all frontend-owned source refs gone.  The orphan scan is
+    // deliberately after this point; scanning earlier would report the
+    // sources that teardown still legitimately owns as leaks.
+    verify_libobs_scene_data_drained();
 
     std::lock_guard<std::mutex> lk(callbacksMutex);
     eventCallbacks.clear();

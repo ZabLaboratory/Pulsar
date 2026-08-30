@@ -71,7 +71,10 @@ def test_frontend_drains_source_graph_before_disconnect() -> None:
     teardown = source[source.index("void PulsarFrontendAPI::teardown()") :]
     clear = teardown.index("clear_libobs_scene_data();")
     disconnect = teardown.index('signal_handler_disconnect(globalSh, "source_remove"')
+    release_scenes = teardown.index("release_source_vec(scenes);")
+    verify = teardown.index("verify_libobs_scene_data_drained();")
     assert clear < disconnect
+    assert disconnect < release_scenes < verify
     assert "obs_enum_scenes(collect_ref" in source
     assert "obs_enum_sources(collect_ref" in source
     assert "obs_scene_prune_sources(sc)" in source

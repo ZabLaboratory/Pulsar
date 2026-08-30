@@ -115,6 +115,7 @@ if(NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceTaskState" OR
     message(FATAL_ERROR "browser source CEF tasks must use a lifetime gate and browser snapshot")
 endif()
 if(NOT PULSAR_FRONTEND_CPP MATCHES "clear_libobs_scene_data" OR
+   NOT PULSAR_FRONTEND_CPP MATCHES "verify_libobs_scene_data_drained" OR
    NOT PULSAR_FRONTEND_CPP MATCHES "obs_enum_scenes" OR
    NOT PULSAR_FRONTEND_CPP MATCHES "obs_enum_sources" OR
    NOT PULSAR_FRONTEND_CPP MATCHES "obs_scene_prune_sources" OR
