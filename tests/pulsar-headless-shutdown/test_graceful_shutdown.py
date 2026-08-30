@@ -14,6 +14,7 @@ import asyncio
 import importlib.util
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import sys
@@ -207,11 +208,11 @@ def main() -> int:
     # browsers are observed, every one reaches OnBeforeClose, and only then
     # does the manager thread leave the CEF loop and call CefShutdown.
     required_markers = (
-        "PULSAR_CEF_SHUTDOWN event=browser_created browser_count=2",
+        "PULSAR_CEF_SHUTDOWN event=browser_created",
         "PULSAR_CEF_SHUTDOWN event=begin ",
         "PULSAR_CEF_SHUTDOWN event=close_requested ",
         "PULSAR_CEF_SHUTDOWN event=browser_closed browser_count=0",
-        "PULSAR_CEF_SHUTDOWN event=barrier_released browser_count=0",
+        "PULSAR_CEF_SHUTDOWN event=barrier_released phase=Drained browser_count=0",
         "PULSAR_CEF_SHUTDOWN event=cef_shutdown_begin browser_count=0",
         "PULSAR_CEF_SHUTDOWN event=cef_shutdown_complete browser_count=0",
     )
@@ -219,6 +220,15 @@ def main() -> int:
     positions: dict[str, int] = {}
     for marker in required_markers:
         matches = [index for index, line in enumerate(lines) if marker in line]
+        if marker == "PULSAR_CEF_SHUTDOWN event=browser_created":
+            # The browser id is emitted between the event and count.  Match
+            # both fields on one structured line so a count from another
+            # browser-created event cannot satisfy the two-browser criterion.
+            matches = [
+                index
+                for index in matches
+                if re.search(r"\bbrowser_count=2(?:\s|$)", lines[index]) is not None
+            ]
         if not matches:
             _raise_with_sanitized_tail(probe, process, f"missing CEF lifecycle marker: {marker}")
         positions[marker] = matches[-1]

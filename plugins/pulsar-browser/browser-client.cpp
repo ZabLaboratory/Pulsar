@@ -85,6 +85,8 @@ void BrowserClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
 
 void BrowserClient::OnBeforeClose(CefRefPtr<CefBrowser> browser)
 {
+	/* CEF may deliver queued callbacks after BrowserSource has been detached. */
+	bs = nullptr;
 	BrowserSourceBrowserClosed(browser);
 }
 

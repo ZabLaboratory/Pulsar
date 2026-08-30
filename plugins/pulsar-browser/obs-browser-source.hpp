@@ -37,6 +37,12 @@ enum class ControlLevel : int {
 	All,
 };
 
+enum class BrowserSourceDestroyDisposition : int {
+	QueueOnCefUi,
+	DeleteNow,
+	Fatal,
+};
+
 // Pulsar #158 / ADR Prism 028 §3.2 -- upstream obs-browser ships ReadObs here,
 // which hands EVERY page loaded in a browser source `window.obsstudio.
 // getStatus()` (streaming / recording / replay-buffer / virtual-cam state) for
@@ -66,8 +72,11 @@ void BrowserSourceBeginShutdown();
 void BrowserSourceCloseAllBrowsers();
 std::size_t BrowserSourceLiveBrowserCount();
 bool BrowserSourceShutdownComplete();
+bool BrowserSourceMarkDrained();
 bool BrowserSourceShutdownStarted();
 bool BrowserSourceCanCreateBrowser();
+BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy();
+void BrowserSourceDestroyTaskComplete();
 void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser);
 void BrowserSourceBrowserClosed(CefRefPtr<CefBrowser> browser);
 
@@ -137,6 +146,7 @@ struct BrowserSource {
 	bool CreateBrowser();
 	void DestroyBrowser();
 	void CloseBrowserForShutdown();
+	void UnlinkFromBrowserList();
 	void ExecuteOnBrowser(BrowserFunc func, bool async = false);
 
 	/* ---------------------------- */
