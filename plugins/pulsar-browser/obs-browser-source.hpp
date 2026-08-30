@@ -30,6 +30,7 @@
 #include <string>
 #include <mutex>
 #include <memory>
+#include <vector>
 
 enum class ControlLevel : int {
 	None,
@@ -84,14 +85,14 @@ bool BrowserSourceCefReady();
 /* Initialization failure is terminal for this plugin instance. */
 bool BrowserSourceCefInitializationFailed();
 bool BrowserSourceCanCreateBrowser();
-BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy(BrowserSource *source, int browser_id,
-								 bool *wait_for_browser);
-bool BrowserSourceRegisterPendingBrowser(BrowserSource *source, int browser_id);
 void BrowserSourceDestroyTaskComplete();
 void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser, BrowserSource *source);
 void BrowserSourceBrowserClosed(int browser_id);
 void BrowserSourceFinalizeBrowserClose(int browser_id);
-int BrowserSourceBrowserIdForSource(BrowserSource *source);
+std::vector<int> BrowserSourceBrowserIdsForSource(BrowserSource *source);
+BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy(BrowserSource *source,
+									std::vector<int> *browser_ids);
+void BrowserSourceEnqueueDestroyClose(int browser_id);
 bool BrowserSourceRequestBrowserClose(int browser_id, CefRefPtr<CefBrowserHost> browser_host);
 
 struct BrowserSource {

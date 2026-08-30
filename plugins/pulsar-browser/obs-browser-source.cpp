@@ -74,13 +74,19 @@ static set<int> live_browser_ids;
 static map<int, BrowserSource *> browser_sources_by_id;
 static map<int, BrowserSource *> pending_browser_sources;
 static set<int> browser_close_observed_ids;
+static set<int> browser_close_requested_ids;
 static std::size_t pending_source_destructions = 0;
 static std::atomic<std::size_t> active_source_tasks{0};
 static deque<int> shutdown_close_ids;
+static deque<int> source_destroy_close_ids;
 static int shutdown_close_in_flight = -1;
+static int source_destroy_close_in_flight = -1;
 static bool shutdown_close_request_active = false;
+static bool source_destroy_close_request_active = false;
 static bool shutdown_close_next_task_posted = false;
+static bool source_destroy_close_next_task_posted = false;
 static bool shutdown_close_sequence_started = false;
+static set<BrowserSource *> destroying_sources;
 enum class BrowserLifecyclePhase : int {
 	Running,
 	Closing,
@@ -90,6 +96,7 @@ enum class BrowserLifecyclePhase : int {
 static BrowserLifecyclePhase browser_lifecycle_state = BrowserLifecyclePhase::Running;
 
 static void BrowserSourceScheduleNextClose();
+static void BrowserSourceScheduleNextDestroyClose();
 
 [[noreturn]] static void BrowserSourceDestroyFatal(const char *reason)
 {
@@ -175,6 +182,10 @@ static void BrowserSourceCompleteTaskRelease(BrowserSourceTaskRelease release)
 {
 	if (!release.source)
 		return;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		destroying_sources.erase(release.source);
+	}
 	delete release.source;
 	if (release.complete_destroy_task)
 		BrowserSourceDestroyTaskComplete();
@@ -306,12 +317,22 @@ void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser, BrowserSource *s
 
 	const int browser_id = browser->GetIdentifier();
 	bool close_immediately;
+	bool close_for_destroying_source = false;
 	std::size_t browser_count;
 	{
 		lock_guard<mutex> lock(browser_lifecycle_mutex);
 		live_browser_ids.insert(browser_id);
 		browser_sources_by_id[browser_id] = source;
-		close_immediately = browser_lifecycle_state != BrowserLifecyclePhase::Running;
+		close_for_destroying_source = source && destroying_sources.find(source) != destroying_sources.end();
+		close_immediately = browser_lifecycle_state != BrowserLifecyclePhase::Running ||
+			close_for_destroying_source;
+		if (close_for_destroying_source) {
+			if (!source->task_state || !source->task_state->add_browser_id(browser_id))
+				BrowserSourceDestroyFatal("browser_destroy_state_not_armed");
+			auto [pending_it, inserted] = pending_browser_sources.emplace(browser_id, source);
+			if (!inserted && pending_it->second != source)
+				BrowserSourceDestroyFatal("pending_browser_source_mismatch");
+		}
 		browser_count = live_browser_ids.size();
 	}
 
@@ -326,7 +347,12 @@ void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser, BrowserSource *s
 	 * active close sequence; the barrier cannot observe a false zero and no
 	 * second CloseBrowser call can race the current OnBeforeClose callback.
 	 */
-	if (close_immediately) {
+	if (close_for_destroying_source) {
+		blog(LOG_WARNING,
+		     "PULSAR_CEF_SHUTDOWN event=browser_close_enqueued browser_id=%d reason=source_destroying",
+		     browser_id);
+		BrowserSourceEnqueueDestroyClose(browser_id);
+	} else if (close_immediately) {
 		bool enqueued = false;
 		{
 			lock_guard<mutex> lock(browser_lifecycle_mutex);
@@ -402,6 +428,9 @@ bool BrowserSourceRequestBrowserClose(int browser_id, CefRefPtr<CefBrowserHost> 
 		if (browser_sources_by_id.find(browser_id) == browser_sources_by_id.end() ||
 		    browser_close_observed_ids.find(browser_id) != browser_close_observed_ids.end())
 			return false;
+		/* CloseBrowser can be requested by both restart and shutdown paths. */
+		if (!browser_close_requested_ids.insert(browser_id).second)
+			return false;
 	}
 
 	ActuallyCloseBrowser(browser_host);
@@ -460,7 +489,9 @@ static void BrowserSourceRequestNextCloseOnUi()
 		lock_guard<mutex> lock(browser_lifecycle_mutex);
 		shutdown_close_next_task_posted = false;
 		if (!shutdown_close_sequence_started || shutdown_close_in_flight >= 0 ||
-		    shutdown_close_request_active || shutdown_close_ids.empty())
+		    shutdown_close_request_active || shutdown_close_ids.empty() ||
+		    source_destroy_close_in_flight >= 0 || source_destroy_close_request_active ||
+		    source_destroy_close_next_task_posted)
 			return;
 		browser_id = shutdown_close_ids.front();
 		shutdown_close_ids.pop_front();
@@ -482,7 +513,8 @@ static void BrowserSourceRequestNextCloseOnUi()
 	{
 		lock_guard<mutex> lock(browser_lifecycle_mutex);
 		if (!shutdown_close_sequence_started || shutdown_close_in_flight >= 0 ||
-		    shutdown_close_request_active) {
+		    shutdown_close_request_active || source_destroy_close_in_flight >= 0 ||
+		    source_destroy_close_request_active || source_destroy_close_next_task_posted) {
 			shutdown_close_ids.push_front(browser_id);
 			return;
 		}
@@ -518,6 +550,8 @@ static void BrowserSourceScheduleNextClose()
 		lock_guard<mutex> lock(browser_lifecycle_mutex);
 		if (!shutdown_close_sequence_started || shutdown_close_in_flight >= 0 ||
 		    shutdown_close_request_active || shutdown_close_ids.empty() ||
+		    source_destroy_close_in_flight >= 0 || source_destroy_close_request_active ||
+		    source_destroy_close_next_task_posted ||
 		    shutdown_close_next_task_posted)
 			return;
 		shutdown_close_next_task_posted = true;
@@ -530,6 +564,114 @@ static void BrowserSourceScheduleNextClose()
 	}
 }
 
+static void BrowserSourceRequestNextDestroyCloseOnUi()
+{
+	int browser_id = -1;
+	bool resume_global_shutdown = false;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		source_destroy_close_next_task_posted = false;
+		/* The global shutdown sequence owns close serialization once started. */
+		if (shutdown_close_sequence_started) {
+			resume_global_shutdown = true;
+		} else if (source_destroy_close_in_flight >= 0 ||
+		    source_destroy_close_request_active || source_destroy_close_ids.empty())
+			return;
+		else {
+			browser_id = source_destroy_close_ids.front();
+			source_destroy_close_ids.pop_front();
+			source_destroy_close_in_flight = browser_id;
+			source_destroy_close_request_active = true;
+		}
+	}
+	if (resume_global_shutdown) {
+		BrowserSourceScheduleNextClose();
+		return;
+	}
+
+	/* Resolve one browser by ID; never retain a batch across CloseBrowser. */
+	CefRefPtr<CefBrowser> browser = BrowserSourceFindBrowser(browser_id);
+	if (!browser) {
+		bool live = false;
+		bool mapped = false;
+		{
+			lock_guard<mutex> lock(browser_lifecycle_mutex);
+			live = live_browser_ids.find(browser_id) != live_browser_ids.end();
+			mapped = browser_sources_by_id.find(browser_id) != browser_sources_by_id.end();
+			if (live && mapped) {
+				/* Restart may already have posted a close for this browser. */
+				source_destroy_close_request_active = false;
+			}
+		}
+		if (!live || !mapped)
+			BrowserSourceDestroyFatal("source_close_browser_lookup_failed");
+		blog(LOG_ERROR,
+		     "PULSAR_CEF_SHUTDOWN event=browser_close_deferred browser_id=%d "
+		     "reason=browser_ref_missing action=await_finalization",
+		     browser_id);
+		return;
+	}
+	CefRefPtr<CefBrowserHost> browser_host = browser->GetHost();
+	browser = nullptr;
+	if (!browser_host)
+		BrowserSourceDestroyFatal("source_close_host_missing");
+
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_close_call browser_id=%d reason=source_destroy",
+	     browser_id);
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_ref_released_before_close browser_id=%d",
+	     browser_id);
+	const bool requested = BrowserSourceRequestBrowserClose(browser_id, browser_host);
+	browser_host = nullptr;
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_close_return browser_id=%d requested=%d",
+	     browser_id, requested ? 1 : 0);
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		source_destroy_close_request_active = false;
+		/* Keep the in-flight ID until OnBeforeClose/finalization. */
+	}
+}
+
+static void BrowserSourceScheduleNextDestroyClose()
+{
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		if (shutdown_close_sequence_started || source_destroy_close_in_flight >= 0 ||
+		    source_destroy_close_request_active || source_destroy_close_ids.empty() ||
+		    source_destroy_close_next_task_posted)
+			return;
+		source_destroy_close_next_task_posted = true;
+	}
+
+	if (!QueueCEFTask([]() { BrowserSourceRequestNextDestroyCloseOnUi(); })) {
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		source_destroy_close_next_task_posted = false;
+		BrowserSourceDestroyFatal("source_close_next_task_post_failed");
+	}
+}
+
+void BrowserSourceEnqueueDestroyClose(int browser_id)
+{
+	if (browser_id < 0)
+		return;
+
+	bool schedule = false;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		if (shutdown_close_sequence_started)
+			return;
+		if (std::find(source_destroy_close_ids.begin(), source_destroy_close_ids.end(), browser_id) ==
+		    source_destroy_close_ids.end() &&
+		    source_destroy_close_in_flight != browser_id)
+			source_destroy_close_ids.push_back(browser_id);
+		schedule = true;
+	}
+	if (schedule)
+		BrowserSourceScheduleNextDestroyClose();
+}
+
 void BrowserSourceFinalizeBrowserClose(int browser_id)
 {
 	if (browser_id < 0)
@@ -538,6 +680,8 @@ void BrowserSourceFinalizeBrowserClose(int browser_id)
 	BrowserSource *source = nullptr;
 	bool pending_destroy = false;
 	bool known_browser = false;
+	bool source_has_remaining_browser = false;
+	bool source_delete_ready = false;
 	std::size_t browser_count;
 	{
 		lock_guard<mutex> lock(browser_lifecycle_mutex);
@@ -556,12 +700,47 @@ void BrowserSourceFinalizeBrowserClose(int browser_id)
 			pending_browser_sources.erase(pending_it);
 		}
 		known_browser = live_browser_ids.find(browser_id) != live_browser_ids.end();
+		browser_close_requested_ids.erase(browser_id);
 		if (!known_browser && !source) {
 			browser_count = live_browser_ids.size();
 		} else {
 			live_browser_ids.erase(browser_id);
 			browser_close_observed_ids.erase(browser_id);
 			browser_count = live_browser_ids.size();
+		}
+		if (source) {
+			for (const auto &entry : browser_sources_by_id) {
+				if (entry.second == source) {
+					source_has_remaining_browser = true;
+					break;
+				}
+			}
+			if (!source_has_remaining_browser) {
+				for (const auto &entry : pending_browser_sources) {
+					if (entry.second == source) {
+						source_has_remaining_browser = true;
+						break;
+					}
+				}
+			}
+		}
+		source_destroy_close_ids.erase(
+			std::remove(source_destroy_close_ids.begin(), source_destroy_close_ids.end(), browser_id),
+			source_destroy_close_ids.end());
+		if (source_destroy_close_in_flight == browser_id)
+			source_destroy_close_in_flight = -1;
+
+		/* BrowserSourceBrowserCreated uses the same lifecycle -> task-state
+		 * lock order.  Decide whether this was the last ID while both locks are
+		 * held, so an OnAfterCreated callback cannot add a new ID between the
+		 * map scan and the per-source completion claim. */
+		if (source && pending_destroy) {
+			if (!source->task_state)
+				BrowserSourceDestroyFatal("browser_destroy_state_missing");
+			const bool browser_delete_completed = source->task_state->finalize_browser_id(browser_id);
+			if (source_has_remaining_browser == browser_delete_completed)
+				BrowserSourceDestroyFatal("browser_destroy_state_map_mismatch");
+			source_delete_ready = browser_delete_completed;
 		}
 	}
 
@@ -572,7 +751,7 @@ void BrowserSourceFinalizeBrowserClose(int browser_id)
 		return;
 	}
 
-	if (source && pending_destroy) {
+	if (source && pending_destroy && source_delete_ready) {
 		source->UnlinkFromBrowserList();
 		const auto task_state = source->task_state;
 		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, true));
@@ -584,27 +763,30 @@ void BrowserSourceFinalizeBrowserClose(int browser_id)
 			shutdown_close_in_flight = -1;
 	}
 	BrowserSourceScheduleNextClose();
+	BrowserSourceScheduleNextDestroyClose();
 
 	blog(LOG_INFO,
 	     "PULSAR_CEF_SHUTDOWN event=browser_closed browser_id=%d browser_count=%llu",
 	     browser_id, static_cast<unsigned long long>(browser_count));
 }
 
-int BrowserSourceBrowserIdForSource(BrowserSource *source)
+std::vector<int> BrowserSourceBrowserIdsForSource(BrowserSource *source)
 {
+	std::vector<int> ids;
 	if (!source)
-		return -1;
+		return ids;
 
 	lock_guard<mutex> lock(browser_lifecycle_mutex);
 	for (const auto &[browser_id, mapped_source] : browser_sources_by_id) {
 		if (mapped_source == source)
-			return browser_id;
+			ids.push_back(browser_id);
 	}
 	for (const auto &[browser_id, mapped_source] : pending_browser_sources) {
-		if (mapped_source == source)
-			return browser_id;
+		if (mapped_source == source && std::find(ids.begin(), ids.end(), browser_id) == ids.end())
+			ids.push_back(browser_id);
 	}
-	return -1;
+	std::sort(ids.begin(), ids.end());
+	return ids;
 }
 
 std::size_t BrowserSourceLiveBrowserCount()
@@ -625,7 +807,9 @@ bool BrowserSourceShutdownComplete()
 	return browser_lifecycle_state == BrowserLifecyclePhase::Closing && live_browser_ids.empty() &&
 	       browser_sources_by_id.empty() && pending_browser_sources.empty() &&
 	       browser_close_observed_ids.empty() && pending_source_destructions == 0 &&
-	       active_source_tasks.load(std::memory_order_acquire) == 0;
+	       active_source_tasks.load(std::memory_order_acquire) == 0 &&
+	       source_destroy_close_ids.empty() && source_destroy_close_in_flight < 0 &&
+	       !source_destroy_close_request_active && !source_destroy_close_next_task_posted;
 }
 
 bool BrowserSourceMarkDrained()
@@ -636,37 +820,49 @@ bool BrowserSourceMarkDrained()
 	if (browser_lifecycle_state != BrowserLifecyclePhase::Closing || !live_browser_ids.empty() ||
 	    !browser_sources_by_id.empty() || !pending_browser_sources.empty() ||
 	    !browser_close_observed_ids.empty() || pending_source_destructions != 0 ||
-	    active_source_tasks.load(std::memory_order_acquire) != 0)
+	    active_source_tasks.load(std::memory_order_acquire) != 0 ||
+	    !source_destroy_close_ids.empty() || source_destroy_close_in_flight >= 0 ||
+	    source_destroy_close_request_active || source_destroy_close_next_task_posted)
 		return false;
 
 	browser_lifecycle_state = BrowserLifecyclePhase::Drained;
 	return true;
 }
 
-BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy(BrowserSource *source, int browser_id,
-								     bool *wait_for_browser)
+BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy(BrowserSource *source,
+									     std::vector<int> *browser_ids)
 {
-	if (!source || !wait_for_browser)
+	if (!source || !browser_ids)
 		return BrowserSourceDestroyDisposition::Fatal;
-	*wait_for_browser = false;
+	browser_ids->clear();
 	lock_guard<mutex> lock(browser_lifecycle_mutex);
 	switch (browser_lifecycle_state) {
 	case BrowserLifecyclePhase::Running:
 	case BrowserLifecyclePhase::Closing:
-		if (browser_id >= 0) {
-			auto source_it = browser_sources_by_id.find(browser_id);
-			const bool live = live_browser_ids.find(browser_id) != live_browser_ids.end();
-			if (source_it != browser_sources_by_id.end() && source_it->second != source)
+		if (!source->task_state || !source->task_state->arm_browser_ids(std::vector<int>{}))
+			return BrowserSourceDestroyDisposition::Fatal;
+		destroying_sources.insert(source);
+		for (const auto &[browser_id, mapped_source] : browser_sources_by_id) {
+			if (mapped_source != source)
+				continue;
+			if (live_browser_ids.find(browser_id) == live_browser_ids.end())
 				return BrowserSourceDestroyDisposition::Fatal;
-			if (live && source_it == browser_sources_by_id.end())
+			browser_ids->push_back(browser_id);
+			if (!source->task_state->add_browser_id(browser_id))
 				return BrowserSourceDestroyDisposition::Fatal;
-			if (live && source_it != browser_sources_by_id.end()) {
-				auto [pending_it, inserted] = pending_browser_sources.emplace(browser_id, source);
-				if (!inserted && pending_it->second != source)
+			auto [pending_it, inserted] = pending_browser_sources.emplace(browser_id, source);
+			if (!inserted && pending_it->second != source)
+				return BrowserSourceDestroyDisposition::Fatal;
+		}
+		for (const auto &[browser_id, mapped_source] : pending_browser_sources) {
+			if (mapped_source == source &&
+			    std::find(browser_ids->begin(), browser_ids->end(), browser_id) == browser_ids->end()) {
+				browser_ids->push_back(browser_id);
+				if (!source->task_state->add_browser_id(browser_id))
 					return BrowserSourceDestroyDisposition::Fatal;
-				*wait_for_browser = true;
 			}
 		}
+		std::sort(browser_ids->begin(), browser_ids->end());
 		++pending_source_destructions;
 		return BrowserSourceDestroyDisposition::QueueOnCefUi;
 	case BrowserLifecyclePhase::Drained:
@@ -674,25 +870,6 @@ BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy(BrowserSource *sourc
 	}
 
 	return BrowserSourceDestroyDisposition::Fatal;
-}
-
-bool BrowserSourceRegisterPendingBrowser(BrowserSource *source, int browser_id)
-{
-	if (!source || browser_id < 0)
-		return false;
-
-	lock_guard<mutex> lock(browser_lifecycle_mutex);
-	auto source_it = browser_sources_by_id.find(browser_id);
-	const bool live = live_browser_ids.find(browser_id) != live_browser_ids.end();
-	if (source_it != browser_sources_by_id.end() && source_it->second != source)
-		BrowserSourceDestroyFatal("pending_browser_source_mismatch");
-	if (!live || source_it == browser_sources_by_id.end())
-		return false;
-
-	auto [pending_it, inserted] = pending_browser_sources.emplace(browser_id, source);
-	if (!inserted && pending_it->second != source)
-		BrowserSourceDestroyFatal("pending_browser_source_mismatch");
-	return true;
 }
 
 void BrowserSourceDestroyTaskComplete()
@@ -714,21 +891,27 @@ void BrowserSourceCloseAllBrowsers()
 {
 	const std::size_t browser_count = BrowserSourceLiveBrowserCount();
 	std::deque<int> close_ids;
-	std::set<int> unique_ids;
 	/* Open admission before the source snapshot so a concurrent creation is
 	 * enqueued by BrowserSourceBrowserCreated instead of falling through the
 	 * gap between discovery and sequence activation. */
 	{
 		lock_guard<mutex> lock(browser_lifecycle_mutex);
 		shutdown_close_sequence_started = true;
-	}
-	{
-		lock_guard<mutex> lock(browser_list_mutex);
-		for (BrowserSource *bs = first_browser; bs; bs = bs->next) {
-			CefRefPtr<CefBrowser> browser = bs->GetBrowser();
-			if (browser && unique_ids.insert(browser->GetIdentifier()).second)
-				close_ids.push_back(browser->GetIdentifier());
+		/* The lifecycle map also contains sources unlinked during restart/remove. */
+		std::set<int> close_id_set(live_browser_ids.begin(), live_browser_ids.end());
+		for (const int browser_id : live_browser_ids)
+			close_ids.push_back(browser_id);
+		/* A source-local close queue must be transferred to the global owner.
+		 * Otherwise a queued ID left behind when shutdown starts would keep the
+		 * barrier permanently non-drained even though the global sequence closes
+		 * the same live browser.  An already in-flight local ID remains owned by
+		 * its current CEF turn and is released by BrowserSourceFinalizeBrowserClose.
+		 */
+		for (const int browser_id : source_destroy_close_ids) {
+			if (close_id_set.insert(browser_id).second)
+				close_ids.push_back(browser_id);
 		}
+		source_destroy_close_ids.clear();
 	}
 	/*
 	 * Keep only stable browser IDs, never a batch of owning CefRefPtr objects.
@@ -795,86 +978,38 @@ void BrowserSource::Destroy()
 	destroying.store(true, std::memory_order_release);
 	DestroyTextures();
 
-	CefRefPtr<CefBrowser> browser = GetBrowser();
-	if (!browser && !BrowserSourceCefReady()) {
+	std::vector<int> browser_ids = BrowserSourceBrowserIdsForSource(this);
+	if (browser_ids.empty() && !BrowserSourceCefReady()) {
 		blog(LOG_WARNING,
 		     "PULSAR_CEF_SHUTDOWN event=source_destroy_rejected reason=cef_not_ready");
 		SetBrowser(nullptr);
 		UnlinkFromBrowserList();
-		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, false));
+		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, true));
 		return;
 	}
-	const int browser_id = browser ? browser->GetIdentifier() : BrowserSourceBrowserIdForSource(this);
-	bool wait_for_browser = false;
+
 	const BrowserSourceDestroyDisposition disposition =
-		BrowserSourcePrepareDestroy(this, browser_id, &wait_for_browser);
+		BrowserSourcePrepareDestroy(this, &browser_ids);
 	if (disposition == BrowserSourceDestroyDisposition::DeleteNow) {
 		UnlinkFromBrowserList();
 		SetBrowser(nullptr);
-		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, false));
+		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, true));
 		return;
 	}
 	if (disposition == BrowserSourceDestroyDisposition::Fatal)
 		BrowserSourceDestroyFatal("invalid_lifecycle_phase");
 
-	if (browser_id >= 0 && wait_for_browser) {
-		if (!browser)
-			return;
-		CefRefPtr<CefBrowserHost> browser_host = browser->GetHost();
-		browser = nullptr;
-		if (!browser_host)
-			BrowserSourceDestroyFatal("cef_destroy_host_missing");
-		const bool posted = QueueCEFTask([browser_id, browser_host]() mutable {
-			blog(LOG_INFO,
-			     "PULSAR_CEF_SHUTDOWN event=browser_ref_released_before_close browser_id=%d",
-			     browser_id);
-			BrowserSourceRequestBrowserClose(browser_id, browser_host);
-			browser_host = nullptr;
-		});
-		if (!posted)
-			BrowserSourceDestroyFatal("cef_destroy_task_post_failed");
+	if (browser_ids.empty()) {
+		/* No browser remains; the source task state owns the final delete. */
+		SetBrowser(nullptr);
+		UnlinkFromBrowserList();
+		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, true));
 		return;
 	}
 
-	if (!BrowserSourceAcquireTask(task_state, true))
-		BrowserSourceDestroyFatal("destroy_task_admission_rejected");
-	const auto destroy_task_state = task_state;
-	const bool posted = QueueCEFTask([destroy_task_state]() {
-		BrowserSource *source = BrowserSourceTaskSource(destroy_task_state);
-		if (!source) {
-			BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(destroy_task_state));
-			return;
-		}
-		/*
-		 * Serialize behind any earlier CreateBrowser task.  A browser may have
-		 * been created after Destroy() sampled the source; register it before
-		 * requesting close so OnBeforeClose owns the final delete.  If the old
-		 * browser already reached the quiescent close path, no lifecycle entry
-		 * remains and this task is the safe owner of the source deletion.
-		 */
-		CefRefPtr<CefBrowser> current_browser = source->GetBrowser();
-		const int current_browser_id = current_browser ? current_browser->GetIdentifier() : -1;
-		CefRefPtr<CefBrowserHost> browser_host = current_browser ? current_browser->GetHost() : nullptr;
-		current_browser = nullptr;
-		if (browser_host && BrowserSourceRegisterPendingBrowser(source, current_browser_id)) {
-			blog(LOG_INFO,
-			     "PULSAR_CEF_SHUTDOWN event=browser_ref_released_before_close browser_id=%d",
-			     current_browser_id);
-			BrowserSourceRequestBrowserClose(current_browser_id, browser_host);
-			browser_host = nullptr;
-			BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(destroy_task_state));
-			return;
-		}
-		source->SetBrowser(nullptr);
-		source->UnlinkFromBrowserList();
-		BrowserSourceCompleteTaskRelease(
-			BrowserSourceRequestDeleteReleaseOwnLease(destroy_task_state, true));
-	});
-
-	if (!posted) {
-		BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(task_state));
-		BrowserSourceDestroyFatal("cef_destroy_task_post_failed");
-	}
+	/* Every browser ID owned by this source must close before the source can die. */
+	for (const int browser_id : browser_ids)
+		BrowserSourceEnqueueDestroyClose(browser_id);
 }
 
 void BrowserSource::ExecuteOnBrowser(BrowserFunc func, bool async)
@@ -956,7 +1091,8 @@ bool BrowserSource::CreateBrowser()
 	const auto create_task_state = task_state;
 	const bool posted = QueueCEFTask([create_task_state]() {
 		BrowserSource *source = BrowserSourceTaskSource(create_task_state);
-		if (!source || !BrowserSourceCanCreateBrowser() || source->destroying.load(std::memory_order_acquire)) {
+		if (!source || !BrowserSourceCanCreateBrowser() || source->destroying.load(std::memory_order_acquire) ||
+		    create_task_state->is_destroying()) {
 			BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(create_task_state));
 			return;
 		}
@@ -1035,9 +1171,11 @@ void BrowserSource::DestroyBrowser()
 {
 	ExecuteOnBrowser(
 		[](CefRefPtr<CefBrowser> browser) {
+			const int browser_id = browser ? browser->GetIdentifier() : -1;
 			CefRefPtr<CefBrowserHost> browser_host = browser ? browser->GetHost() : nullptr;
 			browser = nullptr;
-			ActuallyCloseBrowser(browser_host);
+			if (browser_id >= 0)
+				BrowserSourceRequestBrowserClose(browser_id, browser_host);
 		},
 		true);
 	SetBrowser(nullptr);

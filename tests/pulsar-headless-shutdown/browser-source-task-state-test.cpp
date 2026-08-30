@@ -8,6 +8,7 @@
  ******************************************************************************/
 
 #include "browser-source-task-state.hpp"
+#include "browser-audio-callback-gate.hpp"
 
 #include <chrono>
 #include <condition_variable>
@@ -204,11 +205,48 @@ static bool test_destroy_task_releases_own_lease()
 	       check(own_underflow.underflow, "own-first double release was accepted");
 }
 
+static bool test_inverted_two_browser_finalization_waits_for_audio()
+{
+	/* Exercise the production per-source close tracker with two CEF IDs. */
+	BrowserSourceTaskState source;
+	source.source = reinterpret_cast<BrowserSource *>(static_cast<std::uintptr_t>(1));
+	const bool destroying = source.begin_destroy();
+	const bool armed = source.arm_browser_ids(std::vector<int>{101, 202});
+	BrowserAudioCallbackGate audio;
+	audio.mark_stream_started();
+	const bool old_audio_admitted = audio.try_acquire();
+
+	/* The second browser may close first, but source deletion is not allowed. */
+	const bool second_deleted = source.finalize_browser_id(202);
+	/* Model an OnAfterCreated callback racing between two close callbacks. */
+	const bool late_browser_added = source.add_browser_id(303);
+	const bool first_deleted = source.finalize_browser_id(101);
+	audio.mark_close_callback_seen();
+	audio.mark_stream_stopped();
+	const bool claimed_while_audio_in_flight = audio.try_claim_finalization();
+	const bool audio_claimed_after_release = audio.release_and_try_claim();
+	const bool late_deleted = source.finalize_browser_id(303);
+	const bool duplicate_delete = source.finalize_browser_id(303);
+
+	return check(destroying && armed, "multi-browser source close was not armed") &&
+	       check(old_audio_admitted, "old audio callback was not admitted") &&
+	       check(!second_deleted, "source deleted while another browser ID remained") &&
+	       check(late_browser_added, "late browser ID was not admitted while source was destroying") &&
+	       check(!first_deleted, "source deleted while a late browser ID remained") &&
+	       check(!claimed_while_audio_in_flight, "audio finalization raced an in-flight callback") &&
+	       check(audio_claimed_after_release, "audio quiescence was not observed") &&
+	       check(late_deleted, "last browser ID did not complete source deletion") &&
+	       check(source.browser_delete_completed, "source deletion was not exactly once") &&
+	       check(!duplicate_delete, "duplicate browser finalization deleted the source twice") &&
+	       check(source.pending_browser_ids.empty(), "browser IDs remained pending after finalization");
+}
+
 int main()
 {
 	return test_synchronous_close_releases_browser_before_invalidation() &&
 	       test_admission_then_destroy() && test_destroy_then_admission() &&
-	       test_destroy_task_releases_own_lease()
+	       test_destroy_task_releases_own_lease() &&
+	       test_inverted_two_browser_finalization_waits_for_audio()
 		       ? 0
 		       : 1;
 }

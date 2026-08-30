@@ -82,7 +82,9 @@ if(NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "obs_source_get_weak_source" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "obs_weak_source_get_source" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "obs_weak_source_release" OR
    NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "obs_weak_source_t" OR
-   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceBrowserIdForSource" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceBrowserIdsForSource" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "source_destroy_close_ids" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceEnqueueDestroyClose" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "DetachBrowser" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceFinalizeBrowserClose[(]CefRefPtr" OR
    PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceFinalizeBrowserClose[(]CefRefPtr")
@@ -90,6 +92,8 @@ if(NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "obs_source_get_weak_source" OR
 endif()
 if(NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceTaskState" OR
    NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "std::atomic<bool> create_browser" OR
+   NOT PULSAR_BROWSER_TASK_STATE_HPP MATCHES "arm_browser_ids" OR
+   NOT PULSAR_BROWSER_TASK_STATE_HPP MATCHES "finalize_browser_id" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceAcquireTask" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "active_source_tasks" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "std::deque<int> close_ids" OR
