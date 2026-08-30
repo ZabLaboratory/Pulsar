@@ -8,6 +8,7 @@ import importlib.util
 import inspect
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -15,6 +16,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "probe-dual-lane.py"
+HEADLESS = ROOT / "plugins" / "pulsar-headless" / "main.cpp"
 SPEC = importlib.util.spec_from_file_location("probe_dual_lane_contract", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 probe = importlib.util.module_from_spec(SPEC)
@@ -74,6 +76,62 @@ def test_spawn_after_rtmp_ready_starts_listener_before_spawn():
 
     probe.spawn_after_rtmp_ready(FakeProcess())
     assert events == ["receiver.start", "pulsar.spawn"]
+
+
+def test_windows_shutdown_uses_anonymous_inherited_event_and_requires_ack():
+    headless = HEADLESS.read_text(encoding="utf-8")
+    driver = SCRIPT.read_text(encoding="utf-8")
+
+    assert "PULSAR_SHUTDOWN_EVENT_HANDLE" in headless
+    assert "CreateEvent" not in headless
+    assert "mechanism=named_event" not in headless
+    assert "SetHandleInformation(candidate, HANDLE_FLAG_INHERIT, 0)" in headless
+    assert "WaitForSingleObject(g_shutdown_event, 100)" in headless
+    assert "reason=closed_handle" in headless
+    assert '"handle_list": [handle]' in driver
+    assert "SetHandleInformation" in driver
+    assert "_windows_signal_shutdown_event" in driver
+    assert "self.forced_kill_used = True" in driver
+    assert "wait_for_shutdown_control_ready" in driver
+    assert driver.index("process.wait_for_shutdown_control_ready(timeout=60)") < driver.index(
+        "ready_match = process.wait_for(READY_RE, timeout=60)"
+    )
+
+
+def test_windows_shutdown_signal_failure_contains_with_forced_kill(monkeypatch):
+    probe_module = probe
+
+    class StuckProcess:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("pulsar", timeout)
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    process = probe_module.PulsarProcess(
+        Path("pulsar.exe"), "x264", Path("record"), runtime_id="runtime-shutdown-failure"
+    )
+    process.proc = StuckProcess()
+    process.shutdown_event_handle = 123
+    monkeypatch.setattr(probe_module.os, "name", "nt")
+
+    def fail_signal(_handle):
+        raise probe_module.ProbeFailure("signal failed")
+
+    monkeypatch.setattr(probe_module, "_windows_signal_shutdown_event", fail_signal)
+    monkeypatch.setattr(probe_module, "_windows_close_handle", lambda _handle: None)
+
+    with pytest.raises(probe_module.ProbeFailure, match="forced process kill|signal failed"):
+        process.shutdown()
+    assert process.forced_kill_used is True
+    assert process.proc.returncode == -9
 
 
 def test_drive_propagates_resource_wait_and_keeps_outputs_alive_until_threshold(tmp_path):

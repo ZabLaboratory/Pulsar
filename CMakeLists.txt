@@ -156,4 +156,22 @@ if(WIN32)
     # silently arm or disarm a drill. This native truth table needs no OBS,
     # GPU, or running Pulsar process.
     add_subdirectory(tests/dual-lane-config)
+
+    # #249 -- /SUBSYSTEM:WINDOWS Pulsar is spawned with stdout redirected to
+    # a pipe by the real probe. Prove its anonymous inherited event control
+    # path releases both runtime leases without falling back to kill().
+    if(TARGET pulsar-headless)
+        find_package(Python3 COMPONENTS Interpreter REQUIRED)
+        add_test(
+            NAME pulsar-headless-graceful-shutdown
+            COMMAND ${Python3_EXECUTABLE}
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/pulsar-headless-shutdown/test_graceful_shutdown.py"
+                    "$<TARGET_FILE:pulsar-headless>"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        )
+        set_tests_properties(pulsar-headless-graceful-shutdown PROPERTIES
+            TIMEOUT 120
+            LABELS "integration;runtime"
+        )
+    endif()
 endif()
