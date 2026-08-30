@@ -103,6 +103,7 @@ static mutex cef_shutdown_completion_mutex;
 static condition_variable cef_shutdown_completion_cv;
 static bool cef_shutdown_completion_signaled = false;
 static bool cef_shutdown_completion_success = false;
+static atomic<bool> cef_pre_obs_shutdown_complete{false};
 
 #if defined(_WIN32)
 static int adapterCount = 0;
@@ -605,6 +606,94 @@ static void StartBrowserShutdownBarrier()
 	}
 }
 
+/*
+ * libobs stops its global audio output before unloading modules.  Browser
+ * audio callbacks must therefore be fenced while obs_get_audio() is still a
+ * valid host resource, rather than waiting for obs_module_unload().  The
+ * headless host invokes the private proc after frontend teardown and before
+ * obs_shutdown(); this keeps the browser plugin loaded while the audio bus is
+ * still valid.  The existing manager-thread completion ACK remains the single
+ * bounded, fail-closed barrier.
+ */
+static bool BrowserSourcePrepareBeforeObsShutdown()
+{
+	if (cef_pre_obs_shutdown_complete.load(memory_order_acquire))
+		return true;
+
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin");
+
+#ifdef ENABLE_BROWSER_QT_LOOP
+	if (!BrowserSourceCefReady()) {
+		cef_pre_obs_shutdown_complete.store(true, memory_order_release);
+		blog(LOG_INFO,
+		     "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_not_running");
+		return true;
+	}
+	BrowserSourceBeginShutdown();
+	BrowserSourceCloseAllBrowsers();
+	const auto deadline = chrono::steady_clock::now() + cef_shutdown_timeout;
+	while (!BrowserSourceMarkDrained() && chrono::steady_clock::now() < deadline) {
+		CefDoMessageLoopWork();
+		this_thread::yield();
+	}
+	if (!BrowserSourceMarkDrained())
+		FailCefShutdown("pre_obs_shutdown_barrier_timeout");
+	cef_shutdown_barrier_released.store(true, memory_order_release);
+	BrowserShutdown(true);
+#else
+	if (!manager_thread.joinable()) {
+		cef_pre_obs_shutdown_complete.store(true, memory_order_release);
+		blog(LOG_INFO,
+		     "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_not_running");
+		return true;
+	}
+	if (BrowserSourceCefInitializationFailed()) {
+		manager_thread.join();
+		cef_pre_obs_shutdown_complete.store(true, memory_order_release);
+		blog(LOG_INFO,
+		     "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_init_failed");
+		return true;
+	}
+	if (!BrowserSourceWaitForCefReady()) {
+		if (BrowserSourceCefInitializationFailed()) {
+			manager_thread.join();
+			cef_pre_obs_shutdown_complete.store(true, memory_order_release);
+			blog(LOG_INFO,
+			     "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_init_failed");
+			return true;
+		}
+		FailCefShutdown("pre_obs_shutdown_readiness_timeout");
+	}
+
+	ResetCefShutdownCompletion();
+	BrowserSourceBeginShutdown();
+	StartBrowserShutdownBarrier();
+
+	unique_lock<mutex> lock(cef_shutdown_completion_mutex);
+	const bool completion_received = cef_shutdown_completion_cv.wait_for(
+		lock, cef_shutdown_watchdog_timeout, []() { return cef_shutdown_completion_signaled; });
+	const bool completion_success = completion_received && cef_shutdown_completion_success;
+	lock.unlock();
+	if (!completion_received)
+		FailCefShutdown("pre_obs_shutdown_completion_ack_timeout");
+	if (!completion_success)
+		FailCefShutdown("pre_obs_shutdown_completion_ack_failed");
+
+	manager_thread.join();
+#endif
+
+	cef_pre_obs_shutdown_complete.store(true, memory_order_release);
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete");
+	return true;
+}
+
+static void BrowserSourcePrepareBeforeObsShutdownProc(void *, calldata_t *cd)
+{
+	const bool success = BrowserSourcePrepareBeforeObsShutdown();
+	if (cd)
+		calldata_set_bool(cd, "success", success);
+}
+
 #ifndef ENABLE_BROWSER_QT_LOOP
 static void BrowserManagerThread(void)
 {
@@ -968,6 +1057,12 @@ bool obs_module_load(void)
 	     cef_version_info(5), cef_version_info(6), cef_version_info(7), CEF_VERSION);
 
 	RegisterBrowserSource();
+	if (proc_handler_t *global_ph = obs_get_proc_handler()) {
+		proc_handler_add(global_ph, "void pulsar_browser_pre_shutdown(out bool success)",
+				 &BrowserSourcePrepareBeforeObsShutdownProc, nullptr);
+	} else {
+		blog(LOG_ERROR, "[obs-browser] pre-obs-shutdown proc registration failed");
+	}
 	obs_frontend_add_event_callback(handle_obs_frontend_event, nullptr);
 
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
@@ -1010,6 +1105,10 @@ void obs_module_post_load(void)
 void obs_module_unload(void)
 {
 #ifdef ENABLE_BROWSER_QT_LOOP
+	if (cef_pre_obs_shutdown_complete.load(memory_order_acquire)) {
+		os_event_destroy(cef_started_event);
+		return;
+	}
 	if (BrowserSourceCefInitializationFailed()) {
 		os_event_destroy(cef_started_event);
 		return;
@@ -1033,7 +1132,10 @@ void obs_module_unload(void)
 	BrowserShutdown(cef_shutdown_barrier_released.load(std::memory_order_acquire) &&
 			!cef_shutdown_barrier_failed.load(std::memory_order_acquire));
 #else
-	if (manager_thread.joinable()) {
+	if (cef_pre_obs_shutdown_complete.load(memory_order_acquire)) {
+		if (manager_thread.joinable())
+			manager_thread.join();
+	} else if (manager_thread.joinable()) {
 		if (BrowserSourceCefInitializationFailed()) {
 			manager_thread.join();
 			os_event_destroy(cef_started_event);

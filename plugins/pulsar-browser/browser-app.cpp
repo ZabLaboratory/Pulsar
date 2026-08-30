@@ -19,6 +19,7 @@
 #include "browser-app.hpp"
 #include "browser-version.h"
 #include <nlohmann/json.hpp>
+#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -396,7 +397,7 @@ bool MessageObject::ExecuteNextBrowserTask()
 		browserTasks.pop_front();
 	}
 
-	nextTask.func(nextTask.browser);
+	nextTask.func(std::move(nextTask.browser));
 	return true;
 }
 

@@ -23,6 +23,64 @@ static bool check(bool condition, const char *message)
 	return condition;
 }
 
+struct FakeBrowserClose {
+	int refs = 0;
+	bool invalidated = false;
+	bool on_before_close_seen = false;
+	bool browser_ref_survived_close = false;
+};
+
+struct FakeBrowserOwner {
+	FakeBrowserClose *browser = nullptr;
+
+	explicit FakeBrowserOwner(FakeBrowserClose *browser_) : browser(browser_)
+	{
+		++browser->refs;
+	}
+
+	~FakeBrowserOwner()
+	{
+		reset();
+	}
+
+	void reset()
+	{
+		if (browser) {
+			--browser->refs;
+			browser = nullptr;
+		}
+	}
+};
+
+struct FakeBrowserHost {
+	FakeBrowserClose *browser = nullptr;
+
+	void CloseBrowser()
+	{
+		browser->on_before_close_seen = true;
+		browser->invalidated = true;
+		browser->browser_ref_survived_close = browser->refs != 0;
+	}
+};
+
+static bool test_synchronous_close_releases_browser_before_invalidation()
+{
+	FakeBrowserClose browser;
+	{
+		FakeBrowserOwner browser_owner(&browser);
+		FakeBrowserHost browser_host{&browser};
+		/* Model the production host-only handoff: no CefBrowser owner survives. */
+		browser_owner.reset();
+		browser_host.CloseBrowser();
+	}
+
+	return check(browser.on_before_close_seen, "fake close did not enter OnBeforeClose") &&
+	       check(browser.invalidated, "fake close did not invalidate the browser") &&
+	       check(!browser.browser_ref_survived_close,
+		     "a browser owner survived synchronous OnBeforeClose") &&
+	       check(browser.refs == 0, "fake browser retained a reference after close");
+}
+
 static bool test_admission_then_destroy()
 {
 	BrowserSourceTaskState state;
@@ -148,7 +206,8 @@ static bool test_destroy_task_releases_own_lease()
 
 int main()
 {
-	return test_admission_then_destroy() && test_destroy_then_admission() &&
+	return test_synchronous_close_releases_browser_before_invalidation() &&
+	       test_admission_then_destroy() && test_destroy_then_admission() &&
 	       test_destroy_task_releases_own_lease()
 		       ? 0
 		       : 1;
