@@ -30,14 +30,23 @@ RUNTIME = "runtime-fixture-001"
 ROLE_MAP = {"on_air": "A", "preview": "B"}
 
 
-def _event_common(command_id: str, intent_id: str, seq: int, observed: int, revisions: dict[str, int], state: str) -> dict:
+def _event_common(
+    command_id: str,
+    intent_id: str,
+    seq: int,
+    observed: int,
+    revisions: dict[str, int],
+    state: str,
+    *,
+    runtime_id: str = RUNTIME,
+) -> dict:
     return {
         "contract": "pulsar.scene-switch.v1",
         "schema_version": 1,
         "message_type": "event",
         "command_id": command_id,
         "intent_id": intent_id,
-        "runtime_instance_id": RUNTIME,
+        "runtime_instance_id": runtime_id,
         "server_seq": seq,
         "state": state,
         "previous_revisions": deepcopy(revisions),
@@ -48,13 +57,23 @@ def _event_common(command_id: str, intent_id: str, seq: int, observed: int, revi
     }
 
 
-def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: float = 7.0, ds_extra_ms: float = 22.0):
+def _take_records(
+    count: int,
+    *,
+    evidence_kind: str = "fixture",
+    raw_extra_ms: float = 7.0,
+    ds_extra_ms: float = 22.0,
+    codec: str = "nvenc",
+    runtime_id: str = RUNTIME,
+    include_resources: bool = True,
+    resource_encoder_active: bool = True,
+):
     session = {
         "record_type": "session",
         "schema": probe.TRACE_SCHEMA,
-        "runtime_instance_id": RUNTIME,
-        "session_id": "session-fixture-001",
-        "codec": "nvenc",
+        "runtime_instance_id": runtime_id,
+        "session_id": f"session-{runtime_id}",
+        "codec": codec,
         # Runtime fixtures model the same two-phase campaign as the real
         # driver: an observed warm-up prefix followed by measured Takes.
         # Small fixture-only traces keep the historical compact shape so the
@@ -62,7 +81,7 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
         # claim.
         "warmup_takes": count if evidence_kind == "runtime" else 0,
         "video": {"width": 1920, "height": 1080, "fps_num": 60, "fps_den": 1},
-        "workload": {"wgc": True, "cef": True, "nvenc": True},
+        "workload": {"wgc": True, "cef": True, "nvenc": codec == "nvenc"},
         "capture_paths": list(probe.BOUNDARIES),
         "resource_reference": deepcopy(probe.RESOURCE_REFERENCE),
         "source_types": ["window_capture", "browser_source"] if evidence_kind == "runtime" else None,
@@ -87,7 +106,15 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
         commit_at = accepted_at + 5_000_000
         frame_id = 100 + index
         pts_ns = 10_000_000_000 + index * 16_666_667
-        accepted = _event_common(take_id, intent_id, seq, accepted_at, revisions, "take_accepted")
+        accepted = _event_common(
+            take_id,
+            intent_id,
+            seq,
+            accepted_at,
+            revisions,
+            "take_accepted",
+            runtime_id=runtime_id,
+        )
         accepted.update(
             {
                 "event_type": "TakeAccepted",
@@ -100,7 +127,15 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
         records.append({"record_type": "event", "event": accepted})
         seq += 1
         committed_revisions = {"program": index + 1, "preview": 0, "role_map": index + 1}
-        committed = _event_common(take_id, intent_id, seq, commit_at, revisions, "ready")
+        committed = _event_common(
+            take_id,
+            intent_id,
+            seq,
+            commit_at,
+            revisions,
+            "ready",
+            runtime_id=runtime_id,
+        )
         committed.update(
             {
                 "event_type": "TakeCommitted",
@@ -133,7 +168,7 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
                 "record_type": "observation",
                 "boundary": boundary,
                 "clock_domain": "monotonic_ns",
-                "runtime_instance_id": RUNTIME,
+                "runtime_instance_id": runtime_id,
                 "command_id": take_id,
                 "intent_id": intent_id,
                 "take_command_id": take_id,
@@ -160,33 +195,37 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
         records.append(observation("antenna_first_frame", commit_at + 120_000_000, frame_id + 3, pts_ns + 3))
         revisions = committed_revisions
 
-    # Resource values are deterministic and include both modes.  The delta is
-    # intentionally below the known reference so the comparison can be tested.
-    for mode, render, resident in (
-        ("reference", 1.000, 100_000_000),
-        ("dual_lane", 1.080, 103_000_000),
-    ):
-        for sample_index in range(2):
-            records.append(
-                {
-                    "record_type": "resource_sample",
-                    "sample_mode": mode,
-                    "clock_domain": "monotonic_ns",
-                    "runtime_instance_id": RUNTIME,
-                    "observed_at_monotonic_ns": 20_000_000_000 + sample_index * 1_000_000,
-                    "measurement_phase": mode,
-                    "build_revision": session["build_revision"],
-                    "hardware": deepcopy(session["hardware"]),
-                    "producer_topology": "single_lane_reference" if mode == "reference" else "dual_lane_ab",
-                    "producer_count": 1 if mode == "reference" else 2,
-                    "frame_render_ms": render + sample_index * 0.001,
-                    "resident_bytes": resident + sample_index * 1000,
-                    "process_cpu_percent": 15.0 + sample_index,
-                    "host_gpu_percent": 25.0 + sample_index,
-                    "callback_backlog_estimate": sample_index,
-                    "encoder_utilization_percent": 4.0,
-                }
-            )
+    if include_resources:
+        # Resource values are deterministic and include both modes.  The
+        # delta is intentionally below the known reference so the comparison
+        # can be tested.  x264 samples, if requested by a negative test, are
+        # never admissible evidence for AC-13.
+        for mode, render, resident in (
+            ("reference", 1.000, 100_000_000),
+            ("dual_lane", 1.080, 103_000_000),
+        ):
+            for sample_index in range(2):
+                records.append(
+                    {
+                        "record_type": "resource_sample",
+                        "sample_mode": mode,
+                        "clock_domain": "monotonic_ns",
+                        "runtime_instance_id": runtime_id,
+                        "observed_at_monotonic_ns": 20_000_000_000 + sample_index * 1_000_000,
+                        "measurement_phase": mode,
+                        "build_revision": session["build_revision"],
+                        "hardware": deepcopy(session["hardware"]),
+                        "producer_topology": "single_lane_reference" if mode == "reference" else "dual_lane_ab",
+                        "producer_count": 1 if mode == "reference" else 2,
+                        "encoder_active": resource_encoder_active,
+                        "frame_render_ms": render + sample_index * 0.001,
+                        "resident_bytes": resident + sample_index * 1000,
+                        "process_cpu_percent": 15.0 + sample_index,
+                        "host_gpu_percent": 25.0 + sample_index,
+                        "callback_backlog_estimate": sample_index,
+                        "encoder_utilization_percent": 4.0,
+                    }
+                )
     return records
 
 
@@ -223,6 +262,93 @@ def test_runtime_report_can_pass_only_with_explicit_complete_evidence():
     assert report["takes"]["total_committed_takes"] == 6
     assert report["latency"]["encoder_input_raw"]["count"] == 3
     assert all(report["criteria"][criterion]["status"] in ("PASS", "MEASURED") for criterion in ("AC-07", "AC-08", "AC-11", "AC-12", "AC-13"))
+
+
+def test_runtime_x264_without_resources_passes_and_marks_ac13_not_applicable():
+    trace = _trace(
+        3,
+        evidence_kind="runtime",
+        codec="x264",
+        runtime_id="runtime-x264-no-resources",
+        include_resources=False,
+    )
+    report = probe.analyze_trace(trace, minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
+
+    assert report["status"] == "PASS"
+    assert all(
+        report["criteria"][criterion]["status"] == "PASS"
+        for criterion in ("AC-07", "AC-08", "AC-11", "AC-12")
+    )
+    assert report["criteria"]["AC-13"]["status"] == "NOT_APPLICABLE"
+    assert report["criteria"]["AC-13"]["applicable"] is False
+    assert report["resources"]["status"] == "NOT_APPLICABLE"
+    assert "x264" in report["resources"]["reason"]
+
+
+def test_runtime_x264_resource_samples_cannot_substitute_ac13():
+    trace = _trace(3, evidence_kind="runtime", codec="x264", runtime_id="runtime-x264-with-resources")
+    report = probe.analyze_trace(trace, minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
+
+    assert report["status"] == "PASS"
+    assert report["criteria"]["AC-13"]["status"] == "NOT_APPLICABLE"
+    assert report["resources"]["status"] == "NOT_APPLICABLE"
+    assert report["resources"]["comparison"] == {}
+
+
+def test_runtime_nvenc_without_reference_or_dual_resources_remains_unproven():
+    trace = _trace(
+        3,
+        evidence_kind="runtime",
+        codec="nvenc",
+        runtime_id="runtime-nvenc-no-resources",
+        include_resources=False,
+    )
+    report = probe.analyze_trace(trace, minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
+
+    assert report["status"] == "UNPROVEN"
+    assert report["criteria"]["AC-07"]["status"] == "PASS"
+    assert report["criteria"]["AC-08"]["status"] == "PASS"
+    assert report["criteria"]["AC-11"]["status"] == "PASS"
+    assert report["criteria"]["AC-12"]["status"] == "PASS"
+    assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
+    assert report["resources"]["status"] == "UNPROVEN"
+
+
+def test_runtime_nvenc_resource_samples_without_active_encoder_are_not_evidence():
+    trace = _trace(
+        3,
+        evidence_kind="runtime",
+        codec="nvenc",
+        runtime_id="runtime-nvenc-inactive-resources",
+        resource_encoder_active=False,
+    )
+    report = probe.analyze_trace(trace, minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
+
+    assert report["status"] == "UNPROVEN"
+    assert report["resources"]["sample_counts"] == {"reference": 2, "dual_lane": 2}
+    assert report["resources"]["active_sample_counts"] == {"reference": 0, "dual_lane": 0}
+    assert report["resources"]["inactive_sample_counts"] == {"reference": 2, "dual_lane": 2}
+    assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
+
+
+def test_legacy_resource_samples_without_encoder_attestation_remain_unproven():
+    records = _take_records(
+        3,
+        evidence_kind="runtime",
+        codec="nvenc",
+        runtime_id="runtime-nvenc-legacy-resources",
+    )
+    for record in records:
+        if record.get("record_type") == "resource_sample":
+            record.pop("encoder_active", None)
+
+    trace = probe.parse_records(records)
+    report = probe.analyze_trace(trace, minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
+
+    assert report["status"] == "UNPROVEN"
+    assert report["resources"]["sample_counts"] == {"reference": 2, "dual_lane": 2}
+    assert report["resources"]["active_sample_counts"] == {"reference": 0, "dual_lane": 0}
+    assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
 
 
 def test_default_acceptance_threshold_is_unproven_for_small_fixture():
@@ -470,14 +596,37 @@ def test_unknown_record_and_malformed_trace_fail_closed(tmp_path):
 
 
 def test_multiple_campaigns_do_not_pool_codec_or_path_samples():
-    first = _trace(3, evidence_kind="runtime")
-    second_records = _take_records(3, evidence_kind="runtime")
-    second_records[0]["session_id"] = "session-fixture-002"
-    second = probe.parse_records(second_records, source="fixture-2.jsonl")
+    first = _trace(
+        3,
+        evidence_kind="runtime",
+        codec="x264",
+        runtime_id="runtime-x264-independent",
+        include_resources=False,
+    )
+    second = _trace(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-independent")
     report = probe.analyze_traces((first, second), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
     assert report["status"] == "PASS"
     assert len(report["campaigns"]) == 2
     assert all(campaign["latency"]["encoder_input_raw"]["count"] == 3 for campaign in report["campaigns"])
+    assert report["required_codecs"] == ["x264", "nvenc"]
+    assert report["observed_codecs"] == ["nvenc", "x264"]
+    assert report["complete_codec_coverage"] is True
+    coverage = {entry["codec"]: entry for entry in report["codec_coverage"]}
+    assert coverage["x264"]["resource_status"] == "NOT_APPLICABLE"
+    assert coverage["nvenc"]["resource_status"] == "MEASURED"
+
+
+def test_multiple_nvenc_campaigns_without_x264_are_unproven():
+    first = _trace(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-duplicate-a")
+    second = _trace(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-duplicate-b")
+    report = probe.analyze_traces((first, second), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
+
+    assert report["status"] == "UNPROVEN"
+    assert report["complete_codec_coverage"] is False
+    assert report["observed_codecs"] == ["nvenc"]
+    assert len(report["codec_coverage"]) == 2
+    assert all(entry["status"] == "PASS" for entry in report["codec_coverage"])
+    assert all(entry["resource_status"] == "MEASURED" for entry in report["codec_coverage"])
 
 
 def test_cli_writes_deterministic_report_and_returns_fixture_skip(tmp_path, capsys):

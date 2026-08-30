@@ -370,7 +370,7 @@ public:
     }
 
     void initialize(const char *encoderFamily, const obs_video_info &video, bool wgcWorkload,
-                    bool cefWorkload, bool wgcSourceBound)
+                    bool cefWorkload, bool wgcSourceBound, obs_encoder_t *videoEncoder)
     {
         stopResourceSampler();
         stopTraceWriter();
@@ -401,6 +401,7 @@ public:
             traceGpu_.clear();
             producerTopology_.clear();
             producerCount_ = 0;
+            videoEncoder_ = nullptr;
         }
 
         const char *tracePath = std::getenv("PULSAR_TRACE_PATH");
@@ -457,6 +458,7 @@ public:
             }
             wgcWorkload_ = wgcWorkload;
             cefWorkload_ = cefWorkload;
+            videoEncoder_ = videoEncoder;
             session = sessionJson(encoderFamily, video, wgcWorkload, cefWorkload, wgcSourceBound);
         }
 
@@ -524,6 +526,7 @@ public:
         committed_ = {};
         lastRawTake_.clear();
         lastPacketTake_.clear();
+        videoEncoder_ = nullptr;
     }
 
     bool enabled()
@@ -1117,6 +1120,7 @@ private:
             std::string gpuName;
             std::string producerTopology;
             uint64_t producerCount = 0;
+            obs_encoder_t *videoEncoder = nullptr;
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
                 if (!enabled_ || resourceMode_.empty())
@@ -1128,7 +1132,9 @@ private:
                 gpuName = traceGpu_;
                 producerTopology = producerTopology_;
                 producerCount = producerCount_;
+                videoEncoder = videoEncoder_;
             }
+            const bool encoderActive = videoEncoder && obs_encoder_active(videoEncoder);
 
             std::ostringstream sample;
             sample << "{\"record_type\":\"resource_sample\",\"sample_mode\":\"" << mode
@@ -1140,6 +1146,7 @@ private:
                    << ",\"host_gpu_percent\":" << gpu.utilization
                    << ",\"callback_backlog_estimate\":" << queueDepth
                    << ",\"encoder_utilization_percent\":" << gpu.encoderUtilization
+                   << ",\"encoder_active\":" << (encoderActive ? "true" : "false")
                    << ",\"gpu_memory_bytes\":" << gpu.memoryBytes
                    << ",\"measurement_phase\":\"" << mode
                    << "\",\"build_revision\":\"" << escape(buildRevision)
@@ -1528,6 +1535,9 @@ private:
     std::string producerTopology_;
     uint64_t producerCount_ = 0;
     std::string resourceMode_;
+    // Non-owning: setup owns the encoder; teardown stops and joins the
+    // resource sampler before releasing it.
+    obs_encoder_t *videoEncoder_ = nullptr;
     bool wgcWorkload_ = false;
     bool cefWorkload_ = false;
     uint64_t serverSeq_ = 0;
@@ -4480,7 +4490,7 @@ bool PulsarFrontendAPI::setup()
         const bool wgcSourceBound = externalLaneWorkload ? captureWindowRequested :
                                     captureItem != nullptr;
         g_runtimeTelemetry.initialize(encoderFamily.c_str(), telemetryVideo, wgcWorkload, cefWorkload,
-                                      wgcSourceBound);
+                                      wgcSourceBound, videoEncoder);
         if (g_runtimeTelemetry.enabled()) {
             obs_add_raw_video_callback(nullptr, pulsar_runtime_raw_video_callback, nullptr);
             if (streamOutput)

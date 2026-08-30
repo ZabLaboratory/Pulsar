@@ -123,10 +123,17 @@ an external Probe measurement and must not be labelled as this boundary.
 Resource samples use `sample_mode=reference` and `sample_mode=dual_lane` and
 record `frame_render_ms`, `resident_bytes`, `process_cpu_percent`,
 `host_gpu_percent`, `callback_backlog_estimate`, and
-`encoder_utilization_percent`. The report
+`encoder_utilization_percent`, plus the strict `encoder_active` state read
+from the actual bound encoder at sample time. The report
 computes actual deltas from the two sample sets and shows them beside the
 known `+0.091 ms/frame` and `+3.13 MB` references. It never declares runtime
-capacity from the reference alone.
+capacity from the reference alone. Samples with `encoder_active=false` remain
+diagnostic and cannot satisfy the AC-13 minimum.
+
+The `encoder_active` field is optional for backward parsing of older traces;
+when it is absent, the sample is treated as inactive for acceptance. This
+keeps historical evidence inspectable without allowing it to satisfy the
+new active-encoder resource gate.
 
 Every resource sample also carries `measurement_phase`, the exact candidate
 `build_revision`, `hardware.host`/`hardware.gpu`, and the explicit
@@ -155,8 +162,10 @@ redacted command line, resolution/FPS, adapter/driver, and the WGC/CEF/NVENC
 flags in the session record.
 
 ```powershell
-# Run the runtime producer/instrumentation for x264 and save x264.jsonl.
-# Repeat with PULSAR_VIDEO_ENCODER=nvenc and save nvenc.jsonl.
+# Run the runtime producer/instrumentation for x264 and save x264.jsonl.  This
+# campaign has no resource phase; AC-13 is NOT_APPLICABLE for x264.
+# Repeat with PULSAR_VIDEO_ENCODER=nvenc and save nvenc.jsonl; only the NVENC
+# campaign performs the reference/dual resource comparison while recording.
 # The probe itself keeps the ProgramReturn DirectShow reader open; the reader
 # and encoder-output callback write observations using the same runtime/session
 # IDs and monotonic clock. RTMP receiver timing is an external Probe
@@ -188,8 +197,12 @@ python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100
 ```
 
 `reference` is an explicit legacy single-canvas run; it does not emit Take
-events. Both invocations require a real visible WGC target and the local CEF
-workload. The driver sets `PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD=1`, so the
+events. It nevertheless starts a real local NVENC recording, waits for
+`OUTPUT_STARTED`, keeps the encoder active while collecting resource samples,
+then stops and verifies that recording before returning. An inactive or
+missing encoder attestation cannot satisfy AC-13. Both invocations require a
+real visible WGC target and the local CEF workload. The driver sets
+`PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD=1`, so the
 frontend suppresses its `Default` bootstrap WGC/CEF sources and the probe alone
 creates one producer pair on A for `reference`, or two independent pairs on A/B
 for `dual_lane`. The second invocation appends its real scene-switch events and

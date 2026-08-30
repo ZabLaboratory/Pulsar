@@ -29,6 +29,12 @@ Run the two acceptance campaigns independently against the same build::
         --build-revision <candidate-sha> --capture-window <visible-title:class:exe> \
         --cef-workload --trace-append --resource-mode dual_lane
 
+The x264 trace is a latency-only campaign (AC-13 is not applicable); the
+NVENC trace's reference phase must run with ``--resource-mode reference
+--resource-only`` before the dual-lane append above.  The reference phase
+starts and verifies a real recording so its resource samples attest an active
+encoder rather than only a requested codec.
+
 Exit codes are 0 (pass), 1 (assertion/runtime failure), 2 (usage or missing
 WebSocket dependency), and 3 (typed environment skip, for example no binary
 or no NVENC device).  This probe validates the routing and identity contract;
@@ -1802,6 +1808,48 @@ def take_telemetry_data(process: PulsarProcess, number: int, target_scene: str) 
     }
 
 
+async def start_resource_recording(inbox: Inbox, ws: Any, process: PulsarProcess) -> None:
+    """Start recording and prove the setup-time encoder is the requested one."""
+
+    response = await request(inbox, ws, "StartRecord", "resource-start-record")
+    assert_success(response, "StartRecord(resource phase)")
+    await wait_event(
+        inbox,
+        ws,
+        "RecordStateChanged",
+        lambda data: data.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STARTED",
+    )
+    bind_lines = [line for line in process.snapshot() if ENCODER_BIND_RE.search(line)]
+    if len(bind_lines) != 1:
+        raise ProbeFailure(
+            "resource phase expected exactly one setup-time encoder bind before active record, "
+            f"got {len(bind_lines)}"
+        )
+    # Let at least a few output frames reach the active encoder before the
+    # sampler window starts.  The resource records themselves still attest
+    # activity from obs_encoder_active(videoEncoder), not this delay.
+    await asyncio.sleep(0.5)
+
+
+async def stop_resource_recording(
+    inbox: Inbox, ws: Any, *, request_id: str = "resource-stop-record"
+) -> str:
+    """Stop the resource-phase recording and return its verified output path."""
+
+    response = await request(inbox, ws, "StopRecord", request_id)
+    assert_success(response, "StopRecord(resource phase)")
+    stopped = await wait_event(
+        inbox,
+        ws,
+        "RecordStateChanged",
+        lambda data: data.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STOPPED",
+    )
+    output_path = (stopped.get("eventData") or {}).get("outputPath") or ""
+    if not output_path:
+        raise ProbeFailure("resource phase STOPPED event did not include outputPath")
+    return output_path
+
+
 async def collect_resource_samples(
     process: PulsarProcess, mode: str, minimum_samples: int, timeout: float
 ) -> int:
@@ -1811,6 +1859,10 @@ async def collect_resource_samples(
     nvidia-smi adapter, not reconstructed from Python timing.  This helper only
     performs the lifecycle/availability check and never writes evidence itself.
     """
+
+    ffprobe = find_ffprobe()
+    if not ffprobe:
+        raise ProbeSkip("ffprobe is required to attest an active NVENC resource phase")
 
     ready_match = process.wait_for(READY_RE, timeout=60)
     ws_url = ready_match.group(1)
@@ -1869,38 +1921,102 @@ async def collect_resource_samples(
             # dead/black WGC or CEF producer cannot make the resource delta
             # look like a valid topology comparison.
             await verify_workload_sources(inbox, ws, process, lanes=lanes, require_pixels=True)
-        deadline = time.monotonic() + timeout
-        while True:
-            if process.trace_path is None:
-                raise ProbeFailure("resource sampling requires --trace")
-            count = 0
-            try:
-                with process.trace_path.open("r", encoding="utf-8") as handle:
-                    for line in handle:
-                        try:
-                            record = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if (
-                            record.get("record_type") == "resource_sample"
-                            and record.get("sample_mode") == mode
-                            and record.get("runtime_instance_id") == process.runtime_id
-                        ):
-                            count += 1
-            except FileNotFoundError:
-                count = 0
-            if count >= minimum_samples:
-                return count
-            if time.monotonic() >= deadline:
-                if process.proc is not None and process.proc.poll() is None:
-                    raise ProbeSkip(
-                        "native resource sampler produced no complete samples; "
-                        "verify nvidia-smi and platform counters on this host"
-                    )
-                raise ProbeFailure(
-                    f"runtime exited before collecting {minimum_samples} {mode} resource samples"
+
+        # Resource samples are admissible for AC-13 only while the requested
+        # NVENC encoder is genuinely active.  The reference phase therefore
+        # starts the same local recording path as the long dual-lane phase and
+        # keeps it running for the entire sample window.
+        encoder_match = process.wait_for(ENCODER_RE, timeout=60)
+        actual_family = encoder_match.group(1).lower()
+        if actual_family != process.encoder:
+            if process.encoder == "nvenc":
+                raise ProbeSkip(
+                    f"requested NVENC but Pulsar boot selected {actual_family}; no usable NVENC device"
                 )
-            await asyncio.sleep(0.25)
+            raise ProbeFailure(
+                f"requested encoder family {process.encoder!r}, boot selected {actual_family!r}"
+            )
+        if mode == "reference" and process.encoder != "nvenc":
+            raise ProbeFailure("AC-13 reference resource phase requires encoder=nvenc")
+
+        recording_started = False
+        recording_stopped = False
+        output_path: str | None = None
+
+        async def stop_recording_after_error() -> None:
+            nonlocal recording_stopped, output_path
+            if not recording_started or recording_stopped:
+                return
+            output_path = await stop_resource_recording(
+                inbox, ws, request_id="resource-stop-record-cleanup"
+            )
+            recording_stopped = True
+
+        try:
+            # Mark the attempt before issuing StartRecord so a failure after
+            # the output has actually started still enters the strict stop
+            # path.  If StartRecord itself declines, the cleanup request is
+            # harmlessly rejected and the original failure is preserved.
+            recording_started = True
+            await start_resource_recording(inbox, ws, process)
+            deadline = time.monotonic() + timeout
+            count = 0
+            active_count = 0
+            while True:
+                if process.trace_path is None:
+                    raise ProbeFailure("resource sampling requires --trace")
+                count = 0
+                active_count = 0
+                try:
+                    with process.trace_path.open("r", encoding="utf-8") as handle:
+                        for line in handle:
+                            try:
+                                record = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            if (
+                                record.get("record_type") == "resource_sample"
+                                and record.get("sample_mode") == mode
+                                and record.get("runtime_instance_id") == process.runtime_id
+                            ):
+                                count += 1
+                                if record.get("encoder_active") is True:
+                                    active_count += 1
+                except FileNotFoundError:
+                    count = 0
+                    active_count = 0
+                if active_count >= minimum_samples:
+                    break
+                if time.monotonic() >= deadline:
+                    if process.proc is not None and process.proc.poll() is None:
+                        raise ProbeSkip(
+                            "native resource sampler produced no complete active-encoder samples; "
+                            "verify nvidia-smi, platform counters and the recording output on this host"
+                        )
+                    raise ProbeFailure(
+                        f"runtime exited before collecting {minimum_samples} active {mode} resource samples"
+                    )
+                await asyncio.sleep(0.25)
+
+            output_path = await stop_resource_recording(inbox, ws)
+            recording_stopped = True
+        except Exception:
+            try:
+                await stop_recording_after_error()
+            except Exception as cleanup_exc:
+                raise ProbeFailure(
+                    f"resource sampling failed and StopRecord cleanup failed: {cleanup_exc}"
+                ) from cleanup_exc
+            raise
+
+        if output_path is None:
+            raise ProbeFailure("active resource phase stopped without a recording output path")
+        verify_recording(output_path, ffprobe)
+        print(
+            f"   active encoder resource samples verified: total={count} active={active_count} "
+            f"mode={mode}"
+        )
+        return active_count
 
 
 async def assert_distinct_selected_scenes(

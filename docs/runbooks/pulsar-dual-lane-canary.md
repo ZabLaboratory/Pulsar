@@ -83,8 +83,17 @@ python scripts/probe-dual-lane.py `
   --trace <evidence-dir>\x264.jsonl `
   --runtime-id pulsar-249-x264-<unique> `
   --build-revision <40-lowercase-candidate-sha> `
+  --capture-window <visible-title:class:exe> --cef-workload
+
+# NVENC owns the resource comparison: append the dual-lane phase to the same
+# reference trace/runtime after the single-canvas reference process exits.
+python scripts/probe-dual-lane.py `
+  --exe <exact-artifact> --encoder nvenc `
+  --trace <evidence-dir>\nvenc.jsonl `
+  --runtime-id pulsar-249-nvenc-<unique> `
+  --build-revision <40-lowercase-candidate-sha> `
   --capture-window <visible-title:class:exe> --cef-workload `
-  --resource-mode dual_lane
+  --resource-mode reference --resource-only
 
 python scripts/probe-dual-lane.py `
   --exe <exact-artifact> --encoder nvenc --takes 100 `
@@ -92,7 +101,7 @@ python scripts/probe-dual-lane.py `
   --runtime-id pulsar-249-nvenc-<unique> `
   --build-revision <40-lowercase-candidate-sha> `
   --capture-window <visible-title:class:exe> --cef-workload `
-  --resource-mode dual_lane
+  --trace-append --resource-mode dual_lane
 ```
 
 The trace must contain at least 100 observed warm-up Takes followed by 100
@@ -105,6 +114,18 @@ python scripts/probe-take-latency.py `
   --trace <evidence-dir>\x264.jsonl <evidence-dir>\nvenc.jsonl `
   --output <evidence-dir>\latency-report.json
 ```
+
+The x264 campaign has no resource phase: its AC-13 status is explicitly
+`NOT_APPLICABLE` because AC-13 measures the WGC+CEF+NVENC resource delta;
+resource samples from an x264 trace can never substitute for that proof. The
+NVENC trace must contain both the reference and dual-lane resource phases and
+is the only campaign that may report AC-13 as `MEASURED`. Its reference
+`--resource-only` invocation starts a real NVENC recording before counting
+samples, requires `OUTPUT_STARTED`, and stops/verifies that recording before
+returning. Samples without the observed `encoder_active=true` state remain
+diagnostic and cannot satisfy AC-13. The aggregate report is `PASS` only when
+independent passing x264 and NVENC campaigns are both present; it exposes
+per-codec/session coverage and never pools samples across traces.
 
 The report is acceptable only when both `encoder_input_raw` and
 `directshow_return` are present with their own counts and p95 values. The
@@ -230,7 +251,7 @@ recreate them from prose.
 | AC-09 | #245 common Program audio evidence; no Preview/AFV claim |
 | AC-10 | runtime/alias lease logs and #243/#246/#248 evidence |
 | AC-12 | separately reported encoded first packet/RTMP guard, if captured |
-| AC-13 | reference versus dual-lane resource delta under WGC+CEF+NVENC |
+| AC-13 | NVENC-only reference versus dual-lane resource delta under WGC+CEF+NVENC; x264 is explicitly `NOT_APPLICABLE` |
 | AC-14 | rollback probe output with matching committed frame/PTS and one encoder bind |
 
 The evidence directory should contain only compact, deterministic summaries

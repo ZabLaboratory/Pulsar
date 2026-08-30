@@ -490,6 +490,23 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert "require_pixels=False" not in probe
     assert "OBS_WEBSOCKET_OUTPUT_STARTED" in probe
     assert "OBS_WEBSOCKET_OUTPUT_STOPPED" in probe
+    assert "async def start_resource_recording" in probe
+    assert "async def stop_resource_recording" in probe
+    assert "active_count >= minimum_samples" in probe
+    assert 'record.get("encoder_active") is True' in probe
+    assert "verify_recording(output_path, ffprobe)" in probe
+    resource_start = probe.index("async def start_resource_recording")
+    resource_stop = probe.index("async def stop_resource_recording")
+    resource_collect = probe.index("async def collect_resource_samples")
+    assert resource_start < resource_stop < resource_collect
+    start_helper = probe[resource_start:resource_stop]
+    stop_helper = probe[resource_stop:resource_collect]
+    assert start_helper.index('"StartRecord"') < start_helper.index("OBS_WEBSOCKET_OUTPUT_STARTED")
+    assert stop_helper.index('"StopRecord"') < stop_helper.index("OBS_WEBSOCKET_OUTPUT_STOPPED")
+    collect_body = probe[resource_collect:probe.index("async def assert_distinct_selected_scenes", resource_collect)]
+    assert collect_body.index("await start_resource_recording") < collect_body.index("active_count >= minimum_samples")
+    assert collect_body.index("await stop_resource_recording") < collect_body.index("verify_recording(output_path, ffprobe)")
+    assert "stop_recording_after_error" in collect_body
     assert "-count_frames" in probe
     assert "encoder video_t bound once to ProgramView" in probe
     assert "lane_root_binding_valid=(\\d) program_main_view_valid=(\\d)" in probe

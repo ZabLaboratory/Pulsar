@@ -41,7 +41,8 @@ The session record documents the exact build command, hardware/workload
 flags, warm-up count and the known resource reference (+0.091 ms/frame and
 +3.13 MB, represented as decimal bytes).  Resource samples are collected in
 ``reference`` and ``dual_lane`` modes so the delta is measured rather than
-declared from that reference.
+declared from that reference.  Each new sample carries the actual
+``encoder_active`` state; only active-encoder samples can satisfy AC-13.
 
 Usage::
 
@@ -104,6 +105,7 @@ RESOURCE_REFERENCE = {
     "extra_resident_bytes": 3_130_000,
 }
 RESOURCE_MODES = ("reference", "dual_lane")
+REQUIRED_CODECS = ("x264", "nvenc")
 RESOURCE_METRICS = (
     "frame_render_ms",
     "resident_bytes",
@@ -166,7 +168,7 @@ RESOURCE_REQUIRED = {
     "producer_count",
     *RESOURCE_METRICS,
 }
-RESOURCE_OPTIONAL = {"gpu_memory_bytes", "notes"}
+RESOURCE_OPTIONAL = {"encoder_active", "gpu_memory_bytes", "notes"}
 RESOURCE_ALLOWED = RESOURCE_REQUIRED | RESOURCE_OPTIONAL
 
 
@@ -463,6 +465,8 @@ def _validate_resource(value: Any, session: Mapping[str, Any], *, line: int | No
             line=line,
         )
     _integer(obj["observed_at_monotonic_ns"], "resource.observed_at_monotonic_ns", line=line)
+    if "encoder_active" in obj:
+        _boolean(obj["encoder_active"], "resource.encoder_active", line=line)
     for key in RESOURCE_METRICS:
         _number(obj[key], f"resource.{key}", line=line)
     if "gpu_memory_bytes" in obj:
@@ -821,36 +825,64 @@ def analyze_trace(
             "separate_boundary": boundary != "encoder_input_raw",
         }
 
-    resource_report: dict[str, Any] = {"status": "UNPROVEN", "sample_counts": {}, "metrics": {}, "comparison": {}}
+    resource_report: dict[str, Any] = {
+        "status": "UNPROVEN",
+        "sample_counts": {},
+        "active_sample_counts": {},
+        "inactive_sample_counts": {},
+        "metrics": {},
+        "comparison": {},
+    }
     for mode in RESOURCE_MODES:
         samples = [sample for sample in trace.resources if sample["sample_mode"] == mode]
+        active_samples = [sample for sample in samples if sample.get("encoder_active") is True]
         resource_report["sample_counts"][mode] = len(samples)
+        resource_report["active_sample_counts"][mode] = len(active_samples)
+        resource_report["inactive_sample_counts"][mode] = len(samples) - len(active_samples)
         resource_report["metrics"][mode] = {
-            metric: _resource_stats([sample[metric] for sample in samples]) for metric in RESOURCE_METRICS
+            metric: _resource_stats([sample[metric] for sample in active_samples]) for metric in RESOURCE_METRICS
         }
-    reference_samples = [sample for sample in trace.resources if sample["sample_mode"] == "reference"]
-    dual_samples = [sample for sample in trace.resources if sample["sample_mode"] == "dual_lane"]
-    if (
-        len(reference_samples) >= minimum_resource_samples
-        and len(dual_samples) >= minimum_resource_samples
-        and all(bool(session["workload"][key]) for key in ("wgc", "cef", "nvenc"))
-    ):
-        for metric in ("frame_render_ms", "resident_bytes"):
-            reference_p50 = resource_report["metrics"]["reference"][metric]["p50"]
-            dual_p50 = resource_report["metrics"]["dual_lane"][metric]["p50"]
-            delta = float(dual_p50) - float(reference_p50)
-            expected = RESOURCE_REFERENCE["extra_frame_render_ms"] if metric == "frame_render_ms" else RESOURCE_REFERENCE["extra_resident_bytes"]
-            resource_report["comparison"][metric] = {
-                "reference_p50": reference_p50,
-                "dual_lane_p50": dual_p50,
-                "delta": round(delta, 6),
-                "known_reference_delta": expected,
-                "within_known_reference": delta <= expected,
-            }
-        resource_report["status"] = "MEASURED"
+    if session["codec"] == "x264":
+        # AC-13 is a resource delta for the NVENC workload specifically.  An
+        # x264 trace may carry diagnostic resource samples, but they must not
+        # be allowed to satisfy or substitute this criterion.
+        resource_report["status"] = "NOT_APPLICABLE"
+        resource_report["reason"] = "AC-13 applies only to the NVENC resource workload; x264 samples are diagnostic only"
     else:
-        resource_report["status"] = "UNPROVEN"
-        resource_report["reason"] = "requires both resource modes, minimum samples, and WGC+CEF+NVENC workload flags"
+        reference_samples = [
+            sample
+            for sample in trace.resources
+            if sample["sample_mode"] == "reference" and sample.get("encoder_active") is True
+        ]
+        dual_samples = [
+            sample
+            for sample in trace.resources
+            if sample["sample_mode"] == "dual_lane" and sample.get("encoder_active") is True
+        ]
+        if (
+            len(reference_samples) >= minimum_resource_samples
+            and len(dual_samples) >= minimum_resource_samples
+            and all(bool(session["workload"][key]) for key in ("wgc", "cef", "nvenc"))
+        ):
+            for metric in ("frame_render_ms", "resident_bytes"):
+                reference_p50 = resource_report["metrics"]["reference"][metric]["p50"]
+                dual_p50 = resource_report["metrics"]["dual_lane"][metric]["p50"]
+                delta = float(dual_p50) - float(reference_p50)
+                expected = RESOURCE_REFERENCE["extra_frame_render_ms"] if metric == "frame_render_ms" else RESOURCE_REFERENCE["extra_resident_bytes"]
+                resource_report["comparison"][metric] = {
+                    "reference_p50": reference_p50,
+                    "dual_lane_p50": dual_p50,
+                    "delta": round(delta, 6),
+                    "known_reference_delta": expected,
+                    "within_known_reference": delta <= expected,
+                }
+            resource_report["status"] = "MEASURED"
+        else:
+            resource_report["status"] = "UNPROVEN"
+            resource_report["reason"] = (
+                "requires both resource modes, minimum active-encoder samples, "
+                "and WGC+CEF+NVENC workload flags"
+            )
 
     criteria = {
         "AC-07": {"boundary": "encoder_input_raw", **latency["encoder_input_raw"]},
@@ -868,10 +900,13 @@ def analyze_trace(
             "status": resource_report["status"],
             "resource": resource_report,
             "capacity_not_declared_from_reference": True,
+            "applicable": session["codec"] == "nvenc",
         },
     }
     hard_fail = any(criteria[key]["status"] == "FAIL" for key in ("AC-07", "AC-08", "AC-11", "AC-12"))
-    required_unproven = any(criteria[key]["status"] not in ("PASS", "MEASURED") for key in ("AC-07", "AC-08", "AC-12", "AC-13"))
+    required_unproven = any(criteria[key]["status"] not in ("PASS", "MEASURED") for key in ("AC-07", "AC-08", "AC-12"))
+    if session["codec"] == "nvenc":
+        required_unproven = required_unproven or criteria["AC-13"]["status"] not in ("MEASURED",)
     if hard_fail:
         status = "FAIL"
     elif session["evidence_kind"] != "runtime":
@@ -923,6 +958,7 @@ def analyze_trace(
             "encoded_first_packet is the pre-network encoder callback; RTMP receiver ingress is an external Probe boundary.",
             "Decoded and antenna timings are diagnostic only and carry no acceptance SLO.",
             "The first session.warmup_takes committed Takes are excluded from latency percentiles; measured counts are the observed committed suffix.",
+            "Resource sample counts include all records; resource metrics and AC-13 use only samples with encoder_active=true.",
             "A fixture report is never a runtime acceptance; run the same command against a runtime trace with evidence_kind=runtime.",
         ],
     }
@@ -950,20 +986,54 @@ def analyze_traces(
     ]
     if len(reports) == 1:
         return reports[0]
+
+    # Keep the campaign boundary visible in the aggregate report.  Latency
+    # and resource samples are analyzed inside each Trace above; this summary
+    # deliberately carries only per-session metadata and criterion statuses,
+    # so a passing x264 campaign can never donate samples to NVENC's AC-13.
+    codec_coverage = [
+        {
+            "codec": report["session"]["codec"],
+            "runtime_instance_id": report["session"]["runtime_instance_id"],
+            "session_id": report["session"]["session_id"],
+            "status": report["status"],
+            "criteria": {
+                key: report["criteria"][key]["status"]
+                for key in ("AC-07", "AC-08", "AC-11", "AC-12", "AC-13")
+            },
+            "resource_status": report["resources"]["status"],
+        }
+        for report in reports
+    ]
+    observed_codecs = sorted({entry["codec"] for entry in codec_coverage})
+    complete_codec_coverage = set(REQUIRED_CODECS).issubset(observed_codecs) and all(
+        entry["status"] == "PASS" for entry in codec_coverage
+    )
     statuses = {report["status"] for report in reports}
     if "FAIL" in statuses:
         status = "FAIL"
-    elif statuses == {"PASS"}:
-        status = "PASS"
-    elif "FIXTURE_ONLY" in statuses:
+    elif statuses == {"FIXTURE_ONLY"}:
         status = "FIXTURE_ONLY"
-    else:
+    elif not complete_codec_coverage:
+        # A multi-trace acceptance report is complete only when it contains
+        # one or more independent passing campaigns for both required
+        # codecs.  In particular, two passing NVENC traces cannot masquerade
+        # as x264 coverage, and no samples are pooled to make them pass.
         status = "UNPROVEN"
+    else:
+        status = "PASS"
     return {
         "schema": REPORT_SCHEMA,
         "status": status,
         "campaigns": reports,
-        "notes": ["Each campaign is an independent runtime/session; do not pool samples across codec/path boundaries."],
+        "codec_coverage": codec_coverage,
+        "required_codecs": list(REQUIRED_CODECS),
+        "observed_codecs": observed_codecs,
+        "complete_codec_coverage": complete_codec_coverage,
+        "notes": [
+            "Each campaign is an independent runtime/session; do not pool samples across codec/path boundaries.",
+            "AC-13 is measured only by the NVENC reference-versus-dual resource pair; x264 reports NOT_APPLICABLE.",
+        ],
     }
 
 
@@ -981,7 +1051,10 @@ def _print_summary(report: Mapping[str, Any]) -> None:
                 f"p99={summary.get('p99_ms')}ms status={summary.get('status')}"
             )
         resources = campaign.get("resources", {})
-        print(f"  {codec}/resources: status={resources.get('status')} samples={resources.get('sample_counts')}")
+        print(
+            f"  {codec}/resources: status={resources.get('status')} "
+            f"samples={resources.get('sample_counts')} active={resources.get('active_sample_counts')}"
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
