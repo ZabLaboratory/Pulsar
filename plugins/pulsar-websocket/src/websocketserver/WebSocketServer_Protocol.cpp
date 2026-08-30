@@ -362,7 +362,7 @@ void WebSocketServer::BroadcastEvent(uint64_t requiredIntent, const std::string 
 	if (!handlerLease)
 		return;
 
-	_threadPool.start(Utils::Compat::CreateFunctionRunnable([=, handlerLease]() {
+	_threadPool.start(Utils::Compat::CreateFunctionRunnable([=, handlerLease = handlerLease]() {
 		// Populate message object
 		json eventMessage;
 		eventMessage["op"] = 5;
