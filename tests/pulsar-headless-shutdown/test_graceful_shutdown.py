@@ -86,6 +86,16 @@ def test_create_remove_rendezvous_is_bounded_and_test_only() -> None:
     assert send < armed < release
 
 
+def test_browser_closed_marker_precedes_source_delete() -> None:
+    source = (ROOT / "plugins" / "pulsar-browser" / "obs-browser-source.cpp").read_text(
+        encoding="utf-8"
+    )
+    finalizer = source[source.index("void BrowserSourceFinalizeBrowserClose") :]
+    closed = finalizer.index("event=browser_closed")
+    source_release = finalizer.index("BrowserSourceCompleteTaskRelease")
+    assert closed < source_release
+
+
 def test_frontend_drains_source_graph_before_disconnect() -> None:
     source = (
         ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
