@@ -76,6 +76,7 @@ import os
 import pathlib
 import re
 import secrets
+import signal
 import shutil
 import socket
 import struct
@@ -505,6 +506,7 @@ class PulsarProcess:
         self.directshow_startup_output = ""
         self.directshow_lines: list[str] = []
         self.directshow_thread: threading.Thread | None = None
+        self.directshow_cleanup_failure: str | None = None
         self.lines: list[str] = []
         self.condition = threading.Condition()
         self.thread: threading.Thread | None = None
@@ -766,23 +768,51 @@ class PulsarProcess:
         if self.directshow_proc is None:
             if self.directshow_thread is not None:
                 self.directshow_thread.join(timeout=2)
+                if self.directshow_thread.is_alive():
+                    self.directshow_cleanup_failure = (
+                        "ProgramReturn DirectShow reader thread did not exit"
+                    )
+                    raise ProbeFailure(self.directshow_cleanup_failure)
                 self.directshow_thread = None
             return
         process = self.directshow_proc
-        self.directshow_proc = None
+        failure: str | None = None
         if process.poll() is None:
             try:
                 process.terminate()
                 process.wait(timeout=5)
-            except Exception:
+            except subprocess.TimeoutExpired:
                 try:
                     process.kill()
                     process.wait(timeout=5)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    failure = f"ProgramReturn DirectShow consumer could not be killed: {exc}"
+            except Exception as exc:
+                failure = f"ProgramReturn DirectShow consumer termination failed: {exc}"
+        # Keep the Popen handle until the OS confirms exit.  In particular,
+        # do not turn a still-running FFmpeg into a false PASS by clearing the
+        # reference before terminate/kill has been observed.
+        if process.poll() is None and failure is None:
+            failure = "ProgramReturn DirectShow consumer remained alive after cleanup"
+        if process.poll() is None:
+            failure = failure or "ProgramReturn DirectShow consumer exit was not confirmed"
+        else:
+            try:
+                process.wait(timeout=0)
+            except Exception as exc:
+                failure = failure or f"ProgramReturn DirectShow consumer reap failed: {exc}"
         if self.directshow_thread is not None:
             self.directshow_thread.join(timeout=2)
-            self.directshow_thread = None
+            if self.directshow_thread.is_alive():
+                failure = failure or "ProgramReturn DirectShow reader thread did not exit"
+        if failure is not None:
+            self.directshow_cleanup_failure = failure
+            raise ProbeFailure(failure)
+        # Only release the handle after both process exit and the stdout pump
+        # have been confirmed.  This leaves subsequent shutdown/retry paths
+        # able to inspect the owned process when cleanup is incomplete.
+        self.directshow_proc = None
+        self.directshow_thread = None
 
     def _pump_directshow(self, process: subprocess.Popen[str]) -> None:
         if process.stdout is None:
@@ -795,18 +825,74 @@ class PulsarProcess:
         # queue/filter lease is closed while the ProgramReturn output is still
         # alive.  This also prevents a stale reader from consuming a later
         # runtime's named queue.
-        self.stop_directshow_consumer()
-        if self.proc is None or self.proc.poll() is not None:
-            return
+        directshow_failure: ProbeFailure | None = None
         try:
-            self.proc.terminate()
-            self.proc.wait(timeout=8)
-        except Exception:
+            self.stop_directshow_consumer()
+        except ProbeFailure as exc:
+            directshow_failure = exc
+        pulsar_failure: str | None = None
+        if self.proc is not None and self.proc.poll() is None:
             try:
-                self.proc.kill()
+                if os.name == "nt":
+                    # The headless child owns a process group and releases
+                    # its runtime/DirectShow leases from the graceful Ctrl+
+                    # Break path. Hard termination is only the fallback.
+                    self.proc.send_signal(signal.CTRL_BREAK_EVENT)
+                else:
+                    self.proc.terminate()
                 self.proc.wait(timeout=8)
-            except Exception:
-                pass
+            except subprocess.TimeoutExpired:
+                try:
+                    self.proc.kill()
+                    self.proc.wait(timeout=8)
+                except Exception as exc:
+                    pulsar_failure = f"Pulsar process could not be killed during cleanup: {exc}"
+            except Exception as exc:
+                try:
+                    self.proc.terminate()
+                    self.proc.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    try:
+                        self.proc.kill()
+                        self.proc.wait(timeout=8)
+                    except Exception as fallback_exc:
+                        pulsar_failure = (
+                            "Pulsar process termination failed during cleanup: "
+                            f"graceful={exc}; fallback={fallback_exc}"
+                        )
+                except Exception as fallback_exc:
+                    pulsar_failure = (
+                        "Pulsar process termination failed during cleanup: "
+                        f"graceful={exc}; fallback={fallback_exc}"
+                    )
+        if self.proc is not None and self.proc.poll() is None:
+            pulsar_failure = pulsar_failure or "Pulsar process remained alive after cleanup"
+        if directshow_failure is not None:
+            if pulsar_failure:
+                raise ProbeFailure(f"{directshow_failure}; {pulsar_failure}")
+            raise directshow_failure
+        if pulsar_failure:
+            raise ProbeFailure(pulsar_failure)
+
+    def assert_shutdown_clean(self, *, require_runtime_lease: bool = False) -> None:
+        """Fail a campaign if an owned process, reader, or lease survived."""
+
+        if self.directshow_cleanup_failure is not None:
+            raise ProbeFailure(self.directshow_cleanup_failure)
+        if self.directshow_proc is not None and self.directshow_proc.poll() is None:
+            raise ProbeFailure("ProgramReturn DirectShow consumer is still alive after shutdown")
+        if self.directshow_thread is not None and self.directshow_thread.is_alive():
+            raise ProbeFailure("ProgramReturn DirectShow reader thread is still alive after shutdown")
+        if self.proc is not None and self.proc.poll() is None:
+            raise ProbeFailure("Pulsar process is still alive after shutdown")
+        if self.thread is not None and self.thread.is_alive():
+            raise ProbeFailure("Pulsar log reader thread is still alive after shutdown")
+        if require_runtime_lease and not any(
+            "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released" in line
+            or "PULSAR_RUNTIME_INSTANCE lease=released" in line
+            for line in self.snapshot()
+        ):
+            raise ProbeFailure("runtime instance lease was not released at shutdown")
 
 
 class Inbox:
@@ -1733,10 +1819,12 @@ async def collect_resource_samples(
             await verify_workload_sources(inbox, ws, process, lanes=lanes)
         elif process.capture_window or process.cef_workload:
             # The reference phase intentionally creates and measures one
-            # producer pair on A.  The dual phase creates and measures both
+            # producer on A.  The dual phase creates and measures both
             # producer pairs on A/B; no hidden B registration contaminates the
-            # baseline.
-            await verify_workload_sources(inbox, ws, process, lanes=lanes, require_pixels=False)
+            # baseline.  Both paths use the same non-black pixel gate so a
+            # dead/black WGC or CEF producer cannot make the resource delta
+            # look like a valid topology comparison.
+            await verify_workload_sources(inbox, ws, process, lanes=lanes, require_pixels=True)
         deadline = time.monotonic() + timeout
         while True:
             if process.trace_path is None:
@@ -2271,6 +2359,8 @@ def run(args: argparse.Namespace) -> int:
             trace_host,
             trace_gpu,
         )
+        result = EXIT_FAIL
+        cleanup_failure: ProbeFailure | None = None
         try:
             if trace_path is not None:
                 calibration = calibrate_wire_clock()
@@ -2300,23 +2390,37 @@ def run(args: argparse.Namespace) -> int:
                     )
                 )
                 print(f"PASS: collected {count} native {args.resource_mode} resource samples")
-                return 0
-            commits = asyncio.run(drive(process, args.takes, warmup_takes=warmup_takes))
-            print(
-                f"PASS: {len(commits)} Takes; computed lane/surface relations remained valid; "
-                "frame_id/PTS monotone"
-            )
-            return 0
+                result = 0
+            else:
+                commits = asyncio.run(drive(process, args.takes, warmup_takes=warmup_takes))
+                print(
+                    f"PASS: {len(commits)} Takes; computed lane/surface relations remained valid; "
+                    "frame_id/PTS monotone"
+                )
+                result = 0
         except ProbeSkip as exc:
             print(f"SKIP: {exc}")
-            return EXIT_SKIP
+            result = EXIT_SKIP
         except (ProbeFailure, asyncio.TimeoutError, OSError, json.JSONDecodeError) as exc:
             print(f"FAIL: {exc}", file=sys.stderr)
-            return EXIT_FAIL
+            result = EXIT_FAIL
         finally:
-            process.shutdown()
+            try:
+                process.shutdown()
+            except ProbeFailure as exc:
+                cleanup_failure = exc
             if cef_server is not None:
                 cef_server.close()
+        if cleanup_failure is not None:
+            print(f"FAIL: cleanup did not release all owned resources: {cleanup_failure}", file=sys.stderr)
+            return EXIT_FAIL
+        if result == 0:
+            try:
+                process.assert_shutdown_clean(require_runtime_lease=trace_path is not None)
+            except ProbeFailure as exc:
+                print(f"FAIL: cleanup verification failed: {exc}", file=sys.stderr)
+                return EXIT_FAIL
+        return result
 
 
 def main() -> int:

@@ -10,7 +10,9 @@ and a teardown barrier for an extracted (in-flight) swap.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,9 @@ _DIRECTSHOW_NAMESPACE_PATCH = _ROOT / "patches/0010-fix-win-dshow-reject-ambiguo
 _RUNTIME_PROBE = _ROOT / "scripts/probe-dual-lane.py"
 _ROLLBACK_PROBE = _ROOT / "scripts/probe-dual-lane-rollback.py"
 _OUTPUT_EFFECT_PROBE = _ROOT / "scripts/probe-output-effect.py"
+_DUAL_LANE_CONFIG = _ROOT / "plugins/pulsar-frontend-stub/include/pulsar-dual-lane-config.h"
+_DUAL_LANE_CONFIG_TEST = _ROOT / "tests/dual-lane-config/dual-lane-config-probe.cpp"
+_DUAL_LANE_CONFIG_CMAKE = _ROOT / "tests/dual-lane-config/CMakeLists.txt"
 
 
 def _read(path: Path) -> str:
@@ -44,6 +49,55 @@ def _load_probe(path: Path, module_name: str):
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_directshow_cleanup_keeps_owned_handle_and_fails_closed() -> None:
+    probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_cleanup")
+
+    class ExitingProcess:
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            assert timeout is None or timeout >= 0
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("fake", timeout)
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    class StuckProcess(ExitingProcess):
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    def process_with(fake: object):
+        instance = probe.PulsarProcess.__new__(probe.PulsarProcess)
+        instance.directshow_proc = fake
+        instance.directshow_thread = threading.Thread(target=lambda: None)
+        instance.directshow_thread.start()
+        instance.directshow_cleanup_failure = None
+        return instance
+
+    clean = process_with(ExitingProcess())
+    clean.stop_directshow_consumer()
+    assert clean.directshow_proc is None
+    assert clean.directshow_thread is None
+
+    stuck = process_with(StuckProcess())
+    with pytest.raises(probe.ProbeFailure, match="remained alive|exit was not confirmed|could not be killed"):
+        stuck.stop_directshow_consumer()
+    assert stuck.directshow_proc is not None
+    assert stuck.directshow_cleanup_failure is not None
 
 
 def test_physical_roots_are_fixed_and_roles_point_at_their_lane() -> None:
@@ -285,6 +339,23 @@ def test_dual_lane_activation_flag_is_consumed_and_rollback_preserves_surfaces()
     assert 'return {false, "invalid-PULSAR_DISABLE_DUAL_LANE"}' in source
     assert "dualLaneEnabled = activation.enabled && !resourceReference && rollbackSetting.valid" in source
     assert '"invalid-PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES"' in source
+    config = _read(_DUAL_LANE_CONFIG)
+    config_test = _read(_DUAL_LANE_CONFIG_TEST)
+    config_cmake = _read(_DUAL_LANE_CONFIG_CMAKE)
+    rollback_parser = _between(
+        source,
+        "DualLaneRollbackSetting resolve_dual_lane_rollback_after_takes()",
+        "class PulsarFrontendAPI;",
+    )
+    assert "parse_rollback_after_takes" in rollback_parser
+    assert "strtoull" not in rollback_parser
+    assert "ASCII digits" in config
+    assert "parsed == 100000ULL / 10ULL && digitValue > 0" in config
+    for value in ('""', '"0"', '"100001"', '" 1"', '"+1"', '"1.0"'):
+        assert value in config_test
+    for value in ('"1"', '"0001"', '"100000"'):
+        assert value in config_test
+    assert "add_test(NAME pulsar-dual-lane-config-probe" in config_cmake
     assert "parse_env_bool" in source
     assert "if (!*value)" in source
     assert "assert_dual_lane_activation" in probe
@@ -325,6 +396,8 @@ def test_dual_lane_activation_flag_is_consumed_and_rollback_preserves_surfaces()
     assert "rollback-vendor-prepare" in rollback_probe
     assert "rollback-vendor-take" in rollback_probe
     assert "rollback-vendor-dispatch" in rollback_probe
+    assert "rollback-getstate-race-" in rollback_probe
+    assert "ready/operational=true after the frame-boundary freeze" in rollback_probe
     assert "validate_commit(identity, None, commit)" in rollback_probe
     assert 'state_before["state"] != "frozen"' in rollback_probe
     assert "freezeAfterFrontendRollback" in source
@@ -356,6 +429,10 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert '"PULSAR_DIRECTSHOW_LEGACY_ALIAS"' in probe
     assert 'boundary="directshow_return"' in probe
     assert "assert_directshow_consumer_alive" in probe
+    assert "directshow_cleanup_failure" in probe
+    assert "assert_shutdown_clean" in probe
+    assert "require_pixels=True" in probe
+    assert "require_pixels=False" not in probe
     assert "OBS_WEBSOCKET_OUTPUT_STARTED" in probe
     assert "OBS_WEBSOCKET_OUTPUT_STOPPED" in probe
     assert "-count_frames" in probe

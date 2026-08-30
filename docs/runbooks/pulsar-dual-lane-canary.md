@@ -150,11 +150,13 @@ expected sequence is:
 The harness also calls the versioned vendor API after the freeze. `GetState`
 is still available as an observation path and reports `state=frozen` with
 `operational=false`; valid `Prepare`, `Take`, and `Dispatch` payloads are
-rejected by the closed mutation bridge with `PREVIEW_FROZEN` before the vendor
+rejected by the closed mutation gateway with `PREVIEW_FROZEN` before the vendor
 state machine can mutate anything. A before/after `GetState` comparison proves
-that state, `server_seq`, revisions and role mapping are unchanged. This is
-deliberately a gateway/direct-vendor freeze rejection, not a
-`PREVIEW_LANE_MISMATCH` result.
+that state, `server_seq`, revisions and role mapping are unchanged. This
+public probe intentionally claims gateway coverage only: the direct vendor
+adapter keeps the same fail-closed guard and bounded cache, but the websocket
+transport does not expose a second route that bypasses the gateway for a
+separate direct-adapter saturation claim.
 
 The marker is written asynchronously by a process-lifetime worker so the
 graphics callback performs no directory creation or file I/O. The probe waits
@@ -172,10 +174,11 @@ keep the runtime fail-stopped, and escalate the candidate for investigation.
 Do not clear the flag, retry indefinitely or overwrite the evidence.
 
 `PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES` is a bounded drill trigger, not the
-activation safety flag. A malformed value, an explicitly empty value, zero, or
-a value above `100000` is rejected and fails closed to the compatibility
-single-canvas path; it must never leave dual-lane active while silently
-disarming the drill. Such a run is not a rollback proof. Malformed
+activation safety flag. Only ASCII decimal digits representing `1..100000` are
+accepted. A malformed value, an explicitly empty value, whitespace, a sign,
+zero, overflow, or a value above `100000` is rejected and fails closed to the
+compatibility single-canvas path; it must never leave dual-lane active while
+silently disarming the drill. Such a run is not a rollback proof. Malformed
 `PULSAR_DUAL_LANE_ENABLED` or `PULSAR_DISABLE_DUAL_LANE` values likewise fail
 closed to the compatibility path.
 

@@ -152,6 +152,46 @@ async def drive_rollback(process: Any) -> None:
         ):
             raise probe.ProbeFailure(f"rollback log reported unsafe state: {rollback_match.group(0)}")
 
+        # The graphics callback publishes the bridge freeze before its
+        # asynchronous marker/log work and before the vendor bookkeeping
+        # lock is necessarily updated. Read GetState concurrently at that
+        # exact boundary: no response may expose the old ready/operational
+        # view after mutation admission has closed.
+        async def post_freeze_state(request_id: str) -> dict[str, Any]:
+            response = await inbox.receive_until_response(ws, request_id)
+            probe.assert_success(response, f"CallVendorRequest/GetState/{request_id}")
+            return ((response.get("responseData") or {}).get("responseData") or {})
+
+        state_race_ids = [f"rollback-getstate-race-{index}" for index in range(16)]
+        for request_id in state_race_ids:
+            await ws.send(
+                json.dumps(
+                    {
+                        "op": 6,
+                        "d": {
+                            "requestType": "CallVendorRequest",
+                            "requestId": request_id,
+                            "requestData": {
+                                "vendorName": "pulsar-scene-switch",
+                                "requestType": "GetState",
+                                "requestData": {},
+                            },
+                        },
+                    }
+                )
+            )
+        state_race = [await post_freeze_state(request_id) for request_id in state_race_ids]
+        if any(
+            state.get("state") != "frozen"
+            or state.get("operational") is not False
+            or state.get("frozen") is not True
+            for state in state_race
+        ):
+            raise probe.ProbeFailure(
+                "GetState exposed ready/operational=true after the frame-boundary freeze: "
+                f"{state_race}"
+            )
+
         marker_path = runtime.record_dir / "pulsar-dual-lane-rollback.json"
         marker: dict[str, Any] | None = None
         marker_deadline = time.monotonic() + 10.0

@@ -97,6 +97,7 @@
 #endif
 
 #include "pulsar-frontend-stub.h"
+#include "pulsar-dual-lane-config.h"
 #include "pulsar-dual-lane-control.h"
 #include "pulsar-runtime-telemetry.h"
 #include "pulsar-program-audio.h"
@@ -169,23 +170,16 @@ struct DualLaneRollbackSetting {
 DualLaneRollbackSetting resolve_dual_lane_rollback_after_takes()
 {
     const char *value = std::getenv("PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES");
-    if (!value || !*value)
-        return {0, value == nullptr, value == nullptr ? "unset" :
-                                                        "invalid-PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES"};
-
-    char *end = nullptr;
-    const unsigned long long parsed = std::strtoull(value, &end, 10);
-    // Keep this an intentionally small, testable operational guard.  A value
-    // of zero or a malformed/oversized value is invalid configuration.  The
-    // caller must fail closed to the compatibility topology; it must never
-    // leave dual-lane active while silently disarming the drill.
-    if (!end || *end != '\0' || parsed == 0 || parsed > 100000ULL) {
+    const auto parsed = pulsar_dual_lane_config::parse_rollback_after_takes(value);
+    if (!parsed.valid) {
         blog(LOG_WARNING,
              "[pulsar-dual-lane] PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES rejected; "
              "expected an integer in 1..100000");
         return {0, false, "invalid-PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES"};
     }
-    return {static_cast<uint64_t>(parsed), true, "valid"};
+    if (!parsed.present)
+        return {0, true, "unset"};
+    return {parsed.takes, true, "valid"};
 }
 
 class PulsarFrontendAPI;
@@ -239,6 +233,16 @@ public:
     {
         lifecycle_.store(Lifecycle::ShuttingDown, std::memory_order_release);
         pending_.store(true, std::memory_order_release);
+    }
+
+    // This is the single effective rollback/teardown latch. Readers such as
+    // the scene-switch GetState adapter must observe the same atomic bit as
+    // websocket mutation admission; a separately updated vendor boolean
+    // would leave a window in which GetState says "ready" after admission was
+    // already closed.
+    bool frozen() const
+    {
+        return lifecycle_.load(std::memory_order_acquire) == Lifecycle::ShuttingDown;
     }
 
     // Stop admitting new mutations, then wait for the one already inside the
@@ -2838,7 +2842,11 @@ private:
         // first; retain the same explicit, mutation-free guard here for
         // callers that reach the registered vendor directly.
         const std::string type = command["command_type"];
-        if (!operational_ && type != "Abort") {
+        // The frontend publishes the bridge latch first at the frame
+        // boundary. Consult it directly so a direct vendor caller cannot
+        // observe or mutate through the short interval before the adapter's
+        // own bookkeeping lock is updated.
+        if ((g_dualLaneControlBridge.frozen() || !operational_) && type != "Abort") {
             respondFrozen(p, response);
             return;
         }
@@ -2899,12 +2907,14 @@ private:
     void state(obs_data_t *response)
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        const bool effectiveFrozen = g_dualLaneControlBridge.frozen() || !operational_;
+        const std::string effectiveState = effectiveFrozen ? "frozen" : state_;
         json out = { {"contract", "pulsar.scene-switch.v1"},
             {"schema_version", 1},
             {"runtime_instance_id", runtimeId_},
-            {"state", state_},
-            {"operational", operational_},
-            {"frozen", !operational_},
+            {"state", effectiveState},
+            {"operational", !effectiveFrozen},
+            {"frozen", effectiveFrozen},
             {"server_seq", serverSeq_},
             {"revisions", revisions_},
             {"role_map", roleMap_},

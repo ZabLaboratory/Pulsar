@@ -150,4 +150,10 @@ if(WIN32)
     # no libobs/Qt: the went-active state machine itself is exercised by
     # scripts/probe-multi-stream.py instead (see the probe's own header).
     add_subdirectory(tests/output-attempt-settled-probe)
+
+    # #249 -- the rollback trigger is parsed by the same header-only helper
+    # used by the frontend, so whitespace/sign/zero/overflow values cannot
+    # silently arm or disarm a drill. This native truth table needs no OBS,
+    # GPU, or running Pulsar process.
+    add_subdirectory(tests/dual-lane-config)
 endif()

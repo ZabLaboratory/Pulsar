@@ -17,6 +17,10 @@ status before the issue can be handed to Probe.
   remain separate diagnostics; none is an antenna guarantee.
 - WGC+CEF screenshots must be non-black and pixel-gated. A blank frame is a
   rejected attempt, never an acceptable placeholder.
+- The bounded direct-vendor idempotency cache is guarded in source and by its
+  native config/unit coverage. The public rollback probe exercises the
+  gateway rejection path; it does not claim a second transport that bypasses
+  that gateway for direct-adapter saturation.
 - No password, token, private path or unredacted process log belongs in this
   directory.
 
