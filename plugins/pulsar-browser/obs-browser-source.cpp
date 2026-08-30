@@ -38,6 +38,10 @@
 #include <mutex>
 #include <utility>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #ifdef __linux__
 #include "linux-keyboard-helpers.hpp"
 #endif
@@ -87,6 +91,7 @@ static bool shutdown_close_next_task_posted = false;
 static bool source_destroy_close_next_task_posted = false;
 static bool shutdown_close_sequence_started = false;
 static set<BrowserSource *> destroying_sources;
+static std::atomic<bool> test_create_rendezvous_consumed{false};
 enum class BrowserLifecyclePhase : int {
 	Running,
 	Closing,
@@ -1004,6 +1009,12 @@ void BrowserSource::Destroy()
 		BrowserSourceDestroyFatal("invalid_lifecycle_phase");
 
 	if (browser_ids.empty()) {
+		/* No browser was present when PrepareDestroy armed the barrier.  The
+		 * generation marker is the test-only handoff which lets a paused create
+		 * task prove that Destroy won the race before CreateBrowserSync resumes. */
+		blog(LOG_INFO,
+		     "PULSAR_CEF_SHUTDOWN event=source_destroy_armed generation=%llu browser_count=0",
+		     static_cast<unsigned long long>(source_generation));
 		/* No browser remains; the source task state owns the final delete. */
 		SetBrowser(nullptr);
 		UnlinkFromBrowserList();
@@ -1073,6 +1084,40 @@ void BrowserSource::ExecuteOnBrowser(BrowserFunc func, bool async)
 	}
 }
 
+#ifdef _WIN32
+static void BrowserSourceTestCreateRendezvous()
+{
+	const char *rendezvous_name = std::getenv("PULSAR_CEF_TEST_CREATE_RENDEZVOUS");
+	if (!rendezvous_name || !*rendezvous_name || test_create_rendezvous_consumed.exchange(true))
+		return;
+
+	const std::string ready_name = std::string(rendezvous_name) + ".ready";
+	const std::string release_name = std::string(rendezvous_name) + ".release";
+	HANDLE ready_event = OpenEventA(EVENT_MODIFY_STATE, FALSE, ready_name.c_str());
+	HANDLE release_event = OpenEventA(SYNCHRONIZE, FALSE, release_name.c_str());
+	if (!ready_event || !release_event) {
+		if (ready_event)
+			CloseHandle(ready_event);
+		if (release_event)
+			CloseHandle(release_event);
+		BrowserSourceDestroyFatal("test_create_rendezvous_open_failed");
+	}
+
+	if (!SetEvent(ready_event)) {
+		CloseHandle(ready_event);
+		CloseHandle(release_event);
+		BrowserSourceDestroyFatal("test_create_rendezvous_ready_failed");
+	}
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=test_create_rendezvous_ready");
+	const DWORD wait_result = WaitForSingleObject(release_event, 5000);
+	CloseHandle(ready_event);
+	CloseHandle(release_event);
+	if (wait_result != WAIT_OBJECT_0)
+		BrowserSourceDestroyFatal("test_create_rendezvous_release_timeout");
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=test_create_rendezvous_released");
+}
+#endif
+
 bool BrowserSource::CreateBrowser()
 {
 	if (!BrowserSourceCanCreateBrowser()) {
@@ -1100,6 +1145,12 @@ bool BrowserSource::CreateBrowser()
 			BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(create_task_state));
 			return;
 		}
+
+#ifdef _WIN32
+		/* Test-only gate: RemoveInput may be sent while CreateBrowserSync is
+		 * paused, forcing the real late OnAfterCreated ordering. */
+		BrowserSourceTestCreateRendezvous();
+#endif
 
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
 		if (hwaccel) {
