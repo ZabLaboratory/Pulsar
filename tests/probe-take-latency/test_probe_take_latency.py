@@ -84,6 +84,19 @@ def _take_records(
         "workload": {"wgc": True, "cef": True, "nvenc": codec == "nvenc"},
         "capture_paths": list(probe.BOUNDARIES),
         "resource_reference": deepcopy(probe.RESOURCE_REFERENCE),
+        "rtmp_receiver": {
+            "server_url": "rtmp://127.0.0.1:19350/pulsar",
+            "stream_key": f"stream-{runtime_id}",
+            "endpoint": f"rtmp://127.0.0.1:19350/pulsar/stream-{runtime_id}",
+            "receiver_id": "ffmpeg-receiver",
+            "stream_id": f"stream-{runtime_id}",
+            "clock_source": "perf_counter_ns/qpc",
+            "clock_offset_ns": 0,
+            "clock_bound_ns": 5_000_000,
+            "packet_timebase_num": 1,
+            "packet_timebase_den": 1000,
+        },
+        "rtmp_load_requested": True,
         "source_types": ["window_capture", "browser_source"] if evidence_kind == "runtime" else None,
         "build_revision": "f" * 40 if evidence_kind == "runtime" else "fixture-build",
         "command_line": "fixture only; never a runtime acceptance",
@@ -161,6 +174,7 @@ def _take_records(
                 "encoder_input_raw": ("ProgramView", "encoder_input"),
                 "directshow_return": ("ProgramReturn", "DirectShow"),
                 "encoded_first_packet": ("EncoderOutput", "encoder_callback"),
+                "rtmp_first_packet": ("RTMP", "receiver"),
                 "decoded_first_frame": ("RTMP", "decoder"),
                 "antenna_first_frame": ("Antenna", "antenna"),
             }[boundary]
@@ -183,7 +197,33 @@ def _take_records(
             if boundary in ("encoder_input_raw", "directshow_return"):
                 item["program_frame"] = valid
             if boundary == "encoded_first_packet":
-                item["packet_index"] = 0
+                item.update(
+                    {
+                        "packet_index": index,
+                        "packet_pts": index,
+                        "packet_dts": index,
+                        "packet_timebase_num": 1,
+                        "packet_timebase_den": 60,
+                    }
+                )
+            if boundary == "rtmp_first_packet":
+                # RTMP/FLV timestamps are millisecond ticks.  Round to the
+                # nearest tick so the parser exercises its documented
+                # half-receiver-tick rational matching rule.
+                receiver_pts = round(index * 1000 / 60)
+                item.update(
+                    {
+                        "packet_index": 1000 + index,
+                        "packet_pts": receiver_pts,
+                        "packet_dts": receiver_pts,
+                        "packet_timebase_num": 1,
+                        "packet_timebase_den": 1000,
+                        "packet_identity": f"stream-{runtime_id}-video-{index}",
+                        "clock_source": "perf_counter_ns/qpc",
+                        "clock_offset_ns": 0,
+                        "clock_bound_ns": 5_000_000,
+                    }
+                )
             return {"record_type": "observation", **item}
 
         # A valid frame before the atomic commit is intentionally ignored.
@@ -191,6 +231,7 @@ def _take_records(
         records.append(observation("encoder_input_raw", commit_at + int(raw_extra_ms * 1_000_000), frame_id, pts_ns))
         records.append(observation("directshow_return", commit_at + int(ds_extra_ms * 1_000_000), frame_id + 1, pts_ns + 1))
         records.append(observation("encoded_first_packet", commit_at + 3_000_000, frame_id, pts_ns))
+        records.append(observation("rtmp_first_packet", commit_at + 5_000_000, frame_id, pts_ns))
         records.append(observation("decoded_first_frame", commit_at + 100_000_000, frame_id + 2, pts_ns + 2))
         records.append(observation("antenna_first_frame", commit_at + 120_000_000, frame_id + 3, pts_ns + 3))
         revisions = committed_revisions
@@ -219,6 +260,7 @@ def _take_records(
                         "producer_count": 1 if mode == "reference" else 2,
                         "encoder_active": resource_encoder_active,
                         "encoder_family": codec,
+                        "rtmp_load_active": True,
                         "frame_render_ms": render + sample_index * 0.001,
                         "resident_bytes": resident + sample_index * 1000,
                         "process_cpu_percent": 15.0 + sample_index,
@@ -332,6 +374,43 @@ def test_runtime_nvenc_resource_samples_without_active_encoder_are_not_evidence(
     assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
 
 
+def test_ac13_requires_symmetric_active_rtmp_load_in_reference_and_dual_phases():
+    records = _take_records(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-asym-rtmp")
+    reference = next(
+        record
+        for record in records
+        if record.get("record_type") == "resource_sample" and record.get("sample_mode") == "reference"
+    )
+    reference["rtmp_load_active"] = False
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
+    assert report["resources"]["rtmp_load_active_sample_counts"]["reference"] == 1
+    assert report["resources"]["rtmp_load_active_sample_counts"]["dual_lane"] == 2
+
+
+def test_ac13_uses_conjoint_active_rtmp_samples_and_keeps_early_false_diagnostic():
+    records = _take_records(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-early-rtmp")
+    first_by_mode = set()
+    for record in records:
+        if record.get("record_type") != "resource_sample":
+            continue
+        mode = record["sample_mode"]
+        if mode not in first_by_mode:
+            first_by_mode.add(mode)
+            record["encoder_active"] = True
+            record["encoder_family"] = "nvenc"
+            record["rtmp_load_active"] = False
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=1
+    )
+    assert report["criteria"]["AC-13"]["status"] == "MEASURED"
+    assert report["resources"]["eligible_sample_counts"] == {"reference": 1, "dual_lane": 1}
+    assert report["resources"]["rtmp_eligible_sample_counts"] == {"reference": 1, "dual_lane": 1}
+    assert report["resources"]["rtmp_load_active_sample_counts"] == {"reference": 1, "dual_lane": 1}
+
+
 def test_runtime_nvenc_resource_samples_from_another_codec_are_not_evidence():
     records = _take_records(
         3,
@@ -378,6 +457,101 @@ def test_default_acceptance_threshold_is_unproven_for_small_fixture():
     assert report["criteria"]["AC-07"]["status"] == "UNPROVEN"
     assert report["criteria"]["AC-08"]["status"] == "UNPROVEN"
     assert report["criteria"]["AC-12"]["status"] == "UNPROVEN"
+
+
+def test_encoded_only_evidence_can_never_satisfy_ac12():
+    records = [
+        record
+        for record in _take_records(3, evidence_kind="runtime", include_resources=False)
+        if not (record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet")
+    ]
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    assert report["criteria"]["AC-07"]["status"] == "PASS"
+    assert report["criteria"]["AC-08"]["status"] == "PASS"
+    assert report["criteria"]["AC-12"]["status"] == "UNPROVEN"
+    assert report["criteria"]["AC-12"]["boundary"] == "rtmp_first_packet"
+    assert report["criteria"]["AC-12"]["encoder_callback_auxiliary"]["count"] == 3
+    assert report["status"] == "UNPROVEN"
+
+
+def test_rtmp_receiver_requires_complete_session_and_packet_metadata():
+    records = _take_records(3)
+    session = records[0]
+    session.pop("rtmp_receiver")
+    with pytest.raises(probe.EvidenceError, match="must be present together"):
+        probe.analyze_trace(
+            probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+        )
+
+    records = _take_records(3)
+    encoded = next(
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "encoded_first_packet"
+    )
+    encoded.pop("packet_timebase_den")
+    with pytest.raises(probe.EvidenceError, match="encoded packet metadata must be complete"):
+        probe.parse_records(records)
+
+
+def test_rtmp_load_request_and_receiver_metadata_are_an_atomic_session_pair():
+    records = _take_records(1)
+    records[0].pop("rtmp_load_requested")
+    with pytest.raises(probe.EvidenceError, match="must be present together"):
+        probe.parse_records(records)
+
+    records = _take_records(1)
+    records[0]["rtmp_load_requested"] = False
+    with pytest.raises(probe.EvidenceError, match="must be present together"):
+        probe.parse_records(records)
+
+
+def test_rtmp_capture_path_requires_receiver_metadata():
+    records = _take_records(1)
+    records[0].pop("rtmp_receiver")
+    records[0].pop("rtmp_load_requested")
+    with pytest.raises(probe.EvidenceError, match="capture_paths includes rtmp_first_packet"):
+        probe.parse_records(records)
+
+
+def test_rtmp_packet_must_match_one_producer_pts_within_half_receiver_tick():
+    records = _take_records(3)
+    rtmp = next(
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "rtmp_first_packet"
+    )
+    rtmp["packet_pts"] += 1
+    with pytest.raises(probe.EvidenceError, match="producer PTS matches"):
+        probe.analyze_trace(
+            probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+        )
+
+
+def test_rtmp_receiver_clock_mismatch_and_packet_identity_are_rejected():
+    records = _take_records(3)
+    rtmp = next(
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "rtmp_first_packet"
+    )
+    rtmp["clock_source"] = "qpc"
+    with pytest.raises(probe.EvidenceError, match="clock_source differs"):
+        probe.parse_records(records)
+
+    records = _take_records(3)
+    rtmp_records = [
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "rtmp_first_packet"
+    ]
+    rtmp_records[1]["packet_identity"] = rtmp_records[0]["packet_identity"]
+    with pytest.raises(probe.EvidenceError, match="duplicate RTMP packet identity"):
+        probe.analyze_trace(
+            probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+        )
 
 
 def test_wrong_directshow_surface_is_rejected_instead_of_counted_as_raw():

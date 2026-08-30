@@ -104,6 +104,12 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "#ifdef _WIN32\n#include <windows.h>\n#endif" in frontend
     assert '\\"boundary\\":\\"encoder_input_raw\\"' in frontend
     assert '\\"boundary\\":\\"encoded_first_packet\\"' in frontend
+    assert '\\"packet_pts\\":' in frontend
+    assert '\\"packet_timebase_num\\":' in frontend
+    assert '\\"capture_paths\\":[\\"encoder_input_raw\\",\\"directshow_return\\",\\"encoded_first_packet\\"' in frontend
+    assert "streamOutput_ = streamOutput" in frontend
+    assert "rtmp_load_active" in frontend
+    assert "obs_output_active(streamOutput)" in frontend
     assert "obs_add_raw_video_callback" in frontend
     assert "obs_output_add_packet_callback" in frontend
     assert 'obs_source_create("browser_source", "PulsarCefWorkload"' in frontend
@@ -440,6 +446,7 @@ def test_wire_clock_calibration_brackets_qpc_and_rejects_epoch_mismatch(
         "wire_now_ns": 1_000_000_050,
         "qpc_now_ns": 1_000_000_050,
         "qpc_delta_ns": 0,
+        "qpc_bound_ns": 50,
     }
 
     qpc_samples = iter((2_000_000_000, 2_000_000_100))

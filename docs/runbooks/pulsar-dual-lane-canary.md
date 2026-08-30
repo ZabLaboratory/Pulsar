@@ -128,12 +128,13 @@ AC-13. The aggregate report is `PASS` only when
 independent passing x264 and NVENC campaigns are both present; it exposes
 per-codec/session coverage and never pools samples across traces.
 
-The report is acceptable only when both `encoder_input_raw` and
-`directshow_return` are present with their own counts and p95 values. The
-limits are raw p95 `<=50 ms` and DirectShow-return p95 `<=75 ms`. A first
-encoded packet or RTMP receiver value is an additional guard and never a
-substitute for either boundary. Decoded/player/antenna values are diagnostic
-only.
+The report is acceptable only when `encoder_input_raw`, `directshow_return`,
+and the distinct `rtmp_first_packet` receiver boundary are present with their
+own counts and p95 values. The limits are raw p95 `<=50 ms`, DirectShow-return
+p95 `<=75 ms`, and RTMP receiver/demux p95 `<=15 ms`. The pre-network
+`encoded_first_packet` callback is auxiliary and can never satisfy AC-12.
+RTMP receiver evidence is not wire-level and never substitutes for raw or
+DirectShow; decoded/player/antenna values are diagnostic only.
 
 If the machine cannot supply a real WGC/CEF producer, record a typed skip;
 never convert the color-source or resource-only fixture into a production
@@ -240,7 +241,7 @@ recreate them from prose.
 | I10-I11, ordering and idempotence | #247 | runtime contract/QA results; no new contract implementation here |
 | I12, common Program audio | #245 | common route/PTS result from #245; Preview audio remains unsupported |
 | I13, runtime namespace and alias lease | #243 / #246 / #248 | startup lease lines, distinct runtime IDs and dedicated/refused second holder |
-| I14, separate measurements | #246 | independent raw, DirectShow-return and optional RTMP fields |
+| I14, separate measurements | #246 + Conduit AC-12 boundary | independent raw, DirectShow-return, RTMP receiver/demux and optional decoded fields |
 
 | Acceptance criterion | Required Keeper evidence |
 | --- | --- |
@@ -251,7 +252,7 @@ recreate them from prose.
 | AC-08 | independent DirectShow-return p95 report, count >=100 per codec |
 | AC-09 | #245 common Program audio evidence; no Preview/AFV claim |
 | AC-10 | runtime/alias lease logs and #243/#246/#248 evidence |
-| AC-12 | separately reported encoded first packet/RTMP guard, if captured |
+| AC-12 | `rtmp_first_packet` from the real loopback receiver, correlated by rational packet PTS/timebase; encoded callback remains auxiliary |
 | AC-13 | NVENC-only reference versus dual-lane resource delta under WGC+CEF+NVENC; x264 is explicitly `NOT_APPLICABLE` |
 | AC-14 | rollback probe output with matching committed frame/PTS and one encoder bind |
 

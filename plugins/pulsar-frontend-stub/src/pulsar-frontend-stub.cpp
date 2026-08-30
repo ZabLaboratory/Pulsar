@@ -370,7 +370,8 @@ public:
     }
 
     void initialize(const char *encoderFamily, const obs_video_info &video, bool wgcWorkload,
-                    bool cefWorkload, bool wgcSourceBound, obs_encoder_t *videoEncoder)
+                    bool cefWorkload, bool wgcSourceBound, obs_encoder_t *videoEncoder,
+                    obs_output_t *streamOutput)
     {
         stopResourceSampler();
         stopTraceWriter();
@@ -403,6 +404,7 @@ public:
             producerCount_ = 0;
             encoderFamily_.clear();
             videoEncoder_ = nullptr;
+            streamOutput_ = nullptr;
         }
 
         const char *tracePath = std::getenv("PULSAR_TRACE_PATH");
@@ -461,6 +463,9 @@ public:
             cefWorkload_ = cefWorkload;
             encoderFamily_ = encoderFamily && *encoderFamily ? encoderFamily : "unknown";
             videoEncoder_ = videoEncoder;
+            // Non-owning: setup owns streamOutput and teardown joins this
+            // sampler before stopping/releasing the output.
+            streamOutput_ = streamOutput;
             session = sessionJson(encoderFamily, video, wgcWorkload, cefWorkload, wgcSourceBound);
         }
 
@@ -530,6 +535,7 @@ public:
         lastPacketTake_.clear();
         encoderFamily_.clear();
         videoEncoder_ = nullptr;
+        streamOutput_ = nullptr;
     }
 
     bool enabled()
@@ -928,7 +934,10 @@ public:
     {
         if (!packet || packet->type != OBS_ENCODER_VIDEO)
             return;
-        packetFrameCount_.fetch_add(1, std::memory_order_relaxed);
+        // Monotone video-packet sequence on the native streamOutput callback.
+        // The external RTMP receiver has its own sequence and is correlated
+        // by rational PTS/timebase, never by log order alone.
+        const uint64_t packetIndex = packetFrameCount_.fetch_add(1, std::memory_order_relaxed);
         TakeContext context;
         uint64_t observed = nowNs();
         {
@@ -955,7 +964,12 @@ public:
                     << revisionJson(context.programRevision, context.previewRevision, context.roleMapRevision)
                     << ",\"frame_id\":" << context.frameId << ",\"pts_ns\":" << context.ptsNs
                     << ",\"observed_at_monotonic_ns\":" << observed
-                    << ",\"valid\":true,\"packet_index\":0,\"surface\":\"EncoderOutput\",\"consumer\":\"encoder_callback\"}";
+                    << ",\"valid\":true,\"packet_index\":" << packetIndex
+                    << ",\"packet_pts\":" << packet->pts
+                    << ",\"packet_dts\":" << packet->dts
+                    << ",\"packet_timebase_num\":" << packet->timebase_num
+                    << ",\"packet_timebase_den\":" << packet->timebase_den
+                    << ",\"surface\":\"EncoderOutput\",\"consumer\":\"encoder_callback\"}";
         writeLine(observation.str());
     }
 
@@ -1125,6 +1139,7 @@ private:
             std::string encoderFamily;
             uint64_t producerCount = 0;
             obs_encoder_t *videoEncoder = nullptr;
+            obs_output_t *streamOutput = nullptr;
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
                 if (!enabled_ || resourceMode_.empty())
@@ -1138,8 +1153,10 @@ private:
                 encoderFamily = encoderFamily_;
                 producerCount = producerCount_;
                 videoEncoder = videoEncoder_;
+                streamOutput = streamOutput_;
             }
             const bool encoderActive = videoEncoder && obs_encoder_active(videoEncoder);
+            const bool rtmpLoadActive = streamOutput && obs_output_active(streamOutput);
 
             std::ostringstream sample;
             sample << "{\"record_type\":\"resource_sample\",\"sample_mode\":\"" << mode
@@ -1153,6 +1170,7 @@ private:
                    << ",\"encoder_utilization_percent\":" << gpu.encoderUtilization
                    << ",\"encoder_active\":" << (encoderActive ? "true" : "false")
                    << ",\"encoder_family\":\"" << escape(encoderFamily) << "\""
+                   << ",\"rtmp_load_active\":" << (rtmpLoadActive ? "true" : "false")
                    << ",\"gpu_memory_bytes\":" << gpu.memoryBytes
                    << ",\"measurement_phase\":\"" << mode
                    << "\",\"build_revision\":\"" << escape(buildRevision)
@@ -1545,6 +1563,8 @@ private:
     // Non-owning: setup owns the encoder; teardown stops and joins the
     // resource sampler before releasing it.
     obs_encoder_t *videoEncoder_ = nullptr;
+    // Non-owning; resourceLoop is joined before setup releases streamOutput.
+    obs_output_t *streamOutput_ = nullptr;
     bool wgcWorkload_ = false;
     bool cefWorkload_ = false;
     uint64_t serverSeq_ = 0;
@@ -4504,7 +4524,7 @@ bool PulsarFrontendAPI::setup()
         const bool wgcSourceBound = externalLaneWorkload ? captureWindowRequested :
                                     captureItem != nullptr;
         g_runtimeTelemetry.initialize(encoderFamily.c_str(), telemetryVideo, wgcWorkload, cefWorkload,
-                                      wgcSourceBound, videoEncoder);
+                                      wgcSourceBound, videoEncoder, streamOutput);
         if (g_runtimeTelemetry.enabled()) {
             obs_add_raw_video_callback(nullptr, pulsar_runtime_raw_video_callback, nullptr);
             if (streamOutput)

@@ -16,7 +16,8 @@ interpolation over the sorted sample values; the rank is `(n - 1) * q`.
 | --- | --- | --- | --- |
 | `encoder_input_raw` | `ProgramView` / `encoder_input` | First valid Program frame received at the encoder/raw input. | AC-07, p95 `<=50 ms` |
 | `directshow_return` | `ProgramReturn` / `DirectShow` | First valid Program frame observed by the DirectShow return consumer. | AC-08, p95 `<=75 ms` |
-| `encoded_first_packet` | `EncoderOutput` / `encoder_callback` | First encoded video packet handed to the encoder-output callback (`packet_index=0`), before any network or RTMP receiver. | AC-12, p95 compared with `<=15 ms` baseline |
+| `encoded_first_packet` | `EncoderOutput` / `encoder_callback` | First encoded video packet handed to the encoder-output callback, before any network or RTMP receiver. It is auxiliary only. | Diagnostic; never AC-12 |
+| `rtmp_first_packet` | `RTMP` / `receiver` | First video packet observed by the dedicated FFmpeg loopback receiver/demux after the atomic Take. The packet has a receiver sequence, PTS/DTS/timebase, and unique identity matched to exactly one producer packet by rational PTS. | AC-12, p95 `<=15 ms` |
 | `decoded_first_frame` | `RTMP` / `decoder` | First decoded frame, diagnostic only. | No SLO |
 | `antenna_first_frame` | `Antenna` / `antenna` | First antenna/player frame, diagnostic only. | No SLO |
 
@@ -46,7 +47,20 @@ metadata:
   "warmup_takes": 100,
   "video": {"width": 1920, "height": 1080, "fps_num": 60, "fps_den": 1},
   "workload": {"wgc": true, "cef": true, "nvenc": true},
-  "capture_paths": ["encoder_input_raw", "directshow_return", "encoded_first_packet"],
+  "capture_paths": ["encoder_input_raw", "directshow_return", "encoded_first_packet", "rtmp_first_packet"],
+  "rtmp_receiver": {
+    "server_url": "rtmp://127.0.0.1:<port>/pulsar",
+    "stream_key": "runtime-001-nvenc",
+    "endpoint": "rtmp://127.0.0.1:<port>/pulsar/runtime-001-nvenc",
+    "receiver_id": "ffmpeg-rtmp-receiver",
+    "stream_id": "runtime-001-nvenc",
+    "clock_source": "perf_counter_ns/qpc",
+    "clock_offset_ns": 0,
+    "clock_bound_ns": 5000000,
+    "packet_timebase_num": 1,
+    "packet_timebase_den": 1000
+  },
+  "rtmp_load_requested": true,
   "source_types": ["window_capture", "browser_source"],
   "resource_reference": {
     "extra_frame_render_ms": 0.091,
@@ -68,7 +82,10 @@ commit's `previous_revisions` must equal the acceptance's `revisions` and its
 frame ID/PTS are the atomic frame boundary.
 
 An observation record has the following required fields (plus optional
-`frame_hash`, `packet_index`, and `notes`):
+`frame_hash`, packet metadata, clock metadata, and `notes`). For
+`rtmp_first_packet`, `packet_index`, `packet_pts`, `packet_dts`,
+`packet_timebase_num`, `packet_timebase_den`, `packet_identity`,
+`clock_source`, `clock_offset_ns`, and `clock_bound_ns` are mandatory.
 
 ```json
 {
@@ -114,18 +131,38 @@ require a separate contract decision. Duplicate callbacks for the accepted Take
 are ignored; the physical role map remains the one reported by the callback.
 
 The pre-network encoded callback uses the same correlation fields, with
-`boundary=encoded_first_packet`, `surface=EncoderOutput`,
-`consumer=encoder_callback`, and `packet_index=0`. It still carries the frame
-ID/PTS associated with the packet; the script refuses a packet-only timestamp
-that cannot be correlated to the Take frame boundary. RTMP receiver ingress is
-an external Probe measurement and must not be labelled as this boundary.
+`boundary=encoded_first_packet`, `surface=EncoderOutput`, and
+`consumer=encoder_callback`. Current runtimes additionally expose the sender
+packet PTS/DTS/timebase and a monotone video-packet sequence. This boundary is
+auxiliary: it can never satisfy AC-12.
+
+The AC-12 boundary is produced by
+`scripts/probe-dual-lane.py --rtmp-receiver`. The driver starts FFmpeg with the
+same command used for the campaign, configures Pulsar's native `streamOutput`
+through `SetStreamServiceSettings` (`rtmp_custom`, `server` plus `key`), and
+starts `StartStream`. The receiver listens on the full `server/key` endpoint.
+After the stream and Pulsar process have stopped, the driver fuses the
+receiver records into a new deterministic JSONL artifact; it never writes to
+the producer JSONL while the runtime is active. Each receiver packet is
+matched to exactly one encoded producer packet by rational PTS/timebase,
+allowing only half of one receiver tick for FLV millisecond quantization.
+Missing, ambiguous, mixed-session, or uncalibrated matches fail closed.
+
+The receiver timestamp is the time FFmpeg's demux log is observed by the
+driver in the QPC-compatible monotonic domain. It is a receiver/demux
+measurement, not a wire-level timestamp and not a decoded or antenna/player
+latency guarantee.
 
 Resource samples use `sample_mode=reference` and `sample_mode=dual_lane` and
 record `frame_render_ms`, `resident_bytes`, `process_cpu_percent`,
 `host_gpu_percent`, `callback_backlog_estimate`, and
 `encoder_utilization_percent`, plus strict `encoder_active` and
-`encoder_family` fields read from the actual bound encoder at sample time. The report
-computes actual deltas from the two sample sets and shows them beside the
+`encoder_family` and `rtmp_load_active` fields read from the actual bound
+encoder and native `streamOutput` at sample time. Reference and dual-lane
+resource phases must each collect their minimum samples while
+`rtmp_load_active=true`; early samples taken before `StartStream` remain
+diagnostic and cannot be promoted after the fact. The report computes actual
+deltas from the two sample sets and shows them beside the
 known `+0.091 ms/frame` and `+3.13 MB` references. It never declares runtime
 capacity from the reference alone. Samples with `encoder_active=false` remain
 diagnostic and cannot satisfy the AC-13 minimum.
@@ -169,13 +206,33 @@ flags in the session record.
 # campaign performs the reference/dual resource comparison while recording.
 # The probe itself keeps the ProgramReturn DirectShow reader open; the reader
 # and encoder-output callback write observations using the same runtime/session
-# IDs and monotonic clock. RTMP receiver timing is an external Probe
-# measurement and must not be merged from wall-clock logs.
+# IDs and monotonic clock. Add --rtmp-receiver to exercise the native RTMP
+# streamOutput and fuse correlated receiver/demux observations after shutdown.
 
 python scripts/probe-take-latency.py `
   --trace artifacts/246/x264.jsonl artifacts/246/nvenc.jsonl `
   --output artifacts/246/latency-report.json
 ```
+
+For an AC-12-enabled latency run (one independent command per codec), use the
+exact candidate artifact and a visible WGC/CEF workload:
+
+```powershell
+python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder x264 --takes 100 `
+  --trace artifacts/249/x264-rtmp.jsonl --build-revision <candidate-sha> `
+  --capture-window <visible-title:class:exe> --cef-workload --rtmp-receiver
+python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 `
+  --trace artifacts/249/nvenc-rtmp.jsonl --build-revision <candidate-sha> `
+  --capture-window <visible-title:class:exe> --cef-workload --rtmp-receiver
+python scripts/probe-take-latency.py --trace artifacts/249/x264-rtmp.jsonl artifacts/249/nvenc-rtmp.jsonl `
+  --output artifacts/249/latency-report.json
+```
+
+Each traced run executes 100 observed warm-up Takes followed by 100 measured
+Takes. The two final files are independent sessions and must not be pooled by
+the harness; the aggregate parser requires both codec campaigns. The producer
+sidecar named `.producer.jsonl` is retained for audit, while the named trace
+is the fused artifact.
 
 The default gate is 100 measured Takes, 100 warm-up Takes, and 10 resource
 samples per resource mode. Use smaller thresholds only in unit tests; fixture
@@ -190,17 +247,20 @@ with the same runtime ID:
 python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc `
   --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 `
   --build-revision <candidate-sha> --capture-window <visible-title:class:exe> `
-  --cef-workload --resource-mode reference --resource-only
+  --cef-workload --resource-mode reference --resource-only --rtmp-receiver
 python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 `
   --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 `
   --build-revision <candidate-sha> --capture-window <visible-title:class:exe> `
-  --cef-workload --trace-append --resource-mode dual_lane
+  --cef-workload --trace-append --resource-mode dual_lane --rtmp-receiver
 ```
 
 `reference` is an explicit legacy single-canvas run; it does not emit Take
-events. It nevertheless starts a real local NVENC recording, waits for
-`OUTPUT_STARTED`, keeps the encoder active while collecting resource samples,
-then stops and verifies that recording before returning. An inactive or
+events. With `--rtmp-receiver`, it starts the same native `streamOutput` and
+FFmpeg receiver as the dual-lane run before sampling, and the runtime emits
+`rtmp_load_active` per sample. It nevertheless starts a real local NVENC
+recording, waits for `OUTPUT_STARTED`, keeps both output paths active while
+collecting resource samples, then stops/verifies the stream and recording
+before returning. An inactive or
 missing encoder attestation cannot satisfy AC-13. Both invocations require a
 real visible WGC target and the local CEF workload. The driver sets
 `PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD=1`, so the

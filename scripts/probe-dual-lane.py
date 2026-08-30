@@ -49,7 +49,10 @@ object is accessed from Python.  Only obs-websocket v5 JSON frames and the
 Pulsar child process's structured diagnostics are used.  With ``--trace``, the
 same public requests carry an explicit, opt-in transaction envelope; the
 runtime writes session/events/raw/encoded-output records and starts the
-ProgramReturn producer for an independent DirectShow consumer.  ``--resource-mode`` enables
+ProgramReturn producer for an independent DirectShow consumer. With
+``--rtmp-receiver``, it also starts the native streamOutput to a real local
+FFmpeg RTMP receiver and fuses receiver packet observations only after
+shutdown. ``--resource-mode`` enables
 the native OBS/platform resource sampler; use ``--resource-only`` for the
 single-producer-pair reference phase and ``--trace-append --resource-mode dual_lane``
 for the correlated two-pair A/B phase.
@@ -75,7 +78,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
+from fractions import Fraction
 import hashlib
+import importlib.util
 import http.server
 import json
 import os
@@ -93,7 +99,7 @@ import threading
 import time
 import zlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 try:
     import websockets
@@ -150,6 +156,7 @@ DUAL_ACTIVATION_RE = re.compile(
     r"rollback_after_takes=(\d+) flag_resolved_at=setup"
 )
 BUILD_REVISION_RE = re.compile(r"[0-9a-f]{40}")
+ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 ENCODER_BIND_RE = re.compile(
     DUAL_LANE_LOG_PREFIX + r"\s*encoder video_t bound once to ProgramView"
 )
@@ -188,6 +195,35 @@ SOURCE_SCREENSHOT_INTERVAL_S = 0.5
 # percentiles, and the following --takes commits are the measured sample.
 # Non-traced smoke runs keep their historical --takes total.
 TRACE_WARMUP_TAKES = 100
+
+# AC-12 is measured at the first video packet observed by a dedicated local
+# RTMP receiver.  FFmpeg's ``-debug_ts`` reports the demuxer PTS in FLV
+# millisecond ticks; the receiver-side contract deliberately records that
+# rational timebase and never calls it wire-level ingress.
+RTMP_PACKET_RE = re.compile(
+    r"demuxer\s*->\s*ist_index:\S+\s+type:video\b.*?"
+    r"pkt_pts:(-?\d+)\s+pkt_pts_time:([^\s]+)\s+"
+    r"pkt_dts:(-?\d+)\s+pkt_dts_time:([^\s]+)"
+)
+RTMP_PACKET_TIMEBASE_NUM = 1
+RTMP_PACKET_TIMEBASE_DEN = 1000
+
+
+def _rtmp_packet_identity(stream_id: str, packet_index: int, pts: int, dts: int) -> str:
+    """Return a deterministic packet identity within the trace ID bound."""
+
+    digest = hashlib.sha256(f"{stream_id}|video|{packet_index}|{pts}|{dts}".encode("utf-8")).hexdigest()
+    return "rtmp-" + digest
+
+
+def _stream_id_for_runtime(runtime_id: str, encoder: str) -> str:
+    """Build a URL-safe stream key without exceeding the evidence ID bound."""
+
+    candidate = f"{runtime_id}-{encoder}"
+    if ID_RE.fullmatch(candidate) is not None:
+        return candidate
+    digest = hashlib.sha256(runtime_id.encode("utf-8")).hexdigest()
+    return f"stream-{encoder}-{digest}"
 
 # The dual-lane campaign must exercise an actual browser_source, but its
 # content must not depend on a public website or network availability.  This
@@ -396,6 +432,7 @@ def calibrate_wire_clock(*, max_delta_ns: int = WIRE_CLOCK_QPC_MAX_DELTA_NS) -> 
         "wire_now_ns": wire_now,
         "qpc_now_ns": qpc_midpoint,
         "qpc_delta_ns": delta,
+        "qpc_bound_ns": max(abs(wire_now - before), abs(after - wire_now)),
     }
 
 
@@ -466,6 +503,390 @@ def compute_auth(password: str, salt: str, challenge: str) -> str:
     ).decode("ascii")
 
 
+class RtmpReceiver:
+    """Own a real FFmpeg RTMP loopback receiver for AC-12 evidence.
+
+    FFmpeg is used as the protocol/demux consumer, not as a decoder timing
+    oracle.  ``-debug_ts`` packet records are timestamped when the receiver
+    process emits its demux line; that is explicitly a receiver/demux
+    observation and is never promoted to wire-level or decoded latency.
+    """
+
+    def __init__(self, ffmpeg: str, *, runtime_id: str, stream_id: str) -> None:
+        self.ffmpeg = ffmpeg
+        self.runtime_id = runtime_id
+        if ID_RE.fullmatch(stream_id) is None:
+            raise ProbeFailure("RTMP stream_id must be a non-empty identifier of at most 128 characters")
+        self.stream_id = stream_id
+        self.port = choose_port()
+        self.server_url = f"rtmp://127.0.0.1:{self.port}/pulsar"
+        self.stream_key = stream_id
+        # The service API sends ``server`` and ``key`` separately.  FFmpeg's
+        # listen endpoint must include the key path that the native
+        # streamOutput actually publishes to.
+        self.endpoint = f"{self.server_url}/{self.stream_key}"
+        self.proc: subprocess.Popen[str] | None = None
+        self.thread: threading.Thread | None = None
+        self.lines: list[str] = []
+        self.packets: list[dict[str, int | str]] = []
+        self.failure: str | None = None
+        self.calibration: dict[str, int | str | None] | None = None
+        self._lock = threading.Lock()
+
+    def metadata(self) -> dict[str, int | str]:
+        calibration = self.calibration
+        if calibration is None:
+            raise ProbeFailure("RTMP receiver clock was not calibrated")
+        source = calibration.get("source")
+        offset = calibration.get("qpc_delta_ns")
+        measured_bound = calibration.get("qpc_bound_ns")
+        if source not in ("perf_counter_ns/qpc", "qpc") or not isinstance(offset, int):
+            raise ProbeFailure("RTMP receiver clock calibration is incomplete")
+        if not isinstance(measured_bound, int) or measured_bound <= 0 or measured_bound > WIRE_CLOCK_QPC_MAX_DELTA_NS:
+            raise ProbeFailure("RTMP receiver clock calibration bound is invalid")
+        return {
+            "server_url": self.server_url,
+            "stream_key": self.stream_key,
+            "endpoint": self.endpoint,
+            "receiver_id": "ffmpeg-rtmp-receiver",
+            "stream_id": self.stream_id,
+            "clock_source": str(source),
+            "clock_offset_ns": offset,
+            "clock_bound_ns": measured_bound,
+            "packet_timebase_num": RTMP_PACKET_TIMEBASE_NUM,
+            "packet_timebase_den": RTMP_PACKET_TIMEBASE_DEN,
+        }
+
+    def start(self) -> None:
+        if self.proc is not None:
+            raise ProbeFailure("RTMP receiver was started twice")
+        self.calibration = calibrate_wire_clock()
+        command = [
+            self.ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "verbose",
+            "-debug_ts",
+            "-listen",
+            "1",
+            "-i",
+            self.endpoint,
+            "-map",
+            "0:v:0",
+            "-an",
+            "-c",
+            "copy",
+            "-f",
+            "null",
+            "-",
+        ]
+        self.proc = subprocess.Popen(
+            command,
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        self.thread = threading.Thread(target=self._pump, name="pulsar-rtmp-receiver", daemon=True)
+        self.thread.start()
+        time.sleep(0.25)
+        if self.proc.poll() is not None:
+            self.stop()
+            raise ProbeFailure("RTMP receiver exited before Pulsar could connect: " + " | ".join(self.lines[-20:]))
+
+    def _pump(self) -> None:
+        process = self.proc
+        if process is None or process.stdout is None:
+            return
+        for line in process.stdout:
+            received_at = wire_monotonic_ns()
+            calibration = self.calibration
+            offset = calibration.get("qpc_delta_ns", 0) if calibration is not None else 0
+            if not isinstance(offset, int):
+                with self._lock:
+                    self.failure = "RTMP receiver clock offset was not an integer"
+                continue
+            # Runtime telemetry uses os_gettime_ns/QPC.  Normalize the
+            # receiver's perf_counter timestamp into that same domain before
+            # it enters the fused evidence; the raw receiver timestamp is not
+            # retained as acceptance evidence.
+            received_at -= offset
+            clean = line.rstrip("\r\n")
+            with self._lock:
+                self.lines.append(clean)
+            match = RTMP_PACKET_RE.search(clean)
+            if match is None:
+                continue
+            try:
+                pts_raw = int(match.group(1))
+                dts_raw = int(match.group(3))
+                pts_time = Decimal(match.group(2))
+                dts_time = Decimal(match.group(4))
+                if not pts_time.is_finite() or not dts_time.is_finite():
+                    raise ValueError("non-finite packet time")
+                # The raw FFmpeg packet timestamp must agree with the FLV
+                # millisecond rational within half a receiver tick.  Store the
+                # integer FLV tick, not a floating-point approximation.
+                pts_tick = int((pts_time * RTMP_PACKET_TIMEBASE_DEN).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
+                dts_tick = int((dts_time * RTMP_PACKET_TIMEBASE_DEN).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
+                if abs(pts_tick - pts_raw) > 1 or abs(dts_tick - dts_raw) > 1:
+                    raise ValueError("FFmpeg packet integer/time value disagrees beyond one tick")
+            except (InvalidOperation, ValueError) as exc:
+                with self._lock:
+                    self.failure = f"RTMP packet PTS parse/calibration failure: {exc}"
+                continue
+            with self._lock:
+                packet_index = len(self.packets)
+                # Keep the identity within the trace identifier bound even
+                # when an operator supplies a maximum-length runtime/stream
+                # ID.  Runtime and stream IDs remain first-class correlation
+                # fields; this digest is the bounded packet identity key.
+                packet_identity = _rtmp_packet_identity(self.stream_id, packet_index, pts_raw, dts_raw)
+                self.packets.append(
+                    {
+                        "packet_index": packet_index,
+                        "packet_pts": pts_raw,
+                        "packet_dts": dts_raw,
+                        "packet_pts_time_ms": pts_tick,
+                        "packet_dts_time_ms": dts_tick,
+                        "observed_at_monotonic_ns": received_at,
+                        "packet_identity": packet_identity,
+                    }
+                )
+
+    def stop(self) -> None:
+        process = self.proc
+        if process is None:
+            if self.thread is not None:
+                self.thread.join(timeout=2)
+            return
+        failure: str | None = None
+        if process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                    process.wait(timeout=5)
+                except Exception as exc:  # pragma: no cover - OS-specific cleanup
+                    failure = f"RTMP receiver could not be killed: {exc}"
+            except Exception as exc:  # pragma: no cover - OS-specific cleanup
+                failure = f"RTMP receiver termination failed: {exc}"
+        if process.poll() is None:
+            failure = failure or "RTMP receiver remained alive after cleanup"
+        if self.thread is not None:
+            self.thread.join(timeout=2)
+            if self.thread.is_alive():
+                failure = failure or "RTMP receiver reader thread did not exit"
+        if failure is not None:
+            self.failure = failure
+            raise ProbeFailure(failure)
+
+    def _install_fused_records(self, records: list[dict[str, object]], output_path: pathlib.Path) -> None:
+        """Validate a complete trace in a sibling temp and atomically install it."""
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.fused.tmp")
+        if temp_path.exists():
+            raise ProbeFailure(f"RTMP fusion temporary path already exists: {temp_path}")
+        try:
+            with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+                for record in records:
+                    handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+                    handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+
+            parser_path = pathlib.Path(__file__).with_name("probe-take-latency.py")
+            parser_spec = importlib.util.spec_from_file_location("pulsar_take_latency_fusion", parser_path)
+            if parser_spec is None or parser_spec.loader is None:
+                raise ProbeFailure("cannot load the latency parser for RTMP fusion validation")
+            parser_module = importlib.util.module_from_spec(parser_spec)
+            previous_module = sys.modules.get(parser_spec.name)
+            sys.modules[parser_spec.name] = parser_module
+            try:
+                parser_spec.loader.exec_module(parser_module)
+                fused_trace = parser_module.parse_trace(temp_path)
+                parser_module.analyze_trace(
+                    fused_trace,
+                    minimum_takes=1,
+                    minimum_warmup=0,
+                    minimum_resource_samples=1,
+                )
+            except Exception as exc:
+                raise ProbeFailure(f"RTMP fused trace parser validation failed: {exc}") from exc
+            finally:
+                if previous_module is None:
+                    sys.modules.pop(parser_spec.name, None)
+                else:
+                    sys.modules[parser_spec.name] = previous_module
+            os.replace(temp_path, output_path)
+        except Exception:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+            raise
+
+    def _read_producer_records(self, producer_path: pathlib.Path) -> tuple[list[dict[str, object]], dict[str, object]]:
+        if not producer_path.is_file():
+            raise ProbeFailure(f"producer trace is missing: {producer_path}")
+        try:
+            records = [
+                json.loads(line)
+                for line in producer_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ProbeFailure(f"cannot read producer trace for RTMP fusion: {exc}") from exc
+        if not records or records[0].get("record_type") != "session":
+            raise ProbeFailure("producer trace must begin with one session record")
+        return records, dict(records[0])
+
+    def fuse_resource_trace(
+        self,
+        producer_path: pathlib.Path,
+        output_path: pathlib.Path,
+        *,
+        minimum_samples: int = 1,
+    ) -> None:
+        """Install reference resources collected under the active RTMP load."""
+
+        records, session = self._read_producer_records(producer_path)
+        if any(record.get("record_type") in {"event", "observation"} for record in records[1:]):
+            raise ProbeFailure("resource-only RTMP fusion cannot contain Take events or observations")
+        if not any(record.get("record_type") == "resource_sample" for record in records):
+            raise ProbeFailure("resource-only RTMP fusion requires native resource samples")
+        if minimum_samples < 1:
+            raise ProbeFailure("resource-only RTMP fusion minimum must be positive")
+        if not self.packets:
+            raise ProbeFailure("resource-only RTMP load emitted no receiver video packets")
+        session["rtmp_receiver"] = self.metadata()
+        session["rtmp_load_requested"] = True
+        resource_records = [record for record in records if record.get("record_type") == "resource_sample"]
+        eligible = sum(
+            record.get("encoder_active") is True
+            and record.get("encoder_family") == "nvenc"
+            and record.get("rtmp_load_active") is True
+            for record in resource_records
+        )
+        if eligible < minimum_samples:
+            raise ProbeFailure(
+                "resource-only RTMP load did not produce enough observed-active samples: "
+                f"{eligible} < {minimum_samples}"
+            )
+        self._install_fused_records([session, *records[1:]], output_path)
+
+    def fuse_trace(self, producer_path: pathlib.Path, output_path: pathlib.Path) -> None:
+        """Create a deterministic post-stop trace with receiver observations."""
+
+        if self.failure:
+            raise ProbeFailure(self.failure)
+        records, session = self._read_producer_records(producer_path)
+        session["rtmp_receiver"] = self.metadata()
+        session["rtmp_load_requested"] = True
+        paths = list(session.get("capture_paths") or [])
+        if "rtmp_first_packet" not in paths:
+            paths.append("rtmp_first_packet")
+        session["capture_paths"] = paths
+
+        encoded = [
+            record
+            for record in records
+            if record.get("record_type") == "observation"
+            and record.get("boundary") == "encoded_first_packet"
+            and record.get("valid") is True
+        ]
+        if any(
+            record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet"
+            for record in records
+        ):
+            raise ProbeFailure("producer trace already contains RTMP observations; fusion would double-count receiver data")
+        if not encoded:
+            raise ProbeFailure("producer trace contains no encoded packet observations for RTMP correlation")
+        receiver_packets = list(self.packets)
+        if not receiver_packets:
+            raise ProbeFailure("RTMP receiver emitted no demuxed video packet observations")
+        if self.failure:
+            raise ProbeFailure(self.failure)
+
+        used: set[int] = set()
+        rtmp_observations: list[dict[str, object]] = []
+        receiver_tick = Fraction(RTMP_PACKET_TIMEBASE_NUM, RTMP_PACKET_TIMEBASE_DEN)
+        for producer in encoded:
+            fields = ("packet_pts", "packet_dts", "packet_timebase_num", "packet_timebase_den")
+            if not all(field in producer for field in fields):
+                raise ProbeFailure(
+                    f"encoded producer packet lacks complete PTS/timebase metadata for {producer.get('take_command_id')}"
+                )
+            producer_pts = Fraction(
+                int(producer["packet_pts"]) * int(producer["packet_timebase_num"]),
+                int(producer["packet_timebase_den"]),
+            )
+            candidates: list[dict[str, int | str]] = []
+            for packet in receiver_packets:
+                index = int(packet["packet_index"])
+                if index in used:
+                    continue
+                receiver_pts = Fraction(int(packet["packet_pts"]), RTMP_PACKET_TIMEBASE_DEN)
+                producer_dts = Fraction(
+                    int(producer["packet_dts"]) * int(producer["packet_timebase_num"]),
+                    int(producer["packet_timebase_den"]),
+                )
+                receiver_dts = Fraction(int(packet["packet_dts"]), RTMP_PACKET_TIMEBASE_DEN)
+                if (
+                    abs(receiver_pts - producer_pts) <= receiver_tick / 2
+                    and abs(receiver_dts - producer_dts) <= receiver_tick / 2
+                ):
+                    candidates.append(packet)
+            if len(candidates) != 1:
+                raise ProbeFailure(
+                    f"RTMP receiver packet correlation for {producer.get('take_command_id')} is ambiguous: "
+                    f"{len(candidates)} unique PTS candidates"
+                )
+            packet = candidates[0]
+            packet_index = int(packet["packet_index"])
+            used.add(packet_index)
+            rtmp_observations.append(
+                {
+                    "record_type": "observation",
+                    "boundary": "rtmp_first_packet",
+                    "clock_domain": "monotonic_ns",
+                    "runtime_instance_id": producer["runtime_instance_id"],
+                    "command_id": producer["command_id"],
+                    "intent_id": producer["intent_id"],
+                    "take_command_id": producer["take_command_id"],
+                    "revisions": producer["revisions"],
+                    "frame_id": producer["frame_id"],
+                    "pts_ns": producer["pts_ns"],
+                    "observed_at_monotonic_ns": packet["observed_at_monotonic_ns"],
+                    "valid": True,
+                    "surface": "RTMP",
+                    "consumer": "receiver",
+                    "packet_index": packet["packet_index"],
+                    "packet_pts": packet["packet_pts"],
+                    "packet_dts": packet["packet_dts"],
+                    "packet_timebase_num": RTMP_PACKET_TIMEBASE_NUM,
+                    "packet_timebase_den": RTMP_PACKET_TIMEBASE_DEN,
+                    "packet_identity": packet["packet_identity"],
+                    "clock_source": self.metadata()["clock_source"],
+                    "clock_offset_ns": self.metadata()["clock_offset_ns"],
+                    "clock_bound_ns": self.metadata()["clock_bound_ns"],
+                    "notes": "first video packet observed at FFmpeg RTMP demux; not wire-level or decoded timing",
+                }
+            )
+        merged = [
+            session,
+            *records[1:],
+            *sorted(rtmp_observations, key=lambda item: int(cast(int, item["packet_index"]))),
+        ]
+        self._install_fused_records(merged, output_path)
+
+
 class PulsarProcess:
     """Spawn Pulsar and retain structured stdout for identity assertions."""
 
@@ -513,6 +934,11 @@ class PulsarProcess:
         self.directshow_lines: list[str] = []
         self.directshow_thread: threading.Thread | None = None
         self.directshow_cleanup_failure: str | None = None
+        self.rtmp_receiver: RtmpReceiver | None = None
+        self.rtmp_stream_started = False
+        self.rtmp_cleanup_failure: str | None = None
+        self.rtmp_producer_trace_path: pathlib.Path | None = None
+        self.rtmp_final_trace_path: pathlib.Path | None = None
         self.lines: list[str] = []
         self.condition = threading.Condition()
         self.thread: threading.Thread | None = None
@@ -551,6 +977,16 @@ class PulsarProcess:
             env["PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD"] = "1"
             env["PULSAR_TRACE_WARMUP_TAKES"] = str(TRACE_WARMUP_TAKES)
             env["PULSAR_TRACE_COMMAND"] = "scripts/probe-dual-lane.py --trace"
+            if self.rtmp_receiver is not None:
+                # These values are copied into the final fused session after
+                # both processes stop.  Passing them to the runtime keeps the
+                # producer and receiver artifacts tied to one stream identity
+                # without asking the runtime to write external observations.
+                receiver_metadata = self.rtmp_receiver.metadata()
+                env["PULSAR_TRACE_RTMP_ENABLED"] = "1"
+                env["PULSAR_TRACE_RTMP_ENDPOINT"] = str(receiver_metadata["endpoint"])
+                env["PULSAR_TRACE_RTMP_RECEIVER_ID"] = str(receiver_metadata["receiver_id"])
+                env["PULSAR_TRACE_RTMP_STREAM_ID"] = str(receiver_metadata["stream_id"])
             # Use the runtime-specific ProgramReturn queue for the external
             # DirectShow reader.  This keeps the consumer correlated to the
             # same runtime identity and avoids a process-wide legacy alias
@@ -764,6 +1200,90 @@ class PulsarProcess:
                 + self.directshow_startup_output.strip()
             )
 
+    def start_rtmp_consumer(self) -> None:
+        """Start the dedicated loopback RTMP receiver before StartStream."""
+
+        if self.rtmp_receiver is None:
+            return
+        self.rtmp_receiver.start()
+
+    async def start_rtmp_stream(self, inbox: Inbox, ws: Any) -> None:
+        """Configure and start Pulsar's native streamOutput to the receiver."""
+
+        receiver = self.rtmp_receiver
+        if receiver is None:
+            return
+        response = await request(
+            inbox,
+            ws,
+            "SetStreamServiceSettings",
+            "rtmp-receiver-service",
+            {
+                "streamServiceType": "rtmp_custom",
+                "streamServiceSettings": {
+                    "server": receiver.server_url,
+                    # The key is local-only routing metadata.  It is not
+                    # printed and is never included in the evidence artifact.
+                    "key": receiver.stream_key,
+                },
+            },
+        )
+        assert_success(response, "SetStreamServiceSettings(rtmp loopback)")
+        service_response = await request(inbox, ws, "GetStreamServiceSettings", "get-rtmp-receiver-service")
+        assert_success(service_response, "GetStreamServiceSettings(rtmp loopback)")
+        service_data = service_response.get("responseData") or {}
+        if service_data.get("streamServiceType") != "rtmp_custom":
+            raise ProbeFailure("native streamOutput service type was not rtmp_custom")
+        settings = service_data.get("streamServiceSettings") or {}
+        if settings.get("server") != receiver.server_url:
+            raise ProbeFailure("native streamOutput service endpoint did not round-trip exactly")
+        if settings.get("key") != receiver.stream_key:
+            raise ProbeFailure("native streamOutput service stream key did not round-trip exactly")
+        response = await request(inbox, ws, "StartStream", "start-rtmp-receiver")
+        assert_success(response, "StartStream(rtmp loopback)")
+        await wait_event(
+            inbox,
+            ws,
+            "StreamStateChanged",
+            lambda data: data.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STARTED",
+            timeout=20,
+        )
+        self.rtmp_stream_started = True
+
+    async def stop_rtmp_stream(self, inbox: Inbox, ws: Any) -> None:
+        if self.rtmp_receiver is None:
+            return
+        if self.rtmp_stream_started:
+            response = await request(inbox, ws, "StopStream", "stop-rtmp-receiver")
+            assert_success(response, "StopStream(rtmp loopback)")
+            await wait_event(
+                inbox,
+                ws,
+                "StreamStateChanged",
+                lambda data: data.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STOPPED",
+                timeout=20,
+            )
+            self.rtmp_stream_started = False
+        try:
+            self.rtmp_receiver.stop()
+        except ProbeFailure as exc:
+            self.rtmp_cleanup_failure = str(exc)
+            raise
+
+    def finalize_rtmp_trace(self, *, resource_only: bool = False, minimum_samples: int = 1) -> None:
+        if self.rtmp_receiver is None:
+            return
+        if self.rtmp_producer_trace_path is None or self.rtmp_final_trace_path is None:
+            raise ProbeFailure("RTMP trace fusion paths were not configured")
+        if resource_only:
+            self.rtmp_receiver.fuse_resource_trace(
+                self.rtmp_producer_trace_path,
+                self.rtmp_final_trace_path,
+                minimum_samples=minimum_samples,
+            )
+        else:
+            self.rtmp_receiver.fuse_trace(self.rtmp_producer_trace_path, self.rtmp_final_trace_path)
+
     def _join_directshow_reader(self) -> str | None:
         """Join the bounded stdout pump, retaining state on failure."""
 
@@ -850,6 +1370,13 @@ class PulsarProcess:
             self.stop_directshow_consumer()
         except ProbeFailure as exc:
             directshow_failure = exc
+        rtmp_failure: ProbeFailure | None = None
+        if self.rtmp_receiver is not None:
+            try:
+                self.rtmp_receiver.stop()
+            except ProbeFailure as exc:
+                self.rtmp_cleanup_failure = str(exc)
+                rtmp_failure = exc
         pulsar_failure: str | None = None
         if self.proc is not None and self.proc.poll() is None:
             try:
@@ -894,6 +1421,10 @@ class PulsarProcess:
             if pulsar_failure:
                 raise ProbeFailure(f"{directshow_failure}; {pulsar_failure}")
             raise directshow_failure
+        if rtmp_failure is not None:
+            if pulsar_failure:
+                raise ProbeFailure(f"{rtmp_failure}; {pulsar_failure}")
+            raise rtmp_failure
         if pulsar_failure:
             raise ProbeFailure(pulsar_failure)
 
@@ -902,6 +1433,12 @@ class PulsarProcess:
 
         if self.directshow_cleanup_failure is not None:
             raise ProbeFailure(self.directshow_cleanup_failure)
+        if self.rtmp_cleanup_failure is not None:
+            raise ProbeFailure(self.rtmp_cleanup_failure)
+        if self.rtmp_receiver is not None and self.rtmp_receiver.proc is not None and self.rtmp_receiver.proc.poll() is None:
+            raise ProbeFailure("RTMP receiver is still alive after shutdown")
+        if self.rtmp_receiver is not None and self.rtmp_receiver.thread is not None and self.rtmp_receiver.thread.is_alive():
+            raise ProbeFailure("RTMP receiver reader thread is still alive after shutdown")
         if self.directshow_proc is not None and self.directshow_proc.poll() is None:
             raise ProbeFailure("ProgramReturn DirectShow consumer is still alive after shutdown")
         if self.directshow_thread is not None and self.directshow_thread.is_alive():
@@ -1945,6 +2482,8 @@ async def collect_resource_samples(
 
         async def stop_recording_after_error() -> None:
             nonlocal recording_stopped, output_path
+            if process.rtmp_stream_started:
+                await process.stop_rtmp_stream(inbox, ws)
             if not recording_started or recording_stopped:
                 return
             output_path = await stop_resource_recording(
@@ -1959,14 +2498,18 @@ async def collect_resource_samples(
             # harmlessly rejected and the original failure is preserved.
             recording_started = True
             await start_resource_recording(inbox, ws, process)
+            if process.rtmp_receiver is not None:
+                await process.start_rtmp_stream(inbox, ws)
             deadline = time.monotonic() + timeout
             count = 0
             active_count = 0
+            rtmp_active_count = 0
             while True:
                 if process.trace_path is None:
                     raise ProbeFailure("resource sampling requires --trace")
                 count = 0
                 active_count = 0
+                rtmp_active_count = 0
                 try:
                     with process.trace_path.open("r", encoding="utf-8") as handle:
                         for line in handle:
@@ -1982,15 +2525,18 @@ async def collect_resource_samples(
                                 count += 1
                                 if record.get("encoder_active") is True:
                                     active_count += 1
+                                    if record.get("rtmp_load_active") is True:
+                                        rtmp_active_count += 1
                 except FileNotFoundError:
                     count = 0
                     active_count = 0
-                if active_count >= minimum_samples:
+                    rtmp_active_count = 0
+                if rtmp_active_count >= minimum_samples:
                     break
                 if time.monotonic() >= deadline:
                     if process.proc is not None and process.proc.poll() is None:
                         raise ProbeSkip(
-                            "native resource sampler produced no complete active-encoder samples; "
+                            "native resource sampler produced no complete active-encoder+RTMP-load samples; "
                             "verify nvidia-smi, platform counters and the recording output on this host"
                         )
                     raise ProbeFailure(
@@ -1998,6 +2544,8 @@ async def collect_resource_samples(
                     )
                 await asyncio.sleep(0.25)
 
+            if process.rtmp_receiver is not None:
+                await process.stop_rtmp_stream(inbox, ws)
             output_path = await stop_resource_recording(inbox, ws)
             recording_stopped = True
         except Exception:
@@ -2013,10 +2561,11 @@ async def collect_resource_samples(
             raise ProbeFailure("active resource phase stopped without a recording output path")
         verify_recording(output_path, ffprobe)
         print(
-            f"   active encoder resource samples verified: total={count} active={active_count} "
+            f"   active encoder+RTMP resource samples verified: total={count} active={active_count} "
+            f"rtmp_active={rtmp_active_count} "
             f"mode={mode}"
         )
-        return active_count
+        return rtmp_active_count
 
 
 async def assert_distinct_selected_scenes(
@@ -2152,6 +2701,8 @@ async def drive(process: PulsarProcess, takes: int, *, warmup_takes: int = 0) ->
             )
         # Give the recording path a few frames before stressing the Cut loop.
         await asyncio.sleep(0.5)
+        if process.rtmp_receiver is not None:
+            await process.start_rtmp_stream(inbox, ws)
 
         commits: list[Commit] = []
         for number in range(1, total_takes + 1):
@@ -2329,6 +2880,9 @@ async def drive(process: PulsarProcess, takes: int, *, warmup_takes: int = 0) ->
                     "post-commit Preview after 30 frames",
                 )
 
+        if process.rtmp_receiver is not None:
+            await process.stop_rtmp_stream(inbox, ws)
+
         response = await request(inbox, ws, "StopRecord", "stop-record")
         assert_success(response, "StopRecord")
         stopped = await wait_event(
@@ -2395,6 +2949,7 @@ def validate_trace_append(
     build_revision: str,
     trace_host: str,
     trace_gpu: str,
+    require_rtmp_load: bool = False,
 ) -> None:
     """Validate the NVENC reference trace before allowing an append.
 
@@ -2490,6 +3045,64 @@ def validate_trace_append(
         raise ProbeFailure(
             "--trace-append reference phase lacks an active NVENC encoder attestation"
         )
+    if require_rtmp_load:
+        receiver = session.get("rtmp_receiver")
+        if session.get("rtmp_load_requested") is not True or not isinstance(receiver, dict):
+            raise ProbeFailure(
+                "--trace-append RTMP mode requires reference rtmp_load_requested=true and receiver metadata"
+            )
+        required_receiver_fields = (
+            "server_url",
+            "stream_key",
+            "endpoint",
+            "receiver_id",
+            "stream_id",
+            "clock_source",
+            "clock_offset_ns",
+            "clock_bound_ns",
+            "packet_timebase_num",
+            "packet_timebase_den",
+        )
+        if any(field not in receiver for field in required_receiver_fields):
+            raise ProbeFailure("--trace-append reference RTMP receiver metadata is incomplete")
+        server_url = receiver["server_url"]
+        stream_key = receiver["stream_key"]
+        endpoint = receiver["endpoint"]
+        if (
+            not isinstance(server_url, str)
+            or not (server_url.startswith("rtmp://127.0.0.1:") or server_url.startswith("rtmp://localhost:"))
+            or not isinstance(stream_key, str)
+            or ID_RE.fullmatch(stream_key) is None
+            or not isinstance(endpoint, str)
+            or endpoint != f"{server_url.rstrip('/')}/{stream_key}"
+        ):
+            raise ProbeFailure("--trace-append reference RTMP receiver endpoint is not an exact loopback server/key")
+        if any(
+            not isinstance(receiver[field], str) or ID_RE.fullmatch(receiver[field]) is None
+            for field in ("receiver_id", "stream_id")
+        ):
+            raise ProbeFailure("--trace-append reference RTMP receiver identity is invalid")
+        if receiver["clock_source"] not in ("perf_counter_ns/qpc", "qpc"):
+            raise ProbeFailure("--trace-append reference RTMP receiver clock source is invalid")
+        if (
+            type(receiver["clock_offset_ns"]) is not int
+            or type(receiver["clock_bound_ns"]) is not int
+            or not 0 < receiver["clock_bound_ns"] <= WIRE_CLOCK_QPC_MAX_DELTA_NS
+            or type(receiver["packet_timebase_num"]) is not int
+            or type(receiver["packet_timebase_den"]) is not int
+            or receiver["packet_timebase_num"] <= 0
+            or receiver["packet_timebase_den"] <= 0
+        ):
+            raise ProbeFailure("--trace-append reference RTMP receiver clock/timebase is invalid")
+        if not any(
+            sample.get("encoder_active") is True
+            and sample.get("encoder_family") == "nvenc"
+            and sample.get("rtmp_load_active") is True
+            for sample in reference_samples
+        ):
+            raise ProbeFailure(
+                "--trace-append reference phase lacks an active NVENC sample under observed RTMP load"
+            )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -2560,6 +3173,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="create and bind a real browser_source CEF workload alongside window_capture",
     )
     parser.add_argument(
+        "--rtmp-receiver",
+        action="store_true",
+        help="start a real FFmpeg loopback RTMP receiver and fuse correlated AC-12 evidence after shutdown",
+    )
+    parser.add_argument(
         "--cef-url",
         default=os.environ.get("PULSAR_CEF_URL"),
         help="URL for the --cef-workload browser_source (or PULSAR_CEF_URL; default is an ephemeral local page)",
@@ -2583,6 +3201,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--trace-append requires --runtime-id matching the reference session")
     if args.trace_append and args.resource_mode != "dual_lane":
         parser.error("--trace-append requires --resource-mode dual_lane")
+    if args.rtmp_receiver and args.trace is None:
+        parser.error("--rtmp-receiver requires --trace")
+    if args.rtmp_receiver and args.resource_only and (
+        args.encoder != "nvenc" or args.resource_mode != "reference" or args.trace_append
+    ):
+        parser.error(
+            "--rtmp-receiver --resource-only requires --encoder nvenc --resource-mode reference "
+            "and cannot be combined with --trace-append"
+        )
     if args.trace is not None and (
         not args.build_revision or BUILD_REVISION_RE.fullmatch(args.build_revision) is None
     ):
@@ -2604,12 +3231,26 @@ def run(args: argparse.Namespace) -> int:
         return EXIT_SKIP
 
     with tempfile.TemporaryDirectory(prefix="pulsar-dual-lane-") as record_dir_text:
-        trace_path = args.trace.resolve() if args.trace is not None else None
+        final_trace_path = args.trace.resolve() if args.trace is not None else None
+        # A receiver must never append to a producer JSONL while the runtime
+        # is alive.  Give the runtime a unique producer-only path and create
+        # the final fused artifact only after both child processes have exited.
+        trace_path = final_trace_path
+        producer_trace_path = None
+        if final_trace_path is not None and args.rtmp_receiver:
+            producer_trace_path = final_trace_path.with_name(
+                f".{final_trace_path.name}.{os.getpid()}.producer.jsonl"
+            )
+            trace_path = producer_trace_path
         if trace_path is not None:
             trace_path.parent.mkdir(parents=True, exist_ok=True)
         trace_host = trace_gpu = None
         if trace_path is not None:
             trace_host, trace_gpu = resolve_trace_hardware(args.trace_host, args.trace_gpu)
+        rtmp_ffmpeg = find_ffmpeg(args.exe.parent) if args.rtmp_receiver else None
+        if args.rtmp_receiver and rtmp_ffmpeg is None:
+            print("SKIP: ffmpeg is required for the RTMP receiver boundary")
+            return EXIT_SKIP
         cef_server = None
         if args.cef_workload and not args.cef_url:
             cef_server = DeterministicCefServer()
@@ -2631,25 +3272,63 @@ def run(args: argparse.Namespace) -> int:
             trace_host,
             trace_gpu,
         )
+        if args.rtmp_receiver:
+            if rtmp_ffmpeg is None:
+                print("SKIP: ffmpeg is required for the RTMP receiver boundary")
+                return EXIT_SKIP
+            process.rtmp_receiver = RtmpReceiver(
+                rtmp_ffmpeg,
+                runtime_id=process.runtime_id,
+                stream_id=_stream_id_for_runtime(process.runtime_id, args.encoder),
+            )
+            process.rtmp_producer_trace_path = producer_trace_path
+            process.rtmp_final_trace_path = final_trace_path
         result = EXIT_FAIL
         cleanup_failure: ProbeFailure | None = None
         try:
             if args.trace_append:
+                if final_trace_path is None or not final_trace_path.is_file():
+                    raise ProbeFailure(
+                        "--trace-append requires the existing reference trace at the final --trace path"
+                    )
                 if (
-                    trace_path is None
-                    or args.runtime_id is None
+                    args.runtime_id is None
                     or args.build_revision is None
                     or trace_host is None
                     or trace_gpu is None
                 ):
                     raise ProbeFailure("--trace-append preflight metadata is incomplete")
+                # Check the operator-supplied reference first.  In the RTMP
+                # variant the producer copy is deliberately made only after
+                # this validation, preserving the reference on every failure.
                 validate_trace_append(
-                    trace_path,
+                    final_trace_path,
                     runtime_id=args.runtime_id,
                     build_revision=args.build_revision,
                     trace_host=trace_host,
                     trace_gpu=trace_gpu,
+                    require_rtmp_load=args.rtmp_receiver,
                 )
+                if args.rtmp_receiver:
+                    # Validate and copy the immutable reference before any
+                    # runtime starts.  The final path is only replaced after
+                    # successful receiver fusion, so a failed dual run leaves
+                    # the known-good reference untouched.
+                    if producer_trace_path is None:
+                        raise ProbeFailure("RTMP append producer path was not configured")
+                    shutil.copyfile(final_trace_path, producer_trace_path)
+                    trace_path = producer_trace_path
+                if args.rtmp_receiver:
+                    if trace_path is None:
+                        raise ProbeFailure("RTMP append producer path was not configured")
+                    validate_trace_append(
+                        trace_path,
+                        runtime_id=args.runtime_id,
+                        build_revision=args.build_revision,
+                        trace_host=trace_host,
+                        trace_gpu=trace_gpu,
+                        require_rtmp_load=args.rtmp_receiver,
+                    )
             if trace_path is not None:
                 calibration = calibrate_wire_clock()
                 print(
@@ -2660,7 +3339,7 @@ def run(args: argparse.Namespace) -> int:
                     f"qpc_delta_ns={calibration['qpc_delta_ns']} "
                     f"bound_ns={WIRE_CLOCK_QPC_MAX_DELTA_NS}"
                 )
-            process.spawn()
+            spawn_after_rtmp_ready(process)
             warmup_takes = TRACE_WARMUP_TAKES if trace_path is not None else 0
             print(
                 f"dual-lane probe: encoder={args.encoder} takes={args.takes} "
@@ -2705,10 +3384,39 @@ def run(args: argparse.Namespace) -> int:
         if result == 0:
             try:
                 process.assert_shutdown_clean(require_runtime_lease=trace_path is not None)
+                if args.rtmp_receiver:
+                    try:
+                        process.finalize_rtmp_trace(
+                            resource_only=args.resource_only,
+                            minimum_samples=args.resource_samples,
+                        )
+                    except ProbeFailure:
+                        if producer_trace_path is not None:
+                            print(
+                                f"RTMP fusion failed; producer sidecar preserved for diagnosis: {producer_trace_path}",
+                                file=sys.stderr,
+                            )
+                        raise
+                    if producer_trace_path is not None:
+                        print(
+                            f"RTMP fused trace committed atomically; producer sidecar preserved: {producer_trace_path}"
+                        )
             except ProbeFailure as exc:
                 print(f"FAIL: cleanup verification failed: {exc}", file=sys.stderr)
                 return EXIT_FAIL
         return result
+
+
+def spawn_after_rtmp_ready(process: PulsarProcess) -> None:
+    """Make receiver readiness precede any Pulsar spawn metadata access."""
+
+    if process.rtmp_receiver is not None:
+        # Start and calibrate FFmpeg before Pulsar reads receiver metadata or
+        # publishes its first stream packet.  This makes listener readiness an
+        # explicit lifecycle precondition and ensures spawn failures still
+        # enter the normal cleanup path.
+        process.start_rtmp_consumer()
+    process.spawn()
 
 
 def main() -> int:
