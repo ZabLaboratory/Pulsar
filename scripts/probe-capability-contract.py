@@ -727,7 +727,7 @@ async def drive_record(ws: PulsarWs) -> bool:
     it (the replay-buffer driver needs the shared encoders up).
 
     PauseRecord carries THREE verdicts since #130, all on the same subject:
-    the off-air refusal, the 0-byte refusal, and the healthy pause.
+    the off-air refusal, the pre-video-frame refusal, and the healthy pause.
     """
     # Issue #130 (guard 1 / #120 family): pausing an output that is not
     # recording used to answer Success(). obs_output_pause() returns false on
@@ -757,60 +757,74 @@ async def drive_record(ws: PulsarWs) -> bool:
         return False
     record("Record", "StartRecord", Verdict.OK, "GetRecordStatus.outputActive flips to True")
 
-    # Issue #130 (guard 2): pausing an ffmpeg_muxer that has not written a byte
-    # yet wedges it FOR GOOD -- libobs computes the pause window from an
+    # Issue #130 (guard 2): pausing an ffmpeg_muxer before its first VIDEO
+    # frame wedges it FOR GOOD -- libobs computes the pause window from an
     # encoder timestamp that is still 0, so the pause never lifts, the replay
     # buffer borrowing the same encoders stops producing files, and Stop*
-    # answer Success() while outputActive stays true. The root cause is
+    # can otherwise answer Success() while outputActive stays true. The root cause is
     # upstream (obs-output.c / obs-encoder.c) and out of Pulsar's mandate; the
     # websocket layer refuses the precondition with the cause named
     # (InvalidResourceState 604). Driving it here is now safe BECAUSE of that
     # refusal -- before #130 this sequence bricked the rest of the run, which
     # is why the case was routed out of the gate instead of wired into it.
     _, st, _ = await ws.req("GetRecordStatus")
-    bytes_before_pause = st.get("outputBytes") or 0
+    frames_before_pause = st.get("outputTotalFrames") or 0
     ok, _, comment = await ws.req("PauseRecord")
     code = ws.last_status.get("code")
-    if bytes_before_pause > 0:
-        # The muxer beat the probe to its first byte: the wedging precondition
+    if frames_before_pause > 0:
+        # The muxer beat the probe to its first video frame: the wedging precondition
         # was not reachable this run. Say so and undo -- do not manufacture a
         # verdict out of a case that did not happen.
-        print(f"  (0-byte pause precondition not reachable this run: outputBytes={bytes_before_pause})")
+        print(f"  (pre-video-frame pause precondition not reachable: outputTotalFrames={frames_before_pause})")
         if ok:
             await ws.req("ResumeRecord")
     elif ok:
         record("Record", "PauseRecord", Verdict.OK_NO_EFFECT,
-               "result=True for a pause issued at outputBytes==0 -- libobs's pause timeline is now wedged (#130)")
+               "result=True for a pause issued at outputTotalFrames==0 -- libobs's pause timeline is now wedged (#130)")
     else:
         record("Record", "PauseRecord", Verdict.ERROR_EXPLICIT,
-               f"0-byte pause refused (code={code}, expected 604 InvalidResourceState): {comment}")
+               f"pre-video-frame pause refused (code={code}, expected 604 InvalidResourceState): {comment}")
 
-    # Now let the muxer write its first bytes, and drive pause the way an
-    # operator does -- on a recording that is really recording.
+    # Now let the muxer receive its first video frame, and drive pause the way
+    # an operator does -- on a recording that is really recording.  Bytes alone
+    # are not enough: AAC may make outputBytes non-zero before video arrives.
+    frames_ready = False
     for _ in range(STOP_ATTEMPTS):
         _, st, _ = await ws.req("GetRecordStatus")
-        if (st.get("outputBytes") or 0) > 0:
+        if (st.get("outputTotalFrames") or 0) > 0:
+            frames_ready = True
             break
         await asyncio.sleep(0.25)
+    if not frames_ready:
+        raise RuntimeError(
+            "recording never delivered a video frame before healthy pause test "
+            "(GetRecordStatus.outputTotalFrames stayed 0)"
+        )
 
     ok, _, comment = await ws.req("PauseRecord")
     paused = await ws.poll("GetRecordStatus", "outputPaused", True, attempts=8)
-    if not ok:
-        record("Record", "PauseRecord", Verdict.ERROR_EXPLICIT, f"comment={comment}")
-    elif paused:
-        record("Record", "PauseRecord", Verdict.OK, "GetRecordStatus.outputPaused reflects True")
-    else:
-        record("Record", "PauseRecord", Verdict.OK_NO_EFFECT, f"result=True but outputPaused={paused!r}")
+    if not ok or paused is not True:
+        record(
+            "Record",
+            "PauseRecord",
+            Verdict.ERROR_EXPLICIT,
+            f"healthy pause did not land: ok={ok} paused={paused!r} comment={comment}",
+        )
+        raise RuntimeError("healthy PauseRecord did not become outputPaused=true")
+    record("Record", "PauseRecord", Verdict.OK, "GetRecordStatus.outputPaused reflects True")
 
     await asyncio.sleep(1.0)  # dwell in pause; see the note above
     ok, _, comment = await ws.req("ResumeRecord")
     resumed = await ws.poll("GetRecordStatus", "outputPaused", False, attempts=8)
-    if not ok:
-        record("Record", "ResumeRecord", Verdict.ERROR_EXPLICIT, f"comment={comment}")
-    elif resumed is False:
-        record("Record", "ResumeRecord", Verdict.OK, "GetRecordStatus.outputPaused reflects False")
-    else:
-        record("Record", "ResumeRecord", Verdict.OK_NO_EFFECT, f"result=True but outputPaused={resumed!r}")
+    if not ok or resumed is not False:
+        record(
+            "Record",
+            "ResumeRecord",
+            Verdict.ERROR_EXPLICIT,
+            f"healthy resume did not land: ok={ok} paused={resumed!r} comment={comment}",
+        )
+        raise RuntimeError("healthy ResumeRecord did not become outputPaused=false")
+    record("Record", "ResumeRecord", Verdict.OK, "GetRecordStatus.outputPaused reflects False")
 
     return True
 
@@ -820,10 +834,12 @@ async def finish_record(ws: PulsarWs) -> None:
     stopped = await ws.poll("GetRecordStatus", "outputActive", False, attempts=STOP_ATTEMPTS)
     if not ok:
         record("Record", "StopRecord", Verdict.ERROR_EXPLICIT, f"comment={comment}")
+        raise RuntimeError(f"StopRecord was not successful after pause/replay sequence: {comment}")
     elif stopped is False:
         record("Record", "StopRecord", Verdict.OK, "GetRecordStatus.outputActive flips back to False")
     else:
         record("Record", "StopRecord", Verdict.OK_NO_EFFECT, f"result=True but outputActive={stopped!r}")
+        raise RuntimeError("StopRecord returned success but outputActive stayed true")
 
 
 async def probe_offair_arm(ws: PulsarWs) -> tuple[bool, bool, str | None]:

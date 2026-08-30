@@ -106,18 +106,18 @@
       "the condition under which the defect existed -- and requires it gone from",
       "both GetInputList and GetSceneItemList."
     ],
-    "PauseRecord before the muxer's first bytes wedges record + replay": [
+    "PauseRecord before the muxer's first video frame wedges record + replay": [
       "OPENED 2026-07-27 Forge/#121, CLOSED 2026-07-27 by issue #130.",
       "Confirmed upstream (libobs obs-output.c get_closest_v_ts + obs-encoder.c",
       "video_pause_check_internal): the pause window is computed from an encoder",
       "timestamp that is still 0 before the first encoded frame, so the pause",
       "never lifts. Patching libobs is out of the fork's mandate, so the refusal",
       "lives in the only layer that can name a cause: RequestHandler_Record.cpp",
-      "refuses PauseRecord / ToggleRecordPause at outputBytes == 0 with",
+      "refuses PauseRecord / ToggleRecordPause at outputTotalFrames == 0 with",
       "InvalidResourceState (604), and refuses both on an inactive output with",
       "OutputNotRunning (501) -- the #120-family Success()-lie they also carried.",
       "Now GATED (Record family, PauseRecord): the probe drives the off-air",
-      "pause and the 0-byte pause and requires an explicit refusal for each.",
+      "pause and the pre-video-frame pause and requires an explicit refusal for each.",
       "Driving them is only safe BECAUSE of the refusal -- before #130 that",
       "sequence bricked the rest of the run."
     ],
