@@ -76,6 +76,16 @@ static thread manager_thread;
 static bool manager_initialized = false;
 os_event_t *cef_started_event = nullptr;
 
+enum class CefReadinessState : int {
+	Starting,
+	Ready,
+	Failed,
+};
+static mutex cef_readiness_mutex;
+static condition_variable cef_readiness_cv;
+static CefReadinessState cef_readiness_state = CefReadinessState::Starting;
+static constexpr auto cef_readiness_timeout = std::chrono::seconds(5);
+
 /*
  * CEF requires every browser to have reached OnBeforeClose before
  * CefShutdown.  The manager thread owns the message loop, so the barrier is
@@ -130,7 +140,58 @@ public:
 
 bool QueueCEFTask(std::function<void()> task)
 {
-	return CefPostTask(TID_UI, CefRefPtr<BrowserTask>(new BrowserTask(task)));
+	if (!BrowserSourceCefReady()) {
+		blog(LOG_WARNING, "PULSAR_CEF_SHUTDOWN event=post_rejected reason=cef_not_ready");
+		return false;
+	}
+	const bool posted = CefPostTask(TID_UI, CefRefPtr<BrowserTask>(new BrowserTask(task)));
+	if (!posted)
+		blog(LOG_ERROR, "PULSAR_CEF_SHUTDOWN event=post_rejected reason=cef_task_post_failed");
+	return posted;
+}
+
+bool BrowserSourceCefReady()
+{
+	lock_guard<mutex> lock(cef_readiness_mutex);
+	return cef_readiness_state == CefReadinessState::Ready;
+}
+
+bool BrowserSourceCefInitializationFailed()
+{
+	lock_guard<mutex> lock(cef_readiness_mutex);
+	return cef_readiness_state == CefReadinessState::Failed;
+}
+
+bool BrowserSourceWaitForCefReady()
+{
+	/* Keep the existing manual event as the fast path and readiness proof. */
+	if (cef_started_event && os_event_try(cef_started_event) == 0)
+		return true;
+
+	unique_lock<mutex> lock(cef_readiness_mutex);
+	const bool terminal = cef_readiness_cv.wait_for(lock, cef_readiness_timeout, []() {
+		return cef_readiness_state != CefReadinessState::Starting;
+	});
+	if (terminal && cef_readiness_state == CefReadinessState::Ready)
+		return true;
+
+	if (!terminal) {
+		blog(LOG_WARNING, "PULSAR_CEF_SHUTDOWN event=readiness_timeout action=reject_source");
+	} else {
+		blog(LOG_ERROR,
+		     "PULSAR_CEF_SHUTDOWN event=readiness_failed reason=cef_initialize_failed "
+		     "action=reject_source");
+	}
+	return false;
+}
+
+static void MarkCefReadinessFailed()
+{
+	{
+		lock_guard<mutex> lock(cef_readiness_mutex);
+		cef_readiness_state = CefReadinessState::Failed;
+	}
+	cef_readiness_cv.notify_all();
 }
 
 [[noreturn]] static void FailCefShutdown(const char *reason)
@@ -317,6 +378,7 @@ static CefRefPtr<BrowserApp> app;
 
 static void BrowserInit(void)
 {
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=manager_started");
 	string path = obs_get_module_binary_path(obs_current_module());
 	path = path.substr(0, path.find_last_of('/') + 1);
 	// PULSAR: subprocess helper renamed to pulsar-browser-page.exe
@@ -440,6 +502,7 @@ static void BrowserInit(void)
 #else
 		blog(LOG_ERROR, "[obs-browser]: CEF failed to initialize.");
 #endif
+		MarkCefReadinessFailed();
 		return;
 	}
 
@@ -447,6 +510,12 @@ static void BrowserInit(void)
 	CefRegisterSchemeHandlerFactory("http", "absolute", new BrowserSchemeHandlerFactory());
 
 	os_event_signal(cef_started_event);
+	{
+		lock_guard<mutex> lock(cef_readiness_mutex);
+		cef_readiness_state = CefReadinessState::Ready;
+	}
+	cef_readiness_cv.notify_all();
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=cef_ready");
 }
 
 static void BrowserShutdown(bool allow_cef_shutdown)
@@ -540,6 +609,11 @@ static void StartBrowserShutdownBarrier()
 static void BrowserManagerThread(void)
 {
 	BrowserInit();
+	if (!BrowserSourceCefReady()) {
+		cef_shutdown_barrier_failed.store(true, std::memory_order_release);
+		SignalCefShutdownCompletion(false);
+		return;
+	}
 	CefRunMessageLoop();
 	const bool shutdown_success = cef_shutdown_barrier_released.load(std::memory_order_acquire) &&
 				      !cef_shutdown_barrier_failed.load(std::memory_order_acquire);
@@ -584,6 +658,13 @@ void RegisterBrowserSource()
 	};
 	info.create = [](obs_data_t *settings, obs_source_t *source) -> void * {
 		obs_browser_initialize();
+		if (!BrowserSourceWaitForCefReady()) {
+			blog(LOG_WARNING,
+			     "PULSAR_CEF_SHUTDOWN event=source_create_rejected reason=cef_not_ready");
+			return nullptr;
+		}
+		if (!BrowserSourceCanCreateBrowser())
+			return nullptr;
 		return new BrowserSource(settings, source);
 	};
 	info.destroy = [](void *data) {
@@ -861,6 +942,10 @@ bool obs_module_load(void)
 	qRegisterMetaType<MessageTask>("MessageTask");
 #endif
 
+	{
+		lock_guard<mutex> lock(cef_readiness_mutex);
+		cef_readiness_state = CefReadinessState::Starting;
+	}
 	os_event_init(&cef_started_event, OS_EVENT_TYPE_MANUAL);
 
 #if defined(_WIN32) && CHROME_VERSION_BUILD < 5615
@@ -925,6 +1010,10 @@ void obs_module_post_load(void)
 void obs_module_unload(void)
 {
 #ifdef ENABLE_BROWSER_QT_LOOP
+	if (BrowserSourceCefInitializationFailed()) {
+		os_event_destroy(cef_started_event);
+		return;
+	}
 	BrowserSourceBeginShutdown();
 	BrowserSourceCloseAllBrowsers();
 	const auto deadline = std::chrono::steady_clock::now() + cef_shutdown_timeout;
@@ -945,6 +1034,11 @@ void obs_module_unload(void)
 			!cef_shutdown_barrier_failed.load(std::memory_order_acquire));
 #else
 	if (manager_thread.joinable()) {
+		if (BrowserSourceCefInitializationFailed()) {
+			manager_thread.join();
+			os_event_destroy(cef_started_event);
+			return;
+		}
 		ResetCefShutdownCompletion();
 		BrowserSourceBeginShutdown();
 		StartBrowserShutdownBarrier();

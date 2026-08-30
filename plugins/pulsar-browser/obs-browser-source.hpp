@@ -76,6 +76,12 @@ std::size_t BrowserSourceLiveBrowserCount();
 bool BrowserSourceShutdownComplete();
 bool BrowserSourceMarkDrained();
 bool BrowserSourceShutdownStarted();
+/* Wait for the manager thread's successful CefInitialize, with a bound. */
+bool BrowserSourceWaitForCefReady();
+/* Non-blocking readiness state used by destruction/error paths. */
+bool BrowserSourceCefReady();
+/* Initialization failure is terminal for this plugin instance. */
+bool BrowserSourceCefInitializationFailed();
 bool BrowserSourceCanCreateBrowser();
 BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy(BrowserSource *source, int browser_id,
 								 bool *wait_for_browser);

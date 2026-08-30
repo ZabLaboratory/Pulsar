@@ -168,6 +168,67 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
         )
         probe.assert_success(response, "CreateScene(cef-shutdown-real-scene)")
 
+        # Exercise the immediate post-READY lifecycle before the two durable
+        # browser instances: CreateInput may return before its first video tick,
+        # so RemoveInput must safely destroy a source with no CEF browser yet.
+        readiness_input = "cef-readiness-immediate"
+        readiness_settings = {
+            "url": f"{server.url}?lane=A",
+            "is_local_file": False,
+            "width": probe.CANVAS_W,
+            "height": probe.CANVAS_H,
+            "fps_custom": True,
+            "fps": 30,
+            "shutdown": False,
+            "reroute_audio": True,
+            "restart_when_active": False,
+            "webpage_control_level": 0,
+        }
+        response = await probe.request(
+            inbox,
+            ws,
+            "CreateInput",
+            "cef-shutdown-readiness-create-1",
+            {
+                "sceneName": scene,
+                "inputName": readiness_input,
+                "inputKind": "browser_source",
+                "inputSettings": readiness_settings,
+                "sceneItemEnabled": True,
+            },
+        )
+        probe.assert_success(response, "CreateInput(immediate readiness)")
+        response = await probe.request(
+            inbox,
+            ws,
+            "RemoveInput",
+            "cef-shutdown-readiness-remove-1",
+            {"inputName": readiness_input},
+        )
+        probe.assert_success(response, "RemoveInput(immediate readiness)")
+        response = await probe.request(
+            inbox,
+            ws,
+            "CreateInput",
+            "cef-shutdown-readiness-create-2",
+            {
+                "sceneName": scene,
+                "inputName": readiness_input,
+                "inputKind": "browser_source",
+                "inputSettings": readiness_settings,
+                "sceneItemEnabled": True,
+            },
+        )
+        probe.assert_success(response, "CreateInput(immediate recreate)")
+        response = await probe.request(
+            inbox,
+            ws,
+            "RemoveInput",
+            "cef-shutdown-readiness-remove-2",
+            {"inputName": readiness_input},
+        )
+        probe.assert_success(response, "RemoveInput(immediate recreate)")
+
         for lane in ("A", "B"):
             input_name = f"cef-shutdown-browser-{lane}"
             response = await probe.request(
@@ -318,6 +379,26 @@ def main() -> int:
             _raise_with_sanitized_tail(
                 probe, process, f"missing graceful-shutdown marker: {marker}"
             )
+    readiness_markers = (
+        "PULSAR_CEF_SHUTDOWN event=manager_started",
+        "PULSAR_CEF_SHUTDOWN event=cef_ready",
+    )
+    readiness_positions = {}
+    for marker in readiness_markers:
+        matches = [index for index, line in enumerate(lines) if marker in line]
+        if not matches:
+            _raise_with_sanitized_tail(probe, process, f"missing CEF readiness marker: {marker}")
+        readiness_positions[marker] = matches[-1]
+    first_browser_created = next(
+        (index for index, line in enumerate(lines) if "event=browser_created" in line),
+        None,
+    )
+    if first_browser_created is None or not (
+        readiness_positions[readiness_markers[0]]
+        < readiness_positions[readiness_markers[1]]
+        < first_browser_created
+    ):
+        _raise_with_sanitized_tail(probe, process, "CEF readiness did not precede browser creation")
     control_lines = [line for line in lines if line.startswith("PULSAR_SHUTDOWN_CONTROL")]
     if any(
         "PULSAR_SHUTDOWN_EVENT_HANDLE" in line or "handle" in line.lower()
@@ -326,6 +407,17 @@ def main() -> int:
         _raise_with_sanitized_tail(probe, process, "shutdown handle or its value was logged")
     if process.forced_kill_used:
         _raise_with_sanitized_tail(probe, process, "forced process kill was used")
+    if any(
+        "event=source_destroy_failed" in line
+        or "event=source_create_rejected" in line
+        or "event=post_rejected reason=cef_not_ready" in line
+        for line in lines
+    ):
+        _raise_with_sanitized_tail(
+            probe,
+            process,
+            "immediate CEF source lifecycle reported a readiness or destroy failure",
+        )
     if process.proc is None or process.proc.returncode != 0:
         status = process.proc.returncode if process.proc is not None else None
         _raise_with_sanitized_tail(probe, process, f"Pulsar exited unsuccessfully: {status}")
