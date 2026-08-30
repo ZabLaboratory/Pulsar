@@ -283,9 +283,12 @@ def test_dual_lane_activation_flag_is_consumed_and_rollback_preserves_surfaces()
     assert "legacyDisable == EnvBool::Invalid" in source
     assert 'return {false, "invalid-PULSAR_DUAL_LANE_ENABLED"}' in source
     assert 'return {false, "invalid-PULSAR_DISABLE_DUAL_LANE"}' in source
-    assert "dualLaneEnabled = activation.enabled && !resourceReference" in source
+    assert "dualLaneEnabled = activation.enabled && !resourceReference && rollbackSetting.valid" in source
+    assert '"invalid-PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES"' in source
+    assert "parse_env_bool" in source
+    assert "if (!*value)" in source
     assert "assert_dual_lane_activation" in probe
-    assert 'required_source="PULSAR_DISABLE_DUAL_LANE" if expected_reference else "PULSAR_DUAL_LANE_ENABLED=1"' in probe
+    assert 'required_source="resource-reference" if expected_reference else "PULSAR_DUAL_LANE_ENABLED=1"' in probe
     assert 'required_source="PULSAR_DUAL_LANE_ENABLED=1"' in probe
 
     # Rollback is a post-commit operational freeze.  It must leave the
@@ -295,13 +298,20 @@ def test_dual_lane_activation_flag_is_consumed_and_rollback_preserves_surfaces()
     assert "rollbackAfterTakes" in source
     assert "dualLaneOperational = false" in source
     assert "rollback committed at frame_id=%llu" in source
-    assert "current_program_preserved=1" in source
-    assert "active_video_t_rebound=0" in source
+    assert "current_program_preserved=%d" in source
+    assert "active_video_t_rebound=%d" in source
+    assert "lane_root_binding_valid=%d" in source
+    assert "program_video_stable=%d" in source
+    assert "frozen=%d" in source
+    assert "operational_" in source
+    assert 'state_ = freezeAfterCommit ? "frozen" : "ready"' in source
     callback = _between(
         source,
         "void PulsarFrontendAPI::OnDualLaneCutCommitted",
         "bool PulsarFrontendAPI::setup()",
     )
+    assert "g_dualLaneControlBridge.freeze()" in callback
+    assert "g_dualLaneControlBridge.deactivate()" not in callback
     assert "obs_set_output_source(" not in callback
     assert "obs_view_set_source(" not in callback
     assert "obs_encoder_set_video(" not in callback
@@ -311,6 +321,27 @@ def test_dual_lane_activation_flag_is_consumed_and_rollback_preserves_surfaces()
     assert "pulsar.dual-lane-rollback.v1" in rollback_probe
     assert "current_program_preserved" in rollback_probe
     assert "stable encoder/video binding count=1" in rollback_probe
+    assert "CallVendorRequest" in rollback_probe
+    assert "rollback-vendor-prepare" in rollback_probe
+    assert "rollback-vendor-take" in rollback_probe
+    assert "rollback-vendor-dispatch" in rollback_probe
+    assert "validate_commit(identity, None, commit)" in rollback_probe
+    assert 'state_before["state"] != "frozen"' in rollback_probe
+    assert "freezeAfterFrontendRollback" in source
+    assert "runtime and DirectShow lease state was observable" in rollback_probe
+    assert "CTRL_BREAK_EVENT" in rollback_probe
+    assert "PulsarRollbackMarkerWriter" in source
+    assert "g_rollbackMarkerWriter.start()" in source
+    assert "g_rollbackMarkerWriter.enqueue" in source
+    assert "status.dump()" in source
+    assert '"runtime_instance_id", g_runtimeTelemetry.runtimeInstanceId()' in source
+    callback = _between(
+        source,
+        "void PulsarFrontendAPI::OnDualLaneCutCommitted",
+        "bool PulsarFrontendAPI::setup()",
+    )
+    assert "std::ofstream" not in callback
+    assert "create_directories" not in callback
 
 
 def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> None:
@@ -319,12 +350,21 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert "--takes" in probe
     assert '"StartRecord"' in probe
     assert '"StopRecord"' in probe
+    assert "start_directshow_consumer" in probe
+    assert "Pulsar Program Return" in probe
+    assert '"PULSAR_TRACE_PATH"' in probe
+    assert '"PULSAR_DIRECTSHOW_LEGACY_ALIAS"' in probe
+    assert 'boundary="directshow_return"' in probe
+    assert "assert_directshow_consumer_alive" in probe
     assert "OBS_WEBSOCKET_OUTPUT_STARTED" in probe
     assert "OBS_WEBSOCKET_OUTPUT_STOPPED" in probe
     assert "-count_frames" in probe
     assert "encoder video_t bound once to ProgramView" in probe
     assert "lane_root_binding_valid=(\\d) program_main_view_valid=(\\d)" in probe
     assert "TakeCommitted reported an invalid surface relation" in probe
+    assert "TRACE_WARMUP_TAKES = 100" in probe
+    assert "total_takes = warmup_takes + takes" in probe
+    assert "warmup_takes_observed" in _read(_ROOT / "scripts/probe-take-latency.py")
 
 
 def test_runtime_probe_exercises_live_mutation_and_post_take_isolation() -> None:
@@ -355,6 +395,9 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "std::mutex dispatchMutex_" in frontend
     assert "std::atomic<bool> pending_" in frontend
     assert "Lifecycle::ShuttingDown" in frontend
+    assert "out bool frozen" in frontend
+    assert "bool frozen() const" in bridge
+    assert "void freeze()" in frontend
     assert "g_dualLaneControlBridge.set_pending(true)" in frontend
     assert "g_dualLaneControlBridge.set_pending(false)" in frontend
     assert "g_dualLaneControlBridge.deactivate()" in frontend
@@ -371,6 +414,7 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass" in handler
     assert "RequestStatus::RequestProcessingFailed" in handler
     assert "PREVIEW_FROZEN" in handler
+    assert "after the dual-lane rollback freeze" in handler
     # The gate is central and acquired before handler lookup. The only pending
     # bypass is the exact vendor Abort/GetState pair; Prepare/Take/Dispatch,
     # malformed CallVendorRequest data, and every other vendor remain gated.

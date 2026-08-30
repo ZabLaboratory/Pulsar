@@ -51,14 +51,20 @@ The first relevant line must look like:
 ```
 
 The reference phase of `scripts/probe-dual-lane.py` sets
-`PULSAR_DISABLE_DUAL_LANE=1`; the probe now verifies the corresponding
-startup decision rather than trusting the environment assignment.
+`PULSAR_DISABLE_DUAL_LANE=1` and `PULSAR_TRACE_RESOURCE_MODE=reference`; the
+effective startup decision is logged as `source=resource-reference` because
+the resource-reference mode owns the compatibility-path selection. The probe
+verifies that effective decision rather than trusting either environment
+assignment.
 
 ## Standard codec canaries
 
-Run the standard 100-Take campaign independently for each codec. This checks
-the live A/B roots, stable surfaces, atomic frame-boundary Cut, command safety,
-recording and exactly one encoder binding.
+Run the standard campaign independently for each codec. `--takes 100` means
+100 measured Takes; a traced run first executes 100 warm-up Takes in the same
+runtime and records 200 committed Takes total. The warm-up prefix is excluded
+by `probe-take-latency.py` from the SLO percentiles. This checks the live A/B
+roots, stable surfaces, atomic frame-boundary Cut, command safety, recording
+and exactly one encoder binding.
 
 ```powershell
 python scripts/probe-dual-lane.py `
@@ -89,8 +95,10 @@ python scripts/probe-dual-lane.py `
   --resource-mode dual_lane
 ```
 
-The trace must contain at least 100 warm-up Takes and 100 measured Takes for
-each codec. Validate it with the boundary-aware parser:
+The trace must contain at least 100 observed warm-up Takes followed by 100
+observed measured Takes for each codec (200 committed Takes total with the
+standard command). Validate it with the boundary-aware parser, which reports
+the two observed counts and excludes the warm-up prefix:
 
 ```powershell
 python scripts/probe-take-latency.py `
@@ -129,13 +137,28 @@ expected sequence is:
 
 1. A/B are ready and the encoder is bound once to the stable Program surface.
 2. Take 1 is accepted and committed at `(frame_id, pts_ns)`.
-3. The rollback log reports the same frame/PTS, `current_program_preserved=1`,
-   `active_video_t_rebound=0` and `new_takes_enabled=0`.
+3. The rollback log reports the same frame/PTS and the observed surface
+   properties: `current_program_preserved=1`, `active_video_t_rebound=0` and
+   `new_takes_enabled=0`. These values are derived from live identities, not
+   asserted constants.
 4. Program remains the committed scene and Preview remains the other scene.
 5. A subsequent Preview/scene mutation receives `PREVIEW_FROZEN` and does not
    alter the scene graph; reads remain available.
 6. The recording remains valid and the encoder-binding count stays exactly
    one.
+
+The harness also calls the versioned vendor API after the freeze. `GetState`
+is still available as an observation path and reports `state=frozen` with
+`operational=false`; valid `Prepare`, `Take`, and `Dispatch` payloads are
+rejected by the closed mutation bridge with `PREVIEW_FROZEN` before the vendor
+state machine can mutate anything. A before/after `GetState` comparison proves
+that state, `server_seq`, revisions and role mapping are unchanged. This is
+deliberately a gateway/direct-vendor freeze rejection, not a
+`PREVIEW_LANE_MISMATCH` result.
+
+The marker is written asynchronously by a process-lifetime worker so the
+graphics callback performs no directory creation or file I/O. The probe waits
+for and validates the marker before stopping the process.
 
 This is an in-process operational freeze. It does not pretend to convert the
 already-live two-view topology into a single view. Once the current Program
@@ -147,6 +170,14 @@ setter or rebind the active `video_t`.
 If rollback is triggered by an integrity fault, preserve the trace and logs,
 keep the runtime fail-stopped, and escalate the candidate for investigation.
 Do not clear the flag, retry indefinitely or overwrite the evidence.
+
+`PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES` is a bounded drill trigger, not the
+activation safety flag. A malformed value, an explicitly empty value, zero, or
+a value above `100000` is rejected and fails closed to the compatibility
+single-canvas path; it must never leave dual-lane active while silently
+disarming the drill. Such a run is not a rollback proof. Malformed
+`PULSAR_DUAL_LANE_ENABLED` or `PULSAR_DISABLE_DUAL_LANE` values likewise fail
+closed to the compatibility path.
 
 ## Namespace and lease checks
 

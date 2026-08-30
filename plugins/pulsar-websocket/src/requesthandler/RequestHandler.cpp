@@ -341,9 +341,12 @@ RequestResult RequestHandler::ProcessRequest(const Request &request)
 	const bool controlledSceneSwitchBypass = IsControlledSceneSwitchPendingBypass(request);
 	pulsar_dual_lane_control::MutationLease mutationLease(
 		!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass);
-	if (!mutationLease.allowed())
-		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
-					    "PREVIEW_FROZEN: WebSocket mutation rejected while a dual-lane Take is pending.");
+	if (!mutationLease.allowed()) {
+		const char *reason = mutationLease.frozen()
+			? "PREVIEW_FROZEN: WebSocket mutation rejected after the dual-lane rollback freeze."
+			: "PREVIEW_FROZEN: WebSocket mutation rejected while a dual-lane Take is pending.";
+		return RequestResult::Error(RequestStatus::RequestProcessingFailed, reason);
+	}
 
 	if (!request.RequestData.is_object() && !request.RequestData.is_null())
 		return RequestResult::Error(RequestStatus::InvalidRequestFieldType, "Your request data is not an object.");

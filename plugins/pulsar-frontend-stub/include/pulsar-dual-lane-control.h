@@ -35,10 +35,12 @@ public:
         bool available = false;
         bool allowed = true;
         bool held = false;
+        bool frozen = false;
         if (called) {
             calldata_get_bool(&cd, "available", &available);
             calldata_get_bool(&cd, "allowed", &allowed);
             calldata_get_bool(&cd, "held", &held);
+            calldata_get_bool(&cd, "frozen", &frozen);
         }
         calldata_free(&cd);
 
@@ -51,6 +53,7 @@ public:
         bridgeActive_ = true;
         allowed_ = allowed;
         held_ = held;
+        frozen_ = frozen;
     }
 
     MutationLease(const MutationLease &) = delete;
@@ -59,6 +62,8 @@ public:
     ~MutationLease() { release(); }
 
     bool allowed() const { return allowed_; }
+
+    bool frozen() const { return frozen_; }
 
 private:
     void release()
@@ -76,6 +81,7 @@ private:
     bool bridgeActive_ = false;
     bool allowed_ = true;
     bool held_ = false;
+    bool frozen_ = false;
 };
 
 } // namespace pulsar_dual_lane_control

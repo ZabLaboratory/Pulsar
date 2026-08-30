@@ -55,7 +55,12 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
         "runtime_instance_id": RUNTIME,
         "session_id": "session-fixture-001",
         "codec": "nvenc",
-        "warmup_takes": count,
+        # Runtime fixtures model the same two-phase campaign as the real
+        # driver: an observed warm-up prefix followed by measured Takes.
+        # Small fixture-only traces keep the historical compact shape so the
+        # tests can focus on parser invariants without fabricating a capacity
+        # claim.
+        "warmup_takes": count if evidence_kind == "runtime" else 0,
         "video": {"width": 1920, "height": 1080, "fps_num": 60, "fps_den": 1},
         "workload": {"wgc": True, "cef": True, "nvenc": True},
         "capture_paths": list(probe.BOUNDARIES),
@@ -73,7 +78,9 @@ def _take_records(count: int, *, evidence_kind: str = "fixture", raw_extra_ms: f
     records = [session]
     revisions = {"program": 0, "preview": 0, "role_map": 0}
     seq = 1
-    for index in range(count):
+    warmup_count = count if evidence_kind == "runtime" else 0
+    total_count = warmup_count + count
+    for index in range(total_count):
         take_id = f"take-{index + 1:03d}"
         intent_id = f"intent-{index + 1:03d}"
         accepted_at = 1_000_000_000 + index * 100_000_000
@@ -211,6 +218,10 @@ def test_runtime_report_can_pass_only_with_explicit_complete_evidence():
     trace = _trace(3, evidence_kind="runtime")
     report = probe.analyze_trace(trace, minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
     assert report["status"] == "PASS"
+    assert report["takes"]["warmup_takes_observed"] == 3
+    assert report["takes"]["measured_takes_observed"] == 3
+    assert report["takes"]["total_committed_takes"] == 6
+    assert report["latency"]["encoder_input_raw"]["count"] == 3
     assert all(report["criteria"][criterion]["status"] in ("PASS", "MEASURED") for criterion in ("AC-07", "AC-08", "AC-11", "AC-12", "AC-13"))
 
 

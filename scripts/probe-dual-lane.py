@@ -34,6 +34,10 @@ WebSocket dependency), and 3 (typed environment skip, for example no binary
 or no NVENC device).  This probe validates the routing and identity contract;
 the raw NV12 time-code probe remains the pixel-level proof for no mixed frame.
 
+For traced runs, ``--takes 100`` executes 100 warm-up Takes followed by 100
+measured Takes in the same process; the trace parser excludes the warm-up
+prefix from latency percentiles.  Non-traced smoke runs execute 100 total.
+
 The process boundary is deliberate: no libobs/OBS DLL is loaded and no native
 object is accessed from Python.  Only obs-websocket v5 JSON frames and the
 Pulsar child process's structured diagnostics are used.  With ``--trace``, the
@@ -47,9 +51,11 @@ for the correlated two-pair A/B phase.
 Normal and dual-lane canary processes explicitly set
 ``PULSAR_DUAL_LANE_ENABLED=1`` and require the matching startup decision in
 the log.  The reference phase explicitly sets
-``PULSAR_DISABLE_DUAL_LANE=1`` and requires the compatibility decision, so a
-probe-side environment assignment can never be mistaken for a runtime
-consumer.
+``PULSAR_DISABLE_DUAL_LANE=1`` and enables the resource-reference mode; the
+runtime reports the effective source as ``resource-reference`` because that
+mode owns the compatibility-path decision.  The probe requires that effective
+decision, so a probe-side environment assignment can never be mistaken for a
+runtime consumer.
 
 The --cef-workload mode starts an ephemeral loopback HTTP server for a
 deterministic page and requires --capture-window to name an actual visible WGC
@@ -170,6 +176,11 @@ LANE_SOURCE_NAMES = {
 }
 SOURCE_SCREENSHOT_DEADLINE_S = 20.0
 SOURCE_SCREENSHOT_INTERVAL_S = 0.5
+# The trace contract's warm-up count is an observed partition of the same
+# process: the first 100 committed Takes are discarded from latency
+# percentiles, and the following --takes commits are the measured sample.
+# Non-traced smoke runs keep their historical --takes total.
+TRACE_WARMUP_TAKES = 100
 
 # The dual-lane campaign must exercise an actual browser_source, but its
 # content must not depend on a public website or network availability.  This
@@ -282,9 +293,10 @@ def assert_dual_lane_activation(
     """Verify that the runtime consumed the boot-time topology switch.
 
     The probe sets ``PULSAR_DISABLE_DUAL_LANE`` for its single-canvas
-    reference phase.  A startup decision line is required before any source
-    or Take evidence is accepted; an environment assignment alone is not
-    evidence that the binary used it.
+    reference phase.  Resource-reference mode is the effective compatibility
+    decision reported by the runtime.  A startup decision line is required
+    before any source or Take evidence is accepted; an environment assignment
+    alone is not evidence that the binary used it.
     """
 
     match = process.wait_for(DUAL_ACTIVATION_RE, timeout=60)
@@ -488,6 +500,11 @@ class PulsarProcess:
         self.port = choose_port()
         self.password = secrets.token_urlsafe(24)
         self.proc: subprocess.Popen[str] | None = None
+        self.directshow_proc: subprocess.Popen[str] | None = None
+        self.directshow_command: list[str] | None = None
+        self.directshow_startup_output = ""
+        self.directshow_lines: list[str] = []
+        self.directshow_thread: threading.Thread | None = None
         self.lines: list[str] = []
         self.condition = threading.Condition()
         self.thread: threading.Thread | None = None
@@ -524,8 +541,13 @@ class PulsarProcess:
             # probe's registration/settings/pixel checks are the readiness
             # evidence for the declared topology.
             env["PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD"] = "1"
-            env["PULSAR_TRACE_WARMUP_TAKES"] = str(100)
+            env["PULSAR_TRACE_WARMUP_TAKES"] = str(TRACE_WARMUP_TAKES)
             env["PULSAR_TRACE_COMMAND"] = "scripts/probe-dual-lane.py --trace"
+            # Use the runtime-specific ProgramReturn queue for the external
+            # DirectShow reader.  This keeps the consumer correlated to the
+            # same runtime identity and avoids a process-wide legacy alias
+            # collision during a traced canary.
+            env["PULSAR_DIRECTSHOW_LEGACY_ALIAS"] = "0"
             if self.resource_mode is not None:
                 env["PULSAR_TRACE_RESOURCE_MODE"] = self.resource_mode
             else:
@@ -535,7 +557,7 @@ class PulsarProcess:
                 env["PULSAR_TRACE_APPEND"] = "1"
             else:
                 env.pop("PULSAR_TRACE_APPEND", None)
-            if self.resource_mode == "dual_lane":
+            if self.resource_mode != "reference":
                 env["PULSAR_PROGRAM_RETURN_AUTOSTART"] = "1"
             else:
                 env.pop("PULSAR_PROGRAM_RETURN_AUTOSTART", None)
@@ -568,7 +590,10 @@ class PulsarProcess:
             env.pop("PULSAR_CEF_URL", None)
         env.pop("PULSAR_MIC_DEVICE_ID", None)
 
-        creationflags = 0x08000000 if os.name == "nt" else 0
+        # Keep the child in its own Windows console process group so an
+        # operational rollback probe can request Ctrl+Break and observe the
+        # runtime's graceful lease release before falling back to termination.
+        creationflags = (0x08000000 | 0x00000200) if os.name == "nt" else 0
         self.proc = subprocess.Popen(
             [str(self.exe)],
             cwd=str(self.exe.parent),
@@ -639,7 +664,138 @@ class PulsarProcess:
                     raise ProbeFailure(f"TakeCommitted count={count} not observed\n{tail}")
                 self.condition.wait(timeout=min(0.25, remaining))
 
+    def start_directshow_consumer(self) -> None:
+        """Open the actual ProgramReturn DirectShow filter for a trace run."""
+
+        if self.trace_path is None or self.resource_mode == "reference":
+            return
+        if self.directshow_proc is not None:
+            return
+        ffmpeg = find_ffmpeg(self.exe.parent)
+        if ffmpeg is None:
+            raise ProbeSkip("ffmpeg is required to open the ProgramReturn DirectShow consumer")
+        env = dict(os.environ)
+        env["PULSAR_RUNTIME_INSTANCE_ID"] = self.runtime_id
+        env["PULSAR_TRACE_PATH"] = str(self.trace_path)
+        env["PULSAR_DIRECTSHOW_LEGACY_ALIAS"] = "0"
+        command = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-fflags",
+            "nobuffer",
+            "-flags",
+            "low_delay",
+            "-f",
+            "dshow",
+            "-video_size",
+            f"{CANVAS_W}x{CANVAS_H}",
+            "-framerate",
+            "60",
+            "-i",
+            "video=Pulsar Program Return",
+            "-an",
+            "-f",
+            "null",
+            "-",
+        ]
+        self.directshow_command = command
+        self.directshow_proc = subprocess.Popen(
+            command,
+            cwd=str(self.exe.parent),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        self.directshow_thread = threading.Thread(
+            target=self._pump_directshow,
+            args=(self.directshow_proc,),
+            name="pulsar-directshow-probe",
+            daemon=True,
+        )
+        self.directshow_thread.start()
+        # Device enumeration failures are immediate and typed as an
+        # environment skip.  Once the filter has stayed alive past this
+        # bounded startup window, an exit during Takes is a product/probe
+        # failure and is reported by assert_directshow_consumer_alive().
+        time.sleep(0.75)
+        if self.directshow_proc.poll() is not None:
+            if self.directshow_thread is not None:
+                self.directshow_thread.join(timeout=2)
+                self.directshow_thread = None
+            output = "\n".join(self.directshow_lines)
+            self.directshow_startup_output = output[-4000:]
+            self.directshow_proc = None
+            if any(
+                marker in output.lower()
+                for marker in (
+                    "could not enumerate video devices",
+                    "video device not found",
+                    "could not find video device",
+                    "no such device",
+                    "i/o error",
+                )
+            ):
+                raise ProbeSkip(
+                    "ProgramReturn DirectShow filter is unavailable on this host: "
+                    + self.directshow_startup_output.strip()
+                )
+            raise ProbeFailure(
+                "ProgramReturn DirectShow consumer exited during startup: "
+                + self.directshow_startup_output.strip()
+            )
+
+    def assert_directshow_consumer_alive(self) -> None:
+        if self.directshow_proc is None:
+            return
+        if self.directshow_proc.poll() is None:
+            return
+        if self.directshow_thread is not None:
+            self.directshow_thread.join(timeout=2)
+        output = "\n".join(self.directshow_lines)
+        raise ProbeFailure(
+            "ProgramReturn DirectShow consumer exited during campaign: " + output[-4000:]
+        )
+
+    def stop_directshow_consumer(self) -> None:
+        if self.directshow_proc is None:
+            if self.directshow_thread is not None:
+                self.directshow_thread.join(timeout=2)
+                self.directshow_thread = None
+            return
+        process = self.directshow_proc
+        self.directshow_proc = None
+        if process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=5)
+            except Exception:
+                try:
+                    process.kill()
+                    process.wait(timeout=5)
+                except Exception:
+                    pass
+        if self.directshow_thread is not None:
+            self.directshow_thread.join(timeout=2)
+            self.directshow_thread = None
+
+    def _pump_directshow(self, process: subprocess.Popen[str]) -> None:
+        if process.stdout is None:
+            return
+        for line in process.stdout:
+            self.directshow_lines.append(line.rstrip("\r\n"))
+
     def shutdown(self) -> None:
+        # Release the external DirectShow reader before the producer so the
+        # queue/filter lease is closed while the ProgramReturn output is still
+        # alive.  This also prevents a stale reader from consuming a later
+        # runtime's named queue.
+        self.stop_directshow_consumer()
         if self.proc is None or self.proc.poll() is not None:
             return
         try:
@@ -856,6 +1012,25 @@ def validate_commit(identity: ReadyIdentity, previous: Commit | None, commit: Co
             raise ProbeFailure(f"frame_id did not increase: previous={previous} current={commit}")
         if commit.pts_ns <= previous.pts_ns:
             raise ProbeFailure(f"PTS did not increase: previous={previous} current={commit}")
+
+
+def find_ffmpeg(exe_parent: pathlib.Path | None = None) -> str | None:
+    """Locate the FFmpeg binary used for the DirectShow return consumer."""
+
+    roots = []
+    if exe_parent is not None:
+        roots.append(exe_parent)
+    roots.append(REPO_ROOT / "upstream/.deps")
+    for root in roots:
+        if not root.exists():
+            continue
+        direct = root / "ffmpeg.exe"
+        if direct.is_file():
+            return str(direct)
+        for candidate in root.glob("obs-deps-*-x64/bin/ffmpeg.exe"):
+            if candidate.is_file():
+                return str(candidate)
+    return shutil.which("ffmpeg")
 
 
 def find_ffprobe() -> str | None:
@@ -1515,7 +1690,7 @@ async def collect_resource_samples(
     activation, activation_source, rollback_after_takes = assert_dual_lane_activation(
         process,
         expected=not expected_reference,
-        required_source="PULSAR_DISABLE_DUAL_LANE" if expected_reference else "PULSAR_DUAL_LANE_ENABLED=1",
+        required_source="resource-reference" if expected_reference else "PULSAR_DUAL_LANE_ENABLED=1",
     )
     print(
         "   dual-lane activation consumed: "
@@ -1622,7 +1797,10 @@ async def assert_distinct_selected_scenes(
         raise ProbeFailure(f"logical Program and Preview scenes aliased at {operation}: {program!r}")
 
 
-async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
+async def drive(process: PulsarProcess, takes: int, *, warmup_takes: int = 0) -> list[Commit]:
+    if takes < 1 or warmup_takes < 0:
+        raise ProbeFailure("takes must be positive and warmup_takes must not be negative")
+    total_takes = warmup_takes + takes
     ready_match = process.wait_for(READY_RE, timeout=60)
     ws_url = ready_match.group(1)
     ready_password = ready_match.group(2)
@@ -1662,6 +1840,8 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
     ffprobe = find_ffprobe()
     if not ffprobe:
         raise ProbeSkip("ffprobe is required for the active-recording acceptance proof")
+    if process.trace_path is not None:
+        process.start_directshow_consumer()
 
     async with websockets.connect(
         ws_url, subprotocols=["obswebsocket.json"], open_timeout=15
@@ -1726,7 +1906,8 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
         await asyncio.sleep(0.5)
 
         commits: list[Commit] = []
-        for number in range(1, takes + 1):
+        for number in range(1, total_takes + 1):
+            process.assert_directshow_consumer_alive()
             target = SCENE_B if number % 2 else SCENE_A
             response = await request(
                 inbox,
@@ -1819,6 +2000,13 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
                     boundary="encoder_input_raw",
                     timeout=10.0,
                 )
+                wait_for_trace_record(
+                    process,
+                    "observation",
+                    f"take-{number:03d}",
+                    boundary="directshow_return",
+                    timeout=15.0,
+                )
             validate_commit(identity, commits[-1] if commits else None, commit)
             commits.append(commit)
             if number in (1, takes) or number % 25 == 0:
@@ -1910,9 +2098,9 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
             for line in process.snapshot()
             if (match := COMMIT_RE.search(line)) is not None
         ]
-        if len(all_commits) != takes or [commit.count for commit in all_commits] != list(range(1, takes + 1)):
+        if len(all_commits) != total_takes or [commit.count for commit in all_commits] != list(range(1, total_takes + 1)):
             raise ProbeFailure(
-                f"expected exactly {takes} contiguous TakeCommitted logs, got "
+                f"expected exactly {total_takes} contiguous TakeCommitted logs, got "
                 f"{[commit.count for commit in all_commits]}"
             )
         first_commit_index = next(
@@ -1927,8 +2115,28 @@ async def drive(process: PulsarProcess, takes: int) -> list[Commit]:
         )
         if bind_index >= first_commit_index:
             raise ProbeFailure("encoder video_t bind was not completed before the first Take")
+        if process.trace_path is not None:
+            process.assert_directshow_consumer_alive()
+            wait_for_trace_record(
+                process,
+                "observation",
+                f"take-{total_takes:03d}",
+                boundary="directshow_return",
+                timeout=15.0,
+            )
         verify_recording(output_path, ffprobe)
 
+    if warmup_takes:
+        if len(commits) != total_takes:
+            raise ProbeFailure(
+                f"warm-up accounting mismatch: collected {len(commits)} total commits, "
+                f"expected {total_takes} ({warmup_takes} warm + {takes} measured)"
+            )
+        print(
+            f"   trace partition: warmup_takes={warmup_takes} "
+            f"measured_takes={len(commits) - warmup_takes} total_takes={len(commits)}"
+        )
+        return commits[warmup_takes:]
     return commits
 
 
@@ -1936,7 +2144,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", type=pathlib.Path, default=DEFAULT_EXE)
     parser.add_argument("--encoder", choices=("x264", "nvenc"), required=True)
-    parser.add_argument("--takes", type=int, default=100)
+    parser.add_argument(
+        "--takes",
+        type=int,
+        default=100,
+        help="number of measured Takes; traced runs prepend 100 warm-up Takes",
+    )
     parser.add_argument(
         "--trace",
         type=pathlib.Path,
@@ -2070,8 +2283,10 @@ def run(args: argparse.Namespace) -> int:
                     f"bound_ns={WIRE_CLOCK_QPC_MAX_DELTA_NS}"
                 )
             process.spawn()
+            warmup_takes = TRACE_WARMUP_TAKES if trace_path is not None else 0
             print(
-                f"dual-lane probe: encoder={args.encoder} takes={args.takes} exe={args.exe}"
+                f"dual-lane probe: encoder={args.encoder} takes={args.takes} "
+                f"warmup_takes={warmup_takes} total_takes={args.takes + warmup_takes} exe={args.exe}"
                 + (f" trace={trace_path}" if trace_path is not None else "")
                 + (f" resource_mode={args.resource_mode}" if args.resource_mode else "")
             )
@@ -2086,7 +2301,7 @@ def run(args: argparse.Namespace) -> int:
                 )
                 print(f"PASS: collected {count} native {args.resource_mode} resource samples")
                 return 0
-            commits = asyncio.run(drive(process, args.takes))
+            commits = asyncio.run(drive(process, args.takes, warmup_takes=warmup_takes))
             print(
                 f"PASS: {len(commits)} Takes; computed lane/surface relations remained valid; "
                 "frame_id/PTS monotone"

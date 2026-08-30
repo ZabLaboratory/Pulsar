@@ -146,17 +146,21 @@ not accepted as proof of the A/B topology.
 ## Reproducible execution
 
 Run each codec as an independent campaign on the exact binary and host. The
-producer must complete at least 100 warm-up Takes and retain at least 100
-measured Takes for each required boundary. Capture the source/binary revision,
+producer must complete at least 100 warm-up Takes followed by at least 100
+measured Takes in the same runtime session for each required boundary. The
+standard dual-lane probe executes 200 committed Takes for `--takes 100`; the
+parser excludes the first 100 from latency percentiles and reports both
+observed counts. Capture the source/binary revision,
 redacted command line, resolution/FPS, adapter/driver, and the WGC/CEF/NVENC
 flags in the session record.
 
 ```powershell
 # Run the runtime producer/instrumentation for x264 and save x264.jsonl.
 # Repeat with PULSAR_VIDEO_ENCODER=nvenc and save nvenc.jsonl.
-# The DirectShow reader and encoder-output callback must write observations
-# using the same runtime/session IDs and monotonic clock; RTMP receiver timing
-# is an external Probe measurement and must not be merged from wall-clock logs.
+# The probe itself keeps the ProgramReturn DirectShow reader open; the reader
+# and encoder-output callback write observations using the same runtime/session
+# IDs and monotonic clock. RTMP receiver timing is an external Probe
+# measurement and must not be merged from wall-clock logs.
 
 python scripts/probe-take-latency.py `
   --trace artifacts/246/x264.jsonl artifacts/246/nvenc.jsonl `

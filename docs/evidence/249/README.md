@@ -36,9 +36,16 @@ and the commands in `docs/runbooks/pulsar-dual-lane-canary.md` complete.
 
 The rollback harness also requires the machine-readable
 `pulsar.dual-lane-rollback.v1` marker
-`pulsar-dual-lane-rollback.json` beside the recording output. Its frame/PTS,
-lane roles, frozen state, stable surfaces and `active_video_t_rebound=false`
-fields must match the structured rollback log and the committed frame.
+`pulsar-dual-lane-rollback.json` beside the recording output. Its runtime ID,
+frame/PTS, lane roles, frozen state and observed surface properties
+(`lane_root_binding_valid`, stable Program/Preview views and
+`active_video_t_rebound=false`) must match the structured rollback log and the
+committed frame.
+
+For each traced active canary, the harness must keep an actual
+`Pulsar Program Return` DirectShow consumer open for the entire Take loop. A
+trace without `directshow_return` observations from that consumer is
+`UNPROVEN`; raw or RTMP observations cannot substitute for AC-08.
 
 ## Prior core inputs
 

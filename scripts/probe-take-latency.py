@@ -720,6 +720,20 @@ def analyze_trace(
         previous_commit_frame = event["frame_id"]
         previous_commit_pts = event["pts_ns"]
 
+    # ``session.warmup_takes`` is a partition of this same runtime session,
+    # not a declaration that the first measurements were already warm.  The
+    # driver executes those committed Takes first, then the measured sample;
+    # only the suffix after the observed warm-up partition may enter SLO
+    # percentiles.  Keeping the partition here prevents a trace from claiming
+    # 100 warm + 100 measured while actually measuring the warm-up frames.
+    committed_order = sorted(
+        committed,
+        key=lambda key: (committed[key]["observed_at_monotonic_ns"], committed[key]["server_seq"]),
+    )
+    declared_warmup = int(session["warmup_takes"])
+    warmup_take_ids = set(committed_order[:declared_warmup])
+    measured_take_ids = set(committed_order[declared_warmup:])
+
     # Observations before the accepted frame-boundary commit are deliberately
     # retained for diagnostics but never admitted as evidence.  This matters
     # in a real raw callback, which naturally sees frames continuously.
@@ -788,6 +802,8 @@ def analyze_trace(
         values: list[float] = []
         for (take_id, sample_boundary), observation in first_by_take_boundary.items():
             if sample_boundary != boundary:
+                continue
+            if take_id not in measured_take_ids:
                 continue
             accepted_at = accepted[take_id]["observed_at_monotonic_ns"]
             delta_ns = observation["observed_at_monotonic_ns"] - accepted_at
@@ -860,7 +876,12 @@ def analyze_trace(
         status = "FAIL"
     elif session["evidence_kind"] != "runtime":
         status = "FIXTURE_ONLY"
-    elif required_unproven or session["warmup_takes"] < minimum_warmup or unsettled:
+    elif (
+        required_unproven
+        or len(warmup_take_ids) < minimum_warmup
+        or len(measured_take_ids) < minimum_takes
+        or unsettled
+    ):
         status = "UNPROVEN"
     else:
         status = "PASS"
@@ -877,6 +898,8 @@ def analyze_trace(
             "take_aborted": len(aborted),
             "command_rejected": rejected_count,
             "unsettled_take_ids": unsettled,
+            "warmup_takes_observed": len(warmup_take_ids),
+            "measured_takes_observed": len(measured_take_ids),
             "server_seq": [event["server_seq"] for event in ordered_events],
         },
         "takes": {
@@ -884,6 +907,9 @@ def analyze_trace(
             "committed": len(committed),
             "aborted": len(aborted),
             "warmup_takes_declared": session["warmup_takes"],
+            "warmup_takes_observed": len(warmup_take_ids),
+            "measured_takes_observed": len(measured_take_ids),
+            "total_committed_takes": len(committed_order),
             "minimum_warmup_required": minimum_warmup,
             "minimum_measurements_required": minimum_takes,
         },
@@ -896,6 +922,7 @@ def analyze_trace(
             "DirectShow return and encoder/raw input are separate boundaries; neither is inferred from the other.",
             "encoded_first_packet is the pre-network encoder callback; RTMP receiver ingress is an external Probe boundary.",
             "Decoded and antenna timings are diagnostic only and carry no acceptance SLO.",
+            "The first session.warmup_takes committed Takes are excluded from latency percentiles; measured counts are the observed committed suffix.",
             "A fixture report is never a runtime acceptance; run the same command against a runtime trace with evidence_kind=runtime.",
         ],
     }
