@@ -19,6 +19,7 @@
 #include "browser-client.hpp"
 #include "obs-browser-source.hpp"
 #include "base64/base64.hpp"
+#include <functional>
 #include <nlohmann/json.hpp>
 #include <obs-frontend-api.h>
 #include <obs.hpp>
@@ -38,9 +39,63 @@
 #include "drm-format.hpp"
 #endif
 
+extern bool QueueCEFTask(std::function<void()> task);
+
 inline bool BrowserClient::valid() const
 {
 	return !!bs && !bs->destroying;
+}
+
+bool BrowserClient::begin_audio_callback()
+{
+	/*
+	 * OnAudioStreamPacket is allowed to run on CEF's audio thread.  Close the
+	 * admission gate before detaching bs, then account for callbacks which were
+	 * already entering the handler.  OnBeforeClose waits for this count before
+	 * the source can be released.
+	 */
+	if (audio_callbacks_closed.load(std::memory_order_acquire))
+		return false;
+	audio_callbacks_in_flight.fetch_add(1, std::memory_order_acq_rel);
+	/*
+	 * Keep the lease even if OnBeforeClose won the race after the first
+	 * admission check.  The caller will release it through end_audio_callback,
+	 * which preserves the last-callback wake-up for the UI finalizer.
+	 */
+	return true;
+}
+
+void BrowserClient::end_audio_callback(CefRefPtr<CefBrowser> browser)
+{
+	if (audio_callbacks_in_flight.fetch_sub(1, std::memory_order_acq_rel) != 1)
+		return;
+	if (!close_callback_seen.load(std::memory_order_acquire) ||
+	    !audio_stream_stopped.load(std::memory_order_acquire))
+		return;
+
+	CefRefPtr<BrowserClient> self(this);
+	if (!QueueCEFTask([self, browser]() { self->maybe_finalize_browser_close(browser); }))
+		blog(LOG_ERROR, "PULSAR_CEF_SHUTDOWN event=audio_quiescence_task_failed action=watchdog");
+}
+
+void BrowserClient::maybe_finalize_browser_close(CefRefPtr<CefBrowser> browser)
+{
+	if (!close_callback_seen.load(std::memory_order_acquire) ||
+	    !audio_callbacks_closed.load(std::memory_order_acquire) ||
+	    (audio_stream_started.load(std::memory_order_acquire) &&
+	     !audio_stream_stopped.load(std::memory_order_acquire)) ||
+	    audio_callbacks_in_flight.load(std::memory_order_acquire) != 0)
+		return;
+	bool expected = false;
+	if (!close_finalization_started.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
+									std::memory_order_acquire))
+		return;
+
+	/* This is the sole BrowserClient::bs write.  It follows audio quiescence. */
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=audio_quiescent browser_id=%d",
+	     browser ? browser->GetIdentifier() : -1);
+	bs = nullptr;
+	BrowserSourceFinalizeBrowserClose(browser);
 }
 
 CefRefPtr<CefLoadHandler> BrowserClient::GetLoadHandler()
@@ -80,14 +135,20 @@ CefRefPtr<CefRequestHandler> BrowserClient::GetRequestHandler()
 
 void BrowserClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
 {
-	BrowserSourceBrowserCreated(browser);
+	BrowserSourceBrowserCreated(browser, bs);
 }
 
 void BrowserClient::OnBeforeClose(CefRefPtr<CefBrowser> browser)
 {
-	/* CEF may deliver queued callbacks after BrowserSource has been detached. */
-	bs = nullptr;
+	/*
+	 * CEF invokes this on the UI thread, but audio packets can still be
+	 * in-flight on the audio thread.  Keep the client/source association until
+	 * the stopped callback and the in-flight counter prove quiescence.
+	 */
+	audio_callbacks_closed.store(true, std::memory_order_release);
+	close_callback_seen.store(true, std::memory_order_release);
 	BrowserSourceBrowserClosed(browser);
+	maybe_finalize_browser_close(browser);
 }
 
 CefRefPtr<CefResourceRequestHandler> BrowserClient::GetResourceRequestHandler(CefRefPtr<CefBrowser>,
@@ -562,7 +623,10 @@ static speaker_layout GetSpeakerLayout(CefAudioHandler::ChannelLayout cefLayout)
 void BrowserClient::OnAudioStreamStarted(CefRefPtr<CefBrowser> browser, const CefAudioParameters &params_,
 					 int channels_)
 {
-	UNUSED_PARAMETER(browser);
+	audio_stream_started.store(true, std::memory_order_release);
+	audio_stream_stopped.store(false, std::memory_order_release);
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=audio_stream_started browser_id=%d",
+	     browser ? browser->GetIdentifier() : -1);
 	channels = channels_;
 	channel_layout = (ChannelLayout)params_.channel_layout;
 	sample_rate = params_.sample_rate;
@@ -571,8 +635,10 @@ void BrowserClient::OnAudioStreamStarted(CefRefPtr<CefBrowser> browser, const Ce
 
 void BrowserClient::OnAudioStreamPacket(CefRefPtr<CefBrowser> browser, const float **data, int frames, int64_t pts)
 {
-	UNUSED_PARAMETER(browser);
-	if (!valid()) {
+	if (!begin_audio_callback())
+		return;
+	if (close_callback_seen.load(std::memory_order_acquire) || !valid()) {
+		end_audio_callback(browser);
 		return;
 	}
 	struct obs_source_audio audio = {};
@@ -587,11 +653,15 @@ void BrowserClient::OnAudioStreamPacket(CefRefPtr<CefBrowser> browser, const flo
 	audio.speakers = speakers;
 	audio.timestamp = (uint64_t)pts * 1000000LLU;
 	obs_source_output_audio(bs->source, &audio);
+	end_audio_callback(browser);
 }
 
 void BrowserClient::OnAudioStreamStopped(CefRefPtr<CefBrowser> browser)
 {
-	UNUSED_PARAMETER(browser);
+	audio_stream_stopped.store(true, std::memory_order_release);
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=audio_stream_stopped browser_id=%d",
+	     browser ? browser->GetIdentifier() : -1);
+	maybe_finalize_browser_close(browser);
 }
 
 void BrowserClient::OnAudioStreamError(CefRefPtr<CefBrowser> browser, const CefString &message)

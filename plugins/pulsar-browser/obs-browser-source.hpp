@@ -43,6 +43,8 @@ enum class BrowserSourceDestroyDisposition : int {
 	Fatal,
 };
 
+struct BrowserSource;
+
 // Pulsar #158 / ADR Prism 028 §3.2 -- upstream obs-browser ships ReadObs here,
 // which hands EVERY page loaded in a browser source `window.obsstudio.
 // getStatus()` (streaming / recording / replay-buffer / virtual-cam state) for
@@ -75,10 +77,14 @@ bool BrowserSourceShutdownComplete();
 bool BrowserSourceMarkDrained();
 bool BrowserSourceShutdownStarted();
 bool BrowserSourceCanCreateBrowser();
-BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy();
+BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy(BrowserSource *source, int browser_id,
+								 bool *wait_for_browser);
+bool BrowserSourceRegisterPendingBrowser(BrowserSource *source, int browser_id);
 void BrowserSourceDestroyTaskComplete();
-void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser);
+void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser, BrowserSource *source);
 void BrowserSourceBrowserClosed(CefRefPtr<CefBrowser> browser);
+void BrowserSourceFinalizeBrowserClose(CefRefPtr<CefBrowser> browser);
+bool BrowserSourceRequestBrowserClose(CefRefPtr<CefBrowser> browser);
 
 struct BrowserSource {
 	BrowserSource **p_prev_next = nullptr;
@@ -145,7 +151,7 @@ struct BrowserSource {
 
 	bool CreateBrowser();
 	void DestroyBrowser();
-	void CloseBrowserForShutdown();
+	void RequestBrowserCloseForShutdown();
 	void UnlinkFromBrowserList();
 	void ExecuteOnBrowser(BrowserFunc func, bool async = false);
 
