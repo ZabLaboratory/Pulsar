@@ -23,6 +23,7 @@
 #include "cef-headers.hpp"
 #include "browser-app.hpp"
 #include <atomic>
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <mutex>
@@ -54,6 +55,21 @@ enum class ControlLevel : int {
 inline constexpr ControlLevel DEFAULT_CONTROL_LEVEL = ControlLevel::None;
 
 extern bool hwaccel;
+
+/*
+ * CEF owns the actual browser lifetime, which is longer than the
+ * BrowserSource object lifetime because CloseBrowser() is asynchronous.  The
+ * plugin unload path uses these hooks to keep CefRunMessageLoop alive until
+ * CEF has delivered OnBeforeClose for every browser it created.
+ */
+void BrowserSourceBeginShutdown();
+void BrowserSourceCloseAllBrowsers();
+std::size_t BrowserSourceLiveBrowserCount();
+bool BrowserSourceShutdownComplete();
+bool BrowserSourceShutdownStarted();
+bool BrowserSourceCanCreateBrowser();
+void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser);
+void BrowserSourceBrowserClosed(CefRefPtr<CefBrowser> browser);
 
 struct BrowserSource {
 	BrowserSource **p_prev_next = nullptr;
@@ -120,6 +136,7 @@ struct BrowserSource {
 
 	bool CreateBrowser();
 	void DestroyBrowser();
+	void CloseBrowserForShutdown();
 	void ExecuteOnBrowser(BrowserFunc func, bool async = false);
 
 	/* ---------------------------- */

@@ -25,6 +25,8 @@
 #include <obs.hpp>
 #include <functional>
 #include <cstdlib>
+#include <chrono>
+#include <atomic>
 #include <sstream>
 #include <thread>
 #include <mutex>
@@ -72,6 +74,18 @@ using namespace std;
 static thread manager_thread;
 static bool manager_initialized = false;
 os_event_t *cef_started_event = nullptr;
+
+/*
+ * CEF requires every browser to have reached OnBeforeClose before
+ * CefShutdown.  The manager thread owns the message loop, so the barrier is
+ * released by a CEF UI task and never by a wall-clock sleep on the unload
+ * thread.  A timeout is deliberately fail-closed: CefShutdown is skipped and
+ * the process is left to its outer lifecycle rather than tearing down CEF
+ * underneath a still-live browser.
+ */
+static constexpr auto cef_shutdown_timeout = std::chrono::seconds(5);
+static std::atomic<bool> cef_shutdown_barrier_released{false};
+static std::atomic<bool> cef_shutdown_barrier_failed{false};
 
 #if defined(_WIN32)
 static int adapterCount = 0;
@@ -403,17 +417,90 @@ static void BrowserInit(void)
 	os_event_signal(cef_started_event);
 }
 
-static void BrowserShutdown(void)
+static void BrowserShutdown(bool allow_cef_shutdown)
 {
+	if (!allow_cef_shutdown) {
+		std::fprintf(stderr,
+			     "PULSAR_CEF_SHUTDOWN event=cef_shutdown_skipped reason=barrier_failed\n");
+		std::fflush(stderr);
+		blog(LOG_ERROR,
+		     "PULSAR_CEF_SHUTDOWN event=cef_shutdown_skipped reason=barrier_failed");
+		/*
+		 * There is no safe CEF teardown after the barrier deadline.  Terminate
+		 * with a deterministic non-zero status instead of returning through the
+		 * headless host as if module unload had succeeded (which would be a
+		 * false rc=0).  The explicit marker above is flushed by the host logger.
+		 */
+		std::exit(EXIT_FAILURE);
+	}
+
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=cef_shutdown_begin browser_count=%llu",
+	     static_cast<unsigned long long>(BrowserSourceLiveBrowserCount()));
 	CefClearSchemeHandlerFactories();
 
 #ifdef ENABLE_BROWSER_QT_LOOP
 	while (messageObject.ExecuteNextBrowserTask())
 		;
-	CefDoMessageLoopWork();
+		CefDoMessageLoopWork();
 #endif
 	CefShutdown();
 	app = nullptr;
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=cef_shutdown_complete browser_count=%llu",
+	     static_cast<unsigned long long>(BrowserSourceLiveBrowserCount()));
+}
+
+static void PollBrowserShutdown(std::chrono::steady_clock::time_point deadline)
+{
+	const std::size_t browser_count = BrowserSourceLiveBrowserCount();
+	if (BrowserSourceShutdownComplete()) {
+		cef_shutdown_barrier_released.store(true, std::memory_order_release);
+		blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=barrier_released browser_count=%llu",
+		     static_cast<unsigned long long>(browser_count));
+		CefQuitMessageLoop();
+		return;
+	}
+
+	if (std::chrono::steady_clock::now() >= deadline) {
+		cef_shutdown_barrier_failed.store(true, std::memory_order_release);
+		blog(LOG_ERROR,
+		     "PULSAR_CEF_SHUTDOWN event=timeout browser_count=%llu action=skip_cef_shutdown",
+		     static_cast<unsigned long long>(browser_count));
+		CefQuitMessageLoop();
+		return;
+	}
+
+	const bool posted = CefPostDelayedTask(
+		TID_UI, CefRefPtr<BrowserTask>(new BrowserTask([deadline]() { PollBrowserShutdown(deadline); })), 25);
+	if (!posted) {
+		cef_shutdown_barrier_failed.store(true, std::memory_order_release);
+		blog(LOG_ERROR,
+		     "PULSAR_CEF_SHUTDOWN event=timeout browser_count=%llu reason=post_poll_failed "
+		     "action=skip_cef_shutdown",
+		     static_cast<unsigned long long>(browser_count));
+		CefQuitMessageLoop();
+	}
+}
+
+static void StartBrowserShutdownBarrier()
+{
+	const auto deadline = std::chrono::steady_clock::now() + cef_shutdown_timeout;
+	const bool posted = QueueCEFTask([deadline]() {
+		BrowserSourceCloseAllBrowsers();
+		PollBrowserShutdown(deadline);
+	});
+	if (!posted) {
+		cef_shutdown_barrier_failed.store(true, std::memory_order_release);
+		blog(LOG_ERROR,
+		     "PULSAR_CEF_SHUTDOWN event=timeout browser_count=%llu reason=post_close_failed "
+		     "action=skip_cef_shutdown",
+		     static_cast<unsigned long long>(BrowserSourceLiveBrowserCount()));
+		/*
+		 * There is no CEF UI task left that can quit the loop.  CEF documents
+		 * CefQuitMessageLoop as the loop termination primitive; use it only on
+		 * this fail-closed path and still suppress CefShutdown below.
+		 */
+		CefQuitMessageLoop();
+	}
 }
 
 #ifndef ENABLE_BROWSER_QT_LOOP
@@ -421,7 +508,8 @@ static void BrowserManagerThread(void)
 {
 	BrowserInit();
 	CefRunMessageLoop();
-	BrowserShutdown();
+	BrowserShutdown(cef_shutdown_barrier_released.load(std::memory_order_acquire) &&
+			!cef_shutdown_barrier_failed.load(std::memory_order_acquire));
 }
 #endif
 
@@ -802,11 +890,28 @@ void obs_module_post_load(void)
 void obs_module_unload(void)
 {
 #ifdef ENABLE_BROWSER_QT_LOOP
-	BrowserShutdown();
+	BrowserSourceBeginShutdown();
+	BrowserSourceCloseAllBrowsers();
+	const auto deadline = std::chrono::steady_clock::now() + cef_shutdown_timeout;
+	while (!BrowserSourceShutdownComplete() && std::chrono::steady_clock::now() < deadline) {
+		CefDoMessageLoopWork();
+		std::this_thread::yield();
+	}
+	if (BrowserSourceShutdownComplete()) {
+		cef_shutdown_barrier_released.store(true, std::memory_order_release);
+		blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=barrier_released browser_count=0");
+	} else {
+		cef_shutdown_barrier_failed.store(true, std::memory_order_release);
+		blog(LOG_ERROR, "PULSAR_CEF_SHUTDOWN event=timeout browser_count=%llu "
+		     "action=skip_cef_shutdown",
+		     static_cast<unsigned long long>(BrowserSourceLiveBrowserCount()));
+	}
+	BrowserShutdown(cef_shutdown_barrier_released.load(std::memory_order_acquire) &&
+			!cef_shutdown_barrier_failed.load(std::memory_order_acquire));
 #else
 	if (manager_thread.joinable()) {
-		if (!QueueCEFTask([]() { CefQuitMessageLoop(); }))
-			blog(LOG_DEBUG, "[obs-browser]: Failed to post CefQuit task to loop");
+		BrowserSourceBeginShutdown();
+		StartBrowserShutdownBarrier();
 
 		manager_thread.join();
 	}
