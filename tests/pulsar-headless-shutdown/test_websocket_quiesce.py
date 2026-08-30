@@ -139,6 +139,7 @@ def test_native_contract_has_single_admission_and_drain_boundary() -> None:
         "PULSAR_WEBSOCKET_QUIESCE event=fail_closed_exit",
         "std::fflush(stderr)",
         "std::fflush(stdout)",
+        "TerminateProcess(GetCurrentProcess(), 1)",
         "std::_Exit(1)",
     ):
         assert marker in headless
@@ -146,6 +147,10 @@ def test_native_contract_has_single_admission_and_drain_boundary() -> None:
     failed_quiesce = failed_quiesce[: failed_quiesce.index("std::string browser_shutdown_error")]
     assert "fail_closed_websocket_quiesce(websocket_shutdown_error)" in failed_quiesce
     assert "runtime_state->release()" not in failed_quiesce
+    test_source = Path(__file__).read_text(encoding="utf-8")
+    timeout_test = test_source[test_source.index("def _run_windows_quiesce_timeout_integration") :]
+    assert "process failure tail:" in timeout_test
+    assert "probe.failure_tail(process.snapshot(), 120)" in timeout_test
 
 
 def test_failed_quiesce_model_keeps_leases_until_process_exit() -> None:
@@ -595,6 +600,11 @@ def _run_windows_quiesce_timeout_integration(executable: Path) -> None:
         successor_started = True
         successor.wait_for_shutdown_control_ready(timeout=60)
         successor.wait_for(probe.READY_RE, timeout=60)
+    except Exception as exc:
+        # CTest must retain enough credential-sanitized state to distinguish a
+        # timeout before the fail-stop marker from destructor activity after it.
+        tail = probe.failure_tail(process.snapshot(), 120)
+        raise RuntimeError(f"{exc}\nprocess failure tail:\n{tail}") from exc
     finally:
         if started and process.proc is not None and process.proc.poll() is None:
             try:

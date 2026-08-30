@@ -1005,9 +1005,11 @@ bool websocket_pre_shutdown_ready(std::string &reason)
 // WebSocketServer::~WebSocketServer() calls the unbounded Stop(), which can
 // retain admitted worker threads after the host has already released its
 // runtime/alias leases.  Emit a direct, credential-free and flushed marker,
-// then bypass C++/Qt/libobs teardown entirely.  Kernel-backed leases and
-// handles are released by the operating system only once this process exits,
-// so no successor can overlap a still-live failed runtime.
+// then bypass C++/Qt/libobs teardown entirely.  On Windows, _Exit ultimately
+// permits DLL_PROCESS_DETACH and a plugin's static destructors to run, so use
+// TerminateProcess for the stronger no-destructor boundary.  Kernel-backed
+// leases and handles are released by the operating system only once this
+// process exits, so no successor can overlap a still-live failed runtime.
 [[noreturn]] void fail_closed_websocket_quiesce(const std::string &reason)
 {
     std::fprintf(stderr,
@@ -1015,6 +1017,14 @@ bool websocket_pre_shutdown_ready(std::string &reason)
                  reason.c_str());
     std::fflush(stderr);
     std::fflush(stdout);
+#ifdef _WIN32
+    if (!TerminateProcess(GetCurrentProcess(), 1)) {
+        std::fprintf(stderr,
+                     "PULSAR_WEBSOCKET_QUIESCE event=terminate_process_failed error=%lu fallback=exit\n",
+                     static_cast<unsigned long>(GetLastError()));
+        std::fflush(stderr);
+    }
+#endif
     std::_Exit(1);
 }
 
