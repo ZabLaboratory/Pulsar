@@ -252,6 +252,20 @@ def _browser_ids_for_generations(process, generations: set[str]) -> set[str]:
     return result
 
 
+async def _wait_for_browser_ids_for_generation(
+    process, generation: str, minimum_count: int, timeout: float = 20
+) -> set[str]:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        ids = _browser_ids_for_generations(process, {generation})
+        if len(ids) >= minimum_count:
+            return ids
+        await asyncio.sleep(0.1)
+    raise RuntimeError(
+        f"CEF source generation {generation} did not create {minimum_count} browser IDs"
+    )
+
+
 async def _configure_two_browser_sources(probe, ws_url: str, password: str, process, server) -> set[str]:
     """Create two real CEF browser_source instances and keep recording active."""
 
@@ -332,6 +346,95 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
         )
         probe.assert_success(response, "RemoveInput(immediate recreate)")
         await _wait_for_source_destroyed(process, recreate_generation)
+
+        # Exercise the real restart path: an audio-enabled browser is replaced
+        # with a no-audio browser, then removed.  The old browser ID remains in
+        # the lifecycle registry until CEF closes it; source deletion must wait
+        # for both generations rather than following only the current
+        # BrowserSource::cefBrowser member.
+        for cycle in range(2):
+            restart_input = f"cef-restart-audio-{cycle}"
+            restart_source_generations_before = _source_created_generations(process)
+            response = await probe.request(
+                inbox,
+                ws,
+                "CreateInput",
+                f"cef-restart-create-{cycle}",
+                {
+                    "sceneName": scene,
+                    "inputName": restart_input,
+                    "inputKind": "browser_source",
+                    "inputSettings": {
+                        **readiness_settings,
+                        "url": f"{server.url}?lane=A",
+                        "reroute_audio": True,
+                    },
+                    "sceneItemEnabled": True,
+                },
+            )
+            probe.assert_success(response, f"CreateInput(restart audio source {cycle})")
+            restart_generation = await _wait_for_source_created(
+                process, restart_source_generations_before
+            )
+            restart_browser_ids = await _wait_for_browser_ids_for_generation(
+                process, restart_generation, 1
+            )
+            deadline = asyncio.get_running_loop().time() + 20
+            while not any(
+                re.search(
+                    rf"event=audio_stream_started browser_id={browser_id}(?:\s|$)", line
+                )
+                for line in process.snapshot()
+                for browser_id in restart_browser_ids
+            ) and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.1)
+            if not any(
+                re.search(
+                    rf"event=audio_stream_started browser_id={browser_id}(?:\s|$)", line
+                )
+                for line in process.snapshot()
+                for browser_id in restart_browser_ids
+            ):
+                raise RuntimeError(
+                    f"restart source {cycle} did not produce an audio callback before replacement"
+                )
+
+            response = await probe.request(
+                inbox,
+                ws,
+                "SetInputSettings",
+                f"cef-restart-replace-no-audio-{cycle}",
+                {
+                    "inputName": restart_input,
+                    "overlay": True,
+                    "inputSettings": {
+                        **readiness_settings,
+                        "url": f"{server.url}?lane=B",
+                        "reroute_audio": False,
+                    },
+                },
+            )
+            probe.assert_success(
+                response, f"SetInputSettings(restart replacement/no audio {cycle})"
+            )
+            replacement_ids = await _wait_for_browser_ids_for_generation(
+                process, restart_generation, 2
+            )
+            if not restart_browser_ids < replacement_ids:
+                raise RuntimeError(
+                    "restart replacement did not retain the old browser ID in lifecycle evidence: "
+                    f"cycle={cycle} old={sorted(restart_browser_ids)} all={sorted(replacement_ids)}"
+                )
+
+            response = await probe.request(
+                inbox,
+                ws,
+                "RemoveInput",
+                f"cef-restart-remove-{cycle}",
+                {"inputName": restart_input},
+            )
+            probe.assert_success(response, f"RemoveInput(restarted source {cycle})")
+            await _wait_for_source_destroyed(process, restart_generation)
 
         durable_generations: set[str] = set()
         for lane in ("A", "B"):
@@ -675,16 +778,25 @@ def main() -> int:
         for events in lifecycle_by_created_id.values()
     )
     audio_exactly_once = (
-        len(audio_started) == 2
+        durable_browser_ids <= set(audio_started)
         and set(audio_started) == set(audio_stopped)
         and all(len(indices) == 1 for indices in audio_started.values())
         and all(len(indices) == 1 for indices in audio_stopped.values())
     )
+    durable_close_call = {
+        browser_id: browser_close_call[browser_id]
+        for browser_id in durable_browser_ids
+        if browser_id in browser_close_call
+    }
+    durable_close_return = {
+        browser_id: browser_close_return[browser_id]
+        for browser_id in durable_browser_ids
+        if browser_id in browser_close_return
+    }
     shutdown_close_exactly_once = (
-        set(browser_close_call) == set(browser_close_return)
-        and set(browser_close_call) == durable_browser_ids
-        and all(len(indices) == 1 for indices in browser_close_call.values())
-        and all(len(indices) == 1 for indices in browser_close_return.values())
+        set(durable_close_call) == set(durable_close_return) == durable_browser_ids
+        and all(len(indices) == 1 for indices in durable_close_call.values())
+        and all(len(indices) == 1 for indices in durable_close_return.values())
         and len(durable_browser_ids) == 2
     )
     if (
@@ -703,15 +815,17 @@ def main() -> int:
             f"quiescent={sorted(audio_quiescent)} detached={sorted(browser_detached)} "
             f"observed={sorted(browser_close_observed)} intent={sorted(browser_finalization_intent)} "
             f"close_call={sorted(browser_close_call)} close_return={sorted(browser_close_return)} "
+            f"durable_close_call={sorted(durable_close_call)} "
+            f"durable_close_return={sorted(durable_close_return)} "
             f"durable={sorted(durable_browser_ids)} "
             f"before_close_entry={sorted(browser_on_before_close_entry)} "
             f"before_close_exit={sorted(browser_on_before_close_exit)} "
             f"acquired={sorted(client_keepalive_acquired)} released={sorted(client_keepalive_released)}",
         )
     close_call_order = sorted(
-        (min(indices), browser_id) for browser_id, indices in browser_close_call.items()
+        (min(durable_close_call[browser_id]), browser_id) for browser_id in durable_browser_ids
     )
-    if len(close_call_order) != 2 or len({browser_id for _, browser_id in close_call_order}) != 2:
+    if len(close_call_order) != 2:
         _raise_with_sanitized_tail(
             probe,
             process,

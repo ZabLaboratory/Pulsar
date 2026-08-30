@@ -11,6 +11,8 @@
 
 #include <cstddef>
 #include <mutex>
+#include <set>
+#include <vector>
 
 struct BrowserSource;
 
@@ -33,6 +35,9 @@ struct BrowserSourceTaskState {
 	bool delete_requested = false;
 	bool delete_completion_required = false;
 	bool deleted = false;
+	std::set<int> pending_browser_ids;
+	bool browser_delete_requested = false;
+	bool browser_delete_completed = false;
 
 	bool acquire(bool allow_destroying)
 	{
@@ -56,6 +61,44 @@ struct BrowserSourceTaskState {
 	{
 		std::lock_guard<std::mutex> lock(mutex);
 		return source;
+	}
+
+	bool is_destroying()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		return destroying;
+	}
+
+	bool arm_browser_ids(const std::vector<int> &browser_ids)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (!source || deleted || browser_delete_requested || browser_delete_completed)
+			return false;
+		browser_delete_requested = true;
+		pending_browser_ids.insert(browser_ids.begin(), browser_ids.end());
+		return true;
+	}
+
+	bool add_browser_id(int browser_id)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (!source || deleted || !browser_delete_requested || browser_delete_completed || browser_id < 0)
+			return false;
+		pending_browser_ids.insert(browser_id);
+		return true;
+	}
+
+	bool finalize_browser_id(int browser_id)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (!browser_delete_requested || browser_delete_completed ||
+		    pending_browser_ids.erase(browser_id) == 0)
+			return false;
+		if (pending_browser_ids.empty()) {
+			browser_delete_completed = true;
+			return true;
+		}
+		return false;
 	}
 
 	BrowserSourceTaskRelease request_delete_and_take_if_idle(bool completion_required)
