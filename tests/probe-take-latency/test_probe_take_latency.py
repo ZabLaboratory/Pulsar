@@ -530,6 +530,30 @@ def test_rtmp_packet_must_match_one_producer_pts_within_half_receiver_tick():
         )
 
 
+def test_rtmp_slo_includes_declared_receiver_clock_bound_conservatively():
+    records = _take_records(3, raw_extra_ms=7.0)
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    rtmp = report["criteria"]["AC-12"]
+    assert rtmp["p95_ms"] == pytest.approx(10.0)
+    assert rtmp["clock_bound_ms"] == pytest.approx(5.0)
+    assert rtmp["p95_conservative_ms"] == pytest.approx(15.0)
+    assert rtmp["status"] == "PASS"
+
+    records = _take_records(3)
+    for record in records:
+        if record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet":
+            record["observed_at_monotonic_ns"] += 1_000_000
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    conservative = report["criteria"]["AC-12"]
+    assert conservative["p95_ms"] == pytest.approx(11.0)
+    assert conservative["p95_conservative_ms"] == pytest.approx(16.0)
+    assert conservative["status"] == "FAIL"
+
+
 def test_rtmp_receiver_clock_mismatch_and_packet_identity_are_rejected():
     records = _take_records(3)
     rtmp = next(

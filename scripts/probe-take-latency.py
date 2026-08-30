@@ -754,11 +754,17 @@ def _resource_stats(values: Sequence[float | int]) -> dict[str, Any]:
     }
 
 
-def _status_for_latency(summary: Mapping[str, Any], minimum_takes: int, boundary: str) -> str:
+def _status_for_latency(
+    summary: Mapping[str, Any],
+    minimum_takes: int,
+    boundary: str,
+    *,
+    uncertainty_ms: float = 0.0,
+) -> str:
     if summary["count"] < minimum_takes:
         return "UNPROVEN"
     slo = SLO_MS.get(boundary)
-    if slo is not None and float(summary["p95_ms"]) > slo:
+    if slo is not None and float(summary["p95_ms"]) + uncertainty_ms > slo:
         return "FAIL"
     return "PASS"
 
@@ -1120,7 +1126,29 @@ def analyze_trace(
                 raise EvidenceError("CLOCK_INVALID", f"negative {boundary} latency for Take {take_id}")
             values.append(delta_ns / 1_000_000.0)
         summary = _stats(values)
-        status = _status_for_latency(summary, minimum_takes if boundary in REQUIRED_BOUNDARIES else 1, boundary) if values else "UNPROVEN"
+        uncertainty_ms = 0.0
+        if boundary == "rtmp_first_packet" and values:
+            receiver = session.get("rtmp_receiver")
+            if not isinstance(receiver, Mapping) or type(receiver.get("clock_bound_ns")) is not int:
+                raise EvidenceError(
+                    "CORRELATION_INVALID",
+                    "rtmp_first_packet latency requires a valid receiver clock bound",
+                )
+            uncertainty_ms = receiver["clock_bound_ns"] / 1_000_000.0
+            summary["clock_bound_ms"] = round(uncertainty_ms, 6)
+            summary["p95_conservative_ms"] = round(
+                float(summary["p95_ms"]) + uncertainty_ms, 6
+            )
+        status = (
+            _status_for_latency(
+                summary,
+                minimum_takes if boundary in REQUIRED_BOUNDARIES else 1,
+                boundary,
+                uncertainty_ms=uncertainty_ms,
+            )
+            if values
+            else "UNPROVEN"
+        )
         if boundary not in REQUIRED_BOUNDARIES and not values:
             status = "NOT_REQUIRED"
         latency[boundary] = {

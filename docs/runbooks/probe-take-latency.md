@@ -153,6 +153,12 @@ driver in the QPC-compatible monotonic domain. It is a receiver/demux
 measurement, not a wire-level timestamp and not a decoded or antenna/player
 latency guarantee.
 
+The RTMP p95 gate is conservative: the report exposes the raw receiver p95,
+the calibrated clock_bound_ns converted to milliseconds, and
+p95_conservative_ms = p95_ms + clock_bound_ms. AC-12 passes only when the
+conservative value is <=15 ms; the declared clock uncertainty cannot be
+silently ignored.
+
 Resource samples use `sample_mode=reference` and `sample_mode=dual_lane` and
 record `frame_render_ms`, `resident_bytes`, `process_cpu_percent`,
 `host_gpu_percent`, `callback_backlog_estimate`, and
