@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from typing import Any
 
 import pytest
 
@@ -120,6 +121,187 @@ def test_shutdown_integration_reports_sanitized_failure_tail():
     assert "Sanitized Pulsar log tail:" in integration
 
 
+def _boundary_wait_fixture(count: int = 1, *, omit: tuple[int, str] | None = None):
+    records = []
+    commits = []
+    packets = []
+    runtime_id = "runtime-boundary-wait"
+    for number in range(1, count + 1):
+        take_id = f"take-{number:03d}"
+        intent_id = f"intent-{number:03d}"
+        frame_id = 100 + number
+        pts_ns = 10_000_000_000 + number * 16_666_667
+        commit_at = 1_000_000_000 + number * 100_000_000
+        revisions = {"program": number, "preview": 0, "role_map": number}
+        records.extend(
+            [
+                {
+                    "record_type": "event",
+                    "event": {
+                        "event_type": "TakeAccepted",
+                        "runtime_instance_id": runtime_id,
+                        "command_id": take_id,
+                        "intent_id": intent_id,
+                        "take_command_id": take_id,
+                        "observed_at_monotonic_ns": commit_at - 5_000_000,
+                    },
+                },
+                {
+                    "record_type": "event",
+                    "event": {
+                        "event_type": "TakeCommitted",
+                        "runtime_instance_id": runtime_id,
+                        "command_id": take_id,
+                        "intent_id": intent_id,
+                        "take_command_id": take_id,
+                        "observed_at_monotonic_ns": commit_at,
+                        "frame_id": frame_id,
+                        "pts_ns": pts_ns,
+                        "revisions": revisions,
+                    },
+                },
+            ]
+        )
+        commit = probe.Commit(number, frame_id, pts_ns, 0, 1, 1, 1, 1, 1)
+        commits.append(commit)
+        for boundary in probe.PRODUCER_BOUNDARIES:
+            if omit == (number, boundary):
+                continue
+            record = {
+                "record_type": "observation",
+                "boundary": boundary,
+                "runtime_instance_id": runtime_id,
+                "command_id": take_id,
+                "intent_id": intent_id,
+                "take_command_id": take_id,
+                "revisions": revisions,
+                "frame_id": frame_id,
+                "pts_ns": pts_ns,
+                "observed_at_monotonic_ns": commit_at + 5_000_000,
+                "valid": True,
+            }
+            if boundary == "encoded_first_packet":
+                record.update(
+                    {
+                        "packet_index": number - 1,
+                        "packet_pts": number - 1,
+                        "packet_dts": number - 1,
+                        "packet_timebase_num": 1,
+                        "packet_timebase_den": 60,
+                    }
+                )
+            records.append(record)
+        packet_tick = round((number - 1) * 1000 / 60)
+        packets.append(
+            {
+                "packet_index": number - 1,
+                "packet_pts": packet_tick,
+                "packet_dts": packet_tick,
+                "packet_identity": f"packet-{number}",
+                "observed_at_monotonic_ns": commit_at + 7_000_000,
+            }
+        )
+    return runtime_id, records, commits, packets
+
+
+def _boundary_wait_process(trace: Path, runtime_id: str) -> Any:
+    class LiveProc:
+        def poll(self):
+            return None
+
+    class Process:
+        proc: Any
+        proc = LiveProc()
+        trace_path = trace
+        runtime_id: str
+
+        def snapshot(self) -> list[str]:
+            return []
+
+    process = Process()
+    process.runtime_id = runtime_id
+    return process
+
+
+def test_wait_for_take_boundaries_requires_all_four_unique_correlations(tmp_path):
+    runtime_id, records, commits, packets = _boundary_wait_fixture(200)
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id=runtime_id, stream_id="stream-nvenc")
+    receiver.packets = packets
+    process = _boundary_wait_process(trace, runtime_id)
+    used: set[int] = set()
+
+    for commit in commits:
+        result = asyncio.run(
+            probe.wait_for_take_boundaries(process, receiver, commit, used, timeout=0.1)
+        )
+        assert set(result) == {*probe.PRODUCER_BOUNDARIES, "rtmp_first_packet"}
+    assert used == set(range(200))
+
+
+def test_wait_for_take_boundaries_rejects_n_minus_one_and_duplicate(tmp_path):
+    runtime_id, records, commits, packets = _boundary_wait_fixture(
+        2, omit=(2, "directshow_return")
+    )
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id=runtime_id, stream_id="stream-nvenc")
+    receiver.packets = packets
+    process = _boundary_wait_process(trace, runtime_id)
+    used: set[int] = set()
+    asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], used, timeout=0.1))
+    with pytest.raises(probe.ProbeFailure, match="directshow_return=0"):
+        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[1], used, timeout=0.05))
+
+    runtime_id, records, commits, packets = _boundary_wait_fixture(1)
+    encoded = next(record for record in records if record.get("boundary") == "encoded_first_packet")
+    records.append(dict(encoded))
+    trace.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    receiver.packets = packets
+    with pytest.raises(probe.ProbeFailure, match="duplicate valid encoded_first_packet"):
+        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], set(), timeout=0.1))
+
+
+def test_wait_for_take_boundaries_rejects_frame_pts_mismatch_and_dead_process(tmp_path):
+    runtime_id, records, commits, packets = _boundary_wait_fixture(1)
+    directshow = next(record for record in records if record.get("boundary") == "directshow_return")
+    directshow["pts_ns"] += 1
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id=runtime_id, stream_id="stream-nvenc")
+    receiver.packets = packets
+    process = _boundary_wait_process(trace, runtime_id)
+    with pytest.raises(probe.ProbeFailure, match="frame/PTS"):
+        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], set(), timeout=0.1))
+
+    runtime_id, records, commits, packets = _boundary_wait_fixture(1)
+    stale = next(record for record in records if record.get("boundary") == "encoder_input_raw")
+    stale["runtime_instance_id"] = "stale-runtime"
+    trace.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    receiver.packets = packets
+    process = _boundary_wait_process(trace, runtime_id)
+    with pytest.raises(probe.ProbeFailure, match="stale runtime"):
+        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], set(), timeout=0.1))
+
+    runtime_id, records, commits, packets = _boundary_wait_fixture(1)
+    packets[0]["packet_pts"] += 1
+    packets[0]["packet_dts"] += 1
+    trace.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    receiver.packets = packets
+    process = _boundary_wait_process(trace, runtime_id)
+    with pytest.raises(probe.ProbeFailure, match="rtmp_candidates=0"):
+        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], set(), timeout=0.1))
+
+    dead_process = _boundary_wait_process(trace, runtime_id)
+    dead_process.proc = type("Dead", (), {"poll": lambda self: 17})()
+
+    with pytest.raises(probe.ProbeFailure, match="runtime exited"):
+        asyncio.run(
+            probe.wait_for_take_boundaries(dead_process, receiver, commits[0], set(), timeout=1.0)
+        )
+
+
 def test_windows_shutdown_signal_failure_contains_with_forced_kill(monkeypatch):
     probe_module = probe
 
@@ -162,12 +344,22 @@ def test_drive_propagates_resource_wait_and_keeps_outputs_alive_until_threshold(
     drive_source = inspect.getsource(probe.drive)
     run_source = inspect.getsource(probe.run)
     assert "wait_for_eligible_resource_samples" in drive_source
+    assert "wait_for_take_boundaries" in drive_source
+    assert "complete_boundary_count += 1" in drive_source
+    assert "complete_boundary_count != total_takes" in drive_source
     assert "minimum_resource_samples=args.resource_samples" in run_source
     assert "minimum_rtmp_samples=args.resource_samples" in run_source
     wait_index = drive_source.index("wait_for_eligible_resource_samples")
+    boundary_wait_index = drive_source.index("wait_for_take_boundaries")
+    commit_validation_index = drive_source.index("validate_commit(identity")
     stream_stop_index = drive_source.index("await process.stop_rtmp_stream", wait_index)
     record_stop_index = drive_source.index('request(inbox, ws, "StopRecord"', wait_index)
     assert wait_index < stream_stop_index < record_stop_index
+    assert commit_validation_index < boundary_wait_index
+    boundary_wait_source = inspect.getsource(probe.wait_for_take_boundaries)
+    assert "receiver.snapshot()" in boundary_wait_source
+    assert "receiver._lock" not in boundary_wait_source
+    assert "stop_rtmp_stream" not in boundary_wait_source
 
     trace = tmp_path / "trace.jsonl"
     runtime_id_value = "runtime-resource-wait"
