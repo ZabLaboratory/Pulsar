@@ -96,6 +96,7 @@ add_library(pulsar-browser MODULE
     browser-app.hpp
     browser-client.cpp
     browser-client.hpp
+    browser-source-task-state.hpp
     browser-scheme.cpp
     browser-scheme.hpp
     browser-version.h
