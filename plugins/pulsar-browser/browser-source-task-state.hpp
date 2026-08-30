@@ -71,6 +71,22 @@ struct BrowserSourceTaskState {
 		return release;
 	}
 
+	BrowserSourceTaskRelease request_delete_release_own_lease(bool completion_required)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		delete_requested = true;
+		delete_completion_required |= completion_required;
+		if (active_tasks == 0)
+			return BrowserSourceTaskRelease{nullptr, false, true};
+		--active_tasks;
+		if (active_tasks != 0 || deleted)
+			return {};
+		deleted = true;
+		BrowserSourceTaskRelease release{source, delete_completion_required, false};
+		source = nullptr;
+		return release;
+	}
+
 	BrowserSourceTaskRelease release_task()
 	{
 		std::lock_guard<std::mutex> lock(mutex);
