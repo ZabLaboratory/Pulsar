@@ -403,6 +403,7 @@ def test_dual_lane_activation_flag_is_consumed_and_rollback_preserves_surfaces()
     for value in ('"1"', '"0001"', '"100000"'):
         assert value in config_test
     assert "add_test(NAME pulsar-dual-lane-config-probe" in config_cmake
+    assert 'RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests/nv-probe"' in config_cmake
     assert "parse_env_bool" in source
     assert "if (!*value)" in source
     assert "assert_dual_lane_activation" in probe
