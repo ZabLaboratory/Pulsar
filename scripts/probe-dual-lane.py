@@ -550,6 +550,11 @@ class PulsarProcess:
             # same runtime identity and avoids a process-wide legacy alias
             # collision during a traced canary.
             env["PULSAR_DIRECTSHOW_LEGACY_ALIAS"] = "0"
+            # The headless lease policy is controlled by this variable (the
+            # DirectShow producer policy above is a separate derived value).
+            # Pin it explicitly so an operator's ambient `required` setting
+            # cannot turn a dedicated traced run into an alias holder.
+            env["PULSAR_LEGACY_ALIAS"] = "disabled"
             if self.resource_mode is not None:
                 env["PULSAR_TRACE_RESOURCE_MODE"] = self.resource_mode
             else:
@@ -727,9 +732,10 @@ class PulsarProcess:
         # failure and is reported by assert_directshow_consumer_alive().
         time.sleep(0.75)
         if self.directshow_proc.poll() is not None:
-            if self.directshow_thread is not None:
-                self.directshow_thread.join(timeout=2)
-                self.directshow_thread = None
+            reader_failure = self._join_directshow_reader()
+            if reader_failure is not None:
+                self.directshow_cleanup_failure = reader_failure
+                raise ProbeFailure(reader_failure)
             output = "\n".join(self.directshow_lines)
             self.directshow_startup_output = output[-4000:]
             self.directshow_proc = None
@@ -752,13 +758,26 @@ class PulsarProcess:
                 + self.directshow_startup_output.strip()
             )
 
+    def _join_directshow_reader(self) -> str | None:
+        """Join the bounded stdout pump, retaining state on failure."""
+
+        if self.directshow_thread is None:
+            return None
+        self.directshow_thread.join(timeout=2)
+        if self.directshow_thread.is_alive():
+            return "ProgramReturn DirectShow reader thread did not exit"
+        self.directshow_thread = None
+        return None
+
     def assert_directshow_consumer_alive(self) -> None:
         if self.directshow_proc is None:
             return
         if self.directshow_proc.poll() is None:
             return
-        if self.directshow_thread is not None:
-            self.directshow_thread.join(timeout=2)
+        reader_failure = self._join_directshow_reader()
+        if reader_failure is not None:
+            self.directshow_cleanup_failure = reader_failure
+            raise ProbeFailure(reader_failure)
         output = "\n".join(self.directshow_lines)
         raise ProbeFailure(
             "ProgramReturn DirectShow consumer exited during campaign: " + output[-4000:]
@@ -766,14 +785,10 @@ class PulsarProcess:
 
     def stop_directshow_consumer(self) -> None:
         if self.directshow_proc is None:
-            if self.directshow_thread is not None:
-                self.directshow_thread.join(timeout=2)
-                if self.directshow_thread.is_alive():
-                    self.directshow_cleanup_failure = (
-                        "ProgramReturn DirectShow reader thread did not exit"
-                    )
-                    raise ProbeFailure(self.directshow_cleanup_failure)
-                self.directshow_thread = None
+            reader_failure = self._join_directshow_reader()
+            if reader_failure is not None:
+                self.directshow_cleanup_failure = reader_failure
+                raise ProbeFailure(reader_failure)
             return
         process = self.directshow_proc
         failure: str | None = None
@@ -801,10 +816,9 @@ class PulsarProcess:
                 process.wait(timeout=0)
             except Exception as exc:
                 failure = failure or f"ProgramReturn DirectShow consumer reap failed: {exc}"
-        if self.directshow_thread is not None:
-            self.directshow_thread.join(timeout=2)
-            if self.directshow_thread.is_alive():
-                failure = failure or "ProgramReturn DirectShow reader thread did not exit"
+        reader_failure = self._join_directshow_reader()
+        if reader_failure is not None:
+            failure = failure or reader_failure
         if failure is not None:
             self.directshow_cleanup_failure = failure
             raise ProbeFailure(failure)
@@ -867,6 +881,9 @@ class PulsarProcess:
                     )
         if self.proc is not None and self.proc.poll() is None:
             pulsar_failure = pulsar_failure or "Pulsar process remained alive after cleanup"
+        reader_failure = self._join_process_reader()
+        if reader_failure is not None:
+            pulsar_failure = pulsar_failure or reader_failure
         if directshow_failure is not None:
             if pulsar_failure:
                 raise ProbeFailure(f"{directshow_failure}; {pulsar_failure}")
@@ -885,14 +902,41 @@ class PulsarProcess:
             raise ProbeFailure("ProgramReturn DirectShow reader thread is still alive after shutdown")
         if self.proc is not None and self.proc.poll() is None:
             raise ProbeFailure("Pulsar process is still alive after shutdown")
-        if self.thread is not None and self.thread.is_alive():
-            raise ProbeFailure("Pulsar log reader thread is still alive after shutdown")
-        if require_runtime_lease and not any(
-            "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released" in line
-            or "PULSAR_RUNTIME_INSTANCE lease=released" in line
-            for line in self.snapshot()
-        ):
-            raise ProbeFailure("runtime instance lease was not released at shutdown")
+        reader_failure = self._join_process_reader()
+        if reader_failure is not None:
+            raise ProbeFailure(reader_failure)
+        if require_runtime_lease:
+            lines = self.snapshot()
+            if not any("PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released" in line for line in lines):
+                raise ProbeFailure("runtime directory lease was not released at shutdown")
+            if not any("PULSAR_RUNTIME_INSTANCE lease=released" in line for line in lines):
+                raise ProbeFailure("runtime instance lease was not released at shutdown")
+            if self.trace_path is not None:
+                alias_pattern = rf"PULSAR_LEGACY_ALIAS lease=(disabled|refused|acquired|released) id={re.escape(self.runtime_id)}"
+                alias_states = [
+                    match.group(1)
+                    for line in lines
+                    if (match := re.search(alias_pattern, line))
+                ]
+                if not alias_states:
+                    raise ProbeFailure(
+                        "legacy DirectShow alias state was not observable as disabled/refused/released"
+                    )
+                if "acquired" in alias_states and "released" not in alias_states:
+                    raise ProbeFailure(
+                        "legacy DirectShow alias was acquired but no matching release was observed"
+                    )
+
+    def _join_process_reader(self) -> str | None:
+        """Join Pulsar's stdout pump after child exit, with a hard bound."""
+
+        if self.thread is None:
+            return None
+        self.thread.join(timeout=2)
+        if self.thread.is_alive():
+            return "Pulsar log reader thread did not exit"
+        self.thread = None
+        return None
 
 
 class Inbox:

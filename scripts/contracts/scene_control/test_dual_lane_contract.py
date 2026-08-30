@@ -80,6 +80,13 @@ def test_directshow_cleanup_keeps_owned_handle_and_fails_closed() -> None:
         def kill(self) -> None:
             return None
 
+    class StuckReader:
+        def join(self, timeout: float | None = None) -> None:
+            assert timeout == 2
+
+        def is_alive(self) -> bool:
+            return True
+
     def process_with(fake: object):
         instance = probe.PulsarProcess.__new__(probe.PulsarProcess)
         instance.directshow_proc = fake
@@ -98,6 +105,46 @@ def test_directshow_cleanup_keeps_owned_handle_and_fails_closed() -> None:
         stuck.stop_directshow_consumer()
     assert stuck.directshow_proc is not None
     assert stuck.directshow_cleanup_failure is not None
+
+    reader_stuck = process_with(ExitingProcess())
+    reader_stuck.directshow_thread = StuckReader()
+    with pytest.raises(probe.ProbeFailure, match="reader thread did not exit"):
+        reader_stuck.stop_directshow_consumer()
+    assert reader_stuck.directshow_proc is not None
+    assert reader_stuck.directshow_thread is not None
+
+    lease_probe = probe.PulsarProcess(
+        Path("pulsar.exe"),
+        "x264",
+        Path("record"),
+        trace_path=Path("trace.jsonl"),
+        runtime_id="runtime-test",
+    )
+    finished = ExitingProcess()
+    finished.returncode = 0
+    lease_probe.proc = finished
+    lease_probe.lines.append("PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=runtime-test")
+    with pytest.raises(probe.ProbeFailure, match="runtime instance lease"):
+        lease_probe.assert_shutdown_clean(require_runtime_lease=True)
+    lease_probe.lines.append("PULSAR_RUNTIME_INSTANCE lease=released id=runtime-test")
+    with pytest.raises(probe.ProbeFailure, match="legacy DirectShow alias state"):
+        lease_probe.assert_shutdown_clean(require_runtime_lease=True)
+    lease_probe.lines.append("PULSAR_LEGACY_ALIAS lease=disabled id=runtime-test")
+    lease_probe.assert_shutdown_clean(require_runtime_lease=True)
+
+    log_thread_probe = probe.PulsarProcess(
+        Path("pulsar.exe"),
+        "x264",
+        Path("record"),
+        trace_path=Path("trace.jsonl"),
+        runtime_id="runtime-test",
+    )
+    log_thread_probe.proc = finished
+    log_thread_probe.lines.extend(lease_probe.lines)
+    log_thread_probe.thread = StuckReader()
+    with pytest.raises(probe.ProbeFailure, match="log reader thread did not exit"):
+        log_thread_probe.assert_shutdown_clean(require_runtime_lease=True)
+    assert log_thread_probe.thread is not None
 
 
 def test_physical_roots_are_fixed_and_roles_point_at_their_lane() -> None:
@@ -427,10 +474,17 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert "Pulsar Program Return" in probe
     assert '"PULSAR_TRACE_PATH"' in probe
     assert '"PULSAR_DIRECTSHOW_LEGACY_ALIAS"' in probe
+    assert '"PULSAR_LEGACY_ALIAS"] = "disabled"' in probe
     assert 'boundary="directshow_return"' in probe
     assert "assert_directshow_consumer_alive" in probe
     assert "directshow_cleanup_failure" in probe
+    assert "def _join_directshow_reader" in probe
+    assert "reader_failure = self._join_directshow_reader()" in probe
+    assert "def _join_process_reader" in probe
     assert "assert_shutdown_clean" in probe
+    assert '"PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released"' in probe
+    assert '"PULSAR_RUNTIME_INSTANCE lease=released"' in probe
+    assert "PULSAR_LEGACY_ALIAS lease=" in probe
     assert "require_pixels=True" in probe
     assert "require_pixels=False" not in probe
     assert "OBS_WEBSOCKET_OUTPUT_STARTED" in probe
