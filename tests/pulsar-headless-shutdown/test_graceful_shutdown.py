@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import http.server
 import io
 import importlib.util
 import math
@@ -23,7 +24,8 @@ import shutil
 import struct
 import sys
 import tempfile
-from urllib.parse import quote
+import threading
+from urllib.parse import parse_qs, quote, urlsplit
 import wave
 
 
@@ -32,6 +34,8 @@ PROBE_PATH = ROOT / "scripts" / "probe-dual-lane.py"
 
 # Build the short looped WAV at runtime so security scanners do not mistake
 # deterministic test media for a credential or opaque token.
+
+
 def _audio_wav_data_uri() -> str:
     sample_rate = 48_000
     frames = 480  # 10 ms, looped by the page to keep CEF's audio stream active.
@@ -51,14 +55,86 @@ def _audio_wav_data_uri() -> str:
 AUDIO_WAV_DATA_URI = _audio_wav_data_uri()
 
 
-def _cef_audio_data_url(lane: str) -> str:
+def _cef_audio_page(lane: str) -> str:
     html = f"""<!doctype html><meta charset='utf-8'>
 <style>html,body{{margin:0;width:100%;height:100%;overflow:hidden;background:#132238;color:#f6fbff;font:48px Arial}}
 main{{height:100%;display:grid;place-items:center}} .tile{{padding:40px;background:{'#ff3da6' if lane == 'A' else '#38e8ff'}}}</style>
 <main><div class='tile'>PULSAR CEF / LANE {lane}</div></main>
 <audio autoplay loop src='{AUDIO_WAV_DATA_URI}'></audio>
 <script>const a=document.querySelector('audio'); a.play().catch(()=>{{}});</script>"""
-    return "data:text/html;charset=utf-8," + quote(html, safe="")
+    return html
+
+
+def _cef_audio_data_url(lane: str) -> str:
+    """Retain a data-URI helper for local unit checks; CTest uses HTTP below."""
+
+    return "data:text/html;charset=utf-8," + quote(_cef_audio_page(lane), safe="")
+
+
+class _CefAudioHandler(http.server.BaseHTTPRequestHandler):
+    """Serve deterministic, lane-tagged CEF HTML over loopback HTTP."""
+
+    def _serve_page(self, include_body: bool) -> None:
+        request = urlsplit(self.path)
+        if request.path != "/pulsar-cef-shutdown.html":
+            self.send_error(404)
+            return
+        lane = parse_qs(request.query).get("lane", [None])[0]
+        if lane not in ("A", "B"):
+            self.send_error(400)
+            return
+        body = _cef_audio_page(lane).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if include_body:
+            self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+        self._serve_page(True)
+
+    def do_HEAD(self) -> None:  # noqa: N802 - stdlib handler API
+        self._serve_page(False)
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+
+class _CefAudioServer:
+    """Bounded loopback server kept alive through the CEF shutdown request."""
+
+    def __init__(self) -> None:
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _CefAudioHandler)
+        self.server.daemon_threads = True
+        self.thread: threading.Thread | None = None
+
+    @property
+    def url(self) -> str:
+        host, port = self.server.server_address[:2]
+        return f"http://{host}:{port}/pulsar-cef-shutdown.html"
+
+    def start(self) -> None:
+        if self.thread is not None:
+            return
+        self.thread = threading.Thread(
+            target=self.server.serve_forever,
+            name="pulsar-cef-shutdown-http",
+            daemon=True,
+        )
+        self.thread.start()
+
+    def close(self) -> None:
+        if self.thread is None:
+            self.server.server_close()
+            return
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        if self.thread.is_alive():
+            raise RuntimeError("CEF test HTTP server thread did not join within 5 seconds")
+        self.thread = None
 
 
 def _load_probe():
@@ -78,7 +154,7 @@ def _raise_with_sanitized_tail(probe, process, message: str) -> None:
     raise RuntimeError(f"{message}\nSanitized Pulsar log tail:\n{tail}")
 
 
-async def _configure_two_browser_sources(probe, ws_url: str, password: str, process) -> None:
+async def _configure_two_browser_sources(probe, ws_url: str, password: str, process, server) -> None:
     """Create two real CEF browser_source instances and keep recording active."""
 
     async with probe.websockets.connect(
@@ -104,7 +180,7 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
                     "inputName": input_name,
                     "inputKind": "browser_source",
                     "inputSettings": {
-                        "url": _cef_audio_data_url(lane),
+                        "url": f"{server.url}?lane={lane}",
                         "is_local_file": False,
                         "width": probe.CANVAS_W,
                         "height": probe.CANVAS_H,
@@ -180,12 +256,15 @@ def main() -> int:
     previous_runtime_id = os.environ.get("PULSAR_RUNTIME_INSTANCE_ID")
     os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = runtime_id
     record_dir = Path(tempfile.mkdtemp(prefix="pulsar-shutdown-record-"))
+    cef_server = _CefAudioServer()
+    cef_server.start()
     process = probe.PulsarProcess(
         executable.resolve(),
         "x264",
         record_dir,
         trace_path=None,
         runtime_id=runtime_id,
+        cef_url=cef_server.url,
     )
     started = False
     real_output_started = False
@@ -196,7 +275,7 @@ def main() -> int:
         # The child-side ACK must precede acceptance of PULSAR_READY.
         process.wait_for_shutdown_control_ready(timeout=60)
         ready = process.wait_for(probe.READY_RE, timeout=60)
-        asyncio.run(_configure_two_browser_sources(probe, ready.group(1), process.password, process))
+        asyncio.run(_configure_two_browser_sources(probe, ready.group(1), process.password, process, cef_server))
         real_output_started = True
     finally:
         try:
@@ -215,6 +294,10 @@ def main() -> int:
                 os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = previous_runtime_id
             try:
                 shutil.rmtree(record_dir)
+            except Exception as exc:
+                cleanup_error = cleanup_error or exc
+            try:
+                cef_server.close()
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
 
