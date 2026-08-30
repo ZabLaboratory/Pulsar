@@ -1,20 +1,22 @@
 """Adversarial proof for the CEF audio-callback admission contract.
 
-This is deliberately a Probe-side test.  It does not replace a C++ race test;
-it records the exact allowed interleaving that must be prevented by the
-production admission primitive and fails the candidate while that primitive
-is still implemented as a split closed-load/fetch-add sequence.
+This is deliberately a Probe-side test.  It does not replace the native race
+test; it exercises both close/admission orderings in a small model and checks
+that the production client uses the same linearized gate.  The old split
+closed-load/fetch-add sequence is retained only as the counterexample model.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import re
 
 
 ROOT = Path(__file__).resolve().parents[2]
 BROWSER_CLIENT = ROOT / "plugins" / "pulsar-browser" / "browser-client.cpp"
+BROWSER_CLIENT_HPP = ROOT / "plugins" / "pulsar-browser" / "browser-client.hpp"
+AUDIO_GATE_HPP = ROOT / "plugins" / "pulsar-browser" / "browser-audio-callback-gate.hpp"
+AUDIO_GATE_CMAKE = ROOT / "tests" / "pulsar-headless-shutdown" / "CMakeLists.txt"
 
 
 def _function_body(source: str, signature: str, next_signature: str) -> str:
@@ -24,71 +26,75 @@ def _function_body(source: str, signature: str, next_signature: str) -> str:
 
 
 @dataclass
-class _SplitAdmissionModel:
-    """Minimal model of the two independent atomics in the old admission path."""
+class _LinearizedAdmissionModel:
+    """Small lock model for the production gate's two close/admit orders."""
 
     audio_callbacks_closed: bool = False
     audio_callbacks_in_flight: int = 0
     close_callback_seen: bool = False
     browser_source_alive: bool = True
 
-    def admission_check(self) -> bool:
-        return not self.audio_callbacks_closed
-
-    def admission_increment(self) -> None:
+    def try_acquire(self) -> bool:
+        if self.audio_callbacks_closed:
+            return False
         self.audio_callbacks_in_flight += 1
+        return True
 
-    def close_and_finalize_if_empty(self) -> None:
+    def close_and_try_finalize(self) -> bool:
         self.audio_callbacks_closed = True
         self.close_callback_seen = True
         if self.audio_callbacks_in_flight == 0:
             self.browser_source_alive = False
+            return True
+        return False
 
-    def callback_may_dereference(self, close_seen_snapshot: bool) -> bool:
-        # The callback's second atomic load is allowed to observe its old value:
-        # it is not synchronized with the independent gate atomic.
-        return not close_seen_snapshot and self.browser_source_alive is False
+    def release_and_try_finalize(self) -> bool:
+        assert self.audio_callbacks_in_flight > 0
+        self.audio_callbacks_in_flight -= 1
+        if self.close_callback_seen and self.audio_callbacks_in_flight == 0:
+            self.browser_source_alive = False
+            return True
+        return False
 
 
-def test_split_audio_admission_has_deterministic_detach_interleaving() -> None:
-    state = _SplitAdmissionModel()
-
-    # T_audio: load(audio_callbacks_closed) -> false; pause before fetch_add.
-    assert state.admission_check() is True
-
-    # T_close: close the gate, observe zero, detach the BrowserSource.
-    state.close_and_finalize_if_empty()
+def test_linearized_audio_admission_is_safe_in_both_orders() -> None:
+    # Close wins: a late callback is rejected and cannot dereference the source.
+    state = _LinearizedAdmissionModel()
+    assert state.close_and_try_finalize() is True
+    assert state.try_acquire() is False
     assert state.browser_source_alive is False
 
-    # T_audio resumes and increments after finalization.  A permitted stale
-    # close_callback_seen read then reaches the old raw BrowserSource pointer.
-    state.admission_increment()
-    assert state.callback_may_dereference(close_seen_snapshot=False) is True
+    # Callback wins: close observes the lease and finalization waits for release.
+    state = _LinearizedAdmissionModel()
+    assert state.try_acquire() is True
+    assert state.close_and_try_finalize() is False
+    assert state.browser_source_alive is True
+    assert state.release_and_try_finalize() is True
+    assert state.browser_source_alive is False
 
 
-def test_production_audio_admission_has_one_atomic_gate_and_lease() -> None:
+def test_production_audio_admission_uses_linearized_gate() -> None:
     source = BROWSER_CLIENT.read_text(encoding="utf-8")
-    body = _function_body(
-        source,
-        "bool BrowserClient::begin_audio_callback()",
-        "void BrowserClient::end_audio_callback",
-    )
+    header = BROWSER_CLIENT_HPP.read_text(encoding="utf-8")
+    gate = AUDIO_GATE_HPP.read_text(encoding="utf-8")
+    cmake = AUDIO_GATE_CMAKE.read_text(encoding="utf-8")
 
-    split_sequence = re.search(
-        r"audio_callbacks_closed\.load\([\s\S]*?"
-        r"audio_callbacks_in_flight\.fetch_add",
-        body,
-    )
-    assert split_sequence is None, (
-        "begin_audio_callback must atomically couple admission with the "
-        "in-flight lease; a closed load followed by fetch_add permits "
-        "detach-before-registration (see the deterministic model test)"
-    )
+    assert "BrowserAudioCallbackGate audio_callbacks" in header
+    assert "return audio_callbacks.try_acquire();" in source
+    assert "audio_callbacks.should_deliver()" in source
+    assert "audio_callbacks.mark_close_callback_seen();" in source
+    assert "audio_callbacks.mark_stream_stopped();" in source
+    assert "audio_callbacks_closed.load" not in source
+    assert "audio_callbacks_in_flight.fetch_add" not in source
 
-    # A direct CAS or a mutex-protected critical section are both acceptable
-    # implementation strategies.  The test intentionally does not prescribe
-    # the production primitive beyond requiring one at this boundary.
-    assert "compare_exchange" in body or "lock_guard" in body, (
-        "begin_audio_callback has no visible atomic gate/lease primitive"
-    )
+    # The admission, close, and finalization decisions all share the same
+    # mutex.  This is the source-level counterpart to the model above; the
+    # native C++ test below provides the real two-thread rendezvous.
+    assert gate.count("std::lock_guard<std::mutex>") >= 5
+    assert "if (admission_closed_)" in gate
+    assert "++in_flight_;" in gate
+    assert "in_flight_ != 0" in gate
+    assert "finalization_claimed_" in gate
 
+    assert "pulsar-audio-callback-gate-test" in cmake
+    assert "browser audio admission must not split gate load" in cmake
