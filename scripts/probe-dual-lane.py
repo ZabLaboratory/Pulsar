@@ -1252,8 +1252,9 @@ class PulsarProcess:
                 "streamServiceType": "rtmp_custom",
                 "streamServiceSettings": {
                     "server": receiver.server_url,
-                    # The key is local-only routing metadata.  It is not
-                    # printed and is never included in the evidence artifact.
+                    # The key is a non-secret local loopback routing identifier.
+                    # It is persisted in receiver metadata for correlation;
+                    # it is never a real distribution/streaming credential.
                     "key": receiver.stream_key,
                 },
             },
