@@ -37,6 +37,8 @@
 #include <chrono>
 #include <cctype>
 #include <cstdarg>
+#include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -583,6 +585,103 @@ BOOL WINAPI console_ctrl_handler(DWORD ctrl_type)
     }
 }
 
+HANDLE g_shutdown_event = nullptr;
+
+// The parent creates an anonymous manual-reset event and passes this one
+// inheritable handle through STARTUPINFOEX's handle list. The numeric value
+// never enters logs or the evidence artifact; only the explicit opt-in
+// presence and lifecycle state are observable.
+bool adopt_shutdown_event_from_environment(const std::string &instance_id)
+{
+    const char *raw = std::getenv("PULSAR_SHUTDOWN_EVENT_HANDLE");
+    if (!raw) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=absent id=%s mechanism=console_compat\n",
+                     instance_id.c_str());
+        return true;
+    }
+    if (!*raw) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=invalid id=%s reason=empty_handle\n",
+                     instance_id.c_str());
+        return false;
+    }
+
+    for (const char *cursor = raw; *cursor; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') {
+            std::fprintf(stderr,
+                         "PULSAR_SHUTDOWN_CONTROL event=invalid id=%s reason=handle_syntax\n",
+                         instance_id.c_str());
+            return false;
+        }
+    }
+    errno = 0;
+    char *end = nullptr;
+    const unsigned long long parsed = std::strtoull(raw, &end, 10);
+    if (errno == ERANGE || end == raw || *end != '\0' || parsed == 0 ||
+        parsed > static_cast<unsigned long long>(UINTPTR_MAX)) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=invalid id=%s reason=handle_range\n",
+                     instance_id.c_str());
+        return false;
+    }
+
+    HANDLE candidate = reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(parsed));
+    DWORD handle_flags = 0;
+    if (!GetHandleInformation(candidate, &handle_flags) ||
+        WaitForSingleObject(candidate, 0) == WAIT_FAILED) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=invalid id=%s reason=closed_handle\n",
+                     instance_id.c_str());
+        return false;
+    }
+    // Do not let this control capability leak into any later child process
+    // (CEF, FFmpeg, or a plugin) that might use inheritable handles.
+    if (!SetHandleInformation(candidate, HANDLE_FLAG_INHERIT, 0)) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=invalid id=%s reason=inherit_clear\n",
+                     instance_id.c_str());
+        return false;
+    }
+    g_shutdown_event = candidate;
+    std::fprintf(stderr,
+                 "PULSAR_SHUTDOWN_CONTROL event=ready id=%s mechanism=inherited_event\n",
+                 instance_id.c_str());
+    return true;
+}
+
+void close_shutdown_event()
+{
+    if (g_shutdown_event) {
+        CloseHandle(g_shutdown_event);
+        g_shutdown_event = nullptr;
+    }
+}
+
+bool shutdown_event_requested(const std::string &instance_id)
+{
+    if (!g_shutdown_event)
+        return false;
+    // Bound the wait so a signaled event interrupts the idle loop promptly,
+    // while still allowing the existing lease-renewal cadence to run. A
+    // failed wait is fail-closed: the process must not continue operating
+    // when its explicit shutdown control has become invalid.
+    const DWORD result = WaitForSingleObject(g_shutdown_event, 100);
+    if (result == WAIT_OBJECT_0) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=signaled id=%s mechanism=inherited_event\n",
+                     instance_id.c_str());
+        return true;
+    }
+    if (result == WAIT_FAILED) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=wait_failed id=%s error=%lu\n",
+                     instance_id.c_str(), static_cast<unsigned long>(GetLastError()));
+        return true;
+    }
+    return false;
+}
+
 // /SUBSYSTEM:WINDOWS support -- since pulsar.exe is built without a
 // console subsystem (so Windows never allocates a window for it), the
 // CRT does NOT auto-wire stdout/stderr to a terminal. Three cases to
@@ -1062,6 +1161,19 @@ int main(int argc, char **argv)
     auto runtime_state = std::make_unique<RuntimeState>();
     if (!runtime_state->initialize())
         return 1;
+
+#ifdef _WIN32
+    // CTRL_BREAK_EVENT requires a console shared with the target. A
+    // /SUBSYSTEM:WINDOWS child whose stdout is a redirected pipe has no such
+    // console, so an explicitly inherited anonymous event is the graceful
+    // control primitive. Invalid opt-in handles fail closed; absent opt-in
+    // retains the console-control compatibility path.
+    if (!adopt_shutdown_event_from_environment(runtime_state->identity.instance_id)) {
+        runtime_state->release();
+        return 1;
+    }
+#endif
+
     // Force the offscreen Qt platform so QApplication can construct
     // without a display server / platform plugin DLL. obs-websocket
     // (and other libobs plugins) link against Qt6 and assume a
@@ -1191,13 +1303,24 @@ int main(int argc, char **argv)
 
     auto next_lease_renew = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (g_running.load(std::memory_order_acquire)) {
+#ifdef _WIN32
+        if (shutdown_event_requested(runtime_state->identity.instance_id))
+            g_running.store(false, std::memory_order_release);
+#endif
+        if (!g_running.load(std::memory_order_acquire))
+            break;
         if (std::chrono::steady_clock::now() >= next_lease_renew) {
             if (!runtime_state->renew())
                 blog(LOG_ERROR, "[pulsar-runtime] lease metadata renewal failed; "
                                 "kernel ownership retained and no alias takeover is allowed");
             next_lease_renew = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         }
+#ifdef _WIN32
+        if (!g_shutdown_event)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+#else
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+#endif
     }
 
     blog(LOG_INFO, "[pulsar-headless] shutting down");
@@ -1206,5 +1329,8 @@ int main(int argc, char **argv)
     obs_shutdown();
 
     runtime_state->release();
+#ifdef _WIN32
+    close_shutdown_event();
+#endif
     return 0;
 }

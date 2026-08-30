@@ -86,6 +86,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import ctypes
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from fractions import Fraction
 import hashlib
@@ -96,7 +97,6 @@ import os
 import pathlib
 import re
 import secrets
-import signal
 import shutil
 import socket
 import struct
@@ -119,6 +119,9 @@ except ImportError:
 EXIT_FAIL = 1
 EXIT_USAGE = 2
 EXIT_SKIP = 3
+
+WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
+WINDOWS_HANDLE_FLAG_INHERIT = 0x00000001
 
 # The runtime's ``os_gettime_ns`` uses QueryPerformanceCounter on Windows.
 # Python's monotonic clocks are not interchangeable on every supported Python
@@ -925,6 +928,72 @@ class RtmpReceiver:
         self._install_fused_records(merged, output_path)
 
 
+def _windows_create_inherited_shutdown_event() -> int:
+    """Create an unnamed inheritable manual-reset event for one child."""
+
+    if os.name != "nt":
+        raise ProbeFailure("inherited Windows shutdown event requested on a non-Windows host")
+
+    class SecurityAttributes(ctypes.Structure):
+        _fields_ = [
+            ("nLength", ctypes.c_uint32),
+            ("lpSecurityDescriptor", ctypes.c_void_p),
+            ("bInheritHandle", ctypes.c_int),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_event = kernel32.CreateEventW
+    create_event.argtypes = [
+        ctypes.POINTER(SecurityAttributes),
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_wchar_p,
+    ]
+    create_event.restype = ctypes.c_void_p
+    attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), None, 1)
+    handle = create_event(ctypes.byref(attributes), 1, 0, None)
+    if not handle:
+        error = ctypes.get_last_error()
+        raise ProbeFailure(f"could not create inherited shutdown event (Win32 error {error})")
+    return int(handle)
+
+
+def _windows_close_handle(handle: int) -> None:
+    if os.name != "nt":
+        return
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_int
+    if not close_handle(ctypes.c_void_p(handle)):
+        error = ctypes.get_last_error()
+        raise ProbeFailure(f"could not close inherited shutdown event (Win32 error {error})")
+
+
+def _windows_clear_handle_inherit(handle: int) -> None:
+    if os.name != "nt":
+        return
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    set_handle_information = kernel32.SetHandleInformation
+    set_handle_information.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32]
+    set_handle_information.restype = ctypes.c_int
+    if not set_handle_information(ctypes.c_void_p(handle), WINDOWS_HANDLE_FLAG_INHERIT, 0):
+        error = ctypes.get_last_error()
+        raise ProbeFailure(f"could not clear inherited shutdown handle (Win32 error {error})")
+
+
+def _windows_signal_shutdown_event(handle: int) -> None:
+    if os.name != "nt":
+        raise ProbeFailure("Windows shutdown event requested on a non-Windows host")
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    set_event = kernel32.SetEvent
+    set_event.argtypes = [ctypes.c_void_p]
+    set_event.restype = ctypes.c_int
+    if not set_event(ctypes.c_void_p(handle)):
+        error = ctypes.get_last_error()
+        raise ProbeFailure(f"could not signal inherited shutdown event (Win32 error {error})")
+
+
 class PulsarProcess:
     """Spawn Pulsar and retain structured stdout for identity assertions."""
 
@@ -980,6 +1049,11 @@ class PulsarProcess:
         self.lines: list[str] = []
         self.condition = threading.Condition()
         self.thread: threading.Thread | None = None
+        self.shutdown_event_handle: int | None = None
+        self.shutdown_control_expected = False
+        self.graceful_shutdown_requested = False
+        self.graceful_shutdown_error: str | None = None
+        self.forced_kill_used = False
 
     def spawn(self) -> None:
         env = dict(os.environ)
@@ -1077,23 +1151,49 @@ class PulsarProcess:
             env.pop("PULSAR_CEF_URL", None)
         env.pop("PULSAR_MIC_DEVICE_ID", None)
 
-        # Keep the child in its own Windows console process group so an
-        # operational rollback probe can request Ctrl+Break and observe the
-        # runtime's graceful lease release before falling back to termination.
-        creationflags = (0x08000000 | 0x00000200) if os.name == "nt" else 0
-        self.proc = subprocess.Popen(
-            [str(self.exe)],
-            cwd=str(self.exe.parent),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            bufsize=1,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creationflags,
-        )
+        # A redirected stdout pipe gives a /SUBSYSTEM:WINDOWS child no shared
+        # console, so CTRL_BREAK is not a reliable control plane. On Windows
+        # create one anonymous manual-reset event and pass it solely through
+        # STARTUPINFOEX's explicit handle list. The parent clears the handle's
+        # inherit bit immediately after CreateProcess; the numeric value is
+        # never logged or written to evidence.
+        startupinfo = None
+        creationflags = 0x08000000 if os.name == "nt" else 0
+        if os.name == "nt":
+            self.shutdown_control_expected = True
+            handle = _windows_create_inherited_shutdown_event()
+            self.shutdown_event_handle = handle
+            env["PULSAR_SHUTDOWN_EVENT_HANDLE"] = str(handle)
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.lpAttributeList = {"handle_list": [handle]}
+            creationflags |= WINDOWS_CREATE_NEW_PROCESS_GROUP
+        try:
+            self.proc = subprocess.Popen(
+                [str(self.exe)],
+                cwd=str(self.exe.parent),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                bufsize=1,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+                startupinfo=startupinfo,
+                close_fds=startupinfo is not None,
+            )
+        except BaseException:
+            if self.shutdown_event_handle is not None:
+                _windows_close_handle(self.shutdown_event_handle)
+                self.shutdown_event_handle = None
+            raise
+        if self.shutdown_event_handle is not None:
+            try:
+                _windows_clear_handle_inherit(self.shutdown_event_handle)
+            except ProbeFailure as exc:
+                self.graceful_shutdown_error = str(exc)
+                raise
         self.thread = threading.Thread(target=self._pump, name="pulsar-probe-log", daemon=True)
         self.thread.start()
 
@@ -1136,6 +1236,33 @@ class PulsarProcess:
                         f"timeout waiting for {pattern.pattern!r}; exit={status}\n{tail}"
                     )
                 self.condition.wait(timeout=min(0.25, remaining))
+
+    def wait_for_shutdown_control_ready(self, timeout: float) -> None:
+        """Require the child ACK before accepting PULSAR_READY or campaigning."""
+
+        if os.name != "nt":
+            return
+        if not self.shutdown_control_expected:
+            raise ProbeFailure("Windows shutdown control was not provisioned for this child")
+        ready_pattern = re.compile(
+            rf"PULSAR_SHUTDOWN_CONTROL event=ready id={re.escape(self.runtime_id)} "
+            r"mechanism=inherited_event$"
+        )
+        self.wait_for(ready_pattern, timeout=timeout)
+
+    def assert_shutdown_control_ready(self) -> None:
+        """Assert that the child-side inherited control ACK was captured."""
+
+        if os.name != "nt":
+            return
+        if not self.shutdown_control_expected:
+            raise ProbeFailure("Windows shutdown control was not provisioned for this child")
+        ready_pattern = re.compile(
+            rf"PULSAR_SHUTDOWN_CONTROL event=ready id={re.escape(self.runtime_id)} "
+            r"mechanism=inherited_event$"
+        )
+        if not any(ready_pattern.search(line) for line in self.snapshot()):
+            raise ProbeFailure("child shutdown control readiness ACK was not observed")
 
     def wait_for_commit(self, count: int, timeout: float) -> re.Match[str]:
         deadline = time.monotonic() + timeout
@@ -1416,46 +1543,61 @@ class PulsarProcess:
             except ProbeFailure as exc:
                 self.rtmp_cleanup_failure = str(exc)
                 rtmp_failure = exc
-        pulsar_failure: str | None = None
+        pulsar_failure: str | None = self.graceful_shutdown_error
         if self.proc is not None and self.proc.poll() is None:
+            if os.name == "nt":
+                try:
+                    if self.shutdown_event_handle is None:
+                        raise ProbeFailure(
+                            "Windows Pulsar process has no inherited shutdown event"
+                        )
+                    _windows_signal_shutdown_event(self.shutdown_event_handle)
+                    self.graceful_shutdown_requested = True
+                except ProbeFailure as exc:
+                    self.graceful_shutdown_error = str(exc)
+            else:
+                self.proc.terminate()
             try:
-                if os.name == "nt":
-                    # The headless child owns a process group and releases
-                    # its runtime/DirectShow leases from the graceful Ctrl+
-                    # Break path. Hard termination is only the fallback.
-                    self.proc.send_signal(signal.CTRL_BREAK_EVENT)
-                else:
-                    self.proc.terminate()
                 self.proc.wait(timeout=8)
             except subprocess.TimeoutExpired:
+                self.forced_kill_used = True
                 try:
                     self.proc.kill()
                     self.proc.wait(timeout=8)
                 except Exception as exc:
                     pulsar_failure = f"Pulsar process could not be killed during cleanup: {exc}"
             except Exception as exc:
-                try:
-                    self.proc.terminate()
-                    self.proc.wait(timeout=8)
-                except subprocess.TimeoutExpired:
+                self.graceful_shutdown_error = str(exc)
+                # A failed graceful request may still leave the process alive;
+                # containment is permitted, but makes this cleanup a failure.
+                if self.proc.poll() is None:
+                    self.forced_kill_used = True
                     try:
                         self.proc.kill()
                         self.proc.wait(timeout=8)
                     except Exception as fallback_exc:
                         pulsar_failure = (
-                            "Pulsar process termination failed during cleanup: "
+                            "Pulsar process shutdown failed during cleanup: "
                             f"graceful={exc}; fallback={fallback_exc}"
                         )
-                except Exception as fallback_exc:
-                    pulsar_failure = (
-                        "Pulsar process termination failed during cleanup: "
-                        f"graceful={exc}; fallback={fallback_exc}"
-                    )
+            if self.graceful_shutdown_error is not None:
+                pulsar_failure = pulsar_failure or self.graceful_shutdown_error
         if self.proc is not None and self.proc.poll() is None:
             pulsar_failure = pulsar_failure or "Pulsar process remained alive after cleanup"
         reader_failure = self._join_process_reader()
         if reader_failure is not None:
             pulsar_failure = pulsar_failure or reader_failure
+        if os.name == "nt" and self.shutdown_event_handle is not None:
+            try:
+                _windows_close_handle(self.shutdown_event_handle)
+            except ProbeFailure as exc:
+                pulsar_failure = pulsar_failure or str(exc)
+            finally:
+                self.shutdown_event_handle = None
+        if os.name == "nt" and self.proc is not None and not self.graceful_shutdown_requested:
+            pulsar_failure = pulsar_failure or "Windows graceful shutdown event was not signaled"
+        if self.forced_kill_used:
+            pulsar_failure = pulsar_failure or "forced process kill was used; cleanup is not accepted"
         if directshow_failure is not None:
             if pulsar_failure:
                 raise ProbeFailure(f"{directshow_failure}; {pulsar_failure}")
@@ -1484,6 +1626,14 @@ class PulsarProcess:
             raise ProbeFailure("ProgramReturn DirectShow reader thread is still alive after shutdown")
         if self.proc is not None and self.proc.poll() is None:
             raise ProbeFailure("Pulsar process is still alive after shutdown")
+        if self.forced_kill_used:
+            raise ProbeFailure("forced process kill was used; graceful cleanup is not accepted")
+        if (
+            self.proc is not None
+            and self.proc.returncode is not None
+            and self.proc.returncode != 0
+        ):
+            raise ProbeFailure(f"Pulsar exited with non-zero status {self.proc.returncode}")
         reader_failure = self._join_process_reader()
         if reader_failure is not None:
             raise ProbeFailure(reader_failure)
@@ -1508,6 +1658,32 @@ class PulsarProcess:
                     raise ProbeFailure(
                         "legacy DirectShow alias was acquired but no matching release was observed"
                     )
+        if os.name == "nt" and self.shutdown_control_expected:
+            lines = self.snapshot()
+            if not any(
+                re.search(
+                    rf"PULSAR_SHUTDOWN_CONTROL event=ready id={re.escape(self.runtime_id)} "
+                    r"mechanism=inherited_event$",
+                    line,
+                )
+                for line in lines
+            ):
+                raise ProbeFailure("child shutdown control readiness ACK was not observed")
+            if not self.graceful_shutdown_requested:
+                raise ProbeFailure("Windows graceful shutdown event was not signaled")
+            if self.graceful_shutdown_error is not None:
+                raise ProbeFailure(self.graceful_shutdown_error)
+            if not any(
+                re.search(
+                    rf"PULSAR_SHUTDOWN_CONTROL event=signaled id={re.escape(self.runtime_id)} "
+                    r"mechanism=inherited_event$",
+                    line,
+                )
+                for line in lines
+            ):
+                raise ProbeFailure("child shutdown event acknowledgement was not observed")
+            if not any("[pulsar-headless] shutting down" in line for line in lines):
+                raise ProbeFailure("Pulsar graceful shutdown log line was not observed")
 
     def _join_process_reader(self) -> str | None:
         """Join Pulsar's stdout pump after child exit, with a hard bound."""
@@ -2440,7 +2616,9 @@ async def collect_resource_samples(
     if not ffprobe:
         raise ProbeSkip("ffprobe is required to attest an active NVENC resource phase")
 
+    process.wait_for_shutdown_control_ready(timeout=60)
     ready_match = process.wait_for(READY_RE, timeout=60)
+    process.assert_shutdown_control_ready()
     ws_url = ready_match.group(1)
     if ready_match.group(2) != process.password:
         raise ProbeFailure("PULSAR_READY password did not match the generated probe secret")
@@ -2719,7 +2897,9 @@ async def drive(
     if takes < 1 or warmup_takes < 0:
         raise ProbeFailure("takes must be positive and warmup_takes must not be negative")
     total_takes = warmup_takes + takes
+    process.wait_for_shutdown_control_ready(timeout=60)
     ready_match = process.wait_for(READY_RE, timeout=60)
+    process.assert_shutdown_control_ready()
     ws_url = ready_match.group(1)
     ready_password = ready_match.group(2)
     if ready_password != process.password:
