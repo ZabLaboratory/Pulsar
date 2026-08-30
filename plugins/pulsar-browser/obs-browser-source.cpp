@@ -984,7 +984,9 @@ void BrowserSource::Destroy()
 		     "PULSAR_CEF_SHUTDOWN event=source_destroy_rejected reason=cef_not_ready");
 		SetBrowser(nullptr);
 		UnlinkFromBrowserList();
-		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, true));
+		/* No PrepareDestroy call occurred, so no pending source-destruction
+		 * completion may be consumed by this no-browser path. */
+		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, false));
 		return;
 	}
 
@@ -993,7 +995,9 @@ void BrowserSource::Destroy()
 	if (disposition == BrowserSourceDestroyDisposition::DeleteNow) {
 		UnlinkFromBrowserList();
 		SetBrowser(nullptr);
-		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, true));
+		/* DeleteNow is used after the global drain and likewise has no pending
+		 * source-destruction counter to complete. */
+		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, false));
 		return;
 	}
 	if (disposition == BrowserSourceDestroyDisposition::Fatal)
