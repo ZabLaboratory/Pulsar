@@ -83,7 +83,7 @@ python scripts/probe-dual-lane.py `
   --trace <evidence-dir>\x264.jsonl `
   --runtime-id pulsar-249-x264-<unique> `
   --build-revision <40-lowercase-candidate-sha> `
-  --capture-window <visible-title:class:exe> --cef-workload
+  --capture-window <visible-title:class:exe> --cef-workload --rtmp-receiver
 
 # NVENC owns the resource comparison: append the dual-lane phase to the same
 # reference trace/runtime after the single-canvas reference process exits.
@@ -93,7 +93,7 @@ python scripts/probe-dual-lane.py `
   --runtime-id pulsar-249-nvenc-<unique> `
   --build-revision <40-lowercase-candidate-sha> `
   --capture-window <visible-title:class:exe> --cef-workload `
-  --resource-mode reference --resource-only
+  --resource-mode reference --resource-only --rtmp-receiver
 
 python scripts/probe-dual-lane.py `
   --exe <exact-artifact> --encoder nvenc --takes 100 `
@@ -101,13 +101,21 @@ python scripts/probe-dual-lane.py `
   --runtime-id pulsar-249-nvenc-<unique> `
   --build-revision <40-lowercase-candidate-sha> `
   --capture-window <visible-title:class:exe> --cef-workload `
-  --trace-append --resource-mode dual_lane
+  --trace-append --resource-mode dual_lane --rtmp-receiver
 ```
 
 The trace must contain at least 100 observed warm-up Takes followed by 100
 observed measured Takes for each codec (200 committed Takes total with the
 standard command). Validate it with the boundary-aware parser, which reports
-the two observed counts and excludes the warm-up prefix:
+the two observed counts and excludes the warm-up prefix.
+
+For the NVENC append, the driver keeps Stream and Record active after the
+200th Take until the requested resource-samples count is reached by observed
+samples jointly attesting encoder_active=true, encoder_family=nvenc, and
+rtmp_load_active=true. Samples emitted before Stream becomes active remain
+diagnostic. A bounded timeout produces a typed skip/failure and still runs the
+normal cleanup path; it never fabricates samples or changes Take latency
+percentiles.
 
 ```powershell
 python scripts/probe-take-latency.py `

@@ -12,28 +12,36 @@ OnAir scene after the first Take, and checks that the logical selections stay
 distinct.  The raw NV12 time-code probe remains the pixel-level proof that
 those live mutations reach only their selected lane.
 
-Run the two acceptance campaigns independently against the same build::
+Optional non-traced smoke checks (no acceptance artifact) are::
 
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder x264 --takes 100
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100
-    python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 \
-        --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 \
+
+The canonical three-command acceptance sequence is::
+
+    python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder x264 --takes 100 \
+        --trace artifacts/249/x264-rtmp.jsonl --runtime-id runtime-x264-001 \
         --build-revision <candidate-sha> --capture-window <visible-title:class:exe> \
-        --cef-workload
+        --cef-workload --rtmp-receiver
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc \
-        --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 \
+        --trace artifacts/249/nvenc-rtmp.jsonl --runtime-id runtime-nvenc-001 \
         --build-revision <candidate-sha> --capture-window <visible-title:class:exe> \
-        --cef-workload --resource-mode reference --resource-only
+        --cef-workload --resource-mode reference --resource-only --rtmp-receiver
     python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 \
-        --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 \
+        --trace artifacts/249/nvenc-rtmp.jsonl --runtime-id runtime-nvenc-001 \
         --build-revision <candidate-sha> --capture-window <visible-title:class:exe> \
-        --cef-workload --trace-append --resource-mode dual_lane
+        --cef-workload --trace-append --resource-mode dual_lane --rtmp-receiver
 
 The x264 trace is a latency-only campaign (AC-13 is not applicable); the
 NVENC trace's reference phase must run with ``--resource-mode reference
 --resource-only`` before the dual-lane append above.  The reference phase
 starts and verifies a real recording so its resource samples attest an active
 encoder rather than only a requested codec.
+
+The dual-lane append keeps Stream and Record alive after the 200th Take until
+the requested minimum of observed active NVENC plus RTMP resource samples is
+present. This sampler wait is bounded and does not add resource records to
+Take latency percentiles or scene events.
 
 Exit codes are 0 (pass), 1 (assertion/runtime failure), 2 (usage or missing
 WebSocket dependency), and 3 (typed environment skip, for example no binary
@@ -2599,6 +2607,81 @@ async def collect_resource_samples(
         return rtmp_active_count
 
 
+async def wait_for_eligible_resource_samples(
+    process: PulsarProcess,
+    mode: str,
+    minimum_samples: int,
+    timeout: float,
+) -> int:
+    """Wait for observed NVENC+RTMP samples without stopping any output.
+
+    This is used after the final dual-lane Take and before StopStream or
+    StopRecord.  The sampler cadence is independent from the Take cadence, so
+    ending outputs immediately after the last Take can otherwise leave the
+    trace below the AC-13 minimum.
+    """
+
+    if minimum_samples < 1:
+        raise ProbeFailure("resource sample minimum must be positive")
+    if timeout <= 0:
+        raise ProbeFailure("resource sample wait timeout must be positive")
+    deadline = time.monotonic() + timeout
+    while True:
+        if process.trace_path is None:
+            raise ProbeFailure("resource sample waiting requires --trace")
+        if process.proc is not None and process.proc.poll() is not None:
+            raise ProbeFailure(
+                f"runtime exited before collecting {minimum_samples} active NVENC+RTMP "
+                f"{mode} resource samples"
+            )
+        total = 0
+        active = 0
+        eligible = 0
+        try:
+            with process.trace_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(record, dict):
+                        continue
+                    if (
+                        record.get("record_type") != "resource_sample"
+                        or record.get("sample_mode") != mode
+                        or record.get("runtime_instance_id") != process.runtime_id
+                    ):
+                        continue
+                    total += 1
+                    if record.get("encoder_active") is True:
+                        active += 1
+                    if (
+                        record.get("encoder_active") is True
+                        and record.get("encoder_family") == "nvenc"
+                        and record.get("rtmp_load_active") is True
+                    ):
+                        eligible += 1
+        except FileNotFoundError:
+            total = active = eligible = 0
+        if eligible >= minimum_samples:
+            print(
+                f"   post-Take resource wait: total={total} active={active} "
+                f"eligible_nvenc_rtmp={eligible} mode={mode}"
+            )
+            return eligible
+        if time.monotonic() >= deadline:
+            if process.proc is not None and process.proc.poll() is None:
+                raise ProbeSkip(
+                    "native resource sampler did not produce enough active NVENC+RTMP samples "
+                    f"before the {timeout:.1f}s post-Take deadline"
+                )
+            raise ProbeFailure(
+                f"runtime exited before collecting {minimum_samples} active NVENC+RTMP "
+                f"{mode} resource samples"
+            )
+        await asyncio.sleep(0.25)
+
+
 async def assert_distinct_selected_scenes(
     inbox: Inbox,
     ws: Any,
@@ -2625,7 +2708,14 @@ async def assert_distinct_selected_scenes(
         raise ProbeFailure(f"logical Program and Preview scenes aliased at {operation}: {program!r}")
 
 
-async def drive(process: PulsarProcess, takes: int, *, warmup_takes: int = 0) -> list[Commit]:
+async def drive(
+    process: PulsarProcess,
+    takes: int,
+    *,
+    warmup_takes: int = 0,
+    minimum_resource_samples: int = 0,
+    resource_sample_timeout: float = 0.0,
+) -> list[Commit]:
     if takes < 1 or warmup_takes < 0:
         raise ProbeFailure("takes must be positive and warmup_takes must not be negative")
     total_takes = warmup_takes + takes
@@ -2911,6 +3001,23 @@ async def drive(process: PulsarProcess, takes: int, *, warmup_takes: int = 0) ->
                     "post-commit Preview after 30 frames",
                 )
 
+        # The native sampler runs on its own cadence.  For the dual-lane
+        # capacity append, keep both outputs alive after the final Take until
+        # the requested number of observed active NVENC+RTMP samples exists.
+        # These records are resource evidence only and never enter Take
+        # latency/event percentiles.
+        if process.resource_mode == "dual_lane" and process.rtmp_receiver is not None:
+            if minimum_resource_samples < 1:
+                raise ProbeFailure(
+                    "dual-lane RTMP capacity append requires a positive resource sample minimum"
+                )
+            await wait_for_eligible_resource_samples(
+                process,
+                "dual_lane",
+                minimum_resource_samples,
+                resource_sample_timeout,
+            )
+
         if process.rtmp_receiver is not None:
             await process.stop_rtmp_stream(inbox, ws)
 
@@ -2981,6 +3088,7 @@ def validate_trace_append(
     trace_host: str,
     trace_gpu: str,
     require_rtmp_load: bool = False,
+    minimum_rtmp_samples: int = 1,
 ) -> None:
     """Validate the NVENC reference trace before allowing an append.
 
@@ -3077,6 +3185,8 @@ def validate_trace_append(
             "--trace-append reference phase lacks an active NVENC encoder attestation"
         )
     if require_rtmp_load:
+        if minimum_rtmp_samples < 1:
+            raise ProbeFailure("--trace-append RTMP minimum must be positive")
         receiver = session.get("rtmp_receiver")
         if session.get("rtmp_load_requested") is not True or not isinstance(receiver, dict):
             raise ProbeFailure(
@@ -3125,14 +3235,16 @@ def validate_trace_append(
             or receiver["packet_timebase_den"] <= 0
         ):
             raise ProbeFailure("--trace-append reference RTMP receiver clock/timebase is invalid")
-        if not any(
+        eligible_reference_samples = sum(
             sample.get("encoder_active") is True
             and sample.get("encoder_family") == "nvenc"
             and sample.get("rtmp_load_active") is True
             for sample in reference_samples
-        ):
+        )
+        if eligible_reference_samples < minimum_rtmp_samples:
             raise ProbeFailure(
-                "--trace-append reference phase lacks an active NVENC sample under observed RTMP load"
+                "--trace-append reference phase lacks enough active NVENC samples under observed RTMP load: "
+                f"{eligible_reference_samples} < {minimum_rtmp_samples}"
             )
 
 
@@ -3232,6 +3344,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--trace-append requires --runtime-id matching the reference session")
     if args.trace_append and args.resource_mode != "dual_lane":
         parser.error("--trace-append requires --resource-mode dual_lane")
+    if args.trace_append and not args.rtmp_receiver:
+        parser.error("--trace-append requires --rtmp-receiver for AC-13 evidence")
     if args.rtmp_receiver and args.trace is None:
         parser.error("--rtmp-receiver requires --trace")
     if args.rtmp_receiver and args.resource_only and (
@@ -3339,6 +3453,7 @@ def run(args: argparse.Namespace) -> int:
                     trace_host=trace_host,
                     trace_gpu=trace_gpu,
                     require_rtmp_load=args.rtmp_receiver,
+                    minimum_rtmp_samples=args.resource_samples,
                 )
                 if args.rtmp_receiver:
                     # Validate and copy the immutable reference before any
@@ -3359,6 +3474,7 @@ def run(args: argparse.Namespace) -> int:
                         trace_host=trace_host,
                         trace_gpu=trace_gpu,
                         require_rtmp_load=args.rtmp_receiver,
+                        minimum_rtmp_samples=args.resource_samples,
                     )
             if trace_path is not None:
                 calibration = calibrate_wire_clock()
@@ -3390,7 +3506,18 @@ def run(args: argparse.Namespace) -> int:
                 print(f"PASS: collected {count} native {args.resource_mode} resource samples")
                 result = 0
             else:
-                commits = asyncio.run(drive(process, args.takes, warmup_takes=warmup_takes))
+                commits = asyncio.run(
+                    drive(
+                        process,
+                        args.takes,
+                        warmup_takes=warmup_takes,
+                        minimum_resource_samples=args.resource_samples,
+                        resource_sample_timeout=max(
+                            30.0,
+                            args.resource_samples * args.resource_interval_ms / 1000.0 + 15.0,
+                        ),
+                    )
+                )
                 print(
                     f"PASS: {len(commits)} Takes; computed lane/surface relations remained valid; "
                     "frame_id/PTS monotone"

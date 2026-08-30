@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import importlib.util
+import inspect
 import json
 from pathlib import Path
 import sys
@@ -72,6 +74,69 @@ def test_spawn_after_rtmp_ready_starts_listener_before_spawn():
 
     probe.spawn_after_rtmp_ready(FakeProcess())
     assert events == ["receiver.start", "pulsar.spawn"]
+
+
+def test_drive_propagates_resource_wait_and_keeps_outputs_alive_until_threshold(tmp_path):
+    assert "minimum_resource_samples" in inspect.signature(probe.drive).parameters
+    assert "resource_sample_timeout" in inspect.signature(probe.drive).parameters
+    drive_source = inspect.getsource(probe.drive)
+    run_source = inspect.getsource(probe.run)
+    assert "wait_for_eligible_resource_samples" in drive_source
+    assert "minimum_resource_samples=args.resource_samples" in run_source
+    assert "minimum_rtmp_samples=args.resource_samples" in run_source
+    wait_index = drive_source.index("wait_for_eligible_resource_samples")
+    stream_stop_index = drive_source.index("await process.stop_rtmp_stream", wait_index)
+    record_stop_index = drive_source.index('request(inbox, ws, "StopRecord"', wait_index)
+    assert wait_index < stream_stop_index < record_stop_index
+
+    trace = tmp_path / "trace.jsonl"
+    runtime_id_value = "runtime-resource-wait"
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+    class FakeProcess:
+        trace_path = trace
+        resource_mode = "dual_lane"
+        runtime_id = runtime_id_value
+        proc = FakeProc()
+
+    first = {
+        "record_type": "resource_sample",
+        "sample_mode": "dual_lane",
+        "runtime_instance_id": runtime_id_value,
+        "encoder_active": True,
+        "encoder_family": "nvenc",
+        "rtmp_load_active": False,
+    }
+    second = dict(first, rtmp_load_active=True)
+    third = dict(first, rtmp_load_active=True)
+    trace.write_text(json.dumps(first) + "\n" + json.dumps(second) + "\n", encoding="utf-8")
+    with pytest.raises(probe.ProbeSkip, match="did not produce enough"):
+        asyncio.run(probe.wait_for_eligible_resource_samples(FakeProcess(), "dual_lane", 2, 0.01))
+    trace.write_text(
+        json.dumps(first) + "\n" + json.dumps(second) + "\n" + json.dumps(third) + "\n",
+        encoding="utf-8",
+    )
+    assert asyncio.run(probe.wait_for_eligible_resource_samples(FakeProcess(), "dual_lane", 2, 0.5)) == 2
+
+
+def test_resource_wait_reports_process_exit_as_failure(tmp_path):
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("", encoding="utf-8")
+
+    class DeadProc:
+        def poll(self):
+            return 17
+
+    class DeadProcess:
+        trace_path = trace
+        runtime_id = "runtime-resource-exited"
+        proc = DeadProc()
+
+    with pytest.raises(probe.ProbeFailure, match="runtime exited"):
+        asyncio.run(probe.wait_for_eligible_resource_samples(DeadProcess(), "dual_lane", 1, 30.0))
 
 
 def test_fusion_is_atomic_and_keeps_existing_reference_on_validation_failure(tmp_path):
@@ -237,6 +302,19 @@ def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_pat
             require_rtmp_load=True,
         )
 
+    records = _reference_append_records()
+    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    with pytest.raises(probe.ProbeFailure, match="lacks enough active NVENC samples"):
+        probe.validate_trace_append(
+            path,
+            runtime_id="runtime-fixture-001",
+            build_revision="f" * 40,
+            trace_host="fixture-host",
+            trace_gpu="fixture-gpu",
+            require_rtmp_load=True,
+            minimum_rtmp_samples=3,
+        )
+
 
 def test_resource_only_reference_may_enable_rtmp_receiver():
     args = _resource_only_args()
@@ -257,6 +335,28 @@ def test_resource_only_reference_may_enable_rtmp_receiver():
 def test_resource_only_rtmp_rejects_non_reference_or_append(extra):
     with pytest.raises(SystemExit):
         _resource_only_args(*extra)
+
+
+def test_trace_append_requires_rtmp_receiver_for_ac13():
+    with pytest.raises(SystemExit):
+        probe.parse_args(
+            [
+                "--encoder",
+                "nvenc",
+                "--trace",
+                "trace.jsonl",
+                "--build-revision",
+                "f" * 40,
+                "--runtime-id",
+                "runtime-001",
+                "--capture-window",
+                "window",
+                "--cef-workload",
+                "--trace-append",
+                "--resource-mode",
+                "dual_lane",
+            ]
+        )
 
 
 def test_resource_fusion_requires_observed_active_rtmp_load_without_fabricating(tmp_path):
