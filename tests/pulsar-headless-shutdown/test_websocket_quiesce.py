@@ -276,6 +276,8 @@ def _run_windows_integration(executable: Path) -> None:
     runtime_id = f"websocket-quiesce-{os.getpid()}-{secrets.token_hex(4)}"
     record_dir = Path(tempfile.mkdtemp(prefix="pulsar-websocket-quiesce-"))
     process = probe.PulsarProcess(executable.resolve(), "x264", record_dir, runtime_id=runtime_id)
+    previous_runtime_id = os.environ.get("PULSAR_RUNTIME_INSTANCE_ID")
+    os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = runtime_id
     started = False
     try:
         process.spawn()
@@ -305,6 +307,10 @@ def _run_windows_integration(executable: Path) -> None:
                 process.shutdown()
             except Exception:
                 pass
+        if previous_runtime_id is None:
+            os.environ.pop("PULSAR_RUNTIME_INSTANCE_ID", None)
+        else:
+            os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = previous_runtime_id
         shutil.rmtree(record_dir, ignore_errors=True)
 
 
