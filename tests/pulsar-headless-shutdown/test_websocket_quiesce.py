@@ -172,6 +172,17 @@ def test_gate_timeout_is_not_an_ack_and_later_drain_remains_possible() -> None:
     assert ok and active == 0
 
 
+def test_serial_frame_fixture_keeps_queue_live_after_sleep() -> None:
+    source = Path(__file__).read_text(encoding="utf-8")
+    run_start = source.rindex("async def _run_inflight_batch")
+    frame_start = source.index("async def frame_batch", run_start)
+    frame_block = source[frame_start : source.index("tasks =", frame_start)]
+    # RequestBatchHandler pops Sleep before arming sleepUntilFrame.  A valid
+    # trailing request is therefore required to keep the queue non-empty and
+    # keep the graphics callback in flight until the requested frame.
+    assert frame_block.index('"sleepFrames": 120') < frame_block.index('"requestType": "GetStats"')
+
+
 def _load_probe() -> Any:
     spec = importlib.util.spec_from_file_location("pulsar_websocket_quiesce_probe", PROBE_PATH)
     if spec is None or spec.loader is None:
@@ -185,12 +196,18 @@ def _load_probe() -> Any:
 async def _run_inflight_batch(probe: Any, process: Any, ws_url: str) -> None:
     async with (
         probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as poll_ws,
-        probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as parallel_ws,
+        probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as parallel_ws_a,
+        probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as parallel_ws_b,
+        probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as parallel_ws_c,
+        probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as parallel_ws_d,
         probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as frame_ws,
     ):
         await asyncio.gather(
             probe.identify(poll_ws, process.password),
-            probe.identify(parallel_ws, process.password),
+            probe.identify(parallel_ws_a, process.password),
+            probe.identify(parallel_ws_b, process.password),
+            probe.identify(parallel_ws_c, process.password),
+            probe.identify(parallel_ws_d, process.password),
             probe.identify(frame_ws, process.password),
         )
         started = asyncio.Event()
@@ -209,7 +226,7 @@ async def _run_inflight_batch(probe: Any, process: Any, ws_url: str) -> None:
                 close_observed.append((getattr(error, "code", None), getattr(error, "reason", None)))
                 return
 
-        async def parallel_batch() -> None:
+        async def parallel_batch(ws: Any, suffix: str) -> None:
             inbox = probe.Inbox()
             started.set()
             try:
@@ -217,8 +234,8 @@ async def _run_inflight_batch(probe: Any, process: Any, ws_url: str) -> None:
                 # occupied long enough to race the shutdown boundary.
                 await probe.request_batch(
                     inbox,
-                    parallel_ws,
-                    "quiesce-parallel-batch",
+                    ws,
+                    f"quiesce-parallel-batch-{suffix}",
                     [{"requestType": "GetStats"} for _ in range(2048)],
                     execution_type=2,
                 )
@@ -238,7 +255,11 @@ async def _run_inflight_batch(probe: Any, process: Any, ws_url: str) -> None:
                         {
                             "requestType": "Sleep",
                             "requestData": {"sleepFrames": 120},
-                        }
+                        },
+                        # Sleep is popped before sleepUntilFrame is armed;
+                        # retain a sentinel request so SerialFrame remains
+                        # pending until the 120th graphics frame.
+                        {"requestType": "GetStats"},
                     ],
                     execution_type=1,
                 )
@@ -246,11 +267,18 @@ async def _run_inflight_batch(probe: Any, process: Any, ws_url: str) -> None:
                 close_observed.append((getattr(error, "code", None), getattr(error, "reason", None)))
                 return
 
-        tasks = [asyncio.create_task(worker()) for worker in (poll_get, parallel_batch, frame_batch)]
+        tasks = [
+            asyncio.create_task(poll_get()),
+            asyncio.create_task(parallel_batch(parallel_ws_a, "a")),
+            asyncio.create_task(parallel_batch(parallel_ws_b, "b")),
+            asyncio.create_task(parallel_batch(parallel_ws_c, "c")),
+            asyncio.create_task(parallel_batch(parallel_ws_d, "d")),
+            asyncio.create_task(frame_batch()),
+        ]
         await asyncio.sleep(0.2)
-        if tasks[1].done():
-            raise RuntimeError("parallel batch completed before the shutdown race")
-        if tasks[2].done():
+        if all(tasks[index].done() for index in range(1, 5)):
+            raise RuntimeError("all 2048-request parallel batches completed before the shutdown race")
+        if tasks[5].done():
             raise RuntimeError("frame batch completed before the shutdown race")
         if not started.is_set():
             raise RuntimeError("no authenticated WebSocket handler started")
