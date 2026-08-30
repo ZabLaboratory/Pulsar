@@ -225,6 +225,21 @@ def _stream_id_for_runtime(runtime_id: str, encoder: str) -> str:
     digest = hashlib.sha256(runtime_id.encode("utf-8")).hexdigest()
     return f"stream-{encoder}-{digest}"
 
+
+def _packet_int(value: object, name: str, *, non_negative: bool = True) -> int:
+    """Validate packet metadata before using it in rational correlation."""
+
+    if type(value) is not int or (non_negative and value < 0):
+        qualifier = "non-negative " if non_negative else ""
+        raise ProbeFailure(f"RTMP {name} must be a {qualifier}integer")
+    return value
+
+
+def _packet_str(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ProbeFailure(f"RTMP {name} must be a non-empty string")
+    return value
+
 # The dual-lane campaign must exercise an actual browser_source, but its
 # content must not depend on a public website or network availability.  This
 # page is served by DeterministicCefServer below and has a deliberately
@@ -789,7 +804,10 @@ class RtmpReceiver:
         records, session = self._read_producer_records(producer_path)
         session["rtmp_receiver"] = self.metadata()
         session["rtmp_load_requested"] = True
-        paths = list(session.get("capture_paths") or [])
+        raw_paths = session.get("capture_paths")
+        if not isinstance(raw_paths, list) or any(not isinstance(path, str) for path in raw_paths):
+            raise ProbeFailure("producer trace capture_paths must be a list of strings")
+        paths = list(cast(list[str], raw_paths))
         if "rtmp_first_packet" not in paths:
             paths.append("rtmp_first_packet")
         session["capture_paths"] = paths
@@ -823,21 +841,31 @@ class RtmpReceiver:
                 raise ProbeFailure(
                     f"encoded producer packet lacks complete PTS/timebase metadata for {producer.get('take_command_id')}"
                 )
-            producer_pts = Fraction(
-                int(producer["packet_pts"]) * int(producer["packet_timebase_num"]),
-                int(producer["packet_timebase_den"]),
+            producer_pts_value = _packet_int(producer["packet_pts"], "producer packet_pts")
+            producer_dts_value = _packet_int(producer["packet_dts"], "producer packet_dts", non_negative=False)
+            producer_timebase_num = _packet_int(
+                producer["packet_timebase_num"], "producer packet_timebase_num"
             )
+            producer_timebase_den = _packet_int(
+                producer["packet_timebase_den"], "producer packet_timebase_den"
+            )
+            if producer_timebase_num <= 0 or producer_timebase_den <= 0:
+                raise ProbeFailure("RTMP producer packet timebase must be positive")
+            producer_pts = Fraction(producer_pts_value * producer_timebase_num, producer_timebase_den)
             candidates: list[dict[str, int | str]] = []
             for packet in receiver_packets:
-                index = int(packet["packet_index"])
+                index = _packet_int(packet.get("packet_index"), "receiver packet_index")
                 if index in used:
                     continue
-                receiver_pts = Fraction(int(packet["packet_pts"]), RTMP_PACKET_TIMEBASE_DEN)
-                producer_dts = Fraction(
-                    int(producer["packet_dts"]) * int(producer["packet_timebase_num"]),
-                    int(producer["packet_timebase_den"]),
+                receiver_pts = Fraction(
+                    _packet_int(packet.get("packet_pts"), "receiver packet_pts"),
+                    RTMP_PACKET_TIMEBASE_DEN,
                 )
-                receiver_dts = Fraction(int(packet["packet_dts"]), RTMP_PACKET_TIMEBASE_DEN)
+                producer_dts = Fraction(producer_dts_value * producer_timebase_num, producer_timebase_den)
+                receiver_dts = Fraction(
+                    _packet_int(packet.get("packet_dts"), "receiver packet_dts", non_negative=False),
+                    RTMP_PACKET_TIMEBASE_DEN,
+                )
                 if (
                     abs(receiver_pts - producer_pts) <= receiver_tick / 2
                     and abs(receiver_dts - producer_dts) <= receiver_tick / 2
@@ -849,7 +877,7 @@ class RtmpReceiver:
                     f"{len(candidates)} unique PTS candidates"
                 )
             packet = candidates[0]
-            packet_index = int(packet["packet_index"])
+            packet_index = _packet_int(packet.get("packet_index"), "receiver packet_index")
             used.add(packet_index)
             rtmp_observations.append(
                 {
@@ -863,7 +891,9 @@ class RtmpReceiver:
                     "revisions": producer["revisions"],
                     "frame_id": producer["frame_id"],
                     "pts_ns": producer["pts_ns"],
-                    "observed_at_monotonic_ns": packet["observed_at_monotonic_ns"],
+                    "observed_at_monotonic_ns": _packet_int(
+                        packet.get("observed_at_monotonic_ns"), "receiver observed_at_monotonic_ns"
+                    ),
                     "valid": True,
                     "surface": "RTMP",
                     "consumer": "receiver",
@@ -872,7 +902,7 @@ class RtmpReceiver:
                     "packet_dts": packet["packet_dts"],
                     "packet_timebase_num": RTMP_PACKET_TIMEBASE_NUM,
                     "packet_timebase_den": RTMP_PACKET_TIMEBASE_DEN,
-                    "packet_identity": packet["packet_identity"],
+                    "packet_identity": _packet_str(packet.get("packet_identity"), "receiver packet_identity"),
                     "clock_source": self.metadata()["clock_source"],
                     "clock_offset_ns": self.metadata()["clock_offset_ns"],
                     "clock_bound_ns": self.metadata()["clock_bound_ns"],
