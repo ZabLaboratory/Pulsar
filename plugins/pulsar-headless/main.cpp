@@ -1323,6 +1323,12 @@ int main(int argc, char **argv)
 #endif
     }
 
+    // blog() is intentionally retained for the structured logger, but its
+    // INFO sink is not mirrored to a redirected stdout/stderr pipe on every
+    // Windows configuration. Emit one credential-free, flushed lifecycle
+    // marker on the same graceful path so pipe consumers can prove teardown.
+    std::fprintf(stderr, "[pulsar-headless] shutting down\n");
+    std::fflush(stderr);
     blog(LOG_INFO, "[pulsar-headless] shutting down");
 
     pulsar_frontend_shutdown();

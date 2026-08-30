@@ -88,6 +88,8 @@ def test_windows_shutdown_uses_anonymous_inherited_event_and_requires_ack():
     assert "SetHandleInformation(candidate, HANDLE_FLAG_INHERIT, 0)" in headless
     assert "WaitForSingleObject(g_shutdown_event, 100)" in headless
     assert "reason=closed_handle" in headless
+    assert 'std::fprintf(stderr, "[pulsar-headless] shutting down\\n");' in headless
+    assert 'std::fflush(stderr);' in headless
     assert '"handle_list": [handle]' in driver
     assert "SetHandleInformation" in driver
     assert "_windows_signal_shutdown_event" in driver
@@ -107,6 +109,15 @@ def test_ctest_resolves_python_from_runtime_path():
     assert "Python3_EXECUTABLE" not in registration
     assert "find_package(Python3" not in registration
     assert "hostedtoolcache" not in registration.lower()
+
+
+def test_shutdown_integration_reports_sanitized_failure_tail():
+    integration = (
+        ROOT / "tests" / "pulsar-headless-shutdown" / "test_graceful_shutdown.py"
+    ).read_text(encoding="utf-8")
+
+    assert "probe.failure_tail(process.snapshot(), 40)" in integration
+    assert "Sanitized Pulsar log tail:" in integration
 
 
 def test_windows_shutdown_signal_failure_contains_with_forced_kill(monkeypatch):
