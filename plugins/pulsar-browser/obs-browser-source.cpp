@@ -21,6 +21,7 @@
 #include "browser-scheme.hpp"
 #include "wide-string.hpp"
 #include <nlohmann/json.hpp>
+#include <obs.hpp>
 #include <util/threading.h>
 #ifdef ENABLE_BROWSER_QT_LOOP
 #include <QApplication>
@@ -105,7 +106,8 @@ static void SendBrowserVisibility(CefRefPtr<CefBrowser> browser, bool isVisible)
 
 void DispatchJSEvent(std::string eventName, std::string jsonString, BrowserSource *browser = nullptr);
 
-BrowserSource::BrowserSource(obs_data_t *, obs_source_t *source_) : source(source_)
+BrowserSource::BrowserSource(obs_data_t *, obs_source_t *source_)
+	: source(source_), weak_source(obs_source_get_weak_source(source_))
 {
 
 	/* Register Refresh hotkey */
@@ -467,6 +469,10 @@ BrowserSource::~BrowserSource()
 		ActuallyCloseBrowser(cefBrowser);
 	else if (cefBrowser)
 		BrowserSourceDestroyFatal("destructor_with_live_browser");
+	if (weak_source) {
+		obs_weak_source_release(weak_source);
+		weak_source = nullptr;
+	}
 }
 
 void BrowserSource::RequestBrowserCloseForShutdown()
@@ -642,7 +648,8 @@ bool BrowserSource::CreateBrowser()
 
 		if (reroute_audio)
 			cefBrowser->GetHost()->SetAudioMuted(true);
-		if (obs_source_showing(source))
+		OBSSourceAutoRelease source_ref = GetStrongSource();
+		if (source_ref && obs_source_showing(source_ref))
 			is_showing = true;
 
 		SendBrowserVisibility(cefBrowser, is_showing);
@@ -842,6 +849,11 @@ CefRefPtr<CefBrowser> BrowserSource::GetBrowser()
 {
 	std::lock_guard<std::recursive_mutex> auto_lock(lockBrowser);
 	return cefBrowser;
+}
+
+obs_source_t *BrowserSource::GetStrongSource()
+{
+	return weak_source ? obs_weak_source_get_source(weak_source) : nullptr;
 }
 
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE

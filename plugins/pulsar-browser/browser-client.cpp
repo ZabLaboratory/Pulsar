@@ -159,8 +159,9 @@ void BrowserClient::OnRenderProcessTerminated(CefRefPtr<CefBrowser>, Termination
 
 	const char *sourceName = "<unknown>";
 
-	if (bs && bs->source)
-		sourceName = obs_source_get_name(bs->source);
+	OBSSourceAutoRelease source_ref = bs->GetStrongSource();
+	if (source_ref)
+		sourceName = obs_source_get_name(source_ref);
 
 	blog(LOG_ERROR, "[obs-browser: '%s'] Webpage has crashed unexpectedly! Reason: '%s'", sourceName,
 	     str_text.c_str());
@@ -202,6 +203,10 @@ bool BrowserClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
 	if (!valid()) {
 		return false;
 	}
+	OBSSourceAutoRelease source_ref = bs->GetStrongSource();
+	if (!source_ref)
+		return false;
+	const char *sourceName = obs_source_get_name(source_ref);
 
 	// Fall-through switch, so that higher levels also have lower-level rights
 	switch (webpage_control_level) {
@@ -235,10 +240,10 @@ bool BrowserClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
 			if (!source) {
 				blog(LOG_WARNING,
 				     "Browser source '%s' tried to switch to scene '%s' which doesn't exist",
-				     obs_source_get_name(bs->source), scene_name.c_str());
+				     sourceName, scene_name.c_str());
 			} else if (!obs_source_is_scene(source)) {
 				blog(LOG_WARNING, "Browser source '%s' tried to switch to '%s' which isn't a scene",
-				     obs_source_get_name(bs->source), scene_name.c_str());
+				     sourceName, scene_name.c_str());
 			} else {
 				obs_frontend_set_current_scene(source);
 			}
@@ -263,7 +268,7 @@ bool BrowserClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
 			else
 				blog(LOG_WARNING,
 				     "Browser source '%s' tried to change the current transition to '%s' which doesn't exist",
-				     obs_source_get_name(bs->source), transition_name.c_str());
+				     sourceName, transition_name.c_str());
 		}
 		[[fallthrough]];
 	case ControlLevel::Basic:
@@ -618,18 +623,26 @@ void BrowserClient::OnAudioStreamPacket(CefRefPtr<CefBrowser> browser, const flo
 		end_audio_callback(browser);
 		return;
 	}
-	struct obs_source_audio audio = {};
-	const uint8_t **pcm = (const uint8_t **)data;
-	speaker_layout speakers = GetSpeakerLayout(channel_layout);
-	int speaker_count = get_audio_channels(speakers);
-	for (int i = 0; i < speaker_count; i++)
-		audio.data[i] = pcm[i];
-	audio.samples_per_sec = sample_rate;
-	audio.frames = frames;
-	audio.format = AUDIO_FORMAT_FLOAT_PLANAR;
-	audio.speakers = speakers;
-	audio.timestamp = (uint64_t)pts * 1000000LLU;
-	obs_source_output_audio(bs->source, &audio);
+	{
+		/* Hold a strong libobs reference across the host callback. */
+		OBSSourceAutoRelease source_ref = bs->GetStrongSource();
+		if (!source_ref) {
+			end_audio_callback(browser);
+			return;
+		}
+		struct obs_source_audio audio = {};
+		const uint8_t **pcm = (const uint8_t **)data;
+		speaker_layout speakers = GetSpeakerLayout(channel_layout);
+		int speaker_count = get_audio_channels(speakers);
+		for (int i = 0; i < speaker_count; i++)
+			audio.data[i] = pcm[i];
+		audio.samples_per_sec = sample_rate;
+		audio.frames = frames;
+		audio.format = AUDIO_FORMAT_FLOAT_PLANAR;
+		audio.speakers = speakers;
+		audio.timestamp = (uint64_t)pts * 1000000LLU;
+		obs_source_output_audio(source_ref, &audio);
+	}
 	end_audio_callback(browser);
 }
 
@@ -719,8 +732,11 @@ bool BrowserClient::OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t l
 
 	const char *sourceName = "<unknown>";
 
-	if (bs && bs->source)
-		sourceName = obs_source_get_name(bs->source);
+	if (!valid())
+		return false;
+	OBSSourceAutoRelease source_ref = bs->GetStrongSource();
+	if (source_ref)
+		sourceName = obs_source_get_name(source_ref);
 
 	blog(errorLevel, "[obs-browser: '%s'] %s: %s (%s:%d)", sourceName, code, message.ToString().c_str(),
 	     source.ToString().c_str(), line);
