@@ -70,11 +70,18 @@ void BrowserClient::maybe_finalize_browser_close(CefRefPtr<CefBrowser> browser)
 
 void BrowserClient::finalize_browser_close(CefRefPtr<CefBrowser> browser)
 {
+	/* Keep this object alive while BrowserSource detaches and destroys state. */
+	CefRefPtr<BrowserClient> self(this);
+	const int browser_id = browser ? browser->GetIdentifier() : -1;
 	/* This is the sole BrowserClient::bs write.  It follows audio quiescence. */
 	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=audio_quiescent browser_id=%d",
-	     browser ? browser->GetIdentifier() : -1);
+	     browser_id);
 	bs = nullptr;
 	BrowserSourceFinalizeBrowserClose(browser);
+	/* Release the self-cycle only after all source/browser teardown is done. */
+	close_keepalive = nullptr;
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=client_keepalive_released browser_id=%d",
+	     browser_id);
 }
 
 CefRefPtr<CefLoadHandler> BrowserClient::GetLoadHandler()
@@ -124,6 +131,12 @@ void BrowserClient::OnBeforeClose(CefRefPtr<CefBrowser> browser)
 	 * in-flight on the audio thread.  Keep the client/source association until
 	 * the stopped callback and the in-flight counter prove quiescence.
 	 */
+	CefRefPtr<BrowserClient> self(this);
+	if (!close_keepalive) {
+		close_keepalive = self;
+		blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=client_keepalive_acquired browser_id=%d",
+		     browser ? browser->GetIdentifier() : -1);
+	}
 	audio_callbacks.mark_close_callback_seen();
 	BrowserSourceBrowserClosed(browser);
 	maybe_finalize_browser_close(browser);

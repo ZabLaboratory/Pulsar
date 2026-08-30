@@ -19,6 +19,13 @@ if(NOT PULSAR_BROWSER_CLIENT_HPP MATCHES "BrowserAudioCallbackGate" OR
    NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "audio_callbacks[.]try_acquire")
     message(FATAL_ERROR "browser client is missing the linearized audio callback gate")
 endif()
+if(NOT PULSAR_BROWSER_CLIENT_HPP MATCHES "close_keepalive" OR
+   NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "close_keepalive[ ]*=[ ]*self" OR
+   NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "close_keepalive[ ]*=[ ]*nullptr" OR
+   NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "client_keepalive_acquired" OR
+   NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "client_keepalive_released")
+    message(FATAL_ERROR "browser client must retain itself through CEF close finalization")
+endif()
 if(PULSAR_BROWSER_CLIENT_CPP MATCHES "bs->source" OR
    PULSAR_BROWSER_CLIENT_CPP MATCHES "obs_source_output_audio[(]bs[->]source")
     message(FATAL_ERROR "browser client must use a strong source reference for host callbacks")

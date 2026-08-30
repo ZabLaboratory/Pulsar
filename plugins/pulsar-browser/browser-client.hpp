@@ -39,6 +39,12 @@ class BrowserClient : public CefClient,
 	bool sharing_available = false;
 	bool reroute_audio = true;
 	BrowserAudioCallbackGate audio_callbacks;
+	/*
+	 * CEF may release its last client reference from OnBeforeClose while
+	 * audio callbacks are still draining.  Hold the client until the gate has
+	 * proved quiescence and BrowserSource finalization has completed.
+	 */
+	CefRefPtr<BrowserClient> close_keepalive;
 	ControlLevel webpage_control_level = DEFAULT_CONTROL_LEVEL;
 
 	inline bool valid() const;
