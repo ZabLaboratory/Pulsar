@@ -53,6 +53,8 @@ PRE_SPLIT_SEC = 3.0
 POST_SPLIT_SEC = 4.0
 FIRST_BYTE_TIMEOUT_SEC = 15.0
 MIN_PART_BYTES = 4 * 1024
+STOP_PENDING_CODE = 702
+STOP_EVENT_TIMEOUT_SEC = 15.0
 
 # The generic upstream comments this probe must NOT see any more.
 UPSTREAM_GENERIC = (
@@ -107,6 +109,41 @@ async def expect_event(inbox: Inbox, ws, event_type: str, timeout: float = 10.0,
         if predicate is None or predicate(e.get("eventData") or {}):
             return inbox.events.pop(i)
     raise RuntimeError("unreachable")
+
+
+async def wait_record_stop(inbox: Inbox, ws, response: dict) -> bool:
+    """Drain a bounded StopRecord Pending result before this probe continues."""
+    status = response.get("requestStatus") or {}
+    if not status.get("result") and int(status.get("code") or 0) != STOP_PENDING_CODE:
+        print(f"error: StopRecord declined before acceptance: {status}")
+        return False
+    if not status.get("result"):
+        print("   StopRecord pending (702); waiting for RecordStateChanged STOPPED")
+
+    try:
+        await expect_event(
+            inbox,
+            ws,
+            "RecordStateChanged",
+            timeout=STOP_EVENT_TIMEOUT_SEC,
+            predicate=lambda d: d.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STOPPED",
+        )
+    except asyncio.TimeoutError:
+        print(f"error: StopRecord did not emit STOPPED within {STOP_EVENT_TIMEOUT_SEC:.0f}s")
+        return False
+
+    deadline = asyncio.get_event_loop().time() + STOP_EVENT_TIMEOUT_SEC
+    n = 0
+    while True:
+        n += 1
+        status_response = await request(inbox, ws, "GetRecordStatus", f"stop-status-{n}")
+        if not (status_response.get("responseData") or {}).get("outputActive"):
+            return True
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            print("error: STOPPED event arrived but GetRecordStatus.outputActive stayed true")
+            return False
+        await asyncio.sleep(min(0.25, remaining))
 
 
 async def request(inbox: Inbox, ws, request_type: str, request_id: str,
@@ -181,8 +218,10 @@ async def probe(url: str, password: str) -> int:
 
         resp = await request(inbox, ws, "GetRecordStatus", "rec-status-0")
         if resp["responseData"]["outputActive"]:
-            print("error: recording already active before probe; stop it first")
-            return 1
+            print("   recording was still active before probe; draining the previous StopRecord")
+            recovery = await request(inbox, ws, "StopRecord", "stop-recovery")
+            if not await wait_record_stop(inbox, ws, recovery):
+                return 1
 
         # -- Criterion 2, off-air half: no recording => refusal, not success.
         for req in ("SplitRecordFile", "CreateRecordChapter"):
@@ -222,7 +261,7 @@ async def probe(url: str, password: str) -> int:
         ok, code, comment = status_of(resp)
         if not ok:
             print(f"error: SplitRecordFile refused on a live recording: code={code} comment={comment!r}")
-            await request(inbox, ws, "StopRecord", "stop-abort")
+            await wait_record_stop(inbox, ws, await request(inbox, ws, "StopRecord", "stop-abort"))
             return 1
 
         try:
@@ -230,7 +269,7 @@ async def probe(url: str, password: str) -> int:
         except asyncio.TimeoutError:
             print("error: SplitRecordFile answered success but no RecordFileChanged "
                   "event followed -- the muxer never switched file")
-            await request(inbox, ws, "StopRecord", "stop-abort")
+            await wait_record_stop(inbox, ws, await request(inbox, ws, "StopRecord", "stop-abort"))
             return 1
         new_path = pathlib.Path(evt["eventData"]["newOutputPath"])
         print(f"   <- RecordFileChanged newOutputPath={new_path}")
@@ -247,24 +286,18 @@ async def probe(url: str, password: str) -> int:
             # then be revisited deliberately, so make it loud.
             print("error: CreateRecordChapter succeeded; this build records through an "
                   "output without chapter support. Re-read the probe against #169.")
-            await request(inbox, ws, "StopRecord", "stop-abort")
+            await wait_record_stop(inbox, ws, await request(inbox, ws, "StopRecord", "stop-abort"))
             return 1
         if not named_refusal(comment, "add_chapter"):
-            await request(inbox, ws, "StopRecord", "stop-abort")
+            await wait_record_stop(inbox, ws, await request(inbox, ws, "StopRecord", "stop-abort"))
             return 1
 
         await asyncio.sleep(POST_SPLIT_SEC)
 
         print("-> StopRecord")
         resp = await request(inbox, ws, "StopRecord", "stop-1")
-        if not resp["requestStatus"]["result"]:
-            print(f"error: StopRecord declined: {resp['requestStatus']}")
+        if not await wait_record_stop(inbox, ws, resp):
             return 1
-        await expect_event(
-            inbox, ws, "RecordStateChanged",
-            predicate=lambda d: d.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STOPPED",
-            timeout=15.0,
-        )
 
     # -- The proof is on disk, not in the return codes.
     produced = sorted({p.resolve() for p in record_dir.glob("*.mp4")} - before)

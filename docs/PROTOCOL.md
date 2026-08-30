@@ -114,7 +114,10 @@ Three things to keep in mind when driving the baseline against Pulsar:
      accepted `StopRecord` that remains active after its bounded 2.5 s flush
      window. `StopRecord` includes `outputPath`, so it returns success only
      after the output is inactive and never returns a stale path on the
-     pending branch. The `comment` carries the observed cause or state.
+     pending branch. On a 702 response, the client must consume the later
+     `RecordStateChanged=STOPPED` event and re-read `GetRecordStatus` before
+     reusing the process; that event carries the final output path. The
+     `comment` carries the observed cause or state.
 
    These requests stay bounded: generic actions use the short verification
    window, while `StopRecord` uses the dedicated 2.5 s muxer-flush bound. The
