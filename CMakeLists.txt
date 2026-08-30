@@ -157,6 +157,11 @@ if(WIN32)
     # GPU, or running Pulsar process.
     add_subdirectory(tests/dual-lane-config)
 
+    # #249 -- admission, in-flight callback accounting, and CEF close
+    # finalization share one linearization point. This native test forces the
+    # close/admission interleaving without requiring OBS or a running CEF.
+    add_subdirectory(tests/pulsar-headless-shutdown)
+
     # #249 -- /SUBSYSTEM:WINDOWS Pulsar is spawned with stdout redirected to
     # a pipe by the real probe. Prove its anonymous inherited event control
     # path releases both runtime leases without falling back to kill().

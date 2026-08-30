@@ -20,8 +20,8 @@
 
 #include <graphics/graphics.h>
 #include <util/threading.h>
-#include <atomic>
 #include "cef-headers.hpp"
+#include "browser-audio-callback-gate.hpp"
 #include "obs-browser-source.hpp"
 
 struct BrowserSource;
@@ -38,18 +38,14 @@ class BrowserClient : public CefClient,
 
 	bool sharing_available = false;
 	bool reroute_audio = true;
-	std::atomic<bool> close_callback_seen{false};
-	std::atomic<bool> audio_stream_started{false};
-	std::atomic<bool> audio_stream_stopped{true};
-	std::atomic<bool> audio_callbacks_closed{false};
-	std::atomic<unsigned int> audio_callbacks_in_flight{0};
-	std::atomic<bool> close_finalization_started{false};
+	BrowserAudioCallbackGate audio_callbacks;
 	ControlLevel webpage_control_level = DEFAULT_CONTROL_LEVEL;
 
 	inline bool valid() const;
 	bool begin_audio_callback();
 	void end_audio_callback(CefRefPtr<CefBrowser> browser);
 	void maybe_finalize_browser_close(CefRefPtr<CefBrowser> browser);
+	void finalize_browser_close(CefRefPtr<CefBrowser> browser);
 
 	void UpdateExtraTexture();
 

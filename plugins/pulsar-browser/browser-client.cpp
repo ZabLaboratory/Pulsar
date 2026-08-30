@@ -48,49 +48,28 @@ inline bool BrowserClient::valid() const
 
 bool BrowserClient::begin_audio_callback()
 {
-	/*
-	 * OnAudioStreamPacket is allowed to run on CEF's audio thread.  Close the
-	 * admission gate before detaching bs, then account for callbacks which were
-	 * already entering the handler.  OnBeforeClose waits for this count before
-	 * the source can be released.
-	 */
-	if (audio_callbacks_closed.load(std::memory_order_acquire))
-		return false;
-	audio_callbacks_in_flight.fetch_add(1, std::memory_order_acq_rel);
-	/*
-	 * Keep the lease even if OnBeforeClose won the race after the first
-	 * admission check.  The caller will release it through end_audio_callback,
-	 * which preserves the last-callback wake-up for the UI finalizer.
-	 */
-	return true;
+	return audio_callbacks.try_acquire();
 }
 
 void BrowserClient::end_audio_callback(CefRefPtr<CefBrowser> browser)
 {
-	if (audio_callbacks_in_flight.fetch_sub(1, std::memory_order_acq_rel) != 1)
-		return;
-	if (!close_callback_seen.load(std::memory_order_acquire) ||
-	    !audio_stream_stopped.load(std::memory_order_acquire))
+	if (!audio_callbacks.release_and_try_claim())
 		return;
 
 	CefRefPtr<BrowserClient> self(this);
-	if (!QueueCEFTask([self, browser]() { self->maybe_finalize_browser_close(browser); }))
+	if (!QueueCEFTask([self, browser]() { self->finalize_browser_close(browser); }))
 		blog(LOG_ERROR, "PULSAR_CEF_SHUTDOWN event=audio_quiescence_task_failed action=watchdog");
 }
 
 void BrowserClient::maybe_finalize_browser_close(CefRefPtr<CefBrowser> browser)
 {
-	if (!close_callback_seen.load(std::memory_order_acquire) ||
-	    !audio_callbacks_closed.load(std::memory_order_acquire) ||
-	    (audio_stream_started.load(std::memory_order_acquire) &&
-	     !audio_stream_stopped.load(std::memory_order_acquire)) ||
-	    audio_callbacks_in_flight.load(std::memory_order_acquire) != 0)
+	if (!audio_callbacks.try_claim_finalization())
 		return;
-	bool expected = false;
-	if (!close_finalization_started.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
-									std::memory_order_acquire))
-		return;
+	finalize_browser_close(browser);
+}
 
+void BrowserClient::finalize_browser_close(CefRefPtr<CefBrowser> browser)
+{
 	/* This is the sole BrowserClient::bs write.  It follows audio quiescence. */
 	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=audio_quiescent browser_id=%d",
 	     browser ? browser->GetIdentifier() : -1);
@@ -145,8 +124,7 @@ void BrowserClient::OnBeforeClose(CefRefPtr<CefBrowser> browser)
 	 * in-flight on the audio thread.  Keep the client/source association until
 	 * the stopped callback and the in-flight counter prove quiescence.
 	 */
-	audio_callbacks_closed.store(true, std::memory_order_release);
-	close_callback_seen.store(true, std::memory_order_release);
+	audio_callbacks.mark_close_callback_seen();
 	BrowserSourceBrowserClosed(browser);
 	maybe_finalize_browser_close(browser);
 }
@@ -623,8 +601,7 @@ static speaker_layout GetSpeakerLayout(CefAudioHandler::ChannelLayout cefLayout)
 void BrowserClient::OnAudioStreamStarted(CefRefPtr<CefBrowser> browser, const CefAudioParameters &params_,
 					 int channels_)
 {
-	audio_stream_started.store(true, std::memory_order_release);
-	audio_stream_stopped.store(false, std::memory_order_release);
+	audio_callbacks.mark_stream_started();
 	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=audio_stream_started browser_id=%d",
 	     browser ? browser->GetIdentifier() : -1);
 	channels = channels_;
@@ -637,7 +614,7 @@ void BrowserClient::OnAudioStreamPacket(CefRefPtr<CefBrowser> browser, const flo
 {
 	if (!begin_audio_callback())
 		return;
-	if (close_callback_seen.load(std::memory_order_acquire) || !valid()) {
+	if (!audio_callbacks.should_deliver() || !valid()) {
 		end_audio_callback(browser);
 		return;
 	}
@@ -658,7 +635,7 @@ void BrowserClient::OnAudioStreamPacket(CefRefPtr<CefBrowser> browser, const flo
 
 void BrowserClient::OnAudioStreamStopped(CefRefPtr<CefBrowser> browser)
 {
-	audio_stream_stopped.store(true, std::memory_order_release);
+	audio_callbacks.mark_stream_stopped();
 	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=audio_stream_stopped browser_id=%d",
 	     browser ? browser->GetIdentifier() : -1);
 	maybe_finalize_browser_close(browser);
