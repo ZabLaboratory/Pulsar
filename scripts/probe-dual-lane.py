@@ -43,6 +43,12 @@ the requested minimum of observed active NVENC plus RTMP resource samples is
 present. This sampler wait is bounded and does not add resource records to
 Take latency percentiles or scene events.
 
+For every traced Take, dispatch is serialized behind a completeness barrier:
+the same runtime/command/intent/take/frame/PTS identity must produce exactly
+one valid encoder-input, DirectShow-return and encoded-packet record plus one
+unique RTMP receiver packet before the next Take is sent. The barrier only
+waits; it never changes observation timestamps or percentile selection.
+
 Exit codes are 0 (pass), 1 (assertion/runtime failure), 2 (usage or missing
 WebSocket dependency), and 3 (typed environment skip, for example no binary
 or no NVENC device).  This probe validates the routing and identity contract;
@@ -107,7 +113,7 @@ import threading
 import time
 import zlib
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Mapping, cast
 
 try:
     import websockets
@@ -206,6 +212,11 @@ SOURCE_SCREENSHOT_INTERVAL_S = 0.5
 # percentiles, and the following --takes commits are the measured sample.
 # Non-traced smoke runs keep their historical --takes total.
 TRACE_WARMUP_TAKES = 100
+PRODUCER_BOUNDARIES = (
+    "encoder_input_raw",
+    "directshow_return",
+    "encoded_first_packet",
+)
 
 # AC-12 is measured at the first video packet observed by a dedicated local
 # RTMP receiver.  FFmpeg's ``-debug_ts`` reports the demuxer PTS in FLV
@@ -250,6 +261,59 @@ def _packet_str(value: object, name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ProbeFailure(f"RTMP {name} must be a non-empty string")
     return value
+
+
+def _rtmp_packet_candidates(
+    producer: Mapping[str, object],
+    receiver_packets: list[dict[str, int | str]],
+    used_packet_indices: set[int],
+) -> list[dict[str, int | str]]:
+    """Return receiver packets uniquely matching one encoded producer packet."""
+
+    fields = ("packet_pts", "packet_dts", "packet_timebase_num", "packet_timebase_den")
+    if any(field not in producer for field in fields):
+        raise ProbeFailure(
+            "encoded producer packet lacks complete PTS/timebase metadata for "
+            f"{producer.get('take_command_id')}"
+        )
+    producer_pts_value = _packet_int(producer["packet_pts"], "producer packet_pts")
+    producer_dts_value = _packet_int(
+        producer["packet_dts"], "producer packet_dts", non_negative=False
+    )
+    producer_timebase_num = _packet_int(
+        producer["packet_timebase_num"], "producer packet_timebase_num"
+    )
+    producer_timebase_den = _packet_int(
+        producer["packet_timebase_den"], "producer packet_timebase_den"
+    )
+    if producer_timebase_num <= 0 or producer_timebase_den <= 0:
+        raise ProbeFailure("RTMP producer packet timebase must be positive")
+    producer_pts = Fraction(
+        producer_pts_value * producer_timebase_num, producer_timebase_den
+    )
+    producer_dts = Fraction(
+        producer_dts_value * producer_timebase_num, producer_timebase_den
+    )
+    receiver_tick = Fraction(RTMP_PACKET_TIMEBASE_NUM, RTMP_PACKET_TIMEBASE_DEN)
+    candidates: list[dict[str, int | str]] = []
+    for packet in receiver_packets:
+        index = _packet_int(packet.get("packet_index"), "receiver packet_index")
+        if index in used_packet_indices:
+            continue
+        receiver_pts = Fraction(
+            _packet_int(packet.get("packet_pts"), "receiver packet_pts"),
+            RTMP_PACKET_TIMEBASE_DEN,
+        )
+        receiver_dts = Fraction(
+            _packet_int(packet.get("packet_dts"), "receiver packet_dts", non_negative=False),
+            RTMP_PACKET_TIMEBASE_DEN,
+        )
+        if (
+            abs(receiver_pts - producer_pts) <= receiver_tick / 2
+            and abs(receiver_dts - producer_dts) <= receiver_tick / 2
+        ):
+            candidates.append(packet)
+    return candidates
 
 # The dual-lane campaign must exercise an actual browser_source, but its
 # content must not depend on a public website or network availability.  This
@@ -683,6 +747,18 @@ class RtmpReceiver:
                     }
                 )
 
+    def snapshot_packets(self) -> list[dict[str, int | str]]:
+        """Return an atomic copy of receiver packet observations."""
+
+        with self._lock:
+            return list(self.packets)
+
+    def snapshot(self) -> tuple[list[dict[str, int | str]], str | None]:
+        """Return packets and receiver failure state from one locked view."""
+
+        with self._lock:
+            return list(self.packets), self.failure
+
     def stop(self) -> None:
         process = self.proc
         if process is None:
@@ -837,51 +913,16 @@ class RtmpReceiver:
             raise ProbeFailure("producer trace already contains RTMP observations; fusion would double-count receiver data")
         if not encoded:
             raise ProbeFailure("producer trace contains no encoded packet observations for RTMP correlation")
-        receiver_packets = list(self.packets)
+        receiver_packets, receiver_failure = self.snapshot()
         if not receiver_packets:
             raise ProbeFailure("RTMP receiver emitted no demuxed video packet observations")
-        if self.failure:
-            raise ProbeFailure(self.failure)
+        if receiver_failure:
+            raise ProbeFailure(receiver_failure)
 
         used: set[int] = set()
         rtmp_observations: list[dict[str, object]] = []
-        receiver_tick = Fraction(RTMP_PACKET_TIMEBASE_NUM, RTMP_PACKET_TIMEBASE_DEN)
         for producer in encoded:
-            fields = ("packet_pts", "packet_dts", "packet_timebase_num", "packet_timebase_den")
-            if not all(field in producer for field in fields):
-                raise ProbeFailure(
-                    f"encoded producer packet lacks complete PTS/timebase metadata for {producer.get('take_command_id')}"
-                )
-            producer_pts_value = _packet_int(producer["packet_pts"], "producer packet_pts")
-            producer_dts_value = _packet_int(producer["packet_dts"], "producer packet_dts", non_negative=False)
-            producer_timebase_num = _packet_int(
-                producer["packet_timebase_num"], "producer packet_timebase_num"
-            )
-            producer_timebase_den = _packet_int(
-                producer["packet_timebase_den"], "producer packet_timebase_den"
-            )
-            if producer_timebase_num <= 0 or producer_timebase_den <= 0:
-                raise ProbeFailure("RTMP producer packet timebase must be positive")
-            producer_pts = Fraction(producer_pts_value * producer_timebase_num, producer_timebase_den)
-            candidates: list[dict[str, int | str]] = []
-            for packet in receiver_packets:
-                index = _packet_int(packet.get("packet_index"), "receiver packet_index")
-                if index in used:
-                    continue
-                receiver_pts = Fraction(
-                    _packet_int(packet.get("packet_pts"), "receiver packet_pts"),
-                    RTMP_PACKET_TIMEBASE_DEN,
-                )
-                producer_dts = Fraction(producer_dts_value * producer_timebase_num, producer_timebase_den)
-                receiver_dts = Fraction(
-                    _packet_int(packet.get("packet_dts"), "receiver packet_dts", non_negative=False),
-                    RTMP_PACKET_TIMEBASE_DEN,
-                )
-                if (
-                    abs(receiver_pts - producer_pts) <= receiver_tick / 2
-                    and abs(receiver_dts - producer_dts) <= receiver_tick / 2
-                ):
-                    candidates.append(packet)
+            candidates = _rtmp_packet_candidates(producer, receiver_packets, used)
             if len(candidates) != 1:
                 raise ProbeFailure(
                     f"RTMP receiver packet correlation for {producer.get('take_command_id')} is ambiguous: "
@@ -2522,6 +2563,172 @@ def wait_for_trace_record(
     )
 
 
+async def wait_for_take_boundaries(
+    process: PulsarProcess,
+    receiver: RtmpReceiver,
+    commit: Commit,
+    used_packet_indices: set[int],
+    *,
+    timeout: float = 20.0,
+) -> dict[str, dict[str, Any]]:
+    """Gate the next Take on one exact producer record at every boundary.
+
+    A current runtime keeps one correlation context for the most recent Take.
+    Dispatching again before the context has emitted all consumers can replace
+    that context and leave a trace that looks valid but is incomplete.  This
+    barrier is deliberately outside the latency calculation: it only waits for
+    the four already timestamped records and never rewrites their timestamps.
+    """
+
+    if process.trace_path is None:
+        raise ProbeFailure("Take boundary waiting requires --trace")
+    if receiver is None:
+        raise ProbeFailure("traced Take boundary waiting requires an RTMP receiver")
+    if timeout <= 0:
+        raise ProbeFailure("Take boundary wait timeout must be positive")
+    take_id = f"take-{commit.count:03d}"
+    intent_id = f"intent-{commit.count:03d}"
+    deadline = time.monotonic() + timeout
+
+    while True:
+        if process.proc is not None and process.proc.poll() is not None:
+            raise ProbeFailure(
+                f"runtime exited before complete boundary correlation for {take_id}"
+            )
+        try:
+            lines = process.trace_path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            lines = []
+        records: list[dict[str, Any]] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                # The producer may be between write and newline.  The parser
+                # will reject a durable malformed line after the campaign;
+                # this poll simply waits for the complete record.
+                continue
+            if isinstance(value, dict):
+                records.append(value)
+
+        accepted_events: list[dict[str, Any]] = []
+        committed_events: list[dict[str, Any]] = []
+        observations: dict[str, list[dict[str, Any]]] = {
+            boundary: [] for boundary in PRODUCER_BOUNDARIES
+        }
+        commit_time: int | None = None
+        commit_revisions: object | None = None
+        for record in records:
+            if record.get("record_type") == "event":
+                event = record.get("event")
+                if not isinstance(event, dict) or event.get("take_command_id") != take_id:
+                    continue
+                if event.get("runtime_instance_id") != process.runtime_id:
+                    raise ProbeFailure(f"{take_id} event has a stale runtime_instance_id")
+                if event.get("command_id") != take_id or event.get("intent_id") != intent_id:
+                    raise ProbeFailure(f"{take_id} event has mismatched command/intent identity")
+                if event.get("event_type") == "TakeAccepted":
+                    accepted_events.append(event)
+                elif event.get("event_type") == "TakeCommitted":
+                    committed_events.append(event)
+                continue
+            if record.get("record_type") != "observation":
+                continue
+            if record.get("take_command_id") != take_id:
+                continue
+            if record.get("runtime_instance_id") != process.runtime_id:
+                raise ProbeFailure(f"{take_id} observation has a stale runtime_instance_id")
+            if record.get("command_id") != take_id or record.get("intent_id") != intent_id:
+                raise ProbeFailure(f"{take_id} observation has mismatched command/intent identity")
+            boundary = record.get("boundary")
+            if boundary not in PRODUCER_BOUNDARIES or record.get("valid") is not True:
+                continue
+            observations[boundary].append(record)
+
+        if len(accepted_events) > 1:
+            raise ProbeFailure(f"{take_id} has duplicate TakeAccepted records")
+        if len(committed_events) > 1:
+            raise ProbeFailure(f"{take_id} has duplicate TakeCommitted records")
+        if committed_events:
+            event = committed_events[0]
+            if event.get("frame_id") != commit.frame_id or event.get("pts_ns") != commit.pts_ns:
+                raise ProbeFailure(f"{take_id} commit log differs from TakeCommitted evidence")
+            commit_time = event.get("observed_at_monotonic_ns")
+            commit_revisions = event.get("revisions")
+            if type(commit_time) is not int or not isinstance(commit_revisions, dict):
+                raise ProbeFailure(f"{take_id} TakeCommitted metadata is incomplete")
+            # Re-evaluate observations now that the commit timestamp is known.
+            for boundary in PRODUCER_BOUNDARIES:
+                observations[boundary].clear()
+            for record in records:
+                if (
+                    record.get("record_type") != "observation"
+                    or record.get("take_command_id") != take_id
+                    or record.get("runtime_instance_id") != process.runtime_id
+                    or record.get("boundary") not in PRODUCER_BOUNDARIES
+                    or record.get("valid") is not True
+                ):
+                    continue
+                observed_at = record.get("observed_at_monotonic_ns")
+                if type(observed_at) is not int or observed_at < commit_time:
+                    continue
+                if record.get("command_id") != take_id or record.get("intent_id") != intent_id:
+                    raise ProbeFailure(f"{take_id} observation has mismatched command/intent identity")
+                if record.get("frame_id") != commit.frame_id or record.get("pts_ns") != commit.pts_ns:
+                    raise ProbeFailure(
+                        f"{take_id} {record.get('boundary')} frame/PTS does not match committed identity"
+                    )
+                if record.get("revisions") != commit_revisions:
+                    raise ProbeFailure(
+                        f"{take_id} {record.get('boundary')} revisions do not match commit"
+                    )
+                observations[record["boundary"]].append(record)
+
+        receiver_packets, receiver_failure = receiver.snapshot()
+        if receiver_failure:
+            raise ProbeFailure(f"RTMP receiver failed during {take_id}: {receiver_failure}")
+        for boundary in PRODUCER_BOUNDARIES:
+            if len(observations[boundary]) > 1:
+                raise ProbeFailure(
+                    f"{take_id} has duplicate valid {boundary} records: "
+                    f"{len(observations[boundary])}"
+                )
+        encoded_records = observations["encoded_first_packet"]
+        packet_candidates: list[dict[str, int | str]] = []
+        if len(encoded_records) == 1:
+            packet_candidates = _rtmp_packet_candidates(
+                encoded_records[0], receiver_packets, used_packet_indices
+            )
+            if len(packet_candidates) > 1:
+                raise ProbeFailure(
+                    f"{take_id} has ambiguous RTMP packet correlation: "
+                    f"{len(packet_candidates)} candidates"
+                )
+
+        complete = all(len(observations[boundary]) == 1 for boundary in PRODUCER_BOUNDARIES)
+        if complete and len(packet_candidates) == 1 and accepted_events and committed_events:
+            packet = packet_candidates[0]
+            packet_index = _packet_int(packet.get("packet_index"), "receiver packet_index")
+            used_packet_indices.add(packet_index)
+            return {
+                **{boundary: observations[boundary][0] for boundary in PRODUCER_BOUNDARIES},
+                "rtmp_first_packet": packet,
+            }
+
+        if time.monotonic() >= deadline:
+            counts = ", ".join(
+                f"{boundary}={len(observations[boundary])}" for boundary in PRODUCER_BOUNDARIES
+            )
+            counts += f", rtmp_candidates={len(packet_candidates)}, rtmp_packets={len(receiver_packets)}"
+            tail = failure_tail(process.snapshot(), 8)
+            raise ProbeFailure(
+                f"{take_id} boundary correlation incomplete before {timeout:.1f}s: {counts}\n{tail}"
+            )
+        await asyncio.sleep(0.05)
+
+
 def take_telemetry_data(process: PulsarProcess, number: int, target_scene: str) -> dict[str, Any]:
     """Build the opt-in #246 envelope carried through the legacy Take route."""
 
@@ -2939,6 +3146,11 @@ async def drive(
     if not ffprobe:
         raise ProbeSkip("ffprobe is required for the active-recording acceptance proof")
     if process.trace_path is not None:
+        trace_receiver = process.rtmp_receiver
+        if trace_receiver is None:
+            raise ProbeFailure(
+                "traced Take campaigns require --rtmp-receiver for complete boundary correlation"
+            )
         process.start_directshow_consumer()
 
     async with websockets.connect(
@@ -3006,6 +3218,8 @@ async def drive(
             await process.start_rtmp_stream(inbox, ws)
 
         commits: list[Commit] = []
+        complete_boundary_count = 0
+        used_rtmp_packet_indices: set[int] = set()
         for number in range(1, total_takes + 1):
             process.assert_directshow_consumer_alive()
             target = SCENE_B if number % 2 else SCENE_A
@@ -3076,38 +3290,19 @@ async def drive(
                     take_telemetry_data(process, number, target),
                 )
                 assert_success(response, f"TriggerStudioModeTransition({number})")
-            if number == 1 and process.trace_path is not None:
-                wait_for_trace_record(
-                    process,
-                    "event",
-                    f"take-{number:03d}",
-                    event_type="TakeAccepted",
-                    timeout=10.0,
-                )
             commit = parse_commit(process.wait_for_commit(number, timeout=15))
-            if number == 1 and process.trace_path is not None:
-                wait_for_trace_record(
-                    process,
-                    "event",
-                    f"take-{number:03d}",
-                    event_type="TakeCommitted",
-                    timeout=10.0,
-                )
-                wait_for_trace_record(
-                    process,
-                    "observation",
-                    f"take-{number:03d}",
-                    boundary="encoder_input_raw",
-                    timeout=10.0,
-                )
-                wait_for_trace_record(
-                    process,
-                    "observation",
-                    f"take-{number:03d}",
-                    boundary="directshow_return",
-                    timeout=15.0,
-                )
             validate_commit(identity, commits[-1] if commits else None, commit)
+            if process.trace_path is not None:
+                if trace_receiver is None:
+                    raise ProbeFailure("traced Take receiver disappeared before boundary gate")
+                await wait_for_take_boundaries(
+                    process,
+                    trace_receiver,
+                    commit,
+                    used_rtmp_packet_indices,
+                    timeout=20.0,
+                )
+                complete_boundary_count += 1
             commits.append(commit)
             if number in (1, takes) or number % 25 == 0:
                 print(
@@ -3186,6 +3381,11 @@ async def drive(
         # the requested number of observed active NVENC+RTMP samples exists.
         # These records are resource evidence only and never enter Take
         # latency/event percentiles.
+        if process.trace_path is not None and complete_boundary_count != total_takes:
+            raise ProbeFailure(
+                "trace campaign stopped before all Take boundary gates completed: "
+                f"{complete_boundary_count} < {total_takes}"
+            )
         if process.resource_mode == "dual_lane" and process.rtmp_receiver is not None:
             if minimum_resource_samples < 1:
                 raise ProbeFailure(
@@ -3708,6 +3908,11 @@ def run(args: argparse.Namespace) -> int:
             result = EXIT_SKIP
         except (ProbeFailure, asyncio.TimeoutError, OSError, json.JSONDecodeError) as exc:
             print(f"FAIL: {exc}", file=sys.stderr)
+            if producer_trace_path is not None:
+                print(
+                    f"producer trace sidecar preserved for diagnosis: {producer_trace_path}",
+                    file=sys.stderr,
+                )
             result = EXIT_FAIL
         finally:
             try:
@@ -3718,6 +3923,11 @@ def run(args: argparse.Namespace) -> int:
                 cef_server.close()
         if cleanup_failure is not None:
             print(f"FAIL: cleanup did not release all owned resources: {cleanup_failure}", file=sys.stderr)
+            if producer_trace_path is not None:
+                print(
+                    f"producer trace sidecar preserved for diagnosis: {producer_trace_path}",
+                    file=sys.stderr,
+                )
             return EXIT_FAIL
         if result == 0:
             try:
