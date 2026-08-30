@@ -965,6 +965,41 @@ bool websocket_server_ready(std::string &reason)
     return true;
 }
 
+// Quiesce the WebSocket admission/dispatch boundary before any frontend or
+// browser callback teardown. The websocket plugin owns the handler leases and
+// returns a bounded, explicit drain ACK; this host only consumes that contract
+// through the global proc handler.
+bool websocket_pre_shutdown_ready(std::string &reason)
+{
+    proc_handler_t *global_ph = obs_get_proc_handler();
+    if (!global_ph) {
+        reason = "obs_websocket_proc_handler_unavailable";
+        return false;
+    }
+
+    calldata_t cd;
+    calldata_init(&cd);
+    calldata_set_int(&cd, "timeout_ms", 5000);
+    const bool called = proc_handler_call(global_ph, "pulsar_websocket_pre_shutdown", &cd);
+    const bool success = calldata_bool(&cd, "success");
+    const long long activeHandlers = calldata_int(&cd, "active_handlers");
+    const long long sessions = calldata_int(&cd, "sessions");
+    const char *phaseValue = calldata_string(&cd, "phase");
+    const std::string phase = phaseValue ? phaseValue : "unknown";
+    calldata_free(&cd);
+    if (!called) {
+        reason = "obs_websocket_quiesce_proc_unavailable";
+        return false;
+    }
+    if (!success || activeHandlers != 0 || sessions != 0) {
+        reason = "obs_websocket_quiesce_failed phase=" + phase +
+                 " active_handlers=" + std::to_string(activeHandlers) +
+                 " sessions=" + std::to_string(sessions);
+        return false;
+    }
+    return true;
+}
+
 // Browser CEF/audio teardown must complete before obs_shutdown() stops the
 // process-wide libobs audio bus.  The browser plugin owns the barrier and
 // exposes it as a private global proc so the host does not link against a DLL
@@ -1295,6 +1330,17 @@ int main(int argc, char **argv)
         std::fprintf(stderr,
                      "PULSAR_RUNTIME_ERROR code=websocket_not_ready id=%s reason=%s\n",
                      runtime_state->identity.instance_id.c_str(), websocket_error.c_str());
+        std::string websocket_shutdown_error;
+        if (!websocket_pre_shutdown_ready(websocket_shutdown_error)) {
+            std::fprintf(stderr,
+                         "PULSAR_RUNTIME_ERROR code=websocket_pre_shutdown_failed reason=%s\n",
+                         websocket_shutdown_error.c_str());
+            runtime_state->release();
+#ifdef _WIN32
+            close_shutdown_event();
+#endif
+            return 1;
+        }
         // The frontend callback table was installed before module loading;
         // fence CEF before handing that table back, then pair its teardown
         // with obs_shutdown on this fail-closed path too.
@@ -1381,6 +1427,18 @@ int main(int argc, char **argv)
     std::fprintf(stderr, "[pulsar-headless] shutting down\n");
     std::fflush(stderr);
     blog(LOG_INFO, "[pulsar-headless] shutting down");
+
+    std::string websocket_shutdown_error;
+    if (!websocket_pre_shutdown_ready(websocket_shutdown_error)) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=websocket_pre_shutdown_failed reason=%s\n",
+                     websocket_shutdown_error.c_str());
+        runtime_state->release();
+#ifdef _WIN32
+        close_shutdown_event();
+#endif
+        return 1;
+    }
 
     std::string browser_shutdown_error;
     if (!browser_pre_shutdown_ready(browser_shutdown_error)) {
