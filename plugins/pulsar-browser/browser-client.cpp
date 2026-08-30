@@ -78,6 +78,18 @@ CefRefPtr<CefRequestHandler> BrowserClient::GetRequestHandler()
 	return this;
 }
 
+void BrowserClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
+{
+	BrowserSourceBrowserCreated(browser);
+}
+
+void BrowserClient::OnBeforeClose(CefRefPtr<CefBrowser> browser)
+{
+	/* CEF may deliver queued callbacks after BrowserSource has been detached. */
+	bs = nullptr;
+	BrowserSourceBrowserClosed(browser);
+}
+
 CefRefPtr<CefResourceRequestHandler> BrowserClient::GetResourceRequestHandler(CefRefPtr<CefBrowser>,
 									      CefRefPtr<CefFrame>,
 									      CefRefPtr<CefRequest> request, bool, bool,

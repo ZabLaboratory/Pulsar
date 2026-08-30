@@ -10,6 +10,7 @@ only on Windows after the real ``pulsar-headless`` target has been built.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import os
 from pathlib import Path
@@ -40,6 +41,77 @@ def _raise_with_sanitized_tail(probe, process, message: str) -> None:
     raise RuntimeError(f"{message}\nSanitized Pulsar log tail:\n{tail}")
 
 
+async def _configure_two_browser_sources(probe, ws_url: str, password: str, server) -> None:
+    """Create two real CEF browser_source instances and keep recording active."""
+
+    async with probe.websockets.connect(
+        ws_url, subprotocols=["obswebsocket.json"], open_timeout=15
+    ) as ws:
+        await probe.identify(ws, password)
+        inbox = probe.Inbox()
+        scene = "cef-shutdown-real-scene"
+        response = await probe.request(
+            inbox, ws, "CreateScene", "cef-shutdown-create-scene", {"sceneName": scene}
+        )
+        probe.assert_success(response, "CreateScene(cef-shutdown-real-scene)")
+
+        for lane in ("A", "B"):
+            input_name = f"cef-shutdown-browser-{lane}"
+            response = await probe.request(
+                inbox,
+                ws,
+                "CreateInput",
+                f"cef-shutdown-create-input-{lane}",
+                {
+                    "sceneName": scene,
+                    "inputName": input_name,
+                    "inputKind": "browser_source",
+                    "inputSettings": {
+                        "url": f"{server.url}?lane={lane}",
+                        "is_local_file": False,
+                        "width": probe.CANVAS_W,
+                        "height": probe.CANVAS_H,
+                        "fps_custom": True,
+                        "fps": 30,
+                        "shutdown": False,
+                        "restart_when_active": False,
+                        "webpage_control_level": 0,
+                    },
+                    "sceneItemEnabled": True,
+                },
+            )
+            probe.assert_success(response, f"CreateInput(browser_source {lane})")
+
+        response = await probe.request(
+            inbox,
+            ws,
+            "SetCurrentProgramScene",
+            "cef-shutdown-set-program",
+            {"sceneName": scene},
+        )
+        probe.assert_success(response, "SetCurrentProgramScene(cef-shutdown-real-scene)")
+
+        # Source screenshots are independent of scene visibility and prove that
+        # both CreateInput calls reached genuine CEF browser instances.
+        for lane in ("A", "B"):
+            await probe.wait_for_nonblack_source(
+                inbox,
+                ws,
+                f"cef-shutdown-browser-{lane}",
+                require_variance=True,
+            )
+
+        response = await probe.request(inbox, ws, "StartRecord", "cef-shutdown-start-record")
+        probe.assert_success(response, "StartRecord(cef-shutdown-real-output)")
+        await probe.wait_event(
+            inbox,
+            ws,
+            "RecordStateChanged",
+            lambda data: data.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STARTED",
+            timeout=20,
+        )
+
+
 def main() -> int:
     if os.name != "nt":
         print("SKIP: graceful-shutdown integration proof is Windows-only")
@@ -55,21 +127,27 @@ def main() -> int:
     previous_runtime_id = os.environ.get("PULSAR_RUNTIME_INSTANCE_ID")
     os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = runtime_id
     record_dir = Path(tempfile.mkdtemp(prefix="pulsar-shutdown-record-"))
+    cef_server = probe.DeterministicCefServer()
+    cef_server.start()
     process = probe.PulsarProcess(
         executable.resolve(),
         "x264",
         record_dir,
         trace_path=None,
         runtime_id=runtime_id,
+        cef_url=cef_server.url,
     )
     started = False
+    real_output_started = False
     cleanup_error: Exception | None = None
     try:
         process.spawn()
         started = True
         # The child-side ACK must precede acceptance of PULSAR_READY.
         process.wait_for_shutdown_control_ready(timeout=60)
-        process.wait_for(probe.READY_RE, timeout=60)
+        ready = process.wait_for(probe.READY_RE, timeout=60)
+        asyncio.run(_configure_two_browser_sources(probe, ready.group(1), process.password, cef_server))
+        real_output_started = True
     finally:
         try:
             process.shutdown()
@@ -87,6 +165,10 @@ def main() -> int:
                 os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = previous_runtime_id
             try:
                 shutil.rmtree(record_dir)
+            except Exception as exc:
+                cleanup_error = cleanup_error or exc
+            try:
+                cef_server.close()
             except Exception as exc:
                 cleanup_error = cleanup_error or exc
 
@@ -118,7 +200,51 @@ def main() -> int:
     if process.proc is None or process.proc.returncode != 0:
         status = process.proc.returncode if process.proc is not None else None
         _raise_with_sanitized_tail(probe, process, f"Pulsar exited unsuccessfully: {status}")
-    print("PASS: pipe-backed Windows graceful shutdown released runtime leases without forced kill")
+    if not real_output_started:
+        _raise_with_sanitized_tail(probe, process, "real recording output was not active before shutdown")
+
+    # The ordering is the regression contract for the CEF fix: two actual
+    # browsers are observed, every one reaches OnBeforeClose, and only then
+    # does the manager thread leave the CEF loop and call CefShutdown.
+    required_markers = (
+        "PULSAR_CEF_SHUTDOWN event=browser_created browser_count=2",
+        "PULSAR_CEF_SHUTDOWN event=begin ",
+        "PULSAR_CEF_SHUTDOWN event=close_requested ",
+        "PULSAR_CEF_SHUTDOWN event=browser_closed browser_count=0",
+        "PULSAR_CEF_SHUTDOWN event=barrier_released phase=Drained browser_count=0",
+        "PULSAR_CEF_SHUTDOWN event=cef_shutdown_begin browser_count=0",
+        "PULSAR_CEF_SHUTDOWN event=cef_shutdown_complete browser_count=0",
+    )
+    lines = process.snapshot()
+    positions: dict[str, int] = {}
+    for marker in required_markers:
+        matches = [index for index, line in enumerate(lines) if marker in line]
+        if not matches:
+            _raise_with_sanitized_tail(probe, process, f"missing CEF lifecycle marker: {marker}")
+        positions[marker] = matches[-1]
+    # BrowserSource destruction may request CloseBrowser before libobs unloads
+    # the plugin, so the ``begin`` marker can legitimately follow the final
+    # OnBeforeClose callback.  The non-negotiable ordering is that real browser
+    # creation is observed, every browser reaches count zero, and CefShutdown
+    # begins only after the barrier has released.
+    if positions[required_markers[0]] > positions[required_markers[3]]:
+        _raise_with_sanitized_tail(
+            probe,
+            process,
+            f"CEF browser count did not reach zero after both creations: {positions}",
+        )
+    barrier = positions[required_markers[4]]
+    shutdown_begin = positions[required_markers[5]]
+    shutdown_complete = positions[required_markers[6]]
+    if not barrier < shutdown_begin < shutdown_complete:
+        _raise_with_sanitized_tail(probe, process, f"CEF barrier/shutdown ordering invalid: {positions}")
+    if any("event=cef_shutdown_skipped" in line or "event=timeout" in line for line in lines):
+        _raise_with_sanitized_tail(probe, process, "CEF shutdown reported a fail-closed timeout on the healthy path")
+
+    print(
+        "PASS: pipe-backed Windows graceful shutdown closed two real CEF browsers "
+        "before CefShutdown with an active recording output and no forced kill"
+    )
     return 0
 
 

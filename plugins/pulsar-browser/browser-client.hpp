@@ -81,6 +81,9 @@ public:
 	virtual bool OnTooltip(CefRefPtr<CefBrowser> browser, CefString &text) override;
 
 	/* CefLifeSpanHandler */
+	virtual void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
+	virtual void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
+
 	virtual bool OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
 #if CHROME_VERSION_BUILD >= 6834
 				   int popup_id,

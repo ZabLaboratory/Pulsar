@@ -27,6 +27,9 @@
 #endif
 #include <util/dstr.h>
 #include <functional>
+#include <cstdio>
+#include <cstdlib>
+#include <set>
 #include <thread>
 #include <mutex>
 
@@ -49,6 +52,33 @@ extern bool QueueCEFTask(std::function<void()> task);
 
 static mutex browser_list_mutex;
 static BrowserSource *first_browser = nullptr;
+
+/*
+ * A BrowserSource can disappear before CEF has finished destroying its
+ * browser.  Keep the shutdown barrier keyed by CEF's browser identifier so
+ * module unload never guesses that a queued CloseBrowser() has completed.
+ * All callbacks below run on the CEF UI thread, while BeginShutdown is called
+ * by the module unload thread; the small mutex protects that seam.
+ */
+static mutex browser_lifecycle_mutex;
+static set<int> live_browser_ids;
+static std::size_t pending_source_destructions = 0;
+enum class BrowserLifecyclePhase : int {
+	Running,
+	Closing,
+	Drained,
+};
+
+static BrowserLifecyclePhase browser_lifecycle_state = BrowserLifecyclePhase::Running;
+
+[[noreturn]] static void BrowserSourceDestroyFatal(const char *reason)
+{
+	std::fprintf(stderr,
+		     "PULSAR_CEF_SHUTDOWN event=source_destroy_failed reason=%s action=exit_nonzero\n",
+		     reason);
+	std::fflush(stderr);
+	std::_Exit(EXIT_FAILURE);
+}
 
 static void SendBrowserVisibility(CefRefPtr<CefBrowser> browser, bool isVisible)
 {
@@ -112,6 +142,9 @@ BrowserSource::BrowserSource(obs_data_t *, obs_source_t *source_) : source(sourc
 
 static void ActuallyCloseBrowser(CefRefPtr<CefBrowser> cefBrowser)
 {
+	if (!cefBrowser)
+		return;
+
 	CefRefPtr<CefClient> client = cefBrowser->GetHost()->GetClient();
 	BrowserClient *bc = reinterpret_cast<BrowserClient *>(client.get());
 	if (bc) {
@@ -127,10 +160,210 @@ static void ActuallyCloseBrowser(CefRefPtr<CefBrowser> cefBrowser)
 	cefBrowser->GetHost()->CloseBrowser(true);
 }
 
+void BrowserSourceBeginShutdown()
+{
+	std::size_t browser_count;
+	std::size_t pending_source_tasks;
+	bool already_started;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		already_started = browser_lifecycle_state != BrowserLifecyclePhase::Running;
+		if (!already_started)
+			browser_lifecycle_state = BrowserLifecyclePhase::Closing;
+		browser_count = live_browser_ids.size();
+		pending_source_tasks = pending_source_destructions;
+	}
+
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=begin phase=Closing browser_count=%llu "
+	     "pending_source_tasks=%llu already_started=%d",
+	     static_cast<unsigned long long>(browser_count),
+	     static_cast<unsigned long long>(pending_source_tasks), already_started ? 1 : 0);
+}
+
+bool BrowserSourceCanCreateBrowser()
+{
+	lock_guard<mutex> lock(browser_lifecycle_mutex);
+	if (browser_lifecycle_state == BrowserLifecyclePhase::Running)
+		return true;
+
+	blog(LOG_WARNING, "PULSAR_CEF_SHUTDOWN event=create_rejected reason=shutdown_started");
+	return false;
+}
+
+void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser)
+{
+	if (!browser)
+		return;
+
+	const int browser_id = browser->GetIdentifier();
+	bool close_immediately;
+	std::size_t browser_count;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		live_browser_ids.insert(browser_id);
+		close_immediately = browser_lifecycle_state != BrowserLifecyclePhase::Running;
+		browser_count = live_browser_ids.size();
+	}
+
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_created browser_id=%d browser_count=%llu",
+	     browser_id, static_cast<unsigned long long>(browser_count));
+
+	/*
+	 * A CreateBrowser task can already be executing when unload flips the
+	 * shutdown bit.  Count this real browser first, then close it on the CEF UI
+	 * thread; the barrier cannot observe a false zero in that race.
+	 */
+	if (close_immediately) {
+		blog(LOG_WARNING,
+		     "PULSAR_CEF_SHUTDOWN event=browser_close_requested browser_id=%d reason=shutdown_started",
+		     browser_id);
+		browser->GetHost()->CloseBrowser(true);
+	}
+}
+
+void BrowserSourceBrowserClosed(CefRefPtr<CefBrowser> browser)
+{
+	if (!browser)
+		return;
+
+	const int browser_id = browser->GetIdentifier();
+	std::size_t browser_count;
+	bool known_browser;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		known_browser = live_browser_ids.erase(browser_id) != 0;
+		browser_count = live_browser_ids.size();
+	}
+
+	if (!known_browser) {
+		blog(LOG_WARNING,
+		     "PULSAR_CEF_SHUTDOWN event=browser_close_duplicate browser_id=%d browser_count=%llu",
+		     browser_id, static_cast<unsigned long long>(browser_count));
+		return;
+	}
+
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_closed browser_id=%d browser_count=%llu",
+	     browser_id, static_cast<unsigned long long>(browser_count));
+}
+
+std::size_t BrowserSourceLiveBrowserCount()
+{
+	lock_guard<mutex> lock(browser_lifecycle_mutex);
+	return live_browser_ids.size();
+}
+
+bool BrowserSourceShutdownStarted()
+{
+	lock_guard<mutex> lock(browser_lifecycle_mutex);
+	return browser_lifecycle_state != BrowserLifecyclePhase::Running;
+}
+
+bool BrowserSourceShutdownComplete()
+{
+	lock_guard<mutex> lock(browser_lifecycle_mutex);
+	return browser_lifecycle_state == BrowserLifecyclePhase::Closing && live_browser_ids.empty() &&
+	       pending_source_destructions == 0;
+}
+
+bool BrowserSourceMarkDrained()
+{
+	lock_guard<mutex> lock(browser_lifecycle_mutex);
+	if (browser_lifecycle_state == BrowserLifecyclePhase::Drained)
+		return true;
+	if (browser_lifecycle_state != BrowserLifecyclePhase::Closing || !live_browser_ids.empty() ||
+	    pending_source_destructions != 0)
+		return false;
+
+	browser_lifecycle_state = BrowserLifecyclePhase::Drained;
+	return true;
+}
+
+BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy()
+{
+	lock_guard<mutex> lock(browser_lifecycle_mutex);
+	switch (browser_lifecycle_state) {
+	case BrowserLifecyclePhase::Running:
+	case BrowserLifecyclePhase::Closing:
+		++pending_source_destructions;
+		return BrowserSourceDestroyDisposition::QueueOnCefUi;
+	case BrowserLifecyclePhase::Drained:
+		return BrowserSourceDestroyDisposition::DeleteNow;
+	}
+
+	return BrowserSourceDestroyDisposition::Fatal;
+}
+
+void BrowserSourceDestroyTaskComplete()
+{
+	bool underflow = false;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		if (pending_source_destructions == 0)
+			underflow = true;
+		else
+			--pending_source_destructions;
+	}
+
+	if (underflow)
+		BrowserSourceDestroyFatal("source_task_underflow");
+}
+
+void BrowserSourceCloseAllBrowsers()
+{
+	const std::size_t browser_count = BrowserSourceLiveBrowserCount();
+	std::size_t source_count = 0;
+	{
+		lock_guard<mutex> lock(browser_list_mutex);
+		for (BrowserSource *bs = first_browser; bs; bs = bs->next) {
+			if (bs->GetBrowser()) {
+				++source_count;
+				/*
+				 * Keep browser_list_mutex held while using the raw list node.  A
+				 * concurrent Destroy() cannot remove and delete this source until
+				 * its CEF reference has been cleared.
+				 */
+				bs->CloseBrowserForShutdown();
+			}
+		}
+	}
+
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=close_requested browser_count=%llu source_count=%llu",
+	     static_cast<unsigned long long>(browser_count),
+	     static_cast<unsigned long long>(source_count));
+}
+
 BrowserSource::~BrowserSource()
 {
-	if (cefBrowser)
+	if (cefBrowser && !BrowserSourceShutdownStarted())
 		ActuallyCloseBrowser(cefBrowser);
+	else if (cefBrowser)
+		SetBrowser(nullptr);
+}
+
+void BrowserSource::CloseBrowserForShutdown()
+{
+	CefRefPtr<CefBrowser> browser = GetBrowser();
+	if (!browser)
+		return;
+
+	ActuallyCloseBrowser(browser);
+	SetBrowser(nullptr);
+}
+
+void BrowserSource::UnlinkFromBrowserList()
+{
+	lock_guard<mutex> lock(browser_list_mutex);
+	if (!p_prev_next)
+		return;
+	if (next)
+		next->p_prev_next = p_prev_next;
+	*p_prev_next = next;
+	p_prev_next = nullptr;
+	next = nullptr;
 }
 
 void BrowserSource::Destroy()
@@ -138,12 +371,32 @@ void BrowserSource::Destroy()
 	destroying = true;
 	DestroyTextures();
 
-	lock_guard<mutex> lock(browser_list_mutex);
-	if (next)
-		next->p_prev_next = p_prev_next;
-	*p_prev_next = next;
+	const BrowserSourceDestroyDisposition disposition = BrowserSourcePrepareDestroy();
+	if (disposition == BrowserSourceDestroyDisposition::DeleteNow) {
+		UnlinkFromBrowserList();
+		SetBrowser(nullptr);
+		delete this;
+		return;
+	}
+	if (disposition == BrowserSourceDestroyDisposition::Fatal)
+		BrowserSourceDestroyFatal("invalid_lifecycle_phase");
 
-	QueueCEFTask([this]() { delete this; });
+	const bool posted = QueueCEFTask([this]() {
+		/*
+		 * Keep the source node alive until this UI task serializes behind any
+		 * earlier CreateBrowser task.  Always detach the client and clear the CEF
+		 * ref on this UI task before deleting the node.  This also removes the
+		 * race where BeginShutdown could flip between a conditional close and the
+		 * destructor's second lifecycle check.
+		 */
+		CloseBrowserForShutdown();
+		UnlinkFromBrowserList();
+		delete this;
+		BrowserSourceDestroyTaskComplete();
+	});
+
+	if (!posted)
+		BrowserSourceDestroyFatal("cef_destroy_task_post_failed");
 }
 
 void BrowserSource::ExecuteOnBrowser(BrowserFunc func, bool async)
@@ -181,7 +434,17 @@ void BrowserSource::ExecuteOnBrowser(BrowserFunc func, bool async)
 
 bool BrowserSource::CreateBrowser()
 {
+	if (!BrowserSourceCanCreateBrowser()) {
+		create_browser = false;
+		return true;
+	}
+
 	return QueueCEFTask([this]() {
+		if (!BrowserSourceCanCreateBrowser()) {
+			create_browser = false;
+			return;
+		}
+
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
 		if (hwaccel) {
 			obs_enter_graphics();
