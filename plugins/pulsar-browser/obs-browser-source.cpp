@@ -27,6 +27,7 @@
 #endif
 #include <util/dstr.h>
 #include <functional>
+#include <set>
 #include <thread>
 #include <mutex>
 
@@ -49,6 +50,17 @@ extern bool QueueCEFTask(std::function<void()> task);
 
 static mutex browser_list_mutex;
 static BrowserSource *first_browser = nullptr;
+
+/*
+ * A BrowserSource can disappear before CEF has finished destroying its
+ * browser.  Keep the shutdown barrier keyed by CEF's browser identifier so
+ * module unload never guesses that a queued CloseBrowser() has completed.
+ * All callbacks below run on the CEF UI thread, while BeginShutdown is called
+ * by the module unload thread; the small mutex protects that seam.
+ */
+static mutex browser_lifecycle_mutex;
+static set<int> live_browser_ids;
+static bool browser_shutdown_started = false;
 
 static void SendBrowserVisibility(CefRefPtr<CefBrowser> browser, bool isVisible)
 {
@@ -112,6 +124,9 @@ BrowserSource::BrowserSource(obs_data_t *, obs_source_t *source_) : source(sourc
 
 static void ActuallyCloseBrowser(CefRefPtr<CefBrowser> cefBrowser)
 {
+	if (!cefBrowser)
+		return;
+
 	CefRefPtr<CefClient> client = cefBrowser->GetHost()->GetClient();
 	BrowserClient *bc = reinterpret_cast<BrowserClient *>(client.get());
 	if (bc) {
@@ -127,10 +142,147 @@ static void ActuallyCloseBrowser(CefRefPtr<CefBrowser> cefBrowser)
 	cefBrowser->GetHost()->CloseBrowser(true);
 }
 
+void BrowserSourceBeginShutdown()
+{
+	std::size_t browser_count;
+	bool already_started;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		already_started = browser_shutdown_started;
+		browser_shutdown_started = true;
+		browser_count = live_browser_ids.size();
+	}
+
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=begin browser_count=%llu already_started=%d",
+	     static_cast<unsigned long long>(browser_count), already_started ? 1 : 0);
+}
+
+bool BrowserSourceCanCreateBrowser()
+{
+	lock_guard<mutex> lock(browser_lifecycle_mutex);
+	if (!browser_shutdown_started)
+		return true;
+
+	blog(LOG_WARNING, "PULSAR_CEF_SHUTDOWN event=create_rejected reason=shutdown_started");
+	return false;
+}
+
+void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser)
+{
+	if (!browser)
+		return;
+
+	const int browser_id = browser->GetIdentifier();
+	bool close_immediately;
+	std::size_t browser_count;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		live_browser_ids.insert(browser_id);
+		close_immediately = browser_shutdown_started;
+		browser_count = live_browser_ids.size();
+	}
+
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_created browser_id=%d browser_count=%llu",
+	     browser_id, static_cast<unsigned long long>(browser_count));
+
+	/*
+	 * A CreateBrowser task can already be executing when unload flips the
+	 * shutdown bit.  Count this real browser first, then close it on the CEF UI
+	 * thread; the barrier cannot observe a false zero in that race.
+	 */
+	if (close_immediately) {
+		blog(LOG_WARNING,
+		     "PULSAR_CEF_SHUTDOWN event=browser_close_requested browser_id=%d reason=shutdown_started",
+		     browser_id);
+		browser->GetHost()->CloseBrowser(true);
+	}
+}
+
+void BrowserSourceBrowserClosed(CefRefPtr<CefBrowser> browser)
+{
+	if (!browser)
+		return;
+
+	const int browser_id = browser->GetIdentifier();
+	std::size_t browser_count;
+	bool known_browser;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		known_browser = live_browser_ids.erase(browser_id) != 0;
+		browser_count = live_browser_ids.size();
+	}
+
+	if (!known_browser) {
+		blog(LOG_WARNING,
+		     "PULSAR_CEF_SHUTDOWN event=browser_close_duplicate browser_id=%d browser_count=%llu",
+		     browser_id, static_cast<unsigned long long>(browser_count));
+		return;
+	}
+
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_closed browser_id=%d browser_count=%llu",
+	     browser_id, static_cast<unsigned long long>(browser_count));
+}
+
+std::size_t BrowserSourceLiveBrowserCount()
+{
+	lock_guard<mutex> lock(browser_lifecycle_mutex);
+	return live_browser_ids.size();
+}
+
+bool BrowserSourceShutdownStarted()
+{
+	lock_guard<mutex> lock(browser_lifecycle_mutex);
+	return browser_shutdown_started;
+}
+
+bool BrowserSourceShutdownComplete()
+{
+	lock_guard<mutex> lock(browser_lifecycle_mutex);
+	return browser_shutdown_started && live_browser_ids.empty();
+}
+
+void BrowserSourceCloseAllBrowsers()
+{
+	const std::size_t browser_count = BrowserSourceLiveBrowserCount();
+	std::size_t source_count = 0;
+	{
+		lock_guard<mutex> lock(browser_list_mutex);
+		for (BrowserSource *bs = first_browser; bs; bs = bs->next) {
+			if (bs->GetBrowser()) {
+				++source_count;
+				/*
+				 * Keep browser_list_mutex held while using the raw list node.  A
+				 * concurrent Destroy() cannot remove and delete this source until
+				 * its CEF reference has been cleared.
+				 */
+				bs->CloseBrowserForShutdown();
+			}
+		}
+	}
+
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=close_requested browser_count=%llu source_count=%llu",
+     static_cast<unsigned long long>(browser_count),
+     static_cast<unsigned long long>(source_count));
+}
+
 BrowserSource::~BrowserSource()
 {
 	if (cefBrowser)
 		ActuallyCloseBrowser(cefBrowser);
+}
+
+void BrowserSource::CloseBrowserForShutdown()
+{
+	CefRefPtr<CefBrowser> browser = GetBrowser();
+	if (!browser)
+		return;
+
+	ActuallyCloseBrowser(browser);
+	SetBrowser(nullptr);
 }
 
 void BrowserSource::Destroy()
@@ -138,10 +290,25 @@ void BrowserSource::Destroy()
 	destroying = true;
 	DestroyTextures();
 
-	lock_guard<mutex> lock(browser_list_mutex);
-	if (next)
-		next->p_prev_next = p_prev_next;
-	*p_prev_next = next;
+	bool shutdown_started;
+	{
+		lock_guard<mutex> lock(browser_list_mutex);
+		if (next)
+			next->p_prev_next = p_prev_next;
+		*p_prev_next = next;
+		shutdown_started = BrowserSourceShutdownStarted();
+	}
+
+	if (shutdown_started) {
+		/*
+		 * Module unload has already drained and detached every browser.  Do not
+		 * queue deletion into a CEF loop that has been stopped; the normal
+		 * destructor is safe because CloseBrowserForShutdown cleared the ref.
+		 */
+		SetBrowser(nullptr);
+		delete this;
+		return;
+	}
 
 	QueueCEFTask([this]() { delete this; });
 }
@@ -182,6 +349,11 @@ void BrowserSource::ExecuteOnBrowser(BrowserFunc func, bool async)
 bool BrowserSource::CreateBrowser()
 {
 	return QueueCEFTask([this]() {
+		if (!BrowserSourceCanCreateBrowser()) {
+			create_browser = false;
+			return;
+		}
+
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
 		if (hwaccel) {
 			obs_enter_graphics();
