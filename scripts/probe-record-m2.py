@@ -379,11 +379,19 @@ async def wait_record_stop(
         except Exception as exc:
             print(f"error: could not re-read GetRecordStatus after STOPPED: {exc}")
             return None
-        if not (status_response.get("responseData") or {}).get("outputActive"):
+        response_data = status_response.get("responseData")
+        if not isinstance(response_data, dict):
+            print("error: GetRecordStatus responseData is malformed after STOPPED")
+            return None
+        output_active = response_data.get("outputActive")
+        if output_active is False:
             if not output_path.is_file():
                 print(f"error: STOPPED event outputPath does not exist: {output_path}")
                 return None
             return event
+        if output_active is not True:
+            print("error: GetRecordStatus.outputActive is malformed after STOPPED")
+            return None
         remaining = deadline - asyncio.get_event_loop().time()
         if remaining <= 0:
             print("error: STOPPED event arrived but GetRecordStatus.outputActive stayed true")

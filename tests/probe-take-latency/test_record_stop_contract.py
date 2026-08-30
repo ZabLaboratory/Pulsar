@@ -152,6 +152,8 @@ def test_record_probes_drain_pending_before_shared_process_reuse() -> None:
     assert "wait_record_stop(inbox, ws, r, record_dir)" in record_m2_probe
     assert "outputPath is stale or outside this run" in record_m2_probe
     assert "outputActive stayed true" in record_m2_probe
+    assert 'output_active is False' in record_m2_probe
+    assert 'output_active is not True' in record_m2_probe
 
     assert "wait_record_stop(inbox, ws, resp)" in record_probe
     assert '"stop-recovery"' in split_probe
@@ -289,6 +291,41 @@ def test_record_m2_stopped_missing_or_stale_path_is_rejected(tmp_path: Path) -> 
                         },
                     },
                 }
+            ]
+        )
+        assert asyncio.run(probe.wait_record_stop(inbox, ws, pending, tmp_path)) is None
+
+
+def test_record_m2_missing_or_non_boolean_output_active_is_fail_closed(tmp_path: Path) -> None:
+    probe = _load_probe(RECORD_M2_PROBE, "record_m2_stop_contract_output_active_failure")
+    output = tmp_path / "final.mp4"
+    output.write_bytes(b"mp4")
+    pending = {"requestStatus": {"result": False, "code": 702, "comment": "still flushing"}}
+    malformed_values = ({}, None, 0, 1, "false")
+    for malformed in malformed_values:
+        inbox = probe.Inbox()
+        ws = _FakeWs(
+            [
+                {
+                    "op": 5,
+                    "d": {
+                        "eventType": "RecordStateChanged",
+                        "eventData": {
+                            "outputState": "OBS_WEBSOCKET_OUTPUT_STOPPED",
+                            "outputPath": str(output),
+                        },
+                    },
+                },
+                {
+                    "op": 7,
+                    "d": {
+                        "requestId": "stop-status-1",
+                        "requestStatus": {"result": True, "code": 100},
+                        "responseData": {"outputActive": malformed}
+                        if malformed != {}
+                        else {},
+                    },
+                },
             ]
         )
         assert asyncio.run(probe.wait_record_stop(inbox, ws, pending, tmp_path)) is None
