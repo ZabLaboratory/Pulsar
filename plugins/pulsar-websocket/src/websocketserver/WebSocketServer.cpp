@@ -50,8 +50,127 @@ WebSocketServer::WebSocketServer() : QObject(nullptr)
 
 WebSocketServer::~WebSocketServer()
 {
-	if (_server.is_listening())
+	if (_server.is_listening() || _serverThread.joinable())
 		Stop();
+}
+
+WebSocketServer::HandlerLease::~HandlerLease()
+{
+	if (_server)
+		_server->LeaveHandler();
+}
+
+std::shared_ptr<WebSocketServer::HandlerLease> WebSocketServer::EnterHandler(bool allowQuiescing)
+{
+	std::lock_guard<std::mutex> lock(_lifecycleMutex);
+	if (_lifecycleState == LifecycleState::Stopped ||
+	    (_lifecycleState == LifecycleState::Quiescing && !allowQuiescing))
+		return nullptr;
+	++_activeHandlers;
+	return std::make_shared<HandlerLease>(this);
+}
+
+std::shared_ptr<WebSocketServer::HandlerLease> WebSocketServer::EnterBatchHandler()
+{
+	// The outer onMessage lease proves this batch came from an admitted
+	// websocket message.  Permit the nested lease to finish if quiesce wins
+	// the race between queueing and entering ProcessRequestBatch.
+	return EnterHandler(true);
+}
+
+void WebSocketServer::LeaveHandler()
+{
+	std::lock_guard<std::mutex> lock(_lifecycleMutex);
+	if (_activeHandlers == 0) {
+		blog(LOG_ERROR, "[WebSocketServer] handler lease underflow");
+		return;
+	}
+	--_activeHandlers;
+	_lifecycleCondition.notify_all();
+}
+
+void WebSocketServer::CloseSessions()
+{
+	std::vector<websocketpp::connection_hdl> handles;
+	{
+		std::lock_guard<std::mutex> lock(_sessionMutex);
+		handles.reserve(_sessions.size());
+		for (const auto &[hdl, session] : _sessions)
+			handles.push_back(hdl);
+	}
+
+	for (const auto &hdl : handles) {
+		websocketpp::lib::error_code errorCode;
+		_server.pause_reading(hdl, errorCode);
+		if (errorCode) {
+			blog(LOG_INFO, "[WebSocketServer::CloseSessions] pause_reading failed: %s", errorCode.message().c_str());
+			errorCode.clear();
+		}
+		_server.close(hdl, websocketpp::close::status::going_away, "Server quiescing.", errorCode);
+		if (errorCode)
+			blog(LOG_INFO, "[WebSocketServer::CloseSessions] close failed: %s", errorCode.message().c_str());
+	}
+}
+
+bool WebSocketServer::Quiesce(std::chrono::milliseconds timeout, size_t &activeHandlers, size_t &sessionsRemaining)
+{
+	if (timeout.count() < 1)
+		timeout = std::chrono::milliseconds(1);
+
+	{
+		std::lock_guard<std::mutex> lock(_lifecycleMutex);
+		if (_lifecycleState == LifecycleState::Stopped) {
+			activeHandlers = 0;
+			std::lock_guard<std::mutex> sessionLock(_sessionMutex);
+			sessionsRemaining = _sessions.size();
+			return sessionsRemaining == 0;
+		}
+		_lifecycleState = LifecycleState::Quiescing;
+	}
+
+	if (_server.is_listening()) {
+		_server.stop_listening();
+	}
+	CloseSessions();
+
+	const auto deadline = std::chrono::steady_clock::now() + timeout;
+	std::unique_lock<std::mutex> lock(_lifecycleMutex);
+	// First wait for callbacks which raced the transition (notably onOpen) to
+	// finish.  A callback may have inserted a session after the first close
+	// snapshot, so take a second close snapshot only after no such callback is
+	// active, then wait for the corresponding onClose handlers as well.
+	const bool handlersDrained = _lifecycleCondition.wait_until(lock, deadline, [this] {
+		return _activeHandlers == 0;
+	});
+	lock.unlock();
+	CloseSessions();
+	lock.lock();
+	const bool drained = handlersDrained && _lifecycleCondition.wait_until(lock, deadline, [this] {
+		if (_activeHandlers != 0)
+			return false;
+		std::lock_guard<std::mutex> sessionLock(_sessionMutex);
+		return _sessions.empty();
+	});
+	activeHandlers = _activeHandlers;
+	lock.unlock();
+	{
+		std::lock_guard<std::mutex> sessionLock(_sessionMutex);
+		sessionsRemaining = _sessions.size();
+	}
+
+	if (drained) {
+		// LifecycleState remains Quiescing until Stop() completes.  Since every
+		// ingress path acquires the same gate and rejects Quiescing, this marker
+		// is the sequence boundary after which no handler can start.
+		blog(LOG_INFO,
+		     "PULSAR_WEBSOCKET_QUIESCE event=ack active_handlers=0 sessions=0 "
+		     "no_handlers_after_ack=1");
+	} else {
+		blog(LOG_ERROR,
+		     "PULSAR_WEBSOCKET_QUIESCE event=timeout active_handlers=%llu sessions=%llu",
+		     static_cast<unsigned long long>(activeHandlers), static_cast<unsigned long long>(sessionsRemaining));
+	}
+	return drained;
 }
 
 void WebSocketServer::ServerRunner()
@@ -147,37 +266,36 @@ void WebSocketServer::Start()
 
 void WebSocketServer::Stop()
 {
-	if (!_server.is_listening()) {
-		blog(LOG_WARNING, "[WebSocketServer::Stop] Call to Stop() but the server is not listening.");
-		return;
+	{
+		std::lock_guard<std::mutex> lifecycleLock(_lifecycleMutex);
+		if (_lifecycleState == LifecycleState::Stopped)
+			return;
+		_lifecycleState = LifecycleState::Quiescing;
 	}
 
-	_server.stop_listening();
-
-	std::unique_lock<std::mutex> lock(_sessionMutex);
-	for (auto const &[hdl, session] : _sessions) {
-		websocketpp::lib::error_code errorCode;
-		_server.pause_reading(hdl, errorCode);
-		if (errorCode) {
-			blog(LOG_INFO, "[WebSocketServer::Stop] Error: %s", errorCode.message().c_str());
-			continue;
-		}
-
-		_server.close(hdl, websocketpp::close::status::going_away, "Server stopping.", errorCode);
-		if (errorCode) {
-			blog(LOG_INFO, "[WebSocketServer::Stop] Error: %s", errorCode.message().c_str());
-			continue;
-		}
+	if (_server.is_listening()) {
+		_server.stop_listening();
 	}
-	lock.unlock();
+	CloseSessions();
 
 	_threadPool.waitForDone();
 
 	// This can delay the thread that it is running on. Bad but kinda required.
-	while (_sessions.size() > 0)
+	while (true) {
+		{
+			std::lock_guard<std::mutex> lock(_sessionMutex);
+			if (_sessions.empty())
+				break;
+		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
 
-	_serverThread.join();
+	if (_serverThread.joinable())
+		_serverThread.join();
+	{
+		std::lock_guard<std::mutex> lock(_lifecycleMutex);
+		_lifecycleState = LifecycleState::Stopped;
+	}
 
 	blog(LOG_INFO, "[WebSocketServer::Stop] Server stopped successfully");
 }
@@ -222,6 +340,10 @@ std::vector<WebSocketServer::WebSocketSessionState> WebSocketServer::GetWebSocke
 
 bool WebSocketServer::onValidate(websocketpp::connection_hdl hdl)
 {
+	auto handlerLease = EnterHandler();
+	if (!handlerLease)
+		return false;
+
 	auto conn = _server.get_con_from_hdl(hdl);
 
 	std::vector<std::string> requestedSubprotocols = conn->get_requested_subprotocols();
@@ -237,6 +359,13 @@ bool WebSocketServer::onValidate(websocketpp::connection_hdl hdl)
 
 void WebSocketServer::onOpen(websocketpp::connection_hdl hdl)
 {
+	auto handlerLease = EnterHandler();
+	if (!handlerLease) {
+		websocketpp::lib::error_code errorCode;
+		_server.close(hdl, websocketpp::close::status::going_away, "Server quiescing.", errorCode);
+		return;
+	}
+
 	auto conn = _server.get_con_from_hdl(hdl);
 
 	auto conf = GetConfig();
@@ -314,11 +443,20 @@ void WebSocketServer::onOpen(websocketpp::connection_hdl hdl)
 
 void WebSocketServer::onClose(websocketpp::connection_hdl hdl)
 {
+	// Close callbacks are allowed during Quiescing because they drain the
+	// session map and must complete before the quiesce ACK is published.
+	auto handlerLease = EnterHandler(true);
+	if (!handlerLease)
+		return;
+
 	auto conn = _server.get_con_from_hdl(hdl);
 
 	// Get info from the session and then delete it
 	std::unique_lock<std::mutex> lock(_sessionMutex);
-	SessionPtr session = _sessions[hdl];
+	auto sessionIt = _sessions.find(hdl);
+	if (sessionIt == _sessions.end())
+		return;
+	SessionPtr session = sessionIt->second;
 	uint64_t eventSubscriptions = session->EventSubscriptions();
 	bool isIdentified = session->IsIdentified();
 	uint64_t connectedAt = session->ConnectedAt();
@@ -366,9 +504,16 @@ void WebSocketServer::onClose(websocketpp::connection_hdl hdl)
 void WebSocketServer::onMessage(websocketpp::connection_hdl hdl,
 				websocketpp::server<websocketpp::config::asio>::message_ptr message)
 {
+	auto handlerLease = EnterHandler();
+	if (!handlerLease) {
+		websocketpp::lib::error_code errorCode;
+		_server.close(hdl, websocketpp::close::status::going_away, "Server quiescing.", errorCode);
+		return;
+	}
+
 	auto opCode = message->get_opcode();
 	std::string payload = message->get_payload();
-	_threadPool.start(Utils::Compat::CreateFunctionRunnable([=]() {
+	_threadPool.start(Utils::Compat::CreateFunctionRunnable([=, handlerLease]() {
 		std::unique_lock<std::mutex> lock(_sessionMutex);
 		SessionPtr session;
 		try {

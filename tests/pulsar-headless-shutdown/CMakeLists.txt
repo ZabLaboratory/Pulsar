@@ -156,3 +156,21 @@ set_target_properties(pulsar-browser-source-task-state-test PROPERTIES
 
 add_test(NAME pulsar-browser-source-task-state-test COMMAND pulsar-browser-source-task-state-test)
 set_tests_properties(pulsar-browser-source-task-state-test PROPERTIES LABELS "unit")
+
+# #249 -- the websocket admission gate must reject new work and drain
+# in-flight ordinary, parallel, and frame handlers before frontend/CEF
+# teardown.  The Python test includes a deterministic adversarial model and,
+# when the real target is available, a pipe-backed Sleep batch integration.
+if(TARGET pulsar-headless)
+    add_test(
+        NAME pulsar-headless-websocket-quiesce
+        COMMAND python
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_websocket_quiesce.py"
+                "$<TARGET_FILE:pulsar-headless>"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+    )
+    set_tests_properties(pulsar-headless-websocket-quiesce PROPERTIES
+        TIMEOUT 90
+        LABELS "integration;runtime"
+    )
+endif()

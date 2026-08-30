@@ -19,6 +19,10 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #pragma once
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <QObject>
 #include <QThreadPool>
@@ -49,11 +53,31 @@ public:
 		bool isIdentified;
 	};
 
+	// A batch lease is intentionally public to the request-batch adapter: the
+	// websocket message lease covers the worker, while this nested lease makes
+	// the SerialFrame callback and Parallel worker fan-out independently
+	// visible to the shutdown drain.
+	class HandlerLease {
+	public:
+		explicit HandlerLease(WebSocketServer *server) : _server(server) {}
+		~HandlerLease();
+		HandlerLease(const HandlerLease &) = delete;
+		HandlerLease &operator=(const HandlerLease &) = delete;
+
+	private:
+		WebSocketServer *_server;
+	};
+
 	WebSocketServer();
 	~WebSocketServer();
 
 	void Start();
 	void Stop();
+	// Stop admitting websocket work, close all sessions, and wait for every
+	// already-admitted IO/request/batch/frame handler to leave.  The caller
+	// must not tear down libobs/frontend callbacks until this bounded drain
+	// returns true.
+	bool Quiesce(std::chrono::milliseconds timeout, size_t &activeHandlers, size_t &sessionsRemaining);
 	void InvalidateSession(websocketpp::connection_hdl hdl);
 	void BroadcastEvent(uint64_t requiredIntent, const std::string &eventType, const json &eventData = nullptr,
 			    uint8_t rpcVersion = 0);
@@ -65,12 +89,19 @@ public:
 	// Callback for when a client subscribes or unsubscribes. `true` for sub, `false` for unsub
 	typedef std::function<void(bool, uint64_t)> ClientSubscriptionCallback; // bool type, uint64_t eventSubscriptions
 	inline void SetClientSubscriptionCallback(ClientSubscriptionCallback cb) { _clientSubscriptionCallback = cb; }
+	std::shared_ptr<HandlerLease> EnterBatchHandler();
 
 signals:
 	void ClientConnected(WebSocketSessionState state);
 	void ClientDisconnected(WebSocketSessionState state, uint16_t closeCode);
 
 private:
+	enum class LifecycleState : uint8_t { Running, Quiescing, Stopped };
+
+	std::shared_ptr<HandlerLease> EnterHandler(bool allowQuiescing = false);
+	void LeaveHandler();
+	void CloseSessions();
+
 	struct ProcessResult {
 		WebSocketCloseCode::WebSocketCloseCode closeCode = WebSocketCloseCode::DontClose;
 		std::string closeReason;
@@ -97,6 +128,14 @@ private:
 
 	std::mutex _sessionMutex;
 	std::map<websocketpp::connection_hdl, SessionPtr, std::owner_less<websocketpp::connection_hdl>> _sessions;
+
+	// Admission and drain are one linearization domain.  A lease is acquired
+	// before work is queued, so work which raced the transition is counted and
+	// cannot outlive the quiesce ACK.  New work sees Quiescing and is rejected.
+	mutable std::mutex _lifecycleMutex;
+	std::condition_variable _lifecycleCondition;
+	LifecycleState _lifecycleState = LifecycleState::Running;
+	size_t _activeHandlers = 0;
 
 	// Pulsar fork: _obsReady defaults to true (vs false upstream).
 	// Upstream's gate fires when OBS_FRONTEND_EVENT_FINISHED_LOADING

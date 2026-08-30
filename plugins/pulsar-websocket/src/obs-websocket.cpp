@@ -95,6 +95,36 @@ static void pulsar_is_listening_cb(void * /*priv_data*/, calldata_t *cd)
 	calldata_set_bool(cd, "success", true);
 }
 
+// The headless host invokes this fence before handing the frontend callback
+// table to the browser/CEF teardown.  It is intentionally a global proc: the
+// host does not link to this plugin's C++ implementation, while the proc keeps
+// the lifecycle boundary explicit and version-independent.
+static void pulsar_websocket_pre_shutdown_cb(void * /*priv_data*/, calldata_t *cd)
+{
+	WebSocketServerPtr server = _webSocketServer;
+	if (!server) {
+		calldata_set_bool(cd, "success", false);
+		calldata_set_int(cd, "active_handlers", 0);
+		calldata_set_int(cd, "sessions", 0);
+		calldata_set_string(cd, "phase", "server_unavailable");
+		return;
+	}
+
+	long long timeoutMs = calldata_int(cd, "timeout_ms");
+	if (timeoutMs < 1)
+		timeoutMs = 5000;
+	if (timeoutMs > 30000)
+		timeoutMs = 30000;
+
+	size_t activeHandlers = 0;
+	size_t sessionsRemaining = 0;
+	const bool success = server->Quiesce(std::chrono::milliseconds(timeoutMs), activeHandlers, sessionsRemaining);
+	calldata_set_bool(cd, "success", success);
+	calldata_set_int(cd, "active_handlers", static_cast<long long>(activeHandlers));
+	calldata_set_int(cd, "sessions", static_cast<long long>(sessionsRemaining));
+	calldata_set_string(cd, "phase", success ? "drained" : "timeout");
+}
+
 bool obs_module_load(void)
 {
 	blog(LOG_INFO, "[obs_module_load] you can haz websockets (Version: %s | RPC Version: %d)", OBS_WEBSOCKET_VERSION,
@@ -125,6 +155,10 @@ bool obs_module_load(void)
 			 nullptr);
 	proc_handler_add(obs_get_proc_handler(),
 			 "bool pulsar_websocket_is_listening(out bool listening)", &pulsar_is_listening_cb, nullptr);
+	proc_handler_add(obs_get_proc_handler(),
+			 "bool pulsar_websocket_pre_shutdown(in int timeout_ms, out bool success, out int active_handlers, "
+			 "out int sessions, out string phase)",
+			 &pulsar_websocket_pre_shutdown_cb, nullptr);
 
 	// Initialize the event handler
 	_eventHandler = std::make_shared<EventHandler>();
