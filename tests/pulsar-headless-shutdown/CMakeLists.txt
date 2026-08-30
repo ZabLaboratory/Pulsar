@@ -80,7 +80,9 @@ if(NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceTaskState" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceBeginDestroyTaskState" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceReleaseTask" OR
    NOT PULSAR_BROWSER_TASK_STATE_HPP MATCHES "request_delete_and_take_if_idle" OR
+   NOT PULSAR_BROWSER_TASK_STATE_HPP MATCHES "request_delete_release_own_lease" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceRequestDeleteIfIdle" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceRequestDeleteReleaseOwnLease" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceRequestDelete[(]" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceDeleteIfIdle[(]" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "QueueCEFTask[(][[]this" OR

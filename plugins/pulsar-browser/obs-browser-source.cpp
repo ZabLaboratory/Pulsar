@@ -144,6 +144,23 @@ static BrowserSourceTaskRelease BrowserSourceReleaseTask(const std::shared_ptr<B
 	return release;
 }
 
+static BrowserSourceTaskRelease BrowserSourceRequestDeleteReleaseOwnLease(
+	const std::shared_ptr<BrowserSourceTaskState> &state, bool completion_required)
+{
+	if (!state)
+		BrowserSourceDestroyFatal("missing_source_task_state");
+
+	lock_guard<mutex> lifecycle_lock(browser_lifecycle_mutex);
+	BrowserSourceTaskRelease release = state->request_delete_release_own_lease(completion_required);
+	if (release.underflow)
+		BrowserSourceDestroyFatal("source_task_underflow");
+	const auto active_tasks = active_source_tasks.load(std::memory_order_relaxed);
+	if (active_tasks == 0)
+		BrowserSourceDestroyFatal("source_task_global_underflow");
+	active_source_tasks.fetch_sub(1, std::memory_order_release);
+	return release;
+}
+
 static BrowserSourceTaskRelease BrowserSourceRequestDeleteIfIdle(
 	const std::shared_ptr<BrowserSourceTaskState> &state, bool completion_required)
 {
@@ -816,7 +833,7 @@ void BrowserSource::Destroy()
 		source->SetBrowser(nullptr);
 		source->UnlinkFromBrowserList();
 		BrowserSourceCompleteTaskRelease(
-			BrowserSourceRequestDeleteIfIdle(destroy_task_state, true));
+			BrowserSourceRequestDeleteReleaseOwnLease(destroy_task_state, true));
 	});
 
 	if (!posted) {

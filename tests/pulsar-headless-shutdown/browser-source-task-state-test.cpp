@@ -96,7 +96,60 @@ static bool test_destroy_then_admission()
 	       check(underflow.underflow, "release underflow was not detected");
 }
 
+static bool test_destroy_task_releases_own_lease()
+{
+	BrowserSourceTaskState own_only;
+	own_only.source = reinterpret_cast<BrowserSource *>(static_cast<std::uintptr_t>(1));
+	const bool own_only_destroying = own_only.begin_destroy();
+	const bool own_only_acquired = own_only.acquire(true);
+	const BrowserSourceTaskRelease own_only_release = own_only.request_delete_release_own_lease(true);
+	const BrowserSourceTaskRelease own_only_duplicate = own_only.request_delete_release_own_lease(true);
+
+	BrowserSourceTaskState other_first;
+	other_first.source = reinterpret_cast<BrowserSource *>(static_cast<std::uintptr_t>(1));
+	const bool other_first_destroying = other_first.begin_destroy();
+	const bool other_first_own = other_first.acquire(true);
+	const bool other_first_other = other_first.acquire(true);
+	const BrowserSourceTaskRelease other_release = other_first.release_task();
+	const BrowserSourceTaskRelease own_release = other_first.request_delete_release_own_lease(true);
+	const BrowserSourceTaskRelease other_underflow = other_first.release_task();
+
+	BrowserSourceTaskState own_first;
+	own_first.source = reinterpret_cast<BrowserSource *>(static_cast<std::uintptr_t>(1));
+	const bool own_first_destroying = own_first.begin_destroy();
+	const bool own_first_own = own_first.acquire(true);
+	const bool own_first_other = own_first.acquire(true);
+	const BrowserSourceTaskRelease own_waiting = own_first.request_delete_release_own_lease(true);
+	const BrowserSourceTaskRelease other_last = own_first.release_task();
+	const BrowserSourceTaskRelease own_underflow = own_first.release_task();
+
+	return check(own_only_destroying && own_only_acquired, "own-only setup did not acquire its lease") &&
+	       check(own_only_release.source != nullptr && own_only_release.complete_destroy_task,
+		     "own-only lease did not complete deletion") &&
+	       check(own_only.active_tasks == 0, "own-only release left an active lease") &&
+	       check(own_only_duplicate.source == nullptr && !own_only_duplicate.complete_destroy_task,
+		     "own-only duplicate completed deletion twice") &&
+	       check(own_only_duplicate.underflow, "own-only duplicate was not detected") &&
+	       check(other_first_destroying && other_first_own && other_first_other,
+		     "other-first setup did not acquire both leases") &&
+	       check(other_release.source == nullptr, "other-first release deleted too early") &&
+	       check(own_release.source != nullptr && own_release.complete_destroy_task,
+		     "own lease did not complete the last release") &&
+	       check(other_first.active_tasks == 0, "other-first release left an active lease") &&
+	       check(other_underflow.underflow, "other-first double release was accepted") &&
+	       check(own_first_destroying && own_first_own && own_first_other,
+		     "own-first setup did not acquire both leases") &&
+	       check(own_waiting.source == nullptr, "own-first release deleted with another lease") &&
+	       check(other_last.source != nullptr && other_last.complete_destroy_task,
+		     "last concurrent lease did not complete deletion") &&
+	       check(own_first.active_tasks == 0, "own-first release left an active lease") &&
+	       check(own_underflow.underflow, "own-first double release was accepted");
+}
+
 int main()
 {
-	return test_admission_then_destroy() && test_destroy_then_admission() ? 0 : 1;
+	return test_admission_then_destroy() && test_destroy_then_admission() &&
+	       test_destroy_task_releases_own_lease()
+		       ? 0
+		       : 1;
 }
