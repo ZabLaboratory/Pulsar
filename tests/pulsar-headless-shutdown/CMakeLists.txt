@@ -12,6 +12,8 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/obs-browser-
      PULSAR_BROWSER_SOURCE_CPP)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/obs-browser-source.hpp"
      PULSAR_BROWSER_SOURCE_HPP)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/browser-source-task-state.hpp"
+     PULSAR_BROWSER_TASK_STATE_HPP)
 if(PULSAR_BROWSER_CLIENT_CPP MATCHES "audio_callbacks_closed[.]load" OR
    PULSAR_BROWSER_CLIENT_CPP MATCHES "audio_callbacks_in_flight[.]fetch_add")
     message(FATAL_ERROR
@@ -68,6 +70,10 @@ if(NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceTaskState" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "std::vector<CefRefPtr<CefBrowser>>" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceBeginDestroyTaskState" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceReleaseTask" OR
+   NOT PULSAR_BROWSER_TASK_STATE_HPP MATCHES "request_delete_and_take_if_idle" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceRequestDeleteIfIdle" OR
+   PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceRequestDelete[(]" OR
+   PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceDeleteIfIdle[(]" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "QueueCEFTask[(][[]this" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "QueueCEFTask[(][[]&" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "bs->RequestBrowserCloseForShutdown")

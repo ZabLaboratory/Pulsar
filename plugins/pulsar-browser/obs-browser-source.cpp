@@ -119,14 +119,6 @@ static bool BrowserSourceBeginDestroyTaskState(const std::shared_ptr<BrowserSour
 	return state->begin_destroy();
 }
 
-static void BrowserSourceRequestDelete(const std::shared_ptr<BrowserSourceTaskState> &state,
-					       bool completion_required)
-{
-	if (!state)
-		BrowserSourceDestroyFatal("missing_source_task_state");
-	state->request_delete(completion_required);
-}
-
 static BrowserSourceTaskRelease BrowserSourceReleaseTask(const std::shared_ptr<BrowserSourceTaskState> &state)
 {
 	if (!state)
@@ -143,13 +135,13 @@ static BrowserSourceTaskRelease BrowserSourceReleaseTask(const std::shared_ptr<B
 	return release;
 }
 
-static BrowserSourceTaskRelease BrowserSourceDeleteIfIdle(
-	const std::shared_ptr<BrowserSourceTaskState> &state)
+static BrowserSourceTaskRelease BrowserSourceRequestDeleteIfIdle(
+	const std::shared_ptr<BrowserSourceTaskState> &state, bool completion_required)
 {
 	if (!state)
 		BrowserSourceDestroyFatal("missing_source_task_state");
 
-	return state->delete_if_idle();
+	return state->request_delete_and_take_if_idle(completion_required);
 }
 
 static void BrowserSourceCompleteTaskRelease(BrowserSourceTaskRelease release)
@@ -416,8 +408,8 @@ void BrowserSourceFinalizeBrowserClose(int browser_id)
 
 	if (source && pending_destroy) {
 		source->UnlinkFromBrowserList();
-		BrowserSourceRequestDelete(source->task_state, true);
-		BrowserSourceCompleteTaskRelease(BrowserSourceDeleteIfIdle(source->task_state));
+		const auto task_state = source->task_state;
+		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, true));
 	}
 
 	blog(LOG_INFO,
@@ -622,8 +614,7 @@ void BrowserSource::Destroy()
 		     "PULSAR_CEF_SHUTDOWN event=source_destroy_rejected reason=cef_not_ready");
 		SetBrowser(nullptr);
 		UnlinkFromBrowserList();
-		BrowserSourceRequestDelete(task_state, false);
-		BrowserSourceCompleteTaskRelease(BrowserSourceDeleteIfIdle(task_state));
+		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, false));
 		return;
 	}
 	const int browser_id = browser ? browser->GetIdentifier() : BrowserSourceBrowserIdForSource(this);
@@ -633,8 +624,7 @@ void BrowserSource::Destroy()
 	if (disposition == BrowserSourceDestroyDisposition::DeleteNow) {
 		UnlinkFromBrowserList();
 		SetBrowser(nullptr);
-		BrowserSourceRequestDelete(task_state, false);
-		BrowserSourceCompleteTaskRelease(BrowserSourceDeleteIfIdle(task_state));
+		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, false));
 		return;
 	}
 	if (disposition == BrowserSourceDestroyDisposition::Fatal)
@@ -674,8 +664,8 @@ void BrowserSource::Destroy()
 		}
 		source->SetBrowser(nullptr);
 		source->UnlinkFromBrowserList();
-		BrowserSourceRequestDelete(destroy_task_state, true);
-		BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(destroy_task_state));
+		BrowserSourceCompleteTaskRelease(
+			BrowserSourceRequestDeleteIfIdle(destroy_task_state, true));
 	});
 
 	if (!posted) {
