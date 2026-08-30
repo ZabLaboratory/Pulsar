@@ -163,6 +163,19 @@ def _raise_with_sanitized_tail(probe, process, message: str) -> None:
     raise RuntimeError(f"{message}\nSanitized Pulsar log tail:\n{tail}")
 
 
+def _source_destroyed_count(process) -> int:
+    return sum("event=source_destroyed" in line for line in process.snapshot())
+
+
+async def _wait_for_source_destroyed(process, previous_count: int, timeout: float = 20) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if _source_destroyed_count(process) > previous_count:
+            return
+        await asyncio.sleep(0.1)
+    raise RuntimeError("CEF readiness source was not destroyed after RemoveInput")
+
+
 async def _configure_two_browser_sources(probe, ws_url: str, password: str, process, server) -> None:
     """Create two real CEF browser_source instances and keep recording active."""
 
@@ -193,6 +206,7 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
             "restart_when_active": False,
             "webpage_control_level": 0,
         }
+        destroyed_before = _source_destroyed_count(process)
         response = await probe.request(
             inbox,
             ws,
@@ -215,6 +229,8 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
             {"inputName": readiness_input},
         )
         probe.assert_success(response, "RemoveInput(immediate readiness)")
+        await _wait_for_source_destroyed(process, destroyed_before)
+        destroyed_before = _source_destroyed_count(process)
         response = await probe.request(
             inbox,
             ws,
@@ -237,6 +253,7 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
             {"inputName": readiness_input},
         )
         probe.assert_success(response, "RemoveInput(immediate recreate)")
+        await _wait_for_source_destroyed(process, destroyed_before)
 
         for lane in ("A", "B"):
             input_name = f"cef-shutdown-browser-{lane}"
@@ -432,6 +449,16 @@ def main() -> int:
         _raise_with_sanitized_tail(probe, process, f"Pulsar exited unsuccessfully: {status}")
     if not real_output_started:
         _raise_with_sanitized_tail(probe, process, "real recording output was not active before shutdown")
+    destroy_diagnostics = (
+        "Double destroy just occurred",
+        "source(s) were remaining",
+    )
+    if any(token in line for line in lines for token in destroy_diagnostics):
+        _raise_with_sanitized_tail(
+            probe,
+            process,
+            "CEF source cleanup reported a remaining source or double destroy",
+        )
 
     # The ordering is the regression contract for the CEF fix: two actual
     # browsers are observed, every one reaches OnBeforeClose, and only then
@@ -448,7 +475,6 @@ def main() -> int:
         "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete",
     )
     count_constraints = {
-        required_markers[0]: 2,
         required_markers[3]: 0,
     }
     lines = process.snapshot()
@@ -495,6 +521,7 @@ def main() -> int:
             process,
             f"pre-obs-shutdown audio fence ordering invalid: {positions}",
         )
+    browser_created = {}
     audio_started = {}
     audio_stopped = {}
     audio_quiescent = {}
@@ -510,6 +537,7 @@ def main() -> int:
     client_keepalive_released = {}
     for index, line in enumerate(lines):
         for event, destination in (
+            ("browser_created", browser_created),
             ("audio_stream_started", audio_started),
             ("audio_stream_stopped", audio_stopped),
             ("audio_quiescent", audio_quiescent),
@@ -529,25 +557,42 @@ def main() -> int:
         match = re.search(r"event=browser_closed browser_id=(\d+)(?:\s|$)", line)
         if match:
             browser_closed.setdefault(match.group(1), []).append(index)
-    if (
-        len(audio_started) != 2
-        or set(audio_started) != set(audio_stopped)
-        or set(audio_started) != set(audio_quiescent)
-        or set(audio_started) != set(browser_detached)
-        or set(audio_started) != set(browser_close_observed)
-        or set(audio_started) != set(browser_finalization_intent)
-        or set(audio_started) != set(browser_close_call)
-        or set(audio_started) != set(browser_close_return)
-        or set(audio_started) != set(browser_on_before_close_entry)
-        or set(audio_started) != set(browser_on_before_close_exit)
-        or set(audio_started) != set(client_keepalive_acquired)
-        or set(audio_started) != set(client_keepalive_released)
-    ):
+    created_ids = set(browser_created)
+    lifecycle_by_created_id = {
+        "browser_closed": browser_closed,
+        "browser_close_observed": browser_close_observed,
+        "browser_finalization_intent": browser_finalization_intent,
+        "browser_detached": browser_detached,
+        "browser_on_before_close_entry": browser_on_before_close_entry,
+        "browser_on_before_close_exit": browser_on_before_close_exit,
+        "client_keepalive_acquired": client_keepalive_acquired,
+        "client_keepalive_released": client_keepalive_released,
+        "audio_quiescent": audio_quiescent,
+    }
+    lifecycle_exactly_once = all(
+        set(events) == created_ids and all(len(indices) == 1 for indices in events.values())
+        for events in lifecycle_by_created_id.values()
+    )
+    audio_exactly_once = (
+        len(audio_started) == 2
+        and set(audio_started) == set(audio_stopped)
+        and all(len(indices) == 1 for indices in audio_started.values())
+        and all(len(indices) == 1 for indices in audio_stopped.values())
+    )
+    shutdown_close_exactly_once = (
+        set(browser_close_call) == set(browser_close_return)
+        and all(len(indices) == 1 for indices in browser_close_call.values())
+        and all(len(indices) == 1 for indices in browser_close_return.values())
+        and len(browser_close_call) == 2
+    )
+    if len(created_ids) < 2 or not lifecycle_exactly_once or not audio_exactly_once or not shutdown_close_exactly_once:
         _raise_with_sanitized_tail(
             probe,
             process,
-            "CEF client/audio lifecycle did not reach exactly two IDs: "
+            "CEF client/audio lifecycle did not satisfy per-browser exactly-once invariants: "
+            f"created={sorted(created_ids)} "
             f"started={sorted(audio_started)} stopped={sorted(audio_stopped)} "
+            f"closed={sorted(browser_closed)} "
             f"quiescent={sorted(audio_quiescent)} detached={sorted(browser_detached)} "
             f"observed={sorted(browser_close_observed)} intent={sorted(browser_finalization_intent)} "
             f"close_call={sorted(browser_close_call)} close_return={sorted(browser_close_return)} "
@@ -573,96 +618,55 @@ def main() -> int:
             process,
             "CEF started a second browser close before the first browser was closed",
         )
-    for browser_id in sorted(audio_started):
-        if browser_id not in browser_closed:
-            _raise_with_sanitized_tail(
-                probe, process, f"CEF browser {browser_id} has no browser_closed marker"
-            )
-        started = min(audio_started[browser_id])
-        stopped_candidates = [index for index in audio_stopped[browser_id] if index > started]
-        if not stopped_candidates:
-            _raise_with_sanitized_tail(
-                probe, process, f"CEF browser {browser_id} has no post-start audio stop marker"
-            )
-        stopped = min(stopped_candidates)
-        quiescent_candidates = [index for index in audio_quiescent[browser_id] if index >= stopped]
-        if not quiescent_candidates:
-            _raise_with_sanitized_tail(
-                probe, process, f"CEF browser {browser_id} has no post-stop audio quiescent marker"
-            )
-        quiescent = min(quiescent_candidates)
-        closed_candidates = [index for index in browser_closed[browser_id] if index >= quiescent]
-        if not closed_candidates:
-            _raise_with_sanitized_tail(
-                probe, process, f"CEF browser {browser_id} has no post-quiescent browser_closed marker"
-            )
-        closed = min(closed_candidates)
-        observed_candidates = [
-            index for index in browser_close_observed[browser_id] if index > started
-        ]
-        acquired_candidates = [
-            index for index in client_keepalive_acquired[browser_id] if index > started
-        ]
-        close_call_candidates = [
-            index for index in browser_close_call[browser_id] if index > started
-        ]
-        close_return_candidates = [
-            index for index in browser_close_return[browser_id] if index > started
-        ]
-        before_close_entry_candidates = [
-            index for index in browser_on_before_close_entry[browser_id] if index > started
-        ]
-        before_close_exit_candidates = [
-            index for index in browser_on_before_close_exit[browser_id] if index > started
-        ]
-        detached_candidates = [
-            index for index in browser_detached[browser_id] if index > started
-        ]
-        intent_candidates = [
-            index for index in browser_finalization_intent[browser_id] if index > started
-        ]
-        released_candidates = [
-            index for index in client_keepalive_released[browser_id] if index >= closed
-        ]
-        if (
-            not observed_candidates
-            or not detached_candidates
-            or not intent_candidates
-            or not close_call_candidates
-            or not close_return_candidates
-            or not before_close_entry_candidates
-            or not before_close_exit_candidates
-            or not acquired_candidates
-            or not released_candidates
-        ):
+    for browser_id in sorted(created_ids):
+        created = min(browser_created[browser_id])
+        observed = min(browser_close_observed[browser_id])
+        acquired = min(client_keepalive_acquired[browser_id])
+        before_close_entry = min(browser_on_before_close_entry[browser_id])
+        before_close_exit = min(browser_on_before_close_exit[browser_id])
+        detached = min(browser_detached[browser_id])
+        intent = min(browser_finalization_intent[browser_id])
+        quiescent = min(audio_quiescent[browser_id])
+        closed = min(browser_closed[browser_id])
+        released = min(client_keepalive_released[browser_id])
+
+        if browser_id in audio_started:
+            started = min(audio_started[browser_id])
+            stopped = min(audio_stopped[browser_id])
+            audio_tail = max(stopped, observed)
+        else:
+            # A readiness source may create and close a browser before CEF
+            # starts its audio stream.  Its lifecycle is still mandatory;
+            # audio stopped is required iff audio started was observed.
+            started = None
+            stopped = None
+            audio_tail = observed
+
+        if browser_id in browser_close_call:
+            close_call = min(browser_close_call[browser_id])
+            close_return = min(browser_close_return[browser_id])
+            close_order_valid = close_call < close_return and close_call < before_close_entry
+        else:
+            close_call = None
+            close_return = None
+            close_order_valid = browser_id not in browser_close_return
+
+        ordering_valid = (
+            created < acquired <= detached <= observed
+            and created < before_close_entry < before_close_exit
+            and audio_tail <= intent <= quiescent < closed < released
+            and close_order_valid
+            and (started is None or started < stopped)
+        )
+        if not ordering_valid:
             _raise_with_sanitized_tail(
                 probe,
                 process,
-                f"CEF client keepalive markers missing for browser {browser_id}",
-            )
-        observed = min(observed_candidates)
-        acquired = min(acquired_candidates)
-        close_call = min(close_call_candidates)
-        close_return = min(close_return_candidates)
-        before_close_entry = min(before_close_entry_candidates)
-        before_close_exit = min(before_close_exit_candidates)
-        detached = min(detached_candidates)
-        intent = min(intent_candidates)
-        released = min(released_candidates)
-        if not (
-            started < stopped
-            and close_call < close_return
-            and close_call < before_close_entry < before_close_exit
-            and started < acquired <= detached <= observed
-            and max(stopped, observed) <= intent <= quiescent < closed < released
-        ):
-            _raise_with_sanitized_tail(
-                probe,
-                process,
-                f"CEF audio/browser close ordering invalid for browser {browser_id}: "
-                f"acquired={acquired} detached={detached} observed={observed} intent={intent} "
-                f"started={started} stopped={stopped} "
-                f"quiescent={quiescent} closed={closed} released={released}",
+                f"CEF browser lifecycle ordering invalid for browser {browser_id}: "
+                f"created={created} acquired={acquired} detached={detached} observed={observed} "
+                f"intent={intent} started={started} stopped={stopped} quiescent={quiescent} "
+                f"closed={closed} released={released} close_call={close_call} "
+                f"close_return={close_return}",
             )
     if any("event=cef_shutdown_skipped" in line or "event=timeout" in line for line in lines):
         _raise_with_sanitized_tail(probe, process, "CEF shutdown reported a fail-closed timeout on the healthy path")

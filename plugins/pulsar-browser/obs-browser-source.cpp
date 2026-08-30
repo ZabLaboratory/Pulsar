@@ -759,6 +759,7 @@ BrowserSource::~BrowserSource()
 		obs_weak_source_release(weak_source);
 		weak_source = nullptr;
 	}
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=source_destroyed");
 }
 
 void BrowserSource::UnlinkFromBrowserList()

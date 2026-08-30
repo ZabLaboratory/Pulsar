@@ -96,6 +96,7 @@ if(NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceTaskState" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_close_return" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_close_enqueued" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_close_deferred" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "event=source_destroyed" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceBeginDestroyTaskState" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceReleaseTask" OR
    NOT PULSAR_BROWSER_TASK_STATE_HPP MATCHES "request_delete_and_take_if_idle" OR
