@@ -33,28 +33,28 @@ using ActionVerdict = Utils::Obs::OutputHelper::ActionVerdict;
 // timeline; video_pause_check_internal then drops every frame with
 // ts >= pause->ts_start and only lifts the pause on an EXACT ts == pause->ts_end,
 // which that faulty base never reaches. The muxer is wedged for good: the replay
-// buffer sharing the encoders stops producing files, and Stop* answer Success()
-// while outputActive stays true.
+// buffer sharing the encoders stops producing files, and an unchecked stop
+// caller can answer Success() while outputActive stays true.
 //
 // Fixing libobs is out of Pulsar's mandate (LICENSE-INVARIANTS.md / fork
 // doctrine: no divergence from libobs for an exotic trigger). The websocket
 // layer is the only layer that can NAME the cause -- obs_frontend_recording_pause()
 // returns void -- so it refuses the precondition instead of entering the wedge.
-// outputBytes > 0 is a conservative proxy for "the muxer took at least one
-// encoded packet": it can refuse a legitimate pause for the few tens of ms after
-// StartRecord, never the reverse. The client lifts the condition itself --
-// outputBytes is already a GetRecordStatus response field.
-static constexpr const char *kPauseBeforeFirstByte =
-	"Cannot pause the recording before the muxer has written its first byte "
-	"(outputBytes is still 0). libobs's pause timeline is not initialised until "
-	"the first encoded frame is muxed; pausing now wedges the output permanently. "
-	"Poll GetRecordStatus until outputBytes > 0, then retry.";
+// outputTotalFrames is the public libobs counter for video frames delivered to
+// this output. It is deliberately used instead of outputBytes: audio packets
+// can make outputBytes non-zero while the first video frame (the packet that
+// initialises libobs's pause timeline) has not arrived yet.
+static constexpr const char *kPauseBeforeFirstVideoFrame =
+	"Cannot pause the recording before the muxer has received its first video frame "
+	"(outputTotalFrames is still 0). libobs's pause timeline is not initialised until "
+	"the first encoded video frame is muxed; pausing now wedges the output permanently. "
+	"Poll GetRecordStatus or GetOutputStatus until outputTotalFrames > 0, then retry.";
 
-// True when the record output has not muxed a single byte yet.
-static bool RecordOutputHasNoBytesYet()
+// True when the record output has not received a single video frame yet.
+static bool RecordOutputHasNoVideoFramesYet()
 {
 	OBSOutputAutoRelease output = obs_frontend_get_recording_output();
-	return !output || obs_output_get_total_bytes(output) == 0;
+	return !output || obs_output_get_total_frames(output) == 0;
 }
 
 // Issue #169 / ADR Prism 026 §3.2. obs_frontend_recording_split_file() and
@@ -84,6 +84,7 @@ static RequestResult RecordProcFailure(const char *action)
  * @responseField outputTimecode      | String  | Current formatted timecode string for the output
  * @responseField outputDuration      | Number  | Current duration in milliseconds for the output
  * @responseField outputBytes         | Number  | Number of bytes sent by the output
+ * @responseField outputTotalFrames   | Number  | Number of video frames delivered by the output
  *
  * @requestType GetRecordStatus
  * @complexity 2
@@ -104,6 +105,7 @@ RequestResult RequestHandler::GetRecordStatus(const Request &)
 	responseData["outputTimecode"] = Utils::Obs::StringHelper::DurationToTimecode(outputDuration);
 	responseData["outputDuration"] = outputDuration;
 	responseData["outputBytes"] = (uint64_t)obs_output_get_total_bytes(recordOutput);
+	responseData["outputTotalFrames"] = (uint64_t)obs_output_get_total_frames(recordOutput);
 
 	return RequestResult::Success(responseData);
 }
@@ -193,8 +195,12 @@ RequestResult RequestHandler::StopRecord(const Request &)
 
 	obs_frontend_recording_stop();
 
-	if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
+	const ActionVerdict verdict = Utils::Obs::OutputHelper::SettleRecordStop(output, watch);
+	if (verdict == ActionVerdict::Refused)
 		return OutputStopFailure(output, "The record output");
+	if (verdict == ActionVerdict::Pending)
+		return OutputStopPending(
+			output, "The record output", Utils::Obs::OutputHelper::RecordStopVerifyTimeoutMs());
 
 	json responseData;
 	responseData["outputPath"] = Utils::Obs::StringHelper::GetLastRecordFileName();
@@ -227,8 +233,8 @@ RequestResult RequestHandler::ToggleRecordPause(const Request &)
 		obs_frontend_recording_pause(false);
 		responseData["outputPaused"] = false;
 	} else {
-		if (RecordOutputHasNoBytesYet())
-			return RequestResult::Error(RequestStatus::InvalidResourceState, kPauseBeforeFirstByte);
+		if (RecordOutputHasNoVideoFramesYet())
+			return RequestResult::Error(RequestStatus::InvalidResourceState, kPauseBeforeFirstVideoFrame);
 		obs_frontend_recording_pause(true);
 		responseData["outputPaused"] = true;
 	}
@@ -258,8 +264,8 @@ RequestResult RequestHandler::PauseRecord(const Request &)
 		return RequestResult::Error(RequestStatus::OutputPaused);
 
 	// Issue #130: refuse the muxer-wedging precondition, with the cause named.
-	if (RecordOutputHasNoBytesYet())
-		return RequestResult::Error(RequestStatus::InvalidResourceState, kPauseBeforeFirstByte);
+	if (RecordOutputHasNoVideoFramesYet())
+		return RequestResult::Error(RequestStatus::InvalidResourceState, kPauseBeforeFirstVideoFrame);
 
 	// TODO: Call signal directly to perform blocking wait
 	obs_frontend_recording_pause(true);
