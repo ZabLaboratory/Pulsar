@@ -6,6 +6,8 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/browser-clie
      PULSAR_BROWSER_CLIENT_CPP)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/browser-client.hpp"
      PULSAR_BROWSER_CLIENT_HPP)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/obs-browser-plugin.cpp"
+     PULSAR_BROWSER_PLUGIN_CPP)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/obs-browser-source.cpp"
      PULSAR_BROWSER_SOURCE_CPP)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/obs-browser-source.hpp"
@@ -18,6 +20,16 @@ endif()
 if(NOT PULSAR_BROWSER_CLIENT_HPP MATCHES "BrowserAudioCallbackGate" OR
    NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "audio_callbacks[.]try_acquire")
     message(FATAL_ERROR "browser client is missing the linearized audio callback gate")
+endif()
+if(NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "BrowserSourceWaitForCefReady" OR
+   NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "BrowserSourceCefInitializationFailed" OR
+   NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "event=manager_started" OR
+   NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "event=cef_ready" OR
+   NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "event=readiness_timeout" OR
+   NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "event=readiness_failed" OR
+   NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "event=source_create_rejected" OR
+   NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "event=post_rejected")
+    message(FATAL_ERROR "CEF readiness barrier or diagnostics are missing")
 endif()
 if(NOT PULSAR_BROWSER_CLIENT_HPP MATCHES "close_keepalive" OR
    NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "close_keepalive[ ]*=[ ]*self" OR

@@ -502,6 +502,13 @@ void BrowserSource::Destroy()
 	DestroyTextures();
 
 	CefRefPtr<CefBrowser> browser = GetBrowser();
+	if (!browser && !BrowserSourceCefReady()) {
+		blog(LOG_WARNING,
+		     "PULSAR_CEF_SHUTDOWN event=source_destroy_rejected reason=cef_not_ready");
+		UnlinkFromBrowserList();
+		delete this;
+		return;
+	}
 	const int browser_id = browser ? browser->GetIdentifier() : -1;
 	bool wait_for_browser = false;
 	const BrowserSourceDestroyDisposition disposition =
@@ -583,6 +590,12 @@ bool BrowserSource::CreateBrowser()
 {
 	if (!BrowserSourceCanCreateBrowser()) {
 		create_browser = false;
+		return true;
+	}
+	if (!BrowserSourceWaitForCefReady()) {
+		create_browser = false;
+		blog(LOG_WARNING,
+		     "PULSAR_CEF_SHUTDOWN event=source_create_rejected reason=cef_not_ready");
 		return true;
 	}
 
