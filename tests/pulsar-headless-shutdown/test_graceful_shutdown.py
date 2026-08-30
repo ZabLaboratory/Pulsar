@@ -16,6 +16,7 @@ import ctypes
 import http.server
 import io
 import importlib.util
+import inspect
 import json
 import math
 import os
@@ -76,6 +77,13 @@ def test_create_remove_rendezvous_is_bounded_and_test_only() -> None:
     assert "WaitForSingleObject(release_event, 5000)" in rendezvous
     assert "event=test_create_rendezvous_ready" in rendezvous
     assert "event=test_create_rendezvous_released" in rendezvous
+
+    harness = inspect.getsource(_configure_two_browser_sources)
+    assert "source_destroy_armed" in source
+    send = harness.index("await ws.send")
+    armed = harness.index("await _wait_for_source_destroy_armed")
+    release = harness.index("create_rendezvous.release_create()")
+    assert send < armed < release
 
 
 def test_frontend_drains_source_graph_before_disconnect() -> None:
@@ -315,6 +323,20 @@ async def _wait_for_source_destroyed(process, generation: str, timeout: float = 
     raise RuntimeError(f"CEF source generation {generation} was not destroyed after RemoveInput")
 
 
+async def _wait_for_source_destroy_armed(process, generation: str, timeout: float = 10) -> None:
+    pattern = re.compile(
+        rf"event=source_destroy_armed generation={re.escape(generation)} browser_count=0(?:\s|$)"
+    )
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if any(pattern.search(line) for line in process.snapshot()):
+            return
+        await asyncio.sleep(0.05)
+    raise RuntimeError(
+        f"CEF source generation {generation} did not acknowledge Destroy arm"
+    )
+
+
 def _browser_ids_for_generations(process, generations: set[str]) -> set[str]:
     result = set()
     for line in process.snapshot():
@@ -411,6 +433,7 @@ async def _configure_two_browser_sources(
                     }
                 )
             )
+            await _wait_for_source_destroy_armed(process, readiness_generation)
             create_rendezvous.release_create()
             response = await inbox.receive_until_response(ws, request_id)
         probe.assert_success(response, "RemoveInput(immediate readiness)")
@@ -444,21 +467,39 @@ async def _configure_two_browser_sources(
                 ]
                 for browser_id in created_ids
             }
+            enqueued_markers = {
+                browser_id: [
+                    index
+                    for index, line in enumerate(lines)
+                    if re.search(
+                        rf"event=browser_close_enqueued browser_id={browser_id} "
+                        r"reason=source_destroying(?:\s|$)",
+                        line,
+                    )
+                ]
+                for browser_id in created_ids
+            }
             if (
                 len(ready_markers) != 1
                 or len(released_markers) != 1
                 or len(created_ids) != 1
                 or len(destroyed_markers) != 1
+                or any(len(indices) != 1 for indices in enqueued_markers.values())
                 or any(len(indices) != 1 for indices in closed_markers.values())
                 or not all(
-                    ready_markers[0] < released_markers[0] < min(indices) < destroyed_markers[0]
-                    for indices in closed_markers.values()
+                    ready_markers[0]
+                    < released_markers[0]
+                    < min(enqueued_markers[browser_id])
+                    < min(closed_markers[browser_id])
+                    < destroyed_markers[0]
+                    for browser_id in created_ids
                 )
             ):
                 raise RuntimeError(
                     "paused create/remove rendezvous did not close exactly one late browser "
                     f"before source destruction: ready={ready_markers} released={released_markers} "
-                    f"created={sorted(created_ids)} closed={closed_markers} destroyed={destroyed_markers}"
+                    f"created={sorted(created_ids)} enqueued={enqueued_markers} "
+                    f"closed={closed_markers} destroyed={destroyed_markers}"
                 )
         source_generations_before = _source_created_generations(process)
         response = await probe.request(

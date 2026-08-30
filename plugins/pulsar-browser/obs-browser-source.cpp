@@ -1009,6 +1009,12 @@ void BrowserSource::Destroy()
 		BrowserSourceDestroyFatal("invalid_lifecycle_phase");
 
 	if (browser_ids.empty()) {
+		/* No browser was present when PrepareDestroy armed the barrier.  The
+		 * generation marker is the test-only handoff which lets a paused create
+		 * task prove that Destroy won the race before CreateBrowserSync resumes. */
+		blog(LOG_INFO,
+		     "PULSAR_CEF_SHUTDOWN event=source_destroy_armed generation=%llu browser_count=0",
+		     static_cast<unsigned long long>(source_generation));
 		/* No browser remains; the source task state owns the final delete. */
 		SetBrowser(nullptr);
 		UnlinkFromBrowserList();

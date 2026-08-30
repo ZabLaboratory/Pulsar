@@ -86,6 +86,7 @@ if(NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "obs_source_get_weak_source" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "source_destroy_close_ids" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceEnqueueDestroyClose" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "test_create_rendezvous_ready" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "source_destroy_armed" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "WaitForSingleObject" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "DetachBrowser" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceFinalizeBrowserClose[(]CefRefPtr" OR
