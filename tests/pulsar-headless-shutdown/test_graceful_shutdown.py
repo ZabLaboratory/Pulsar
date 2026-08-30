@@ -35,6 +35,11 @@ def _load_probe():
     return module
 
 
+def _raise_with_sanitized_tail(probe, process, message: str) -> None:
+    tail = probe.failure_tail(process.snapshot(), 40)
+    raise RuntimeError(f"{message}\nSanitized Pulsar log tail:\n{tail}")
+
+
 def main() -> int:
     if os.name != "nt":
         print("SKIP: graceful-shutdown integration proof is Windows-only")
@@ -86,7 +91,7 @@ def main() -> int:
                 cleanup_error = cleanup_error or exc
 
     if cleanup_error is not None:
-        raise cleanup_error
+        _raise_with_sanitized_tail(probe, process, str(cleanup_error))
     if not started:
         raise RuntimeError("Pulsar process never spawned")
     lines = process.snapshot()
@@ -99,18 +104,20 @@ def main() -> int:
     )
     for marker in required:
         if not any(marker in line for line in lines):
-            raise RuntimeError(f"missing graceful-shutdown marker: {marker}")
+            _raise_with_sanitized_tail(
+                probe, process, f"missing graceful-shutdown marker: {marker}"
+            )
     control_lines = [line for line in lines if line.startswith("PULSAR_SHUTDOWN_CONTROL")]
     if any(
         "PULSAR_SHUTDOWN_EVENT_HANDLE" in line or "handle" in line.lower()
         for line in control_lines
     ):
-        raise RuntimeError("shutdown handle or its value was logged")
+        _raise_with_sanitized_tail(probe, process, "shutdown handle or its value was logged")
     if process.forced_kill_used:
-        raise RuntimeError("forced process kill was used")
+        _raise_with_sanitized_tail(probe, process, "forced process kill was used")
     if process.proc is None or process.proc.returncode != 0:
         status = process.proc.returncode if process.proc is not None else None
-        raise RuntimeError(f"Pulsar exited unsuccessfully: {status}")
+        _raise_with_sanitized_tail(probe, process, f"Pulsar exited unsuccessfully: {status}")
     print("PASS: pipe-backed Windows graceful shutdown released runtime leases without forced kill")
     return 0
 
