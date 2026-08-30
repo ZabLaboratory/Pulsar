@@ -61,7 +61,32 @@ def test_headless_fences_browser_audio_before_obs_shutdown() -> None:
     frontend_shutdown = normal_shutdown.index("pulsar_frontend_shutdown();")
     browser_fence = normal_shutdown.index("browser_pre_shutdown_ready(browser_shutdown_error)")
     obs_shutdown = normal_shutdown.index("obs_shutdown();")
-    assert frontend_shutdown < browser_fence < obs_shutdown
+    assert browser_fence < frontend_shutdown < obs_shutdown
+
+
+def test_frontend_drains_source_graph_before_disconnect() -> None:
+    source = (
+        ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
+    ).read_text(encoding="utf-8")
+    teardown = source[source.index("void PulsarFrontendAPI::teardown()") :]
+    clear = teardown.index("clear_libobs_scene_data();")
+    disconnect = teardown.index('signal_handler_disconnect(globalSh, "source_remove"')
+    assert clear < disconnect
+    assert "obs_enum_scenes(collect_ref" in source
+    assert "obs_enum_sources(collect_ref" in source
+    assert "obs_scene_prune_sources(sc)" in source
+    assert "while (obs_wait_for_destroy_queue())" in source
+    assert "event=source_graph_orphans" in source
+    assert "event=source_graph_drained" in source
+    headless = (ROOT / "plugins" / "pulsar-headless" / "main.cpp").read_text(encoding="utf-8")
+    assert "pulsar_frontend_cleanup_succeeded()" in headless
+    assert "code=frontend_source_cleanup_failed" in headless
+
+
+def test_failure_reporting_preserves_primary_and_cleanup_errors() -> None:
+    summary = _format_failures(RuntimeError("pixel failure"), [RuntimeError("shutdown failure")])
+    assert "primary=pixel failure" in summary
+    assert "cleanup=shutdown failure" in summary
 
 
 def _cef_audio_page(lane: str) -> str:
@@ -163,7 +188,68 @@ def _raise_with_sanitized_tail(probe, process, message: str) -> None:
     raise RuntimeError(f"{message}\nSanitized Pulsar log tail:\n{tail}")
 
 
-async def _configure_two_browser_sources(probe, ws_url: str, password: str, process, server) -> None:
+def _format_failures(primary: Exception | None, cleanup: list[Exception]) -> str:
+    failures = []
+    if primary is not None:
+        failures.append(f"primary={primary}")
+    failures.extend(f"cleanup={error}" for error in cleanup)
+    return "; ".join(failures)
+
+
+def _source_created_generations(process) -> set[str]:
+    return {
+        match.group(1)
+        for line in process.snapshot()
+        if (match := re.search(r"event=source_created generation=(\d+)(?:\s|$)", line))
+    }
+
+
+def _source_destroyed_generations(process) -> set[str]:
+    return {
+        match.group(1)
+        for line in process.snapshot()
+        if (match := re.search(r"event=source_destroyed generation=(\d+)(?:\s|$)", line))
+    }
+
+
+async def _wait_for_source_created(
+    process, previous_generations: set[str], timeout: float = 20
+) -> str:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        new_generations = _source_created_generations(process) - previous_generations
+        if len(new_generations) == 1:
+            return next(iter(new_generations))
+        if len(new_generations) > 1:
+            raise RuntimeError(
+                "ambiguous CEF source creation generations: "
+                f"{sorted(new_generations)}"
+            )
+        await asyncio.sleep(0.1)
+    raise RuntimeError("CEF source creation marker was not observed")
+
+
+async def _wait_for_source_destroyed(process, generation: str, timeout: float = 20) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if generation in _source_destroyed_generations(process):
+            return
+        await asyncio.sleep(0.1)
+    raise RuntimeError(f"CEF source generation {generation} was not destroyed after RemoveInput")
+
+
+def _browser_ids_for_generations(process, generations: set[str]) -> set[str]:
+    result = set()
+    for line in process.snapshot():
+        match = re.search(
+            r"event=browser_created browser_id=(\d+) generation=(\d+)(?:\s|$)", line
+        )
+        if match and match.group(2) in generations:
+            result.add(match.group(1))
+    return result
+
+
+async def _configure_two_browser_sources(probe, ws_url: str, password: str, process, server) -> set[str]:
     """Create two real CEF browser_source instances and keep recording active."""
 
     async with probe.websockets.connect(
@@ -193,6 +279,7 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
             "restart_when_active": False,
             "webpage_control_level": 0,
         }
+        source_generations_before = _source_created_generations(process)
         response = await probe.request(
             inbox,
             ws,
@@ -207,6 +294,7 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
             },
         )
         probe.assert_success(response, "CreateInput(immediate readiness)")
+        readiness_generation = await _wait_for_source_created(process, source_generations_before)
         response = await probe.request(
             inbox,
             ws,
@@ -215,6 +303,8 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
             {"inputName": readiness_input},
         )
         probe.assert_success(response, "RemoveInput(immediate readiness)")
+        await _wait_for_source_destroyed(process, readiness_generation)
+        source_generations_before = _source_created_generations(process)
         response = await probe.request(
             inbox,
             ws,
@@ -229,6 +319,7 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
             },
         )
         probe.assert_success(response, "CreateInput(immediate recreate)")
+        recreate_generation = await _wait_for_source_created(process, source_generations_before)
         response = await probe.request(
             inbox,
             ws,
@@ -237,9 +328,12 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
             {"inputName": readiness_input},
         )
         probe.assert_success(response, "RemoveInput(immediate recreate)")
+        await _wait_for_source_destroyed(process, recreate_generation)
 
+        durable_generations: set[str] = set()
         for lane in ("A", "B"):
             input_name = f"cef-shutdown-browser-{lane}"
+            source_generations_before = _source_created_generations(process)
             response = await probe.request(
                 inbox,
                 ws,
@@ -265,6 +359,9 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
                 },
             )
             probe.assert_success(response, f"CreateInput(browser_source {lane})")
+            durable_generations.add(
+                await _wait_for_source_created(process, source_generations_before)
+            )
 
         response = await probe.request(
             inbox,
@@ -285,19 +382,25 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
                 require_variance=True,
             )
 
+        durable_browser_ids = _browser_ids_for_generations(process, durable_generations)
+        if len(durable_browser_ids) != 2:
+            raise RuntimeError(
+                "CEF durable browser generations did not map to exactly two browser IDs: "
+                f"generations={sorted(durable_generations)} ids={sorted(durable_browser_ids)}"
+            )
         deadline = asyncio.get_running_loop().time() + 20
         started_ids: set[str] = set()
-        while len(started_ids) < 2 and asyncio.get_running_loop().time() < deadline:
+        while not durable_browser_ids.issubset(started_ids) and asyncio.get_running_loop().time() < deadline:
             for line in process.snapshot():
                 match = re.search(r"event=audio_stream_started browser_id=(\d+)(?:\s|$)", line)
                 if match:
                     started_ids.add(match.group(1))
-            if len(started_ids) < 2:
+            if not durable_browser_ids.issubset(started_ids):
                 await asyncio.sleep(0.1)
-        if len(started_ids) != 2:
+        if not durable_browser_ids.issubset(started_ids):
             raise RuntimeError(
-                "CEF audio handler did not start for both browser sources: "
-                f"observed={sorted(started_ids)}"
+                "CEF audio handler did not start for both durable browser sources: "
+                f"durable={sorted(durable_browser_ids)} observed={sorted(started_ids)}"
             )
 
         response = await probe.request(inbox, ws, "StartRecord", "cef-shutdown-start-record")
@@ -309,6 +412,7 @@ async def _configure_two_browser_sources(probe, ws_url: str, password: str, proc
             lambda data: data.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STARTED",
             timeout=20,
         )
+        return durable_browser_ids
 
 
 def main() -> int:
@@ -338,25 +442,33 @@ def main() -> int:
     )
     started = False
     real_output_started = False
-    cleanup_error: Exception | None = None
+    durable_browser_ids: set[str] = set()
+    primary_error: Exception | None = None
     try:
         process.spawn()
         started = True
         # The child-side ACK must precede acceptance of PULSAR_READY.
         process.wait_for_shutdown_control_ready(timeout=60)
         ready = process.wait_for(probe.READY_RE, timeout=60)
-        asyncio.run(_configure_two_browser_sources(probe, ready.group(1), process.password, process, cef_server))
+        durable_browser_ids = asyncio.run(
+            _configure_two_browser_sources(
+                probe, ready.group(1), process.password, process, cef_server
+            )
+        )
         real_output_started = True
+    except Exception as exc:
+        primary_error = exc
     finally:
+        cleanup_errors: list[Exception] = []
         try:
             process.shutdown()
         except Exception as exc:  # preserve the primary startup error
-            cleanup_error = exc
+            cleanup_errors.append(exc)
         try:
-            if started and cleanup_error is None:
+            if started:
                 process.assert_shutdown_clean(require_runtime_lease=True)
         except Exception as exc:
-            cleanup_error = cleanup_error or exc
+            cleanup_errors.append(exc)
         finally:
             if previous_runtime_id is None:
                 os.environ.pop("PULSAR_RUNTIME_INSTANCE_ID", None)
@@ -365,14 +477,14 @@ def main() -> int:
             try:
                 shutil.rmtree(record_dir)
             except Exception as exc:
-                cleanup_error = cleanup_error or exc
+                cleanup_errors.append(exc)
             try:
                 cef_server.close()
             except Exception as exc:
-                cleanup_error = cleanup_error or exc
+                cleanup_errors.append(exc)
 
-    if cleanup_error is not None:
-        _raise_with_sanitized_tail(probe, process, str(cleanup_error))
+    if primary_error is not None or cleanup_errors:
+        _raise_with_sanitized_tail(probe, process, _format_failures(primary_error, cleanup_errors))
     if not started:
         raise RuntimeError("Pulsar process never spawned")
     lines = process.snapshot()
@@ -432,6 +544,18 @@ def main() -> int:
         _raise_with_sanitized_tail(probe, process, f"Pulsar exited unsuccessfully: {status}")
     if not real_output_started:
         _raise_with_sanitized_tail(probe, process, "real recording output was not active before shutdown")
+    destroy_diagnostics = (
+        "Double destroy just occurred",
+        "source(s) were remaining",
+        "event=source_graph_orphans",
+        "event=source_graph_destroy_timeout",
+    )
+    if any(token in line for line in lines for token in destroy_diagnostics):
+        _raise_with_sanitized_tail(
+            probe,
+            process,
+            "CEF source cleanup reported a remaining source or double destroy",
+        )
 
     # The ordering is the regression contract for the CEF fix: two actual
     # browsers are observed, every one reaches OnBeforeClose, and only then
@@ -446,9 +570,9 @@ def main() -> int:
         "PULSAR_CEF_SHUTDOWN event=cef_shutdown_complete browser_count=0",
         "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin",
         "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete",
+        "PULSAR_FRONTEND_CLEANUP event=source_graph_drained",
     )
     count_constraints = {
-        required_markers[0]: 2,
         required_markers[3]: 0,
     }
     lines = process.snapshot()
@@ -495,6 +619,7 @@ def main() -> int:
             process,
             f"pre-obs-shutdown audio fence ordering invalid: {positions}",
         )
+    browser_created = {}
     audio_started = {}
     audio_stopped = {}
     audio_quiescent = {}
@@ -510,6 +635,7 @@ def main() -> int:
     client_keepalive_released = {}
     for index, line in enumerate(lines):
         for event, destination in (
+            ("browser_created", browser_created),
             ("audio_stream_started", audio_started),
             ("audio_stream_stopped", audio_stopped),
             ("audio_quiescent", audio_quiescent),
@@ -529,28 +655,52 @@ def main() -> int:
         match = re.search(r"event=browser_closed browser_id=(\d+)(?:\s|$)", line)
         if match:
             browser_closed.setdefault(match.group(1), []).append(index)
+    created_ids = set(browser_created)
+    lifecycle_by_created_id = {
+        "browser_closed": browser_closed,
+        "browser_close_observed": browser_close_observed,
+        "browser_finalization_intent": browser_finalization_intent,
+        "browser_detached": browser_detached,
+        "browser_on_before_close_entry": browser_on_before_close_entry,
+        "browser_on_before_close_exit": browser_on_before_close_exit,
+        "client_keepalive_acquired": client_keepalive_acquired,
+        "client_keepalive_released": client_keepalive_released,
+        "audio_quiescent": audio_quiescent,
+    }
+    lifecycle_exactly_once = all(
+        set(events) == created_ids and all(len(indices) == 1 for indices in events.values())
+        for events in lifecycle_by_created_id.values()
+    )
+    audio_exactly_once = (
+        len(audio_started) == 2
+        and set(audio_started) == set(audio_stopped)
+        and all(len(indices) == 1 for indices in audio_started.values())
+        and all(len(indices) == 1 for indices in audio_stopped.values())
+    )
+    shutdown_close_exactly_once = (
+        set(browser_close_call) == set(browser_close_return)
+        and set(browser_close_call) == durable_browser_ids
+        and all(len(indices) == 1 for indices in browser_close_call.values())
+        and all(len(indices) == 1 for indices in browser_close_return.values())
+        and len(durable_browser_ids) == 2
+    )
     if (
-        len(audio_started) != 2
-        or set(audio_started) != set(audio_stopped)
-        or set(audio_started) != set(audio_quiescent)
-        or set(audio_started) != set(browser_detached)
-        or set(audio_started) != set(browser_close_observed)
-        or set(audio_started) != set(browser_finalization_intent)
-        or set(audio_started) != set(browser_close_call)
-        or set(audio_started) != set(browser_close_return)
-        or set(audio_started) != set(browser_on_before_close_entry)
-        or set(audio_started) != set(browser_on_before_close_exit)
-        or set(audio_started) != set(client_keepalive_acquired)
-        or set(audio_started) != set(client_keepalive_released)
+        len(created_ids) < 2
+        or not lifecycle_exactly_once
+        or not audio_exactly_once
+        or not shutdown_close_exactly_once
     ):
         _raise_with_sanitized_tail(
             probe,
             process,
-            "CEF client/audio lifecycle did not reach exactly two IDs: "
+            "CEF client/audio lifecycle did not satisfy per-browser exactly-once invariants: "
+            f"created={sorted(created_ids)} "
             f"started={sorted(audio_started)} stopped={sorted(audio_stopped)} "
+            f"closed={sorted(browser_closed)} "
             f"quiescent={sorted(audio_quiescent)} detached={sorted(browser_detached)} "
             f"observed={sorted(browser_close_observed)} intent={sorted(browser_finalization_intent)} "
             f"close_call={sorted(browser_close_call)} close_return={sorted(browser_close_return)} "
+            f"durable={sorted(durable_browser_ids)} "
             f"before_close_entry={sorted(browser_on_before_close_entry)} "
             f"before_close_exit={sorted(browser_on_before_close_exit)} "
             f"acquired={sorted(client_keepalive_acquired)} released={sorted(client_keepalive_released)}",
@@ -573,96 +723,55 @@ def main() -> int:
             process,
             "CEF started a second browser close before the first browser was closed",
         )
-    for browser_id in sorted(audio_started):
-        if browser_id not in browser_closed:
-            _raise_with_sanitized_tail(
-                probe, process, f"CEF browser {browser_id} has no browser_closed marker"
-            )
-        started = min(audio_started[browser_id])
-        stopped_candidates = [index for index in audio_stopped[browser_id] if index > started]
-        if not stopped_candidates:
-            _raise_with_sanitized_tail(
-                probe, process, f"CEF browser {browser_id} has no post-start audio stop marker"
-            )
-        stopped = min(stopped_candidates)
-        quiescent_candidates = [index for index in audio_quiescent[browser_id] if index >= stopped]
-        if not quiescent_candidates:
-            _raise_with_sanitized_tail(
-                probe, process, f"CEF browser {browser_id} has no post-stop audio quiescent marker"
-            )
-        quiescent = min(quiescent_candidates)
-        closed_candidates = [index for index in browser_closed[browser_id] if index >= quiescent]
-        if not closed_candidates:
-            _raise_with_sanitized_tail(
-                probe, process, f"CEF browser {browser_id} has no post-quiescent browser_closed marker"
-            )
-        closed = min(closed_candidates)
-        observed_candidates = [
-            index for index in browser_close_observed[browser_id] if index > started
-        ]
-        acquired_candidates = [
-            index for index in client_keepalive_acquired[browser_id] if index > started
-        ]
-        close_call_candidates = [
-            index for index in browser_close_call[browser_id] if index > started
-        ]
-        close_return_candidates = [
-            index for index in browser_close_return[browser_id] if index > started
-        ]
-        before_close_entry_candidates = [
-            index for index in browser_on_before_close_entry[browser_id] if index > started
-        ]
-        before_close_exit_candidates = [
-            index for index in browser_on_before_close_exit[browser_id] if index > started
-        ]
-        detached_candidates = [
-            index for index in browser_detached[browser_id] if index > started
-        ]
-        intent_candidates = [
-            index for index in browser_finalization_intent[browser_id] if index > started
-        ]
-        released_candidates = [
-            index for index in client_keepalive_released[browser_id] if index >= closed
-        ]
-        if (
-            not observed_candidates
-            or not detached_candidates
-            or not intent_candidates
-            or not close_call_candidates
-            or not close_return_candidates
-            or not before_close_entry_candidates
-            or not before_close_exit_candidates
-            or not acquired_candidates
-            or not released_candidates
-        ):
+    for browser_id in sorted(created_ids):
+        created = min(browser_created[browser_id])
+        observed = min(browser_close_observed[browser_id])
+        acquired = min(client_keepalive_acquired[browser_id])
+        before_close_entry = min(browser_on_before_close_entry[browser_id])
+        before_close_exit = min(browser_on_before_close_exit[browser_id])
+        detached = min(browser_detached[browser_id])
+        intent = min(browser_finalization_intent[browser_id])
+        quiescent = min(audio_quiescent[browser_id])
+        closed = min(browser_closed[browser_id])
+        released = min(client_keepalive_released[browser_id])
+
+        if browser_id in audio_started:
+            started = min(audio_started[browser_id])
+            stopped = min(audio_stopped[browser_id])
+            audio_tail = max(stopped, observed)
+        else:
+            # A readiness source may create and close a browser before CEF
+            # starts its audio stream.  Its lifecycle is still mandatory;
+            # audio stopped is required iff audio started was observed.
+            started = None
+            stopped = None
+            audio_tail = observed
+
+        if browser_id in browser_close_call:
+            close_call = min(browser_close_call[browser_id])
+            close_return = min(browser_close_return[browser_id])
+            close_order_valid = close_call < close_return and close_call < before_close_entry
+        else:
+            close_call = None
+            close_return = None
+            close_order_valid = browser_id not in browser_close_return
+
+        ordering_valid = (
+            created < acquired <= detached <= observed
+            and created < before_close_entry < before_close_exit
+            and audio_tail <= intent <= quiescent < closed < released
+            and close_order_valid
+            and (started is None or started < stopped)
+        )
+        if not ordering_valid:
             _raise_with_sanitized_tail(
                 probe,
                 process,
-                f"CEF client keepalive markers missing for browser {browser_id}",
-            )
-        observed = min(observed_candidates)
-        acquired = min(acquired_candidates)
-        close_call = min(close_call_candidates)
-        close_return = min(close_return_candidates)
-        before_close_entry = min(before_close_entry_candidates)
-        before_close_exit = min(before_close_exit_candidates)
-        detached = min(detached_candidates)
-        intent = min(intent_candidates)
-        released = min(released_candidates)
-        if not (
-            started < stopped
-            and close_call < close_return
-            and close_call < before_close_entry < before_close_exit
-            and started < acquired <= detached <= observed
-            and max(stopped, observed) <= intent <= quiescent < closed < released
-        ):
-            _raise_with_sanitized_tail(
-                probe,
-                process,
-                f"CEF audio/browser close ordering invalid for browser {browser_id}: "
-                f"acquired={acquired} detached={detached} observed={observed} intent={intent} "
-                f"started={started} stopped={stopped} "
-                f"quiescent={quiescent} closed={closed} released={released}",
+                f"CEF browser lifecycle ordering invalid for browser {browser_id}: "
+                f"created={created} acquired={acquired} detached={detached} observed={observed} "
+                f"intent={intent} started={started} stopped={stopped} quiescent={quiescent} "
+                f"closed={closed} released={released} close_call={close_call} "
+                f"close_return={close_return}",
             )
     if any("event=cef_shutdown_skipped" in line or "event=timeout" in line for line in lines):
         _raise_with_sanitized_tail(probe, process, "CEF shutdown reported a fail-closed timeout on the healthy path")
