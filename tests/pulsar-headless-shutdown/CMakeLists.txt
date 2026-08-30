@@ -23,7 +23,9 @@ if(NOT PULSAR_BROWSER_CLIENT_HPP MATCHES "close_keepalive" OR
    NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "close_keepalive[ ]*=[ ]*self" OR
    NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "close_keepalive[ ]*=[ ]*nullptr" OR
    NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "client_keepalive_acquired" OR
-   NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "client_keepalive_released")
+   NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "client_keepalive_released" OR
+   NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "CefRefPtr<BrowserClient>[ ]+callback_self[(]this[)]" OR
+   NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "client_callback_keepalive_acquired")
     message(FATAL_ERROR "browser client must retain itself through CEF close finalization")
 endif()
 if(PULSAR_BROWSER_CLIENT_CPP MATCHES "bs->source" OR
