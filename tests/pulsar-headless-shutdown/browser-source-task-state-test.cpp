@@ -205,6 +205,21 @@ static bool test_destroy_task_releases_own_lease()
 	       check(own_underflow.underflow, "own-first double release was accepted");
 }
 
+static bool test_delete_without_pending_source_does_not_complete_counter()
+{
+	/* CEF-not-ready/DeleteNow paths do not arm pending_source_destructions. */
+	BrowserSourceTaskState state;
+	state.source = reinterpret_cast<BrowserSource *>(static_cast<std::uintptr_t>(1));
+	const bool destroying = state.begin_destroy();
+	const BrowserSourceTaskRelease release = state.request_delete_and_take_if_idle(false);
+
+	return check(destroying, "unarmed delete path did not enter destroying state") &&
+	       check(release.source != nullptr, "unarmed delete path did not detach its source") &&
+	       check(!release.complete_destroy_task,
+		     "unarmed delete path attempted to complete a pending source destruction") &&
+	       check(state.deleted, "unarmed delete path was not marked deleted");
+}
+
 static bool test_inverted_two_browser_finalization_waits_for_audio()
 {
 	/* Exercise the production per-source close tracker with two CEF IDs. */
@@ -246,6 +261,7 @@ int main()
 	return test_synchronous_close_releases_browser_before_invalidation() &&
 	       test_admission_then_destroy() && test_destroy_then_admission() &&
 	       test_destroy_task_releases_own_lease() &&
+	       test_delete_without_pending_source_does_not_complete_counter() &&
 	       test_inverted_two_browser_finalization_waits_for_audio()
 		       ? 0
 		       : 1;
