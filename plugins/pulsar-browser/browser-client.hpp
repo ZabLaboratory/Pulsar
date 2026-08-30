@@ -49,9 +49,10 @@ class BrowserClient : public CefClient,
 
 	inline bool valid() const;
 	bool begin_audio_callback();
-	void end_audio_callback(CefRefPtr<CefBrowser> browser);
-	void maybe_finalize_browser_close(CefRefPtr<CefBrowser> browser);
-	void finalize_browser_close(CefRefPtr<CefBrowser> browser);
+	void end_audio_callback(int browser_id);
+	void maybe_finalize_browser_close(int browser_id);
+	void schedule_browser_close_finalization(int browser_id);
+	void finalize_browser_close(int browser_id);
 
 	void UpdateExtraTexture();
 

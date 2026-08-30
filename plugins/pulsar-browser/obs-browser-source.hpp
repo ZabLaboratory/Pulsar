@@ -88,8 +88,9 @@ BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy(BrowserSource *sourc
 bool BrowserSourceRegisterPendingBrowser(BrowserSource *source, int browser_id);
 void BrowserSourceDestroyTaskComplete();
 void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser, BrowserSource *source);
-void BrowserSourceBrowserClosed(CefRefPtr<CefBrowser> browser);
-void BrowserSourceFinalizeBrowserClose(CefRefPtr<CefBrowser> browser);
+void BrowserSourceBrowserClosed(int browser_id);
+void BrowserSourceFinalizeBrowserClose(int browser_id);
+int BrowserSourceBrowserIdForSource(BrowserSource *source);
 bool BrowserSourceRequestBrowserClose(CefRefPtr<CefBrowser> browser);
 
 struct BrowserSource {
@@ -188,5 +189,6 @@ struct BrowserSource {
 
 	void SetBrowser(CefRefPtr<CefBrowser> b);
 	CefRefPtr<CefBrowser> GetBrowser();
+	void DetachBrowser(int browser_id);
 	obs_source_t *GetStrongSource();
 };

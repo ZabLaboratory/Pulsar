@@ -476,8 +476,10 @@ def main() -> int:
     audio_started = {}
     audio_stopped = {}
     audio_quiescent = {}
+    browser_detached = {}
     browser_closed = {}
     browser_close_observed = {}
+    browser_finalization_intent = {}
     client_keepalive_acquired = {}
     client_keepalive_released = {}
     for index, line in enumerate(lines):
@@ -485,7 +487,9 @@ def main() -> int:
             ("audio_stream_started", audio_started),
             ("audio_stream_stopped", audio_stopped),
             ("audio_quiescent", audio_quiescent),
+            ("browser_detached", browser_detached),
             ("browser_close_observed", browser_close_observed),
+            ("browser_finalization_intent", browser_finalization_intent),
             ("client_keepalive_acquired", client_keepalive_acquired),
             ("client_keepalive_released", client_keepalive_released),
         ):
@@ -499,7 +503,9 @@ def main() -> int:
         len(audio_started) != 2
         or set(audio_started) != set(audio_stopped)
         or set(audio_started) != set(audio_quiescent)
+        or set(audio_started) != set(browser_detached)
         or set(audio_started) != set(browser_close_observed)
+        or set(audio_started) != set(browser_finalization_intent)
         or set(audio_started) != set(client_keepalive_acquired)
         or set(audio_started) != set(client_keepalive_released)
     ):
@@ -508,7 +514,8 @@ def main() -> int:
             process,
             "CEF client/audio lifecycle did not reach exactly two IDs: "
             f"started={sorted(audio_started)} stopped={sorted(audio_stopped)} "
-            f"quiescent={sorted(audio_quiescent)} observed={sorted(browser_close_observed)} "
+            f"quiescent={sorted(audio_quiescent)} detached={sorted(browser_detached)} "
+            f"observed={sorted(browser_close_observed)} intent={sorted(browser_finalization_intent)} "
             f"acquired={sorted(client_keepalive_acquired)} released={sorted(client_keepalive_released)}",
         )
     for browser_id in sorted(audio_started):
@@ -541,10 +548,22 @@ def main() -> int:
         acquired_candidates = [
             index for index in client_keepalive_acquired[browser_id] if index > started
         ]
+        detached_candidates = [
+            index for index in browser_detached[browser_id] if index > started
+        ]
+        intent_candidates = [
+            index for index in browser_finalization_intent[browser_id] if index > started
+        ]
         released_candidates = [
             index for index in client_keepalive_released[browser_id] if index >= closed
         ]
-        if not observed_candidates or not acquired_candidates or not released_candidates:
+        if (
+            not observed_candidates
+            or not detached_candidates
+            or not intent_candidates
+            or not acquired_candidates
+            or not released_candidates
+        ):
             _raise_with_sanitized_tail(
                 probe,
                 process,
@@ -552,17 +571,20 @@ def main() -> int:
             )
         observed = min(observed_candidates)
         acquired = min(acquired_candidates)
+        detached = min(detached_candidates)
+        intent = min(intent_candidates)
         released = min(released_candidates)
         if not (
             started < stopped
-            and started < acquired <= observed
-            and max(stopped, observed) <= quiescent < closed < released
+            and started < acquired <= detached <= observed
+            and max(stopped, observed) <= intent <= quiescent < closed < released
         ):
             _raise_with_sanitized_tail(
                 probe,
                 process,
                 f"CEF audio/browser close ordering invalid for browser {browser_id}: "
-                f"acquired={acquired} observed={observed} started={started} stopped={stopped} "
+                f"acquired={acquired} detached={detached} observed={observed} intent={intent} "
+                f"started={started} stopped={stopped} "
                 f"quiescent={quiescent} closed={closed} released={released}",
             )
     if any("event=cef_shutdown_skipped" in line or "event=timeout" in line for line in lines):

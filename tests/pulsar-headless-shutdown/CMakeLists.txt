@@ -21,6 +21,13 @@ if(NOT PULSAR_BROWSER_CLIENT_HPP MATCHES "BrowserAudioCallbackGate" OR
    NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "audio_callbacks[.]try_acquire")
     message(FATAL_ERROR "browser client is missing the linearized audio callback gate")
 endif()
+if(PULSAR_BROWSER_CLIENT_HPP MATCHES "finalize_browser_close[(]CefRefPtr" OR
+   PULSAR_BROWSER_CLIENT_CPP MATCHES "BrowserSourceFinalizeBrowserClose[(]CefRefPtr" OR
+   NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "self, browser_id" OR
+   NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "browser_finalization_intent" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_detached")
+    message(FATAL_ERROR "CEF close finalization must be deferred with browser_id only")
+endif()
 if(NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "BrowserSourceWaitForCefReady" OR
    NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "BrowserSourceCefInitializationFailed" OR
    NOT PULSAR_BROWSER_PLUGIN_CPP MATCHES "event=manager_started" OR
@@ -47,7 +54,11 @@ endif()
 if(NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "obs_source_get_weak_source" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "obs_weak_source_get_source" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "obs_weak_source_release" OR
-   NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "obs_weak_source_t")
+   NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "obs_weak_source_t" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceBrowserIdForSource" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "DetachBrowser" OR
+   PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceFinalizeBrowserClose[(]CefRefPtr" OR
+   PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceFinalizeBrowserClose[(]CefRefPtr")
     message(FATAL_ERROR "browser source weak-to-strong lifetime bridge is missing")
 endif()
 add_executable(pulsar-audio-callback-gate-test audio-callback-gate-test.cpp)
