@@ -385,11 +385,17 @@ def main() -> int:
     audio_stopped = {}
     audio_quiescent = {}
     browser_closed = {}
+    browser_close_observed = {}
+    client_keepalive_acquired = {}
+    client_keepalive_released = {}
     for index, line in enumerate(lines):
         for event, destination in (
             ("audio_stream_started", audio_started),
             ("audio_stream_stopped", audio_stopped),
             ("audio_quiescent", audio_quiescent),
+            ("browser_close_observed", browser_close_observed),
+            ("client_keepalive_acquired", client_keepalive_acquired),
+            ("client_keepalive_released", client_keepalive_released),
         ):
             match = re.search(rf"event={event} browser_id=(\d+)(?:\s|$)", line)
             if match:
@@ -401,13 +407,17 @@ def main() -> int:
         len(audio_started) != 2
         or set(audio_started) != set(audio_stopped)
         or set(audio_started) != set(audio_quiescent)
+        or set(audio_started) != set(browser_close_observed)
+        or set(audio_started) != set(client_keepalive_acquired)
+        or set(audio_started) != set(client_keepalive_released)
     ):
         _raise_with_sanitized_tail(
             probe,
             process,
-            "CEF audio lifecycle did not reach exactly two stopped/quiescent browser IDs: "
+            "CEF client/audio lifecycle did not reach exactly two IDs: "
             f"started={sorted(audio_started)} stopped={sorted(audio_stopped)} "
-            f"quiescent={sorted(audio_quiescent)}",
+            f"quiescent={sorted(audio_quiescent)} observed={sorted(browser_close_observed)} "
+            f"acquired={sorted(client_keepalive_acquired)} released={sorted(client_keepalive_released)}",
         )
     for browser_id in sorted(audio_started):
         if browser_id not in browser_closed:
@@ -433,12 +443,35 @@ def main() -> int:
                 probe, process, f"CEF browser {browser_id} has no post-quiescent browser_closed marker"
             )
         closed = min(closed_candidates)
-        if not started < stopped <= quiescent < closed:
+        observed_candidates = [
+            index for index in browser_close_observed[browser_id] if index > started
+        ]
+        acquired_candidates = [
+            index for index in client_keepalive_acquired[browser_id] if index > started
+        ]
+        released_candidates = [
+            index for index in client_keepalive_released[browser_id] if index >= closed
+        ]
+        if not observed_candidates or not acquired_candidates or not released_candidates:
+            _raise_with_sanitized_tail(
+                probe,
+                process,
+                f"CEF client keepalive markers missing for browser {browser_id}",
+            )
+        observed = min(observed_candidates)
+        acquired = min(acquired_candidates)
+        released = min(released_candidates)
+        if not (
+            started < stopped
+            and started < acquired <= observed
+            and max(stopped, observed) <= quiescent < closed < released
+        ):
             _raise_with_sanitized_tail(
                 probe,
                 process,
                 f"CEF audio/browser close ordering invalid for browser {browser_id}: "
-                f"started={started} stopped={stopped} quiescent={quiescent} closed={closed}",
+                f"acquired={acquired} observed={observed} started={started} stopped={stopped} "
+                f"quiescent={quiescent} closed={closed} released={released}",
             )
     if any("event=cef_shutdown_skipped" in line or "event=timeout" in line for line in lines):
         _raise_with_sanitized_tail(probe, process, "CEF shutdown reported a fail-closed timeout on the healthy path")
