@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <map>
 #include <set>
+#include <vector>
 #include <thread>
 #include <mutex>
 
@@ -51,6 +52,9 @@
 using namespace std;
 
 extern bool QueueCEFTask(std::function<void()> task);
+#ifdef ENABLE_BROWSER_QT_LOOP
+extern MessageObject messageObject;
+#endif
 
 static mutex browser_list_mutex;
 static BrowserSource *first_browser = nullptr;
@@ -68,6 +72,7 @@ static map<int, BrowserSource *> browser_sources_by_id;
 static map<int, BrowserSource *> pending_browser_sources;
 static set<int> browser_close_observed_ids;
 static std::size_t pending_source_destructions = 0;
+static std::atomic<std::size_t> active_source_tasks{0};
 enum class BrowserLifecyclePhase : int {
 	Running,
 	Closing,
@@ -83,6 +88,77 @@ static BrowserLifecyclePhase browser_lifecycle_state = BrowserLifecyclePhase::Ru
 		     reason);
 	std::fflush(stderr);
 	std::_Exit(EXIT_FAILURE);
+}
+
+static bool BrowserSourceAcquireTask(const std::shared_ptr<BrowserSourceTaskState> &state,
+					     bool allow_destroying)
+{
+	if (!state)
+		return false;
+
+	lock_guard<mutex> lifecycle_lock(browser_lifecycle_mutex);
+	if (!state->acquire(allow_destroying))
+		return false;
+	active_source_tasks.fetch_add(1, std::memory_order_release);
+	return true;
+}
+
+static BrowserSource *BrowserSourceTaskSource(const std::shared_ptr<BrowserSourceTaskState> &state)
+{
+	if (!state)
+		return nullptr;
+	return state->current_source();
+}
+
+static bool BrowserSourceBeginDestroyTaskState(const std::shared_ptr<BrowserSourceTaskState> &state)
+{
+	if (!state)
+		return false;
+
+	lock_guard<mutex> lifecycle_lock(browser_lifecycle_mutex);
+	return state->begin_destroy();
+}
+
+static void BrowserSourceRequestDelete(const std::shared_ptr<BrowserSourceTaskState> &state,
+					       bool completion_required)
+{
+	if (!state)
+		BrowserSourceDestroyFatal("missing_source_task_state");
+	state->request_delete(completion_required);
+}
+
+static BrowserSourceTaskRelease BrowserSourceReleaseTask(const std::shared_ptr<BrowserSourceTaskState> &state)
+{
+	if (!state)
+		BrowserSourceDestroyFatal("missing_source_task_state");
+
+	lock_guard<mutex> lifecycle_lock(browser_lifecycle_mutex);
+	BrowserSourceTaskRelease release = state->release_task();
+	if (release.underflow)
+		BrowserSourceDestroyFatal("source_task_underflow");
+	const auto active_tasks = active_source_tasks.load(std::memory_order_relaxed);
+	if (active_tasks == 0)
+		BrowserSourceDestroyFatal("source_task_global_underflow");
+	active_source_tasks.fetch_sub(1, std::memory_order_release);
+	return release;
+}
+
+static BrowserSourceTaskRelease BrowserSourceDeleteIfIdle(
+	const std::shared_ptr<BrowserSourceTaskState> &state)
+{
+	if (!state)
+		BrowserSourceDestroyFatal("missing_source_task_state");
+
+	return state->delete_if_idle();
+}
+
+static void BrowserSourceCompleteTaskRelease(BrowserSourceTaskRelease release)
+{
+	if (!release.source)
+		return;
+	delete release.source;
+	if (release.complete_destroy_task)
+		BrowserSourceDestroyTaskComplete();
 }
 
 static void SendBrowserVisibility(CefRefPtr<CefBrowser> browser, bool isVisible)
@@ -107,8 +183,14 @@ static void SendBrowserVisibility(CefRefPtr<CefBrowser> browser, bool isVisible)
 void DispatchJSEvent(std::string eventName, std::string jsonString, BrowserSource *browser = nullptr);
 
 BrowserSource::BrowserSource(obs_data_t *, obs_source_t *source_)
-	: source(source_), weak_source(obs_source_get_weak_source(source_))
+	: source(source_),
+	  weak_source(obs_source_get_weak_source(source_)),
+	  task_state(std::make_shared<BrowserSourceTaskState>())
 {
+	{
+		lock_guard<mutex> lock(task_state->mutex);
+		task_state->source = this;
+	}
 
 	/* Register Refresh hotkey */
 	auto refreshFunction = [](void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed) {
@@ -164,6 +246,7 @@ void BrowserSourceBeginShutdown()
 {
 	std::size_t browser_count;
 	std::size_t pending_source_tasks;
+	std::size_t active_tasks;
 	bool already_started;
 	{
 		lock_guard<mutex> lock(browser_lifecycle_mutex);
@@ -172,13 +255,15 @@ void BrowserSourceBeginShutdown()
 			browser_lifecycle_state = BrowserLifecyclePhase::Closing;
 		browser_count = live_browser_ids.size();
 		pending_source_tasks = pending_source_destructions;
+		active_tasks = active_source_tasks.load(std::memory_order_acquire);
 	}
 
 	blog(LOG_INFO,
 	     "PULSAR_CEF_SHUTDOWN event=begin phase=Closing browser_count=%llu "
-	     "pending_source_tasks=%llu already_started=%d",
+	     "pending_source_tasks=%llu active_source_tasks=%llu already_started=%d",
 	     static_cast<unsigned long long>(browser_count),
-	     static_cast<unsigned long long>(pending_source_tasks), already_started ? 1 : 0);
+	     static_cast<unsigned long long>(pending_source_tasks),
+	     static_cast<unsigned long long>(active_tasks), already_started ? 1 : 0);
 }
 
 bool BrowserSourceCanCreateBrowser()
@@ -331,8 +416,8 @@ void BrowserSourceFinalizeBrowserClose(int browser_id)
 
 	if (source && pending_destroy) {
 		source->UnlinkFromBrowserList();
-		delete source;
-		BrowserSourceDestroyTaskComplete();
+		BrowserSourceRequestDelete(source->task_state, true);
+		BrowserSourceCompleteTaskRelease(BrowserSourceDeleteIfIdle(source->task_state));
 	}
 
 	blog(LOG_INFO,
@@ -374,7 +459,8 @@ bool BrowserSourceShutdownComplete()
 	lock_guard<mutex> lock(browser_lifecycle_mutex);
 	return browser_lifecycle_state == BrowserLifecyclePhase::Closing && live_browser_ids.empty() &&
 	       browser_sources_by_id.empty() && pending_browser_sources.empty() &&
-	       browser_close_observed_ids.empty() && pending_source_destructions == 0;
+	       browser_close_observed_ids.empty() && pending_source_destructions == 0 &&
+	       active_source_tasks.load(std::memory_order_acquire) == 0;
 }
 
 bool BrowserSourceMarkDrained()
@@ -384,7 +470,8 @@ bool BrowserSourceMarkDrained()
 		return true;
 	if (browser_lifecycle_state != BrowserLifecyclePhase::Closing || !live_browser_ids.empty() ||
 	    !browser_sources_by_id.empty() || !pending_browser_sources.empty() ||
-	    !browser_close_observed_ids.empty() || pending_source_destructions != 0)
+	    !browser_close_observed_ids.empty() || pending_source_destructions != 0 ||
+	    active_source_tasks.load(std::memory_order_acquire) != 0)
 		return false;
 
 	browser_lifecycle_state = BrowserLifecyclePhase::Drained;
@@ -462,18 +549,26 @@ void BrowserSourceCloseAllBrowsers()
 {
 	const std::size_t browser_count = BrowserSourceLiveBrowserCount();
 	std::size_t source_count = 0;
+	std::vector<CefRefPtr<CefBrowser>> browsers;
 	{
 		lock_guard<mutex> lock(browser_list_mutex);
 		for (BrowserSource *bs = first_browser; bs; bs = bs->next) {
-			if (bs->GetBrowser()) {
-				++source_count;
-				/*
-				 * Keep browser_list_mutex held while using the raw list node.  A
-				 * concurrent Destroy() cannot remove and delete this source until
-				 * its CEF reference has been cleared.
-				 */
-				bs->RequestBrowserCloseForShutdown();
-			}
+			CefRefPtr<CefBrowser> browser = bs->GetBrowser();
+			if (browser)
+				browsers.push_back(browser);
+		}
+	}
+	/*
+	 * Never invoke a close callback while walking the raw BrowserSource list.
+	 * A CefRefPtr is a safe snapshot of the browser identity; the source may be
+	 * unlinked and deleted by a concurrent Destroy() after this lock is released.
+	 */
+	for (const CefRefPtr<CefBrowser> &browser : browsers) {
+		if (BrowserSourceRequestBrowserClose(browser)) {
+			++source_count;
+			blog(LOG_INFO,
+			     "PULSAR_CEF_SHUTDOWN event=browser_close_requested browser_id=%d reason=shutdown_started",
+			     browser->GetIdentifier());
 		}
 	}
 
@@ -493,15 +588,6 @@ BrowserSource::~BrowserSource()
 		obs_weak_source_release(weak_source);
 		weak_source = nullptr;
 	}
-}
-
-void BrowserSource::RequestBrowserCloseForShutdown()
-{
-	CefRefPtr<CefBrowser> browser = GetBrowser();
-	if (!browser)
-		return;
-
-	BrowserSourceRequestBrowserClose(browser);
 }
 
 void BrowserSource::UnlinkFromBrowserList()
@@ -525,15 +611,19 @@ void BrowserSource::DetachBrowser(int browser_id)
 
 void BrowserSource::Destroy()
 {
-	destroying = true;
+	if (!BrowserSourceBeginDestroyTaskState(task_state))
+		return;
+	destroying.store(true, std::memory_order_release);
 	DestroyTextures();
 
 	CefRefPtr<CefBrowser> browser = GetBrowser();
 	if (!browser && !BrowserSourceCefReady()) {
 		blog(LOG_WARNING,
 		     "PULSAR_CEF_SHUTDOWN event=source_destroy_rejected reason=cef_not_ready");
+		SetBrowser(nullptr);
 		UnlinkFromBrowserList();
-		delete this;
+		BrowserSourceRequestDelete(task_state, false);
+		BrowserSourceCompleteTaskRelease(BrowserSourceDeleteIfIdle(task_state));
 		return;
 	}
 	const int browser_id = browser ? browser->GetIdentifier() : BrowserSourceBrowserIdForSource(this);
@@ -543,7 +633,8 @@ void BrowserSource::Destroy()
 	if (disposition == BrowserSourceDestroyDisposition::DeleteNow) {
 		UnlinkFromBrowserList();
 		SetBrowser(nullptr);
-		delete this;
+		BrowserSourceRequestDelete(task_state, false);
+		BrowserSourceCompleteTaskRelease(BrowserSourceDeleteIfIdle(task_state));
 		return;
 	}
 	if (disposition == BrowserSourceDestroyDisposition::Fatal)
@@ -558,7 +649,15 @@ void BrowserSource::Destroy()
 		return;
 	}
 
-	const bool posted = QueueCEFTask([this]() {
+	if (!BrowserSourceAcquireTask(task_state, true))
+		BrowserSourceDestroyFatal("destroy_task_admission_rejected");
+	const auto destroy_task_state = task_state;
+	const bool posted = QueueCEFTask([destroy_task_state]() {
+		BrowserSource *source = BrowserSourceTaskSource(destroy_task_state);
+		if (!source) {
+			BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(destroy_task_state));
+			return;
+		}
 		/*
 		 * Serialize behind any earlier CreateBrowser task.  A browser may have
 		 * been created after Destroy() sampled the source; register it before
@@ -566,20 +665,23 @@ void BrowserSource::Destroy()
 		 * browser already reached the quiescent close path, no lifecycle entry
 		 * remains and this task is the safe owner of the source deletion.
 		 */
-		CefRefPtr<CefBrowser> current_browser = GetBrowser();
+		CefRefPtr<CefBrowser> current_browser = source->GetBrowser();
 		if (current_browser &&
-		    BrowserSourceRegisterPendingBrowser(this, current_browser->GetIdentifier())) {
+		    BrowserSourceRegisterPendingBrowser(source, current_browser->GetIdentifier())) {
 			BrowserSourceRequestBrowserClose(current_browser);
+			BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(destroy_task_state));
 			return;
 		}
-		SetBrowser(nullptr);
-		UnlinkFromBrowserList();
-		delete this;
-		BrowserSourceDestroyTaskComplete();
+		source->SetBrowser(nullptr);
+		source->UnlinkFromBrowserList();
+		BrowserSourceRequestDelete(destroy_task_state, true);
+		BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(destroy_task_state));
 	});
 
-	if (!posted)
+	if (!posted) {
+		BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(task_state));
 		BrowserSourceDestroyFatal("cef_destroy_task_post_failed");
+	}
 }
 
 void BrowserSource::ExecuteOnBrowser(BrowserFunc func, bool async)
@@ -587,20 +689,44 @@ void BrowserSource::ExecuteOnBrowser(BrowserFunc func, bool async)
 	if (!async) {
 #ifdef ENABLE_BROWSER_QT_LOOP
 		if (QThread::currentThread() == qApp->thread()) {
-			if (!!cefBrowser)
-				func(cefBrowser);
+			if (!BrowserSourceAcquireTask(task_state, false))
+				return;
+			CefRefPtr<CefBrowser> browser = GetBrowser();
+			if (browser)
+				func(browser);
+			BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(task_state));
 			return;
 		}
 #endif
 		os_event_t *finishedEvent;
 		os_event_init(&finishedEvent, OS_EVENT_TYPE_AUTO);
-		bool success = QueueCEFTask([&]() {
-			if (!!cefBrowser)
-				func(cefBrowser);
+		if (!BrowserSourceAcquireTask(task_state, false)) {
+			os_event_destroy(finishedEvent);
+			return;
+		}
+		const auto task_state_for_callback = task_state;
+		auto task = [task_state_for_callback, func, finishedEvent]() {
+			BrowserSource *source = BrowserSourceTaskSource(task_state_for_callback);
+			if (source) {
+				CefRefPtr<CefBrowser> browser = source->GetBrowser();
+				if (browser)
+					func(browser);
+			}
 			os_event_signal(finishedEvent);
+			BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(task_state_for_callback));
+		};
+		bool success = QueueCEFTask([task]() {
+#ifdef ENABLE_BROWSER_QT_LOOP
+			QMetaObject::invokeMethod(&messageObject, "ExecuteTask", Qt::QueuedConnection,
+						  Q_ARG(MessageTask, task));
+#else
+			task();
+#endif
 		});
 		if (success) {
 			os_event_wait(finishedEvent);
+		} else {
+			BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(task_state));
 		}
 		os_event_destroy(finishedEvent);
 	} else {
@@ -628,19 +754,27 @@ bool BrowserSource::CreateBrowser()
 		return true;
 	}
 
-	return QueueCEFTask([this]() {
-		if (!BrowserSourceCanCreateBrowser()) {
-			create_browser = false;
+	if (!BrowserSourceAcquireTask(task_state, false)) {
+		create_browser = false;
+		blog(LOG_WARNING,
+		     "PULSAR_CEF_SHUTDOWN event=source_create_rejected reason=source_destroying");
+		return true;
+	}
+	const auto create_task_state = task_state;
+	const bool posted = QueueCEFTask([create_task_state]() {
+		BrowserSource *source = BrowserSourceTaskSource(create_task_state);
+		if (!source || !BrowserSourceCanCreateBrowser() || source->destroying.load(std::memory_order_acquire)) {
+			BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(create_task_state));
 			return;
 		}
 
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
-		if (hwaccel) {
+		if (source->hwaccel) {
 			obs_enter_graphics();
 #if defined(__APPLE__) || defined(_WIN32)
-			tex_sharing_avail = gs_shared_texture_available();
+			source->tex_sharing_avail = gs_shared_texture_available();
 #else
-			tex_sharing_avail = obs_cef_all_drm_formats_supported();
+			source->tex_sharing_avail = obs_cef_all_drm_formats_supported();
 #endif
 			obs_leave_graphics();
 		}
@@ -648,12 +782,12 @@ bool BrowserSource::CreateBrowser()
 		bool hwaccel = false;
 #endif
 
-		CefRefPtr<BrowserClient> browserClient =
-			new BrowserClient(this, hwaccel && tex_sharing_avail, reroute_audio, webpage_control_level);
+		CefRefPtr<BrowserClient> browserClient = new BrowserClient(
+			source, hwaccel && source->tex_sharing_avail, source->reroute_audio, source->webpage_control_level);
 
 		CefWindowInfo windowInfo;
-		windowInfo.bounds.width = width;
-		windowInfo.bounds.height = height;
+		windowInfo.bounds.width = source->width;
+		windowInfo.bounds.height = source->height;
 		windowInfo.windowless_rendering_enabled = true;
 
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
@@ -664,38 +798,44 @@ bool BrowserSource::CreateBrowser()
 
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
 #ifdef BROWSER_EXTERNAL_BEGIN_FRAME_ENABLED
-		if (!fps_custom) {
+		if (!source->fps_custom) {
 			windowInfo.external_begin_frame_enabled = true;
 			cefBrowserSettings.windowless_frame_rate = 0;
 		} else {
-			cefBrowserSettings.windowless_frame_rate = fps;
+			cefBrowserSettings.windowless_frame_rate = source->fps;
 		}
 #else
 		struct obs_video_info ovi;
 		obs_get_video_info(&ovi);
-		canvas_fps = (double)ovi.fps_num / (double)ovi.fps_den;
-		cefBrowserSettings.windowless_frame_rate = (fps_custom) ? fps : canvas_fps;
+		source->canvas_fps = (double)ovi.fps_num / (double)ovi.fps_den;
+		cefBrowserSettings.windowless_frame_rate = (source->fps_custom) ? source->fps : source->canvas_fps;
 #endif
 #else
-		cefBrowserSettings.windowless_frame_rate = fps;
+		cefBrowserSettings.windowless_frame_rate = source->fps;
 #endif
 
 		cefBrowserSettings.default_font_size = 16;
 		cefBrowserSettings.default_fixed_font_size = 16;
 
-		auto browser = CefBrowserHost::CreateBrowserSync(windowInfo, browserClient, url, cefBrowserSettings,
+		auto browser = CefBrowserHost::CreateBrowserSync(windowInfo, browserClient, source->url, cefBrowserSettings,
 								 CefRefPtr<CefDictionaryValue>(), nullptr);
 
-		SetBrowser(browser);
+		source->SetBrowser(browser);
 
-		if (reroute_audio)
-			cefBrowser->GetHost()->SetAudioMuted(true);
-		OBSSourceAutoRelease source_ref = GetStrongSource();
+		if (source->reroute_audio && browser)
+			browser->GetHost()->SetAudioMuted(true);
+		OBSSourceAutoRelease source_ref = source->GetStrongSource();
 		if (source_ref && obs_source_showing(source_ref))
-			is_showing = true;
+			source->is_showing = true;
 
-		SendBrowserVisibility(cefBrowser, is_showing);
+		SendBrowserVisibility(browser, source->is_showing);
+		BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(create_task_state));
 	});
+	if (!posted) {
+		BrowserSourceCompleteTaskRelease(BrowserSourceReleaseTask(task_state));
+		return false;
+	}
+	return true;
 }
 
 void BrowserSource::DestroyBrowser()

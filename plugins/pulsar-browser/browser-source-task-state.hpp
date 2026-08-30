@@ -1,0 +1,92 @@
+/******************************************************************************
+ Copyright (C) 2026 ZabLaboratory
+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 2 of the License, or
+ (at your option) any later version.
+ ******************************************************************************/
+
+#pragma once
+
+#include <cstddef>
+#include <mutex>
+
+struct BrowserSource;
+
+struct BrowserSourceTaskRelease {
+	BrowserSource *source = nullptr;
+	bool complete_destroy_task = false;
+	bool underflow = false;
+};
+
+/*
+ * CEF tasks outlive the OBS callback that posted them.  This small control
+ * block linearizes task admission with source destruction and keeps the raw
+ * BrowserSource pointer valid until the final task lease is released.
+ */
+struct BrowserSourceTaskState {
+	std::mutex mutex;
+	BrowserSource *source = nullptr;
+	std::size_t active_tasks = 0;
+	bool destroying = false;
+	bool delete_requested = false;
+	bool delete_completion_required = false;
+	bool deleted = false;
+
+	bool acquire(bool allow_destroying)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (!source || deleted || (destroying && !allow_destroying))
+			return false;
+		++active_tasks;
+		return true;
+	}
+
+	bool begin_destroy()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (!source || deleted || destroying)
+			return false;
+		destroying = true;
+		return true;
+	}
+
+	BrowserSource *current_source()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		return source;
+	}
+
+	void request_delete(bool completion_required)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		delete_requested = true;
+		delete_completion_required |= completion_required;
+	}
+
+	BrowserSourceTaskRelease release_task()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (active_tasks == 0)
+			return BrowserSourceTaskRelease{nullptr, false, true};
+		--active_tasks;
+		if (active_tasks != 0 || !delete_requested || deleted)
+			return {};
+		deleted = true;
+		BrowserSourceTaskRelease release{source, delete_completion_required, false};
+		source = nullptr;
+		return release;
+	}
+
+	BrowserSourceTaskRelease delete_if_idle()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (active_tasks != 0 || deleted || !delete_requested)
+			return {};
+		deleted = true;
+		BrowserSourceTaskRelease release{source, delete_completion_required, false};
+		source = nullptr;
+		return release;
+	}
+};

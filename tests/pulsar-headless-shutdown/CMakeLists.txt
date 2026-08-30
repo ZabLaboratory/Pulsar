@@ -61,6 +61,18 @@ if(NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "obs_source_get_weak_source" OR
    PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceFinalizeBrowserClose[(]CefRefPtr")
     message(FATAL_ERROR "browser source weak-to-strong lifetime bridge is missing")
 endif()
+if(NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceTaskState" OR
+   NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "std::atomic<bool> create_browser" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceAcquireTask" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "active_source_tasks" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "std::vector<CefRefPtr<CefBrowser>>" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceBeginDestroyTaskState" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceReleaseTask" OR
+   PULSAR_BROWSER_SOURCE_CPP MATCHES "QueueCEFTask[(][[]this" OR
+   PULSAR_BROWSER_SOURCE_CPP MATCHES "QueueCEFTask[(][[]&" OR
+   PULSAR_BROWSER_SOURCE_CPP MATCHES "bs->RequestBrowserCloseForShutdown")
+    message(FATAL_ERROR "browser source CEF tasks must use a lifetime gate and browser snapshot")
+endif()
 add_executable(pulsar-audio-callback-gate-test audio-callback-gate-test.cpp)
 target_compile_features(pulsar-audio-callback-gate-test PRIVATE cxx_std_17)
 target_include_directories(pulsar-audio-callback-gate-test PRIVATE
@@ -74,3 +86,17 @@ set_target_properties(pulsar-audio-callback-gate-test PROPERTIES
 
 add_test(NAME pulsar-audio-callback-gate-test COMMAND pulsar-audio-callback-gate-test)
 set_tests_properties(pulsar-audio-callback-gate-test PROPERTIES LABELS "unit")
+
+add_executable(pulsar-browser-source-task-state-test browser-source-task-state-test.cpp)
+target_compile_features(pulsar-browser-source-task-state-test PRIVATE cxx_std_17)
+target_include_directories(pulsar-browser-source-task-state-test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser"
+)
+set_target_properties(pulsar-browser-source-task-state-test PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests/nv-probe"
+)
+
+add_test(NAME pulsar-browser-source-task-state-test COMMAND pulsar-browser-source-task-state-test)
+set_tests_properties(pulsar-browser-source-task-state-test PROPERTIES LABELS "unit")

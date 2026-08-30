@@ -22,11 +22,13 @@
 
 #include "cef-headers.hpp"
 #include "browser-app.hpp"
+#include "browser-source-task-state.hpp"
 #include <atomic>
 #include <cstddef>
 #include <functional>
 #include <string>
 #include <mutex>
+#include <memory>
 
 enum class ControlLevel : int {
 	None,
@@ -42,8 +44,6 @@ enum class BrowserSourceDestroyDisposition : int {
 	DeleteNow,
 	Fatal,
 };
-
-struct BrowserSource;
 
 // Pulsar #158 / ADR Prism 028 §3.2 -- upstream obs-browser ships ReadObs here,
 // which hands EVERY page loaded in a browser source `window.obsstudio.
@@ -101,7 +101,7 @@ struct BrowserSource {
 	obs_weak_source_t *weak_source = nullptr;
 
 	bool tex_sharing_avail = false;
-	bool create_browser = false;
+	std::atomic<bool> create_browser = false;
 	std::recursive_mutex lockBrowser;
 	CefRefPtr<CefBrowser> cefBrowser;
 
@@ -132,6 +132,7 @@ struct BrowserSource {
 	bool first_update = true;
 	bool reroute_audio = true;
 	std::atomic<bool> destroying = false;
+	std::shared_ptr<BrowserSourceTaskState> task_state;
 	ControlLevel webpage_control_level = DEFAULT_CONTROL_LEVEL;
 #if defined(BROWSER_EXTERNAL_BEGIN_FRAME_ENABLED) && defined(ENABLE_BROWSER_SHARED_TEXTURE)
 	bool reset_frame = false;
@@ -159,7 +160,6 @@ struct BrowserSource {
 
 	bool CreateBrowser();
 	void DestroyBrowser();
-	void RequestBrowserCloseForShutdown();
 	void UnlinkFromBrowserList();
 	void ExecuteOnBrowser(BrowserFunc func, bool async = false);
 
