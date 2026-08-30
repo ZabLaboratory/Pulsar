@@ -769,7 +769,7 @@ bool BrowserSource::CreateBrowser()
 		}
 
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
-		if (source->hwaccel) {
+		if (hwaccel) {
 			obs_enter_graphics();
 #if defined(__APPLE__) || defined(_WIN32)
 			source->tex_sharing_avail = gs_shared_texture_available();
