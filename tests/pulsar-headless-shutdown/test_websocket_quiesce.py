@@ -23,8 +23,6 @@ import threading
 import time
 from typing import Any
 
-import pytest
-
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVER_CPP = ROOT / "plugins" / "pulsar-websocket" / "src" / "websocketserver" / "WebSocketServer.cpp"
@@ -230,17 +228,29 @@ def test_handshake_timeout_and_early_driver_failure_are_fatal() -> None:
     async def exercise() -> None:
         never_ready = asyncio.Event()
 
+        async def expect_runtime_error(awaitable: Any, expected: str) -> None:
+            try:
+                await awaitable
+            except RuntimeError as error:
+                assert expected in str(error)
+            else:
+                raise AssertionError(f"expected RuntimeError containing {expected!r}")
+
         async def failing_driver() -> None:
             raise RuntimeError("native batch entry failed")
 
         failing_task = asyncio.create_task(failing_driver())
-        with pytest.raises(RuntimeError, match="native batch entry failed"):
-            await _await_workload_handshake(never_ready, failing_task, timeout=1)
+        await expect_runtime_error(
+            _await_workload_handshake(never_ready, failing_task, timeout=1),
+            "native batch entry failed",
+        )
 
         never_finishes = asyncio.create_task(asyncio.sleep(10))
         try:
-            with pytest.raises(RuntimeError, match="native in-flight handshake"):
-                await _await_workload_handshake(never_ready, never_finishes, timeout=0.01)
+            await expect_runtime_error(
+                _await_workload_handshake(never_ready, never_finishes, timeout=0.01),
+                "native in-flight handshake",
+            )
         finally:
             never_finishes.cancel()
 
