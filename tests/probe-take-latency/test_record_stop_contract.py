@@ -23,6 +23,7 @@ OUTPUT_EFFECT = ROOT / "plugins" / "pulsar-websocket" / "src" / "requesthandler"
 OUTPUT_HELPER = ROOT / "plugins" / "pulsar-websocket" / "src" / "utils" / "Obs_OutputHelper.cpp"
 OBS_HEADER = ROOT / "plugins" / "pulsar-websocket" / "src" / "utils" / "Obs.h"
 RECORD_PROBE = ROOT / "scripts" / "probe-record.py"
+RECORD_M2_PROBE = ROOT / "scripts" / "probe-record-m2.py"
 RECORD_SPLIT_PROBE = ROOT / "scripts" / "probe-record-split.py"
 
 
@@ -135,6 +136,7 @@ def test_pause_guard_and_status_expose_video_frame_readiness() -> None:
 
 def test_record_probes_drain_pending_before_shared_process_reuse() -> None:
     record_probe = RECORD_PROBE.read_text(encoding="utf-8")
+    record_m2_probe = RECORD_M2_PROBE.read_text(encoding="utf-8")
     split_probe = RECORD_SPLIT_PROBE.read_text(encoding="utf-8")
 
     for probe in (record_probe, split_probe):
@@ -145,6 +147,11 @@ def test_record_probes_drain_pending_before_shared_process_reuse() -> None:
         assert "outputActive" in probe
         assert "did not emit STOPPED" in probe
         assert "outputActive stayed true" in probe
+
+    assert "STOP_PENDING_CODE = 702" in record_m2_probe
+    assert "wait_record_stop(inbox, ws, r, record_dir)" in record_m2_probe
+    assert "outputPath is stale or outside this run" in record_m2_probe
+    assert "outputActive stayed true" in record_m2_probe
 
     assert "wait_record_stop(inbox, ws, resp)" in record_probe
     assert '"stop-recovery"' in split_probe
@@ -215,3 +222,73 @@ def test_record_probe_pending_timeout_and_refusal_never_fabricate_a_path() -> No
 
     refused = {"requestStatus": {"result": False, "code": 500, "comment": "refused"}}
     assert asyncio.run(probe.wait_record_stop(probe.Inbox(), _FakeWs([]), refused)) is None
+
+
+def test_record_m2_pending_702_requires_stopped_inactive_and_current_path(tmp_path: Path) -> None:
+    probe = _load_probe(RECORD_M2_PROBE, "record_m2_stop_contract")
+    output = tmp_path / "final.mp4"
+    output.write_bytes(b"mp4")
+    inbox = probe.Inbox()
+    ws = _FakeWs(
+        [
+            {
+                "op": 5,
+                "d": {
+                    "eventType": "RecordStateChanged",
+                    "eventData": {
+                        "outputState": "OBS_WEBSOCKET_OUTPUT_STOPPED",
+                        "outputPath": str(output),
+                    },
+                },
+            },
+            {
+                "op": 7,
+                "d": {
+                    "requestId": "stop-status-1",
+                    "requestStatus": {"result": True, "code": 100},
+                    "responseData": {"outputActive": False},
+                },
+            },
+        ]
+    )
+    pending = {"requestStatus": {"result": False, "code": 702, "comment": "still flushing"}}
+
+    event = asyncio.run(probe.wait_record_stop(inbox, ws, pending, tmp_path))
+
+    assert event is not None
+    assert event["eventData"]["outputPath"] == str(output)
+
+
+def test_record_m2_pending_timeout_and_non_702_failure_are_fail_closed(tmp_path: Path) -> None:
+    probe = _load_probe(RECORD_M2_PROBE, "record_m2_stop_contract_failure")
+    original_timeout = probe.STOP_EVENT_TIMEOUT_SEC
+    probe.STOP_EVENT_TIMEOUT_SEC = 0.0
+    try:
+        pending = {"requestStatus": {"result": False, "code": 702, "comment": "still active"}}
+        assert asyncio.run(probe.wait_record_stop(probe.Inbox(), _FakeWs([]), pending, tmp_path)) is None
+        refused = {"requestStatus": {"result": False, "code": 500, "comment": "refused"}}
+        assert asyncio.run(probe.wait_record_stop(probe.Inbox(), _FakeWs([]), refused, tmp_path)) is None
+    finally:
+        probe.STOP_EVENT_TIMEOUT_SEC = original_timeout
+
+
+def test_record_m2_stopped_missing_or_stale_path_is_rejected(tmp_path: Path) -> None:
+    probe = _load_probe(RECORD_M2_PROBE, "record_m2_stop_contract_path_failure")
+    pending = {"requestStatus": {"result": False, "code": 702, "comment": "still flushing"}}
+    for output_path in ("", str(tmp_path.parent / "stale.mp4")):
+        inbox = probe.Inbox()
+        ws = _FakeWs(
+            [
+                {
+                    "op": 5,
+                    "d": {
+                        "eventType": "RecordStateChanged",
+                        "eventData": {
+                            "outputState": "OBS_WEBSOCKET_OUTPUT_STOPPED",
+                            "outputPath": output_path,
+                        },
+                    },
+                }
+            ]
+        )
+        assert asyncio.run(probe.wait_record_stop(inbox, ws, pending, tmp_path)) is None
