@@ -61,7 +61,7 @@ static bool test_admission_then_destroy()
 
 	const bool destroying = state.begin_destroy();
 	const bool late_admission = state.acquire(false);
-	state.request_delete(true);
+	const BrowserSourceTaskRelease early_delete = state.request_delete_and_take_if_idle(true);
 	{
 		std::lock_guard<std::mutex> lock(rendezvous_mutex);
 		release = true;
@@ -71,6 +71,7 @@ static bool test_admission_then_destroy()
 
 	return check(destroying, "destroy did not close admission") &&
 	       check(!late_admission, "a task entered after destroy") &&
+	       check(early_delete.source == nullptr, "delete raced an active lease") &&
 	       check(released.source != nullptr, "last lease did not own deletion") &&
 	       check(released.complete_destroy_task, "destroy completion was not preserved") &&
 	       check(!released.underflow, "lease release underflowed");
@@ -83,9 +84,8 @@ static bool test_destroy_then_admission()
 
 	const bool destroying = state.begin_destroy();
 	const bool late_admission = state.acquire(false);
-	state.request_delete(true);
-	const BrowserSourceTaskRelease deleted = state.delete_if_idle();
-	const BrowserSourceTaskRelease duplicate = state.delete_if_idle();
+	const BrowserSourceTaskRelease deleted = state.request_delete_and_take_if_idle(true);
+	const BrowserSourceTaskRelease duplicate = state.request_delete_and_take_if_idle(true);
 	const BrowserSourceTaskRelease underflow = state.release_task();
 
 	return check(destroying, "destroy did not win before admission") &&

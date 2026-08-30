@@ -58,11 +58,17 @@ struct BrowserSourceTaskState {
 		return source;
 	}
 
-	void request_delete(bool completion_required)
+	BrowserSourceTaskRelease request_delete_and_take_if_idle(bool completion_required)
 	{
 		std::lock_guard<std::mutex> lock(mutex);
 		delete_requested = true;
 		delete_completion_required |= completion_required;
+		if (active_tasks != 0 || deleted)
+			return {};
+		deleted = true;
+		BrowserSourceTaskRelease release{source, delete_completion_required, false};
+		source = nullptr;
+		return release;
 	}
 
 	BrowserSourceTaskRelease release_task()
@@ -79,14 +85,4 @@ struct BrowserSourceTaskState {
 		return release;
 	}
 
-	BrowserSourceTaskRelease delete_if_idle()
-	{
-		std::lock_guard<std::mutex> lock(mutex);
-		if (active_tasks != 0 || deleted || !delete_requested)
-			return {};
-		deleted = true;
-		BrowserSourceTaskRelease release{source, delete_completion_required, false};
-		source = nullptr;
-		return release;
-	}
 };

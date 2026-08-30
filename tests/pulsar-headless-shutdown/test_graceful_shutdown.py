@@ -480,6 +480,10 @@ def main() -> int:
     browser_closed = {}
     browser_close_observed = {}
     browser_finalization_intent = {}
+    browser_close_call = {}
+    browser_close_return = {}
+    browser_on_before_close_entry = {}
+    browser_on_before_close_exit = {}
     client_keepalive_acquired = {}
     client_keepalive_released = {}
     for index, line in enumerate(lines):
@@ -490,6 +494,10 @@ def main() -> int:
             ("browser_detached", browser_detached),
             ("browser_close_observed", browser_close_observed),
             ("browser_finalization_intent", browser_finalization_intent),
+            ("browser_close_call", browser_close_call),
+            ("browser_close_return", browser_close_return),
+            ("browser_on_before_close_entry", browser_on_before_close_entry),
+            ("browser_on_before_close_exit", browser_on_before_close_exit),
             ("client_keepalive_acquired", client_keepalive_acquired),
             ("client_keepalive_released", client_keepalive_released),
         ):
@@ -506,6 +514,10 @@ def main() -> int:
         or set(audio_started) != set(browser_detached)
         or set(audio_started) != set(browser_close_observed)
         or set(audio_started) != set(browser_finalization_intent)
+        or set(audio_started) != set(browser_close_call)
+        or set(audio_started) != set(browser_close_return)
+        or set(audio_started) != set(browser_on_before_close_entry)
+        or set(audio_started) != set(browser_on_before_close_exit)
         or set(audio_started) != set(client_keepalive_acquired)
         or set(audio_started) != set(client_keepalive_released)
     ):
@@ -516,7 +528,28 @@ def main() -> int:
             f"started={sorted(audio_started)} stopped={sorted(audio_stopped)} "
             f"quiescent={sorted(audio_quiescent)} detached={sorted(browser_detached)} "
             f"observed={sorted(browser_close_observed)} intent={sorted(browser_finalization_intent)} "
+            f"close_call={sorted(browser_close_call)} close_return={sorted(browser_close_return)} "
+            f"before_close_entry={sorted(browser_on_before_close_entry)} "
+            f"before_close_exit={sorted(browser_on_before_close_exit)} "
             f"acquired={sorted(client_keepalive_acquired)} released={sorted(client_keepalive_released)}",
+        )
+    close_call_order = sorted(
+        (min(indices), browser_id) for browser_id, indices in browser_close_call.items()
+    )
+    if len(close_call_order) != 2 or len({browser_id for _, browser_id in close_call_order}) != 2:
+        _raise_with_sanitized_tail(
+            probe,
+            process,
+            f"CEF shutdown did not issue exactly one close call per browser: {close_call_order}",
+        )
+    first_call, first_browser_id = close_call_order[0]
+    second_call, _ = close_call_order[1]
+    first_closed_candidates = browser_closed.get(first_browser_id, [])
+    if not first_closed_candidates or second_call <= min(first_closed_candidates):
+        _raise_with_sanitized_tail(
+            probe,
+            process,
+            "CEF started a second browser close before the first browser was closed",
         )
     for browser_id in sorted(audio_started):
         if browser_id not in browser_closed:
@@ -548,6 +581,18 @@ def main() -> int:
         acquired_candidates = [
             index for index in client_keepalive_acquired[browser_id] if index > started
         ]
+        close_call_candidates = [
+            index for index in browser_close_call[browser_id] if index > started
+        ]
+        close_return_candidates = [
+            index for index in browser_close_return[browser_id] if index > started
+        ]
+        before_close_entry_candidates = [
+            index for index in browser_on_before_close_entry[browser_id] if index > started
+        ]
+        before_close_exit_candidates = [
+            index for index in browser_on_before_close_exit[browser_id] if index > started
+        ]
         detached_candidates = [
             index for index in browser_detached[browser_id] if index > started
         ]
@@ -561,6 +606,10 @@ def main() -> int:
             not observed_candidates
             or not detached_candidates
             or not intent_candidates
+            or not close_call_candidates
+            or not close_return_candidates
+            or not before_close_entry_candidates
+            or not before_close_exit_candidates
             or not acquired_candidates
             or not released_candidates
         ):
@@ -571,11 +620,17 @@ def main() -> int:
             )
         observed = min(observed_candidates)
         acquired = min(acquired_candidates)
+        close_call = min(close_call_candidates)
+        close_return = min(close_return_candidates)
+        before_close_entry = min(before_close_entry_candidates)
+        before_close_exit = min(before_close_exit_candidates)
         detached = min(detached_candidates)
         intent = min(intent_candidates)
         released = min(released_candidates)
         if not (
             started < stopped
+            and close_call < close_return
+            and close_call < before_close_entry < before_close_exit
             and started < acquired <= detached <= observed
             and max(stopped, observed) <= intent <= quiescent < closed < released
         ):
