@@ -79,12 +79,14 @@ def test_startup_can_expose_browser_source_before_cef_ready() -> None:
     )
 
 
-def test_queue_cef_task_is_directly_bound_to_post_acceptance() -> None:
+def test_queue_cef_task_is_readiness_gated_before_post_acceptance() -> None:
     plugin = PLUGIN.read_text(encoding="utf-8")
     queue = _body(plugin, "bool QueueCEFTask(std::function<void()> task)", "[[noreturn]] static void FailCefShutdown")
 
-    assert "return CefPostTask(TID_UI" in queue
-    assert "cef_started_event" not in queue
+    assert "if (!BrowserSourceCefReady())" in queue
+    assert "event=post_rejected reason=cef_not_ready" in queue
+    assert "const bool posted = CefPostTask(TID_UI" in queue
+    assert "return posted;" in queue
 
 
 def test_source_destroy_turns_post_failure_into_process_abort() -> None:

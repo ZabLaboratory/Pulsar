@@ -113,9 +113,9 @@ def test_self_keepalive_spans_observed_to_source_finalize() -> None:
     assert "CefRefPtr<BrowserClient> self(this);" in before_close
     assert "close_keepalive = self;" in before_close
     assert "CefRefPtr<BrowserClient> self(this);" in finalize
-    assert "BrowserSourceFinalizeBrowserClose(browser);" in finalize
+    assert "BrowserSourceFinalizeBrowserClose(browser_id);" in finalize
     assert "close_keepalive = nullptr;" in finalize
-    assert finalize.index("BrowserSourceFinalizeBrowserClose(browser);") < finalize.index(
+    assert finalize.index("BrowserSourceFinalizeBrowserClose(browser_id);") < finalize.index(
         "close_keepalive = nullptr;"
     )
 
@@ -166,5 +166,5 @@ def test_shutdown_fixture_requires_two_ids_and_accepts_both_stop_orders() -> Non
     assert "len(audio_started) != 2" in integration
     assert "set(audio_started) != set(client_keepalive_acquired)" in integration
     assert "set(audio_started) != set(client_keepalive_released)" in integration
-    assert "max(stopped, observed) <= quiescent" in integration
+    assert "max(stopped, observed) <= intent <= quiescent" in integration
     assert "client_keepalive_acquired" in integration
