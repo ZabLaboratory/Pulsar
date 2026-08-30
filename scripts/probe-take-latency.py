@@ -42,7 +42,8 @@ flags, warm-up count and the known resource reference (+0.091 ms/frame and
 +3.13 MB, represented as decimal bytes).  Resource samples are collected in
 ``reference`` and ``dual_lane`` modes so the delta is measured rather than
 declared from that reference.  Each new sample carries the actual
-``encoder_active`` state; only active-encoder samples can satisfy AC-13.
+`encoder_active` state and `encoder_family`; only active NVENC samples can
+satisfy AC-13.
 
 Usage::
 
@@ -168,7 +169,7 @@ RESOURCE_REQUIRED = {
     "producer_count",
     *RESOURCE_METRICS,
 }
-RESOURCE_OPTIONAL = {"encoder_active", "gpu_memory_bytes", "notes"}
+RESOURCE_OPTIONAL = {"encoder_active", "encoder_family", "gpu_memory_bytes", "notes"}
 RESOURCE_ALLOWED = RESOURCE_REQUIRED | RESOURCE_OPTIONAL
 
 
@@ -467,6 +468,14 @@ def _validate_resource(value: Any, session: Mapping[str, Any], *, line: int | No
     _integer(obj["observed_at_monotonic_ns"], "resource.observed_at_monotonic_ns", line=line)
     if "encoder_active" in obj:
         _boolean(obj["encoder_active"], "resource.encoder_active", line=line)
+    if "encoder_family" in obj:
+        _string(obj["encoder_family"], "resource.encoder_family", line=line)
+        if obj["encoder_family"] not in ("x264", "nvenc"):
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "resource.encoder_family must be x264 or nvenc",
+                line=line,
+            )
     for key in RESOURCE_METRICS:
         _number(obj[key], f"resource.{key}", line=line)
     if "gpu_memory_bytes" in obj:
@@ -829,6 +838,7 @@ def analyze_trace(
         "status": "UNPROVEN",
         "sample_counts": {},
         "active_sample_counts": {},
+        "eligible_sample_counts": {},
         "inactive_sample_counts": {},
         "metrics": {},
         "comparison": {},
@@ -836,11 +846,18 @@ def analyze_trace(
     for mode in RESOURCE_MODES:
         samples = [sample for sample in trace.resources if sample["sample_mode"] == mode]
         active_samples = [sample for sample in samples if sample.get("encoder_active") is True]
+        eligible_samples = [
+            sample
+            for sample in active_samples
+            if sample.get("encoder_family") == "nvenc"
+        ]
         resource_report["sample_counts"][mode] = len(samples)
         resource_report["active_sample_counts"][mode] = len(active_samples)
+        resource_report["eligible_sample_counts"][mode] = len(eligible_samples)
         resource_report["inactive_sample_counts"][mode] = len(samples) - len(active_samples)
+        admitted_samples = eligible_samples if session["codec"] == "nvenc" else active_samples
         resource_report["metrics"][mode] = {
-            metric: _resource_stats([sample[metric] for sample in active_samples]) for metric in RESOURCE_METRICS
+            metric: _resource_stats([sample[metric] for sample in admitted_samples]) for metric in RESOURCE_METRICS
         }
     if session["codec"] == "x264":
         # AC-13 is a resource delta for the NVENC workload specifically.  An
@@ -852,12 +869,16 @@ def analyze_trace(
         reference_samples = [
             sample
             for sample in trace.resources
-            if sample["sample_mode"] == "reference" and sample.get("encoder_active") is True
+            if sample["sample_mode"] == "reference"
+            and sample.get("encoder_active") is True
+            and sample.get("encoder_family") == "nvenc"
         ]
         dual_samples = [
             sample
             for sample in trace.resources
-            if sample["sample_mode"] == "dual_lane" and sample.get("encoder_active") is True
+            if sample["sample_mode"] == "dual_lane"
+            and sample.get("encoder_active") is True
+            and sample.get("encoder_family") == "nvenc"
         ]
         if (
             len(reference_samples) >= minimum_resource_samples
@@ -880,7 +901,7 @@ def analyze_trace(
         else:
             resource_report["status"] = "UNPROVEN"
             resource_report["reason"] = (
-                "requires both resource modes, minimum active-encoder samples, "
+                "requires both resource modes, minimum active NVENC-encoder samples, "
                 "and WGC+CEF+NVENC workload flags"
             )
 
@@ -958,7 +979,7 @@ def analyze_trace(
             "encoded_first_packet is the pre-network encoder callback; RTMP receiver ingress is an external Probe boundary.",
             "Decoded and antenna timings are diagnostic only and carry no acceptance SLO.",
             "The first session.warmup_takes committed Takes are excluded from latency percentiles; measured counts are the observed committed suffix.",
-            "Resource sample counts include all records; resource metrics and AC-13 use only samples with encoder_active=true.",
+            "Resource sample counts include all records; AC-13 uses only samples with encoder_active=true and encoder_family=nvenc.",
             "A fixture report is never a runtime acceptance; run the same command against a runtime trace with evidence_kind=runtime.",
         ],
     }

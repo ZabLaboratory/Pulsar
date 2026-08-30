@@ -10,6 +10,7 @@ and a teardown barrier for an extracted (in-flight) swap.
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import threading
@@ -230,8 +231,7 @@ def test_preview_and_direct_selection_mutate_composition_not_view_identity() -> 
 
 def test_encoder_and_stable_surfaces_are_bound_only_during_setup() -> None:
     source = _read(_FRONTEND)
-    assert source.count("obs_encoder_set_video(videoEncoder, programVideo)") == 1
-    assert "obs_encoder_set_video(videoEncoder, obs_get_video())" not in source
+    assert source.count("obs_encoder_set_video(videoEncoder, encoderVideo)") == 1
 
     setup = _between(
         source,
@@ -259,6 +259,11 @@ def test_encoder_and_stable_surfaces_are_bound_only_during_setup() -> None:
     assert "obs_view_add(programView)" not in setup
     assert "obs_view_remove(programView)" not in setup
     assert "obs_view_destroy(programView)" not in setup
+    main_setup = _between(source, "bool PulsarFrontendAPI::setup()", "void PulsarFrontendAPI::teardown()")
+    assert "video_t bound once to ProgramView" in main_setup
+    assert main_setup.index("setupDualLane(scene)") < main_setup.index(
+        "obs_encoder_set_video(videoEncoder, encoderVideo)"
+    )
     assert "obs_view_set_source(" not in cut
     assert "obs_encoder_set_video(" not in cut
     assert "obs_output_set_media(" not in cut
@@ -514,6 +519,111 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert "TRACE_WARMUP_TAKES = 100" in probe
     assert "total_takes = warmup_takes + takes" in probe
     assert "warmup_takes_observed" in _read(_ROOT / "scripts/probe-take-latency.py")
+    assert "validate_trace_append" in probe
+    assert "--trace-append requires --runtime-id matching the reference session" in probe
+    assert "--resource-mode is supported only with --encoder nvenc" in probe
+    assert 'sample.get("encoder_family") == "nvenc"' in probe
+
+
+def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: Path) -> None:
+    probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_append_preflight")
+    common = [
+        "--trace",
+        str(tmp_path / "trace.jsonl"),
+        "--build-revision",
+        "a" * 40,
+        "--capture-window",
+        "title:class:exe",
+        "--cef-workload",
+    ]
+    with pytest.raises(SystemExit):
+        probe.parse_args(["--encoder", "x264", *common, "--resource-mode", "dual_lane"])
+    with pytest.raises(SystemExit):
+        probe.parse_args(
+            ["--encoder", "x264", *common, "--runtime-id", "runtime-x264", "--trace-append", "--resource-mode", "dual_lane"]
+        )
+
+    session = {
+        "record_type": "session",
+        "codec": "nvenc",
+        "runtime_instance_id": "runtime-reference",
+        "build_revision": "a" * 40,
+        "hardware": {"host": "host-reference", "gpu": "gpu-reference"},
+        "producer_topology": "single_lane_reference",
+        "producer_count": 1,
+        "workload": {"wgc": True, "cef": True, "nvenc": True},
+    }
+    resource = {
+        "record_type": "resource_sample",
+        "sample_mode": "reference",
+        "runtime_instance_id": session["runtime_instance_id"],
+        "build_revision": session["build_revision"],
+        "hardware": session["hardware"],
+        "producer_topology": "single_lane_reference",
+        "producer_count": 1,
+        "encoder_active": True,
+        "encoder_family": "nvenc",
+    }
+    trace_path = tmp_path / "reference.jsonl"
+    trace_path.write_text(
+        json.dumps(session) + "\n" + json.dumps(resource) + "\n",
+        encoding="utf-8",
+    )
+    original_trace = trace_path.read_bytes()
+    probe.validate_trace_append(
+        trace_path,
+        runtime_id="runtime-reference",
+        build_revision="a" * 40,
+        trace_host="host-reference",
+        trace_gpu="gpu-reference",
+    )
+    assert trace_path.read_bytes() == original_trace
+
+    for field, value in (
+        ("runtime_id", "runtime-other"),
+        ("build_revision", "b" * 40),
+        ("trace_host", "host-other"),
+        ("trace_gpu", "gpu-other"),
+    ):
+        kwargs = {
+            "runtime_id": "runtime-reference",
+            "build_revision": "a" * 40,
+            "trace_host": "host-reference",
+            "trace_gpu": "gpu-reference",
+        }
+        kwargs[field] = value
+        with pytest.raises(probe.ProbeFailure, match="does not match"):
+            probe.validate_trace_append(trace_path, **kwargs)
+
+    wrong_family = dict(resource)
+    wrong_family["encoder_family"] = "x264"
+    trace_path.write_text(
+        json.dumps(session) + "\n" + json.dumps(wrong_family) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(probe.ProbeFailure, match="active sample"):
+        probe.validate_trace_append(
+            trace_path,
+            runtime_id="runtime-reference",
+            build_revision="a" * 40,
+            trace_host="host-reference",
+            trace_gpu="gpu-reference",
+        )
+
+    wrong_codec = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
+    wrong_codec["codec"] = "x264"
+    trace_path.write_text(
+        json.dumps(wrong_codec) + "\n" + json.dumps(resource) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(probe.ProbeFailure, match="existing NVENC"):
+        probe.validate_trace_append(
+            trace_path,
+            runtime_id="runtime-reference",
+            build_revision="a" * 40,
+            trace_host="host-reference",
+            trace_gpu="gpu-reference",
+        )
 
 
 def test_runtime_probe_exercises_live_mutation_and_post_take_isolation() -> None:

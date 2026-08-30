@@ -123,15 +123,16 @@ an external Probe measurement and must not be labelled as this boundary.
 Resource samples use `sample_mode=reference` and `sample_mode=dual_lane` and
 record `frame_render_ms`, `resident_bytes`, `process_cpu_percent`,
 `host_gpu_percent`, `callback_backlog_estimate`, and
-`encoder_utilization_percent`, plus the strict `encoder_active` state read
-from the actual bound encoder at sample time. The report
+`encoder_utilization_percent`, plus strict `encoder_active` and
+`encoder_family` fields read from the actual bound encoder at sample time. The report
 computes actual deltas from the two sample sets and shows them beside the
 known `+0.091 ms/frame` and `+3.13 MB` references. It never declares runtime
 capacity from the reference alone. Samples with `encoder_active=false` remain
 diagnostic and cannot satisfy the AC-13 minimum.
 
-The `encoder_active` field is optional for backward parsing of older traces;
-when it is absent, the sample is treated as inactive for acceptance. This
+The `encoder_active` and `encoder_family` fields are optional for backward
+parsing of older traces; when either is absent or the family is not `nvenc`,
+the sample is treated as ineligible for acceptance. This
 keeps historical evidence inspectable without allowing it to satisfy the
 new active-encoder resource gate.
 

@@ -401,6 +401,7 @@ public:
             traceGpu_.clear();
             producerTopology_.clear();
             producerCount_ = 0;
+            encoderFamily_.clear();
             videoEncoder_ = nullptr;
         }
 
@@ -458,6 +459,7 @@ public:
             }
             wgcWorkload_ = wgcWorkload;
             cefWorkload_ = cefWorkload;
+            encoderFamily_ = encoderFamily && *encoderFamily ? encoderFamily : "unknown";
             videoEncoder_ = videoEncoder;
             session = sessionJson(encoderFamily, video, wgcWorkload, cefWorkload, wgcSourceBound);
         }
@@ -526,6 +528,7 @@ public:
         committed_ = {};
         lastRawTake_.clear();
         lastPacketTake_.clear();
+        encoderFamily_.clear();
         videoEncoder_ = nullptr;
     }
 
@@ -1119,6 +1122,7 @@ private:
             std::string host;
             std::string gpuName;
             std::string producerTopology;
+            std::string encoderFamily;
             uint64_t producerCount = 0;
             obs_encoder_t *videoEncoder = nullptr;
             {
@@ -1131,6 +1135,7 @@ private:
                 host = traceHost_;
                 gpuName = traceGpu_;
                 producerTopology = producerTopology_;
+                encoderFamily = encoderFamily_;
                 producerCount = producerCount_;
                 videoEncoder = videoEncoder_;
             }
@@ -1147,6 +1152,7 @@ private:
                    << ",\"callback_backlog_estimate\":" << queueDepth
                    << ",\"encoder_utilization_percent\":" << gpu.encoderUtilization
                    << ",\"encoder_active\":" << (encoderActive ? "true" : "false")
+                   << ",\"encoder_family\":\"" << escape(encoderFamily) << "\""
                    << ",\"gpu_memory_bytes\":" << gpu.memoryBytes
                    << ",\"measurement_phase\":\"" << mode
                    << "\",\"build_revision\":\"" << escape(buildRevision)
@@ -1535,6 +1541,7 @@ private:
     std::string producerTopology_;
     uint64_t producerCount_ = 0;
     std::string resourceMode_;
+    std::string encoderFamily_;
     // Non-owning: setup owns the encoder; teardown stops and joins the
     // resource sampler before releasing it.
     obs_encoder_t *videoEncoder_ = nullptr;
@@ -3396,14 +3403,6 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
         return false;
     }
 
-    // The encoder is intentionally bound once, before any output can start.
-    // obs_encoder_set_video rejects active/initialized encoders; the dual-lane
-    // callback never calls it.
-    if (videoEncoder) {
-        obs_encoder_set_video(videoEncoder, programVideo);
-        blog(LOG_INFO, "[pulsar-dual-lane] encoder video_t bound once to ProgramView");
-    }
-
     // ProgramView aliases the main canvas, so channel 0 is already the legacy
     // output source and obs_get_video()/GetStats observe programVideo directly.
     // Do not create a third mix or rebind the main route after setup.
@@ -4308,6 +4307,21 @@ bool PulsarFrontendAPI::setup()
             blog(LOG_INFO, "[pulsar-dual-lane] compatibility single-canvas path selected");
     } else if (!setupDualLane(scene)) {
         blog(LOG_WARNING, "[pulsar-frontend-stub] dual-lane setup unavailable; keeping legacy canvas path");
+    }
+
+    // Bind the requested encoder exactly once for both the hot dual-lane and
+    // compatibility/reference paths.  The latter uses libobs's main video_t
+    // directly because it intentionally has no auxiliary PreviewView.
+    // obs_encoder_set_video rejects active/initialized encoders; no Cut path
+    // can reach this setup-only binding.
+    if (videoEncoder) {
+        video_t *encoderVideo = programVideo ? programVideo : obs_get_video();
+        if (encoderVideo) {
+            obs_encoder_set_video(videoEncoder, encoderVideo);
+            blog(LOG_INFO, "[pulsar-dual-lane] encoder video_t bound once to ProgramView");
+        } else {
+            blog(LOG_ERROR, "[pulsar-dual-lane] encoder video_t binding skipped: no Program video");
+        }
     }
     obs_scene_release(scene);
     scene = nullptr;

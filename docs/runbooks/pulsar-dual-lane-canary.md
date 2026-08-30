@@ -122,8 +122,9 @@ NVENC trace must contain both the reference and dual-lane resource phases and
 is the only campaign that may report AC-13 as `MEASURED`. Its reference
 `--resource-only` invocation starts a real NVENC recording before counting
 samples, requires `OUTPUT_STARTED`, and stops/verifies that recording before
-returning. Samples without the observed `encoder_active=true` state remain
-diagnostic and cannot satisfy AC-13. The aggregate report is `PASS` only when
+returning. Samples without the observed `encoder_active=true` state or the
+matching `encoder_family=nvenc` identity remain diagnostic and cannot satisfy
+AC-13. The aggregate report is `PASS` only when
 independent passing x264 and NVENC campaigns are both present; it exposes
 per-codec/session coverage and never pools samples across traces.
 

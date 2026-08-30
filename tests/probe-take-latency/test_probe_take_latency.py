@@ -218,6 +218,7 @@ def _take_records(
                         "producer_topology": "single_lane_reference" if mode == "reference" else "dual_lane_ab",
                         "producer_count": 1 if mode == "reference" else 2,
                         "encoder_active": resource_encoder_active,
+                        "encoder_family": codec,
                         "frame_render_ms": render + sample_index * 0.001,
                         "resident_bytes": resident + sample_index * 1000,
                         "process_cpu_percent": 15.0 + sample_index,
@@ -328,6 +329,26 @@ def test_runtime_nvenc_resource_samples_without_active_encoder_are_not_evidence(
     assert report["resources"]["sample_counts"] == {"reference": 2, "dual_lane": 2}
     assert report["resources"]["active_sample_counts"] == {"reference": 0, "dual_lane": 0}
     assert report["resources"]["inactive_sample_counts"] == {"reference": 2, "dual_lane": 2}
+    assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
+
+
+def test_runtime_nvenc_resource_samples_from_another_codec_are_not_evidence():
+    records = _take_records(
+        3,
+        evidence_kind="runtime",
+        codec="nvenc",
+        runtime_id="runtime-nvenc-wrong-family",
+    )
+    for record in records:
+        if record.get("record_type") == "resource_sample":
+            record["encoder_family"] = "x264"
+
+    trace = probe.parse_records(records)
+    report = probe.analyze_trace(trace, minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
+
+    assert report["status"] == "UNPROVEN"
+    assert report["resources"]["active_sample_counts"] == {"reference": 2, "dual_lane": 2}
+    assert report["resources"]["eligible_sample_counts"] == {"reference": 0, "dual_lane": 0}
     assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
 
 

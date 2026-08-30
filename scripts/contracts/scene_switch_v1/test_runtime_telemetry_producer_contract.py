@@ -118,6 +118,7 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "process_cpu_percent" in frontend
     assert "callback_backlog_estimate" in frontend
     assert "encoder_active" in frontend
+    assert "encoder_family" in frontend
     assert "obs_encoder_active(videoEncoder)" in frontend
     assert "obs_encoder_t *videoEncoder" in frontend
     assert "queue_rejected" in frontend

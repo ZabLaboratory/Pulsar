@@ -2388,6 +2388,110 @@ async def drive(process: PulsarProcess, takes: int, *, warmup_takes: int = 0) ->
     return commits
 
 
+def validate_trace_append(
+    trace_path: pathlib.Path,
+    *,
+    runtime_id: str,
+    build_revision: str,
+    trace_host: str,
+    trace_gpu: str,
+) -> None:
+    """Validate the NVENC reference trace before allowing an append.
+
+    The second invocation intentionally reuses the JSONL file produced by the
+    reference process.  Validate its identity and phase before spawning a new
+    runtime: a mismatch must fail before the new process can truncate or
+    append anything.
+    """
+
+    if not trace_path.is_file():
+        raise ProbeFailure(f"--trace-append requires an existing trace file: {trace_path}")
+
+    records: list[dict[str, Any]] = []
+    try:
+        with trace_path.open("r", encoding="utf-8") as handle:
+            for line_number, text in enumerate(handle, start=1):
+                if not text.strip():
+                    continue
+                try:
+                    value = json.loads(text)
+                except json.JSONDecodeError as exc:
+                    raise ProbeFailure(
+                        f"--trace-append found malformed JSON at line {line_number}: {exc.msg}"
+                    ) from exc
+                if not isinstance(value, dict):
+                    raise ProbeFailure(f"--trace-append record at line {line_number} is not an object")
+                record_type = value.get("record_type")
+                if record_type not in {"session", "event", "observation", "resource_sample"}:
+                    raise ProbeFailure(
+                        f"--trace-append found unsupported record_type={record_type!r} "
+                        f"at line {line_number}"
+                    )
+                records.append(value)
+    except OSError as exc:
+        raise ProbeFailure(f"--trace-append cannot read existing trace {trace_path}: {exc}") from exc
+
+    if not records or records[0].get("record_type") != "session":
+        raise ProbeFailure("--trace-append existing trace must begin with its session record")
+    sessions = [record for record in records if record.get("record_type") == "session"]
+    if len(sessions) != 1:
+        raise ProbeFailure(
+            f"--trace-append requires exactly one existing session record, found {len(sessions)}"
+        )
+    session = sessions[0]
+    if session.get("codec") != "nvenc":
+        raise ProbeFailure(
+            f"--trace-append requires an existing NVENC reference session, got {session.get('codec')!r}"
+        )
+    if session.get("runtime_instance_id") != runtime_id:
+        raise ProbeFailure("--trace-append runtime_instance_id does not match the reference session")
+    if session.get("build_revision") != build_revision:
+        raise ProbeFailure("--trace-append build_revision does not match the reference session")
+    if session.get("hardware") != {"host": trace_host, "gpu": trace_gpu}:
+        raise ProbeFailure("--trace-append hardware identity does not match the reference session")
+    if session.get("producer_topology") != "single_lane_reference" or session.get("producer_count") != 1:
+        raise ProbeFailure("--trace-append reference session is not single_lane_reference/producer_count=1")
+    workload = session.get("workload")
+    if not isinstance(workload, dict) or workload.get("nvenc") is not True:
+        raise ProbeFailure("--trace-append reference session does not declare an NVENC workload")
+
+    resource_samples = [record for record in records if record.get("record_type") == "resource_sample"]
+    if any(record.get("record_type") in {"event", "observation"} for record in records):
+        raise ProbeFailure(
+            "--trace-append reference file contains Take/event observations; "
+            "it cannot be used as the NVENC resource baseline"
+        )
+    reference_samples = [sample for sample in resource_samples if sample.get("sample_mode") == "reference"]
+    if not resource_samples or len(reference_samples) != len(resource_samples):
+        raise ProbeFailure(
+            "--trace-append requires only the NVENC reference resource phase before dual-lane append"
+        )
+    for sample in reference_samples:
+        if sample.get("runtime_instance_id") != runtime_id:
+            raise ProbeFailure("--trace-append resource runtime_instance_id does not match the session")
+        if sample.get("build_revision") != build_revision:
+            raise ProbeFailure("--trace-append resource build_revision does not match the session")
+        if sample.get("hardware") != {"host": trace_host, "gpu": trace_gpu}:
+            raise ProbeFailure("--trace-append resource hardware identity does not match the session")
+        if sample.get("producer_topology") != "single_lane_reference" or sample.get("producer_count") != 1:
+            raise ProbeFailure("--trace-append resource reference topology is not single-lane")
+        if "encoder_active" in sample and type(sample["encoder_active"]) is not bool:
+            raise ProbeFailure("--trace-append resource encoder_active must be boolean")
+        if "encoder_family" in sample and sample["encoder_family"] not in ("x264", "nvenc"):
+            raise ProbeFailure("--trace-append resource encoder_family is invalid")
+        if sample.get("encoder_active") is True and sample.get("encoder_family") != "nvenc":
+            raise ProbeFailure(
+                "--trace-append reference contains an active sample without the NVENC encoder identity"
+            )
+    if not any(
+        sample.get("encoder_active") is True and sample.get("encoder_family") == "nvenc"
+        for sample in reference_samples
+    ):
+        raise ProbeFailure(
+            "--trace-append reference phase lacks an active NVENC encoder attestation"
+        )
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", type=pathlib.Path, default=DEFAULT_EXE)
@@ -2422,7 +2526,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--resource-mode",
         choices=("reference", "dual_lane"),
-        help="enable native resource samples in this mode; reference is a single-canvas run",
+        help="enable NVENC-only native resource samples; reference is a single-canvas run",
     )
     parser.add_argument(
         "--resource-only",
@@ -2444,7 +2548,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--trace-append",
         action="store_true",
-        help="append to an existing runtime trace (used for reference+dual_lane campaigns)",
+        help="append NVENC dual-lane evidence after a validated NVENC reference trace",
     )
     parser.add_argument(
         "--capture-window",
@@ -2467,10 +2571,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--runtime-id requires --trace")
     if args.resource_mode and args.trace is None:
         parser.error("--resource-mode requires --trace")
+    if args.resource_mode and args.encoder != "nvenc":
+        parser.error("--resource-mode is supported only with --encoder nvenc")
     if args.resource_only and not args.resource_mode:
         parser.error("--resource-only requires --resource-mode")
     if args.trace_append and args.trace is None:
         parser.error("--trace-append requires --trace")
+    if args.trace_append and args.encoder != "nvenc":
+        parser.error("--trace-append is supported only with --encoder nvenc")
+    if args.trace_append and not args.runtime_id:
+        parser.error("--trace-append requires --runtime-id matching the reference session")
+    if args.trace_append and args.resource_mode != "dual_lane":
+        parser.error("--trace-append requires --resource-mode dual_lane")
     if args.trace is not None and (
         not args.build_revision or BUILD_REVISION_RE.fullmatch(args.build_revision) is None
     ):
@@ -2522,6 +2634,22 @@ def run(args: argparse.Namespace) -> int:
         result = EXIT_FAIL
         cleanup_failure: ProbeFailure | None = None
         try:
+            if args.trace_append:
+                if (
+                    trace_path is None
+                    or args.runtime_id is None
+                    or args.build_revision is None
+                    or trace_host is None
+                    or trace_gpu is None
+                ):
+                    raise ProbeFailure("--trace-append preflight metadata is incomplete")
+                validate_trace_append(
+                    trace_path,
+                    runtime_id=args.runtime_id,
+                    build_revision=args.build_revision,
+                    trace_host=trace_host,
+                    trace_gpu=trace_gpu,
+                )
             if trace_path is not None:
                 calibration = calibrate_wire_clock()
                 print(
