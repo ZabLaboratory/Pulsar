@@ -25,6 +25,7 @@
 #include "browser-source-task-state.hpp"
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <mutex>
@@ -99,6 +100,7 @@ struct BrowserSource {
 
 	obs_source_t *source = nullptr;
 	obs_weak_source_t *weak_source = nullptr;
+	uint64_t source_generation = 0;
 
 	bool tex_sharing_avail = false;
 	std::atomic<bool> create_browser = false;

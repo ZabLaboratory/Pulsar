@@ -60,6 +60,7 @@ extern MessageObject messageObject;
 
 static mutex browser_list_mutex;
 static BrowserSource *first_browser = nullptr;
+static std::atomic<uint64_t> next_source_generation{1};
 
 /*
  * A BrowserSource can disappear before CEF has finished destroying its
@@ -203,12 +204,16 @@ void DispatchJSEvent(std::string eventName, std::string jsonString, BrowserSourc
 BrowserSource::BrowserSource(obs_data_t *, obs_source_t *source_)
 	: source(source_),
 	  weak_source(obs_source_get_weak_source(source_)),
+	  source_generation(next_source_generation.fetch_add(1, std::memory_order_relaxed)),
 	  task_state(std::make_shared<BrowserSourceTaskState>())
 {
 	{
 		lock_guard<mutex> lock(task_state->mutex);
 		task_state->source = this;
 	}
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=source_created generation=%llu",
+	     static_cast<unsigned long long>(source_generation));
 
 	/* Register Refresh hotkey */
 	auto refreshFunction = [](void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed) {
@@ -311,8 +316,9 @@ void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser, BrowserSource *s
 	}
 
 	blog(LOG_INFO,
-	     "PULSAR_CEF_SHUTDOWN event=browser_created browser_id=%d browser_count=%llu",
-	     browser_id, static_cast<unsigned long long>(browser_count));
+	     "PULSAR_CEF_SHUTDOWN event=browser_created browser_id=%d generation=%llu browser_count=%llu",
+	     browser_id, source ? static_cast<unsigned long long>(source->source_generation) : 0ULL,
+	     static_cast<unsigned long long>(browser_count));
 
 	/*
 	 * A CreateBrowser task can already be executing when unload flips the
@@ -759,7 +765,8 @@ BrowserSource::~BrowserSource()
 		obs_weak_source_release(weak_source);
 		weak_source = nullptr;
 	}
-	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=source_destroyed");
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=source_destroyed generation=%llu",
+	     static_cast<unsigned long long>(source_generation));
 }
 
 void BrowserSource::UnlinkFromBrowserList()

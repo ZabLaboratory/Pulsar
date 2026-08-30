@@ -16,6 +16,8 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/obs-browser-
      PULSAR_BROWSER_SOURCE_CPP)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/obs-browser-source.hpp"
      PULSAR_BROWSER_SOURCE_HPP)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-frontend-stub/src/pulsar-frontend-stub.cpp"
+     PULSAR_FRONTEND_CPP)
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../plugins/pulsar-browser/browser-source-task-state.hpp"
      PULSAR_BROWSER_TASK_STATE_HPP)
 if(PULSAR_BROWSER_CLIENT_CPP MATCHES "audio_callbacks_closed[.]load" OR
@@ -96,6 +98,7 @@ if(NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceTaskState" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_close_return" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_close_enqueued" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_close_deferred" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "source_created generation" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "event=source_destroyed" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceBeginDestroyTaskState" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceReleaseTask" OR
@@ -110,6 +113,16 @@ if(NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceTaskState" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "bs->RequestBrowserCloseForShutdown" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "std::vector<CefRefPtr<CefBrowser>>")
     message(FATAL_ERROR "browser source CEF tasks must use a lifetime gate and browser snapshot")
+endif()
+if(NOT PULSAR_FRONTEND_CPP MATCHES "clear_libobs_scene_data" OR
+   NOT PULSAR_FRONTEND_CPP MATCHES "obs_enum_scenes" OR
+   NOT PULSAR_FRONTEND_CPP MATCHES "obs_enum_sources" OR
+   NOT PULSAR_FRONTEND_CPP MATCHES "obs_scene_prune_sources" OR
+   NOT PULSAR_FRONTEND_CPP MATCHES "obs_wait_for_destroy_queue" OR
+   NOT PULSAR_FRONTEND_CPP MATCHES "pulsar_frontend_cleanup_succeeded" OR
+   NOT PULSAR_FRONTEND_CPP MATCHES "source_graph_orphans" OR
+   NOT PULSAR_FRONTEND_CPP MATCHES "source_graph_drained")
+    message(FATAL_ERROR "frontend teardown must clear and verify the libobs source graph")
 endif()
 add_executable(pulsar-audio-callback-gate-test audio-callback-gate-test.cpp)
 target_compile_features(pulsar-audio-callback-gate-test PRIVATE cxx_std_17)

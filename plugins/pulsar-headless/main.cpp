@@ -1296,8 +1296,8 @@ int main(int argc, char **argv)
                      "PULSAR_RUNTIME_ERROR code=websocket_not_ready id=%s reason=%s\n",
                      runtime_state->identity.instance_id.c_str(), websocket_error.c_str());
         // The frontend callback table was installed before module loading;
-        // pair its teardown with obs_shutdown on this fail-closed path too.
-        pulsar_frontend_shutdown();
+        // fence CEF before handing that table back, then pair its teardown
+        // with obs_shutdown on this fail-closed path too.
         std::string browser_shutdown_error;
         if (!browser_pre_shutdown_ready(browser_shutdown_error)) {
             std::fprintf(stderr,
@@ -1305,6 +1305,16 @@ int main(int argc, char **argv)
                          browser_shutdown_error.c_str());
             // Do not enter obs_shutdown after the browser fence failed: that
             // path stops libobs audio while a CEF callback may still be live.
+            runtime_state->release();
+#ifdef _WIN32
+            close_shutdown_event();
+#endif
+            return 1;
+        }
+        pulsar_frontend_shutdown();
+        if (!pulsar_frontend_cleanup_succeeded()) {
+            std::fprintf(stderr,
+                         "PULSAR_RUNTIME_ERROR code=frontend_source_cleanup_failed\n");
             runtime_state->release();
 #ifdef _WIN32
             close_shutdown_event();
@@ -1372,7 +1382,6 @@ int main(int argc, char **argv)
     std::fflush(stderr);
     blog(LOG_INFO, "[pulsar-headless] shutting down");
 
-    pulsar_frontend_shutdown();
     std::string browser_shutdown_error;
     if (!browser_pre_shutdown_ready(browser_shutdown_error)) {
         std::fprintf(stderr,
@@ -1381,6 +1390,16 @@ int main(int argc, char **argv)
         // A failed or missing browser proc is deliberately fail-closed.  The
         // host must not call obs_shutdown and tear down libobs audio under a
         // still-live CEF callback; process exit performs the final cleanup.
+        runtime_state->release();
+#ifdef _WIN32
+        close_shutdown_event();
+#endif
+        return 1;
+    }
+    pulsar_frontend_shutdown();
+    if (!pulsar_frontend_cleanup_succeeded()) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=frontend_source_cleanup_failed\n");
         runtime_state->release();
 #ifdef _WIN32
         close_shutdown_event();

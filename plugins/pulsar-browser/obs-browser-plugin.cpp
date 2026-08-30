@@ -610,10 +610,11 @@ static void StartBrowserShutdownBarrier()
  * libobs stops its global audio output before unloading modules.  Browser
  * audio callbacks must therefore be fenced while obs_get_audio() is still a
  * valid host resource, rather than waiting for obs_module_unload().  The
- * headless host invokes the private proc after frontend teardown and before
- * obs_shutdown(); this keeps the browser plugin loaded while the audio bus is
- * still valid.  The existing manager-thread completion ACK remains the single
- * bounded, fail-closed barrier.
+ * headless host invokes the private proc before frontend teardown and before
+ * obs_shutdown(); this keeps the browser plugin loaded while both the source
+ * graph and the libobs audio bus are still valid.  The existing
+ * manager-thread completion ACK remains the single bounded, fail-closed
+ * barrier.
  */
 static bool BrowserSourcePrepareBeforeObsShutdown()
 {

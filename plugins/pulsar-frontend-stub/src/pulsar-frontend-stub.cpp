@@ -1671,6 +1671,7 @@ private:
 };
 
 PulsarRollbackMarkerWriter g_rollbackMarkerWriter;
+std::atomic<bool> g_frontend_cleanup_succeeded{true};
 
 static void pulsar_runtime_raw_video_callback(void *, struct video_data *frame)
 {
@@ -2030,6 +2031,7 @@ private:
     static char *bstrdup_or_null(const char *s) { return s ? bstrdup(s) : nullptr; }
 
     void teardown();
+    void clear_libobs_scene_data();
 
     // Write a compact machine-readable rollback marker beside the recording
     // output.  This is intentionally not a scene-switch-v1 event: the
@@ -4549,6 +4551,97 @@ bool PulsarFrontendAPI::setup()
     return true;
 }
 
+void PulsarFrontendAPI::clear_libobs_scene_data()
+{
+    // Keep one owning reference per enumerated object while the source graph
+    // is being changed.  obs_enum_* holds libobs's enumeration lock only for
+    // the callback; retaining the refs here makes the subsequent remove and
+    // prune phases independent of that lock and of source_remove callbacks.
+    std::vector<obs_source_t *> sceneRefs;
+    std::vector<obs_source_t *> sourceRefs;
+    const auto collect_ref = [](void *param, obs_source_t *source) {
+        auto *refs = static_cast<std::vector<obs_source_t *> *>(param);
+        if (obs_source_t *ref = obs_source_get_ref(source))
+            refs->push_back(ref);
+        return true;
+    };
+    obs_enum_scenes(collect_ref, &sceneRefs);
+    obs_enum_sources(collect_ref, &sourceRefs);
+
+    std::set<obs_source_t *> sceneSet(sceneRefs.begin(), sceneRefs.end());
+    std::set<obs_source_t *> removed;
+    blog(LOG_INFO,
+         "PULSAR_FRONTEND_CLEANUP event=source_graph_begin scenes=%llu sources=%llu",
+         static_cast<unsigned long long>(sceneRefs.size()),
+         static_cast<unsigned long long>(sourceRefs.size()));
+
+    // Match OBSBasic's dependency order: scene roots first, then the rest of
+    // the global source registry.  A source can appear in both enumerations;
+    // the identity set makes the remove operation exactly once per object.
+    for (obs_source_t *scene : sceneRefs) {
+        if (scene && removed.insert(scene).second)
+            obs_source_remove(scene);
+    }
+    for (obs_source_t *source : sourceRefs) {
+        if (source && removed.insert(source).second)
+            obs_source_remove(source);
+    }
+
+    // obs_source_remove() only marks a source and emits source_remove.  Scene
+    // items own the remaining refs, so pruning must happen after enumeration
+    // has returned and after all roots have been marked removed.
+    for (obs_source_t *scene : sceneRefs) {
+        if (sceneSet.find(scene) == sceneSet.end())
+            continue;
+        if (obs_scene_t *sc = obs_scene_from_source(scene))
+            obs_scene_prune_sources(sc);
+    }
+
+    // Release the enumeration refs only after the second-phase prune.  The
+    // final destroy-queue drain below then observes destruction caused by both
+    // obs_source_remove() and these last releases.
+    for (obs_source_t *source : sourceRefs)
+        if (source)
+            obs_source_release(source);
+    for (obs_source_t *scene : sceneRefs)
+        if (scene)
+            obs_source_release(scene);
+
+    // Destruction is deferred by libobs.  Follow OBSBasic's contract and wait
+    // until the queue reports empty.  This is a synchronous upstream
+    // primitive; the headless parent/harness supervises the overall process
+    // lifetime rather than pretending that a loop count is a wall-clock bound.
+    int pass = 0;
+    while (obs_wait_for_destroy_queue())
+        ++pass;
+
+    std::size_t orphan_scenes = 0;
+    std::size_t orphan_sources = 0;
+    obs_enum_scenes(
+        [](void *param, obs_source_t *) {
+            ++*static_cast<std::size_t *>(param);
+            return true;
+        },
+        &orphan_scenes);
+    obs_enum_sources(
+        [](void *param, obs_source_t *) {
+            ++*static_cast<std::size_t *>(param);
+            return true;
+        },
+        &orphan_sources);
+    if (orphan_scenes != 0 || orphan_sources != 0) {
+        g_frontend_cleanup_succeeded.store(false, std::memory_order_release);
+        blog(LOG_ERROR,
+             "PULSAR_FRONTEND_CLEANUP event=source_graph_orphans scenes=%llu sources=%llu",
+             static_cast<unsigned long long>(orphan_scenes),
+             static_cast<unsigned long long>(orphan_sources));
+    } else {
+        blog(LOG_INFO,
+             "PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=%d",
+             pass);
+    }
+}
+
 void PulsarFrontendAPI::teardown()
 {
     auto release_source_vec = [](std::vector<obs_source_t *> &v) {
@@ -4604,6 +4697,17 @@ void PulsarFrontendAPI::teardown()
     obs_set_output_source(2, nullptr);
     obs_set_output_source(3, nullptr);
 
+    // Clear every view root before removing the libobs source graph.  The
+    // main view is a libobs-owned canvas, while the auxiliary views are
+    // frontend-owned; both can otherwise retain a scene after the source
+    // enumeration below and make the orphan check meaningless.
+    if (programView)
+        obs_view_set_source(programView, 0, nullptr);
+    if (previewView)
+        obs_view_set_source(previewView, 0, nullptr);
+    if (vcamView)
+        obs_view_set_source(vcamView, 0, nullptr);
+
     // M10: output 0 is now a transition holding the scene (and possibly a
     // stinger media source as an active child). Clear each transition's held
     // sources before releasing so libobs drops those child refs cleanly and
@@ -4612,8 +4716,17 @@ void PulsarFrontendAPI::teardown()
         if (t)
             obs_transition_clear(t);
 
-    // Issue #129: drop the global source_remove handler before the sources it
-    // would walk start being released below.
+    // Mirror OBSBasic::ClearSceneData: remove the complete libobs source
+    // graph while the frontend's source_remove callback is still installed,
+    // prune scene items in a second phase, drain deferred destruction, then
+    // check for orphans.  This is deliberately before dropping our setup refs
+    // or disconnecting the callback; otherwise sources created by WebSocket
+    // remain owned by libobs until obs_free_data(), where the CEF/plugin
+    // teardown order is already too late to be safe.
+    clear_libobs_scene_data();
+
+    // The source graph is now drained; no callback may walk this object while
+    // its remaining setup refs are released below.
     if (signal_handler_t *globalSh = obs_get_signal_handler())
         signal_handler_disconnect(globalSh, "source_remove", OnSourceRemove, this);
 
@@ -5403,6 +5516,7 @@ static void pulsar_ui_task_handler(obs_task_t task, void *param, bool /*wait*/)
 
 extern "C" void pulsar_frontend_init(void)
 {
+    g_frontend_cleanup_succeeded.store(true, std::memory_order_release);
     if (g_api) {
         blog(LOG_WARNING, "[pulsar-frontend-stub] init called twice");
         return;
@@ -5450,4 +5564,9 @@ extern "C" void pulsar_frontend_shutdown(void)
     obs_frontend_set_callbacks_internal(nullptr);
     g_api = nullptr;
     blog(LOG_INFO, "[pulsar-frontend-stub] callbacks uninstalled");
+}
+
+extern "C" bool pulsar_frontend_cleanup_succeeded(void)
+{
+    return g_frontend_cleanup_succeeded.load(std::memory_order_acquire);
 }
