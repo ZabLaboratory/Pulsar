@@ -756,6 +756,13 @@ void BrowserSourceFinalizeBrowserClose(int browser_id)
 		return;
 	}
 
+	/* At this point the ID has been removed from the lifecycle maps and, for a
+	 * source-destroying browser, claimed by the per-source task state.  Publish
+	 * the canonical close marker before the final BrowserSource deletion below. */
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_closed browser_id=%d browser_count=%llu",
+	     browser_id, static_cast<unsigned long long>(browser_count));
+
 	if (source && pending_destroy && source_delete_ready) {
 		source->UnlinkFromBrowserList();
 		const auto task_state = source->task_state;
@@ -769,10 +776,6 @@ void BrowserSourceFinalizeBrowserClose(int browser_id)
 	}
 	BrowserSourceScheduleNextClose();
 	BrowserSourceScheduleNextDestroyClose();
-
-	blog(LOG_INFO,
-	     "PULSAR_CEF_SHUTDOWN event=browser_closed browser_id=%d browser_count=%llu",
-	     browser_id, static_cast<unsigned long long>(browser_count));
 }
 
 std::vector<int> BrowserSourceBrowserIdsForSource(BrowserSource *source)
