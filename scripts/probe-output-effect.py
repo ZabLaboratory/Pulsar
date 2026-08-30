@@ -153,15 +153,16 @@ GENERIC_STREAM_OUTPUT = "PulsarStream"
 GENERIC_RECORD_OUTPUT = "PulsarRecord"
 
 # How long the EFFECT of a legitimate stop may take to become observable.
-# A Success on a Pending verdict is correct by contract (ffmpeg_muxer
-# finalises the mp4 on its own thread), but it must still land -- this is the
-# ceiling on "eventually", not on the request itself (MAX_REQUEST_MS).
+# StopRecord itself returns a typed 702 when its bounded server settlement is
+# exceeded; callers must consume the later STOPPED event before reusing the
+# runtime. This is the ceiling on "eventually", not on the request itself.
 STOP_SETTLE_S = 10.0
 
-# Resolution criterion 3: start/stop stay bounded and short. The server-side
-# poll is capped at PULSAR_OUTPUT_VERIFY_MS (250 ms default); this budget
-# leaves generous room for WS round-trip + CI runner jitter while still
-# failing loudly if a request ever became a wait for activation.
+# Resolution criterion 3: generic start/stop verification stays bounded and
+# short. StopRecord has a separate 2500 ms server-side muxer-flush bound
+# because its response carries a completed-file path; this budget leaves room
+# for WS round-trip + CI runner jitter while still failing loudly if the
+# request does not settle.
 MAX_REQUEST_MS = 2500
 
 # A path that cannot be created as a directory on either OS: a component of

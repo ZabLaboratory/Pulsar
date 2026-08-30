@@ -8,9 +8,13 @@ the pause/replay/stop sequence, including the audio-first edge case.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from enum import Enum
+import importlib.util
+import json
 from pathlib import Path
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,6 +22,8 @@ RECORD_HANDLER = ROOT / "plugins" / "pulsar-websocket" / "src" / "requesthandler
 OUTPUT_EFFECT = ROOT / "plugins" / "pulsar-websocket" / "src" / "requesthandler" / "OutputEffect.h"
 OUTPUT_HELPER = ROOT / "plugins" / "pulsar-websocket" / "src" / "utils" / "Obs_OutputHelper.cpp"
 OBS_HEADER = ROOT / "plugins" / "pulsar-websocket" / "src" / "utils" / "Obs.h"
+RECORD_PROBE = ROOT / "scripts" / "probe-record.py"
+RECORD_SPLIT_PROBE = ROOT / "scripts" / "probe-record-split.py"
 
 
 class _StopVerdict(Enum):
@@ -125,3 +131,87 @@ def test_pause_guard_and_status_expose_video_frame_readiness() -> None:
     assert "@responseField outputTotalFrames" in handler
     assert "RecordOutputHasNoBytesYet" not in handler
     assert "kPauseBeforeFirstVideoFrame" in handler
+
+
+def test_record_probes_drain_pending_before_shared_process_reuse() -> None:
+    record_probe = RECORD_PROBE.read_text(encoding="utf-8")
+    split_probe = RECORD_SPLIT_PROBE.read_text(encoding="utf-8")
+
+    for probe in (record_probe, split_probe):
+        assert "STOP_PENDING_CODE = 702" in probe
+        assert "RecordStateChanged" in probe
+        assert "OBS_WEBSOCKET_OUTPUT_STOPPED" in probe
+        assert "GetRecordStatus" in probe
+        assert "outputActive" in probe
+        assert "did not emit STOPPED" in probe
+        assert "outputActive stayed true" in probe
+
+    assert "wait_record_stop(inbox, ws, resp)" in record_probe
+    assert '"stop-recovery"' in split_probe
+    assert "if not await wait_record_stop" in split_probe
+
+
+def _load_probe(path: Path, module_name: str):
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+class _FakeWs:
+    def __init__(self, messages: list[dict]) -> None:
+        self._messages = [json.dumps(message) for message in messages]
+
+    async def send(self, _: str) -> None:
+        return None
+
+    async def recv(self) -> str:
+        if not self._messages:
+            raise AssertionError("fake websocket was read after the bounded test messages ended")
+        return self._messages.pop(0)
+
+
+def test_record_probe_pending_waits_for_late_stop_and_rechecks_state() -> None:
+    probe = _load_probe(RECORD_PROBE, "record_probe_stop_contract")
+    inbox = probe.Inbox()
+    ws = _FakeWs(
+        [
+            {
+                "op": 5,
+                "d": {
+                    "eventType": "RecordStateChanged",
+                    "eventData": {
+                        "outputState": "OBS_WEBSOCKET_OUTPUT_STOPPED",
+                        "outputPath": "final.mp4",
+                    },
+                },
+            },
+            {
+                "op": 7,
+                "d": {
+                    "requestId": "stop-status-1",
+                    "responseData": {"outputActive": False},
+                },
+            },
+        ]
+    )
+    response = {"requestStatus": {"result": False, "code": 702, "comment": "still flushing"}}
+
+    event = asyncio.run(probe.wait_record_stop(inbox, ws, response))
+
+    assert event is not None
+    assert event["eventData"]["outputPath"] == "final.mp4"
+    assert inbox.responses == []
+
+
+def test_record_probe_pending_timeout_and_refusal_never_fabricate_a_path() -> None:
+    probe = _load_probe(RECORD_PROBE, "record_probe_stop_contract_failure")
+    probe.STOP_EVENT_TIMEOUT_SEC = 0.0
+
+    pending = {"requestStatus": {"result": False, "code": 702, "comment": "still active"}}
+    assert asyncio.run(probe.wait_record_stop(probe.Inbox(), _FakeWs([]), pending)) is None
+
+    refused = {"requestStatus": {"result": False, "code": 500, "comment": "refused"}}
+    assert asyncio.run(probe.wait_record_stop(probe.Inbox(), _FakeWs([]), refused)) is None

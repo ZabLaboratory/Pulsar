@@ -831,6 +831,33 @@ async def drive_record(ws: PulsarWs) -> bool:
 
 async def finish_record(ws: PulsarWs) -> None:
     ok, _, comment = await ws.req("StopRecord")
+    code = ws.last_status.get("code")
+    if not ok and code == 702:
+        # StopRecord keeps its response truthful when the muxer flush exceeds
+        # the bounded server window.  Consume the authoritative completion
+        # before Replay/scene probes reuse this shared process; do not turn the
+        # 702 request response into a fake Success.
+        landed = await ws.wait_for_event(
+            "RecordStateChanged",
+            "OBS_WEBSOCKET_OUTPUT_STOPPED",
+            timeout=15.0,
+        )
+        stopped = await ws.poll("GetRecordStatus", "outputActive", False, attempts=STOP_ATTEMPTS)
+        if not landed or stopped is not False:
+            record(
+                "Record",
+                "StopRecord",
+                Verdict.ERROR_EXPLICIT,
+                f"bounded Pending 702 did not settle: event_stopped={landed} outputActive={stopped!r} comment={comment}",
+            )
+            raise RuntimeError("StopRecord Pending did not settle before the next capability probe")
+        record(
+            "Record",
+            "StopRecord",
+            Verdict.ERROR_EXPLICIT,
+            "bounded Pending 702 was truthful; RecordStateChanged STOPPED and outputActive=false arrived later",
+        )
+        return
     stopped = await ws.poll("GetRecordStatus", "outputActive", False, attempts=STOP_ATTEMPTS)
     if not ok:
         record("Record", "StopRecord", Verdict.ERROR_EXPLICIT, f"comment={comment}")
