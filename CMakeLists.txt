@@ -161,10 +161,13 @@ if(WIN32)
     # a pipe by the real probe. Prove its anonymous inherited event control
     # path releases both runtime leases without falling back to kill().
     if(TARGET pulsar-headless)
-        find_package(Python3 COMPONENTS Interpreter REQUIRED)
         add_test(
             NAME pulsar-headless-graceful-shutdown
-            COMMAND ${Python3_EXECUTABLE}
+            # Resolve Python through the runner PATH at test execution time.
+            # The CI job installs websockets after setup-python; baking the
+            # configure-time interpreter here can select a different Python
+            # minor with no probe dependencies.
+            COMMAND python
                     "${CMAKE_CURRENT_SOURCE_DIR}/tests/pulsar-headless-shutdown/test_graceful_shutdown.py"
                     "$<TARGET_FILE:pulsar-headless>"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"

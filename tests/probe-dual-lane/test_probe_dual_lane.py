@@ -98,6 +98,17 @@ def test_windows_shutdown_uses_anonymous_inherited_event_and_requires_ack():
     )
 
 
+def test_ctest_resolves_python_from_runtime_path():
+    cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    registration = cmake[cmake.index("NAME pulsar-headless-graceful-shutdown") :]
+    registration = registration[: registration.index("endif()")]
+
+    assert "COMMAND python" in registration
+    assert "Python3_EXECUTABLE" not in registration
+    assert "find_package(Python3" not in registration
+    assert "hostedtoolcache" not in registration.lower()
+
+
 def test_windows_shutdown_signal_failure_contains_with_forced_kill(monkeypatch):
     probe_module = probe
 
