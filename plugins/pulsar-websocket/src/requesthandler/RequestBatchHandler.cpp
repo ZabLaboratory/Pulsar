@@ -38,6 +38,7 @@ struct SerialFrameBatch {
 	size_t sleepUntilFrame = 0;
 	std::mutex conditionMutex;
 	std::condition_variable condition;
+	bool callbackEntryReported = false;
 
 	SerialFrameBatch(RequestHandler &requestHandler, WebSocketServerPtr webSocketServer, json &variables,
 			bool haltOnFailure)
@@ -130,6 +131,10 @@ static void ObsTickCallback(void *param, float)
 		serialFrameBatch->condition.notify_one();
 		return;
 	}
+	if (!serialFrameBatch->callbackEntryReported) {
+		serialFrameBatch->callbackEntryReported = true;
+		blog(LOG_INFO, "PULSAR_WEBSOCKET_HANDLER event=frame_callback_enter");
+	}
 
 	// Increment frame count
 	serialFrameBatch->frameCount++;
@@ -194,6 +199,9 @@ RequestBatchHandler::ProcessRequestBatch(QThreadPool &threadPool, SessionPtr ses
 			rejected.emplace_back(RequestStatus::NotReady, "WebSocket server is quiescing.");
 		return rejected;
 	}
+	if (batchLease)
+		blog(LOG_INFO, "PULSAR_WEBSOCKET_HANDLER event=batch_enter execution_type=%d",
+		     static_cast<int>(executionType));
 
 	RequestHandler requestHandler(session);
 	if (executionType == RequestBatchExecutionType::SerialRealtime) {

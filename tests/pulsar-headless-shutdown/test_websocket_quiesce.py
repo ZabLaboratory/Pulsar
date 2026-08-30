@@ -23,6 +23,8 @@ import threading
 import time
 from typing import Any
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVER_CPP = ROOT / "plugins" / "pulsar-websocket" / "src" / "websocketserver" / "WebSocketServer.cpp"
@@ -112,6 +114,9 @@ def test_native_contract_has_single_admission_and_drain_boundary() -> None:
     assert "workerLease" in request_batch
     assert request_batch.index("callbackLease") < request_batch.index("condition.notify_one()")
     assert request_batch.index("workerLease") < request_batch.index("parallelResults.condition.notify_one()")
+    assert "PULSAR_WEBSOCKET_HANDLER event=batch_enter execution_type=%d" in request_batch
+    assert "PULSAR_WEBSOCKET_HANDLER event=frame_callback_enter" in request_batch
+    assert request_batch.count("event=frame_callback_enter") == 1
     assert "pulsar_websocket_pre_shutdown" in plugin
     assert "calldata_set_int(cd, \"active_handlers\"" in plugin
     assert "calldata_set_int(cd, \"sessions\"" in plugin
@@ -193,7 +198,62 @@ def _load_probe() -> Any:
     return module
 
 
-async def _run_inflight_batch(probe: Any, process: Any, ws_url: str) -> None:
+def _wait_for_marker_count(process: Any, marker: str, count: int, timeout: float = 20) -> None:
+    deadline = time.monotonic() + timeout
+    with process.condition:
+        while sum(marker in line for line in process.lines) < count:
+            if process.proc is not None and process.proc.poll() is not None:
+                raise RuntimeError(f"Pulsar exited before marker {marker!r} x{count}")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                observed = sum(marker in line for line in process.lines)
+                raise RuntimeError(f"timeout waiting for marker {marker!r} x{count}; observed={observed}")
+            process.condition.wait(timeout=min(0.25, remaining))
+
+
+async def _await_workload_handshake(workload: asyncio.Event, driver: asyncio.Task[Any], timeout: float = 30) -> None:
+    readiness = asyncio.create_task(workload.wait())
+    try:
+        done, _ = await asyncio.wait((driver, readiness), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        if driver in done:
+            # Propagate an early exception or completion; do not turn it into
+            # a successful shutdown readiness signal.
+            await driver
+        if readiness not in done:
+            raise RuntimeError("workloads did not reach the native in-flight handshake")
+    finally:
+        if not readiness.done():
+            readiness.cancel()
+
+
+def test_handshake_timeout_and_early_driver_failure_are_fatal() -> None:
+    async def exercise() -> None:
+        never_ready = asyncio.Event()
+
+        async def failing_driver() -> None:
+            raise RuntimeError("native batch entry failed")
+
+        failing_task = asyncio.create_task(failing_driver())
+        with pytest.raises(RuntimeError, match="native batch entry failed"):
+            await _await_workload_handshake(never_ready, failing_task, timeout=1)
+
+        never_finishes = asyncio.create_task(asyncio.sleep(10))
+        try:
+            with pytest.raises(RuntimeError, match="native in-flight handshake"):
+                await _await_workload_handshake(never_ready, never_finishes, timeout=0.01)
+        finally:
+            never_finishes.cancel()
+
+    asyncio.run(exercise())
+
+
+async def _run_inflight_batch(
+    probe: Any,
+    process: Any,
+    ws_url: str,
+    workloads_inflight: asyncio.Event,
+    shutdown_started: asyncio.Event,
+) -> None:
     async with (
         probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as poll_ws,
         probe.websockets.connect(ws_url, subprotocols=["obswebsocket.json"], open_timeout=15) as parallel_ws_a,
@@ -211,6 +271,7 @@ async def _run_inflight_batch(probe: Any, process: Any, ws_url: str) -> None:
             probe.identify(frame_ws, process.password),
         )
         started = asyncio.Event()
+        poller_ready = asyncio.Event()
         close_observed: list[tuple[int | None, str | None]] = []
 
         async def poll_get() -> None:
@@ -221,8 +282,12 @@ async def _run_inflight_batch(probe: Any, process: Any, ws_url: str) -> None:
                     started.set()
                     await probe.request(inbox, poll_ws, "GetStats", f"quiesce-get-{count}")
                     count += 1
+                    if count == 1:
+                        poller_ready.set()
                     await asyncio.sleep(0.01)
             except Exception as error:
+                if not shutdown_started.is_set():
+                    raise RuntimeError(f"GetStats poller failed before shutdown: {error}") from error
                 close_observed.append((getattr(error, "code", None), getattr(error, "reason", None)))
                 return
 
@@ -240,8 +305,12 @@ async def _run_inflight_batch(probe: Any, process: Any, ws_url: str) -> None:
                     execution_type=2,
                 )
             except Exception as error:
+                if not shutdown_started.is_set():
+                    raise RuntimeError(f"Parallel batch {suffix} failed before shutdown: {error}") from error
                 close_observed.append((getattr(error, "code", None), getattr(error, "reason", None)))
                 return
+            if not shutdown_started.is_set():
+                raise RuntimeError(f"Parallel batch {suffix} completed before shutdown_started")
 
         async def frame_batch() -> None:
             inbox = probe.Inbox()
@@ -264,8 +333,12 @@ async def _run_inflight_batch(probe: Any, process: Any, ws_url: str) -> None:
                     execution_type=1,
                 )
             except Exception as error:
+                if not shutdown_started.is_set():
+                    raise RuntimeError(f"SerialFrame batch failed before shutdown: {error}") from error
                 close_observed.append((getattr(error, "code", None), getattr(error, "reason", None)))
                 return
+            if not shutdown_started.is_set():
+                raise RuntimeError("SerialFrame batch completed before shutdown_started")
 
         tasks = [
             asyncio.create_task(poll_get()),
@@ -275,18 +348,35 @@ async def _run_inflight_batch(probe: Any, process: Any, ws_url: str) -> None:
             asyncio.create_task(parallel_batch(parallel_ws_d, "d")),
             asyncio.create_task(frame_batch()),
         ]
-        await asyncio.sleep(0.2)
-        if all(tasks[index].done() for index in range(1, 5)):
-            raise RuntimeError("all 2048-request parallel batches completed before the shutdown race")
-        if tasks[5].done():
-            raise RuntimeError("frame batch completed before the shutdown race")
-        if not started.is_set():
-            raise RuntimeError("no authenticated WebSocket handler started")
+        await poller_ready.wait()
+        await asyncio.gather(
+            asyncio.to_thread(
+                _wait_for_marker_count,
+                process,
+                "PULSAR_WEBSOCKET_HANDLER event=batch_enter execution_type=2",
+                4,
+            ),
+            asyncio.to_thread(
+                _wait_for_marker_count,
+                process,
+                "PULSAR_WEBSOCKET_HANDLER event=batch_enter execution_type=1",
+                1,
+            ),
+            asyncio.to_thread(
+                _wait_for_marker_count,
+                process,
+                "PULSAR_WEBSOCKET_HANDLER event=frame_callback_enter",
+                1,
+            ),
+        )
+        if not started.is_set() or any(tasks[index].done() for index in range(1, 5)) or tasks[5].done():
+            raise RuntimeError("an authenticated workload completed before the shutdown handshake")
+        workloads_inflight.set()
         # The caller signals the child concurrently from another thread.  The
         # connections may close before responses are delivered; that is fine
         # as long as the native drain ACK is emitted and the process exits
         # without forced containment.
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks)
         if not any(code == 1001 and reason == "Server quiescing." for code, reason in close_observed):
             raise RuntimeError(
                 "authenticated clients did not observe a typed going-away close during quiesce: "
@@ -314,8 +404,13 @@ def _run_windows_integration(executable: Path) -> None:
         ready = process.wait_for(probe.READY_RE, timeout=60)
         # Keep the request alive while the parent triggers the inherited event.
         async def drive() -> None:
-            task = asyncio.create_task(_run_inflight_batch(probe, process, ready.group(1)))
-            await asyncio.sleep(0.25)
+            workloads_inflight = asyncio.Event()
+            shutdown_started = asyncio.Event()
+            task = asyncio.create_task(
+                _run_inflight_batch(probe, process, ready.group(1), workloads_inflight, shutdown_started)
+            )
+            await _await_workload_handshake(workloads_inflight, task)
+            shutdown_started.set()
             await asyncio.to_thread(process.shutdown)
             await task
 
