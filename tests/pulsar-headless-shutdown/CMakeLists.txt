@@ -49,6 +49,10 @@ if(NOT PULSAR_BROWSER_CLIENT_HPP MATCHES "close_keepalive" OR
    NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "client_callback_keepalive_acquired")
     message(FATAL_ERROR "browser client must retain itself through CEF close finalization")
 endif()
+if(NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "browser_on_before_close_entry" OR
+   NOT PULSAR_BROWSER_CLIENT_CPP MATCHES "browser_on_before_close_exit")
+    message(FATAL_ERROR "CEF close callbacks must expose entry and exit markers")
+endif()
 if(PULSAR_BROWSER_CLIENT_CPP MATCHES "bs->source" OR
    PULSAR_BROWSER_CLIENT_CPP MATCHES "obs_source_output_audio[(]bs[->]source")
     message(FATAL_ERROR "browser client must use a strong source reference for host callbacks")
@@ -67,7 +71,12 @@ if(NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceTaskState" OR
    NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "std::atomic<bool> create_browser" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceAcquireTask" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "active_source_tasks" OR
-   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "std::vector<CefRefPtr<CefBrowser>>" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "std::deque<int> close_ids" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceScheduleNextClose" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_close_call" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_close_return" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_close_enqueued" OR
+   NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "browser_close_deferred" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceBeginDestroyTaskState" OR
    NOT PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceReleaseTask" OR
    NOT PULSAR_BROWSER_TASK_STATE_HPP MATCHES "request_delete_and_take_if_idle" OR
@@ -76,7 +85,8 @@ if(NOT PULSAR_BROWSER_SOURCE_HPP MATCHES "BrowserSourceTaskState" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "BrowserSourceDeleteIfIdle[(]" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "QueueCEFTask[(][[]this" OR
    PULSAR_BROWSER_SOURCE_CPP MATCHES "QueueCEFTask[(][[]&" OR
-   PULSAR_BROWSER_SOURCE_CPP MATCHES "bs->RequestBrowserCloseForShutdown")
+   PULSAR_BROWSER_SOURCE_CPP MATCHES "bs->RequestBrowserCloseForShutdown" OR
+   PULSAR_BROWSER_SOURCE_CPP MATCHES "std::vector<CefRefPtr<CefBrowser>>")
     message(FATAL_ERROR "browser source CEF tasks must use a lifetime gate and browser snapshot")
 endif()
 add_executable(pulsar-audio-callback-gate-test audio-callback-gate-test.cpp)

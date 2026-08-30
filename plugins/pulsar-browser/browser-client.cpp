@@ -147,6 +147,9 @@ void BrowserClient::OnBeforeClose(CefRefPtr<CefBrowser> browser)
 	 */
 	CefRefPtr<BrowserClient> self(this);
 	const int browser_id = browser ? browser->GetIdentifier() : -1;
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_on_before_close_entry browser_id=%d",
+	     browser_id);
 	if (!close_keepalive) {
 		close_keepalive = self;
 		blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=client_keepalive_acquired browser_id=%d",
@@ -155,6 +158,9 @@ void BrowserClient::OnBeforeClose(CefRefPtr<CefBrowser> browser)
 	audio_callbacks.mark_close_callback_seen();
 	BrowserSourceBrowserClosed(browser_id);
 	maybe_finalize_browser_close(browser_id);
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_on_before_close_exit browser_id=%d",
+	     browser_id);
 }
 
 CefRefPtr<CefResourceRequestHandler> BrowserClient::GetResourceRequestHandler(CefRefPtr<CefBrowser>,

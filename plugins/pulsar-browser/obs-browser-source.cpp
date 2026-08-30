@@ -23,6 +23,7 @@
 #include <nlohmann/json.hpp>
 #include <obs.hpp>
 #include <util/threading.h>
+#include <algorithm>
 #ifdef ENABLE_BROWSER_QT_LOOP
 #include <QApplication>
 #endif
@@ -30,11 +31,12 @@
 #include <functional>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <map>
 #include <set>
-#include <vector>
 #include <thread>
 #include <mutex>
+#include <utility>
 
 #ifdef __linux__
 #include "linux-keyboard-helpers.hpp"
@@ -73,6 +75,11 @@ static map<int, BrowserSource *> pending_browser_sources;
 static set<int> browser_close_observed_ids;
 static std::size_t pending_source_destructions = 0;
 static std::atomic<std::size_t> active_source_tasks{0};
+static deque<int> shutdown_close_ids;
+static int shutdown_close_in_flight = -1;
+static bool shutdown_close_request_active = false;
+static bool shutdown_close_next_task_posted = false;
+static bool shutdown_close_sequence_started = false;
 enum class BrowserLifecyclePhase : int {
 	Running,
 	Closing,
@@ -80,6 +87,8 @@ enum class BrowserLifecyclePhase : int {
 };
 
 static BrowserLifecyclePhase browser_lifecycle_state = BrowserLifecyclePhase::Running;
+
+static void BrowserSourceScheduleNextClose();
 
 [[noreturn]] static void BrowserSourceDestroyFatal(const char *reason)
 {
@@ -290,14 +299,27 @@ void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser, BrowserSource *s
 
 	/*
 	 * A CreateBrowser task can already be executing when unload flips the
-	 * shutdown bit.  Count this real browser first, then close it on the CEF UI
-	 * thread; the barrier cannot observe a false zero in that race.
+	 * shutdown bit. Count this real browser first, then enqueue it behind the
+	 * active close sequence; the barrier cannot observe a false zero and no
+	 * second CloseBrowser call can race the current OnBeforeClose callback.
 	 */
 	if (close_immediately) {
-		blog(LOG_WARNING,
-		     "PULSAR_CEF_SHUTDOWN event=browser_close_requested browser_id=%d reason=shutdown_started",
-		     browser_id);
-		BrowserSourceRequestBrowserClose(browser);
+		bool enqueued = false;
+		{
+			lock_guard<mutex> lock(browser_lifecycle_mutex);
+			if (shutdown_close_sequence_started && shutdown_close_in_flight != browser_id &&
+			    std::find(shutdown_close_ids.begin(), shutdown_close_ids.end(), browser_id) ==
+				    shutdown_close_ids.end()) {
+				shutdown_close_ids.push_back(browser_id);
+				enqueued = true;
+			}
+		}
+		if (enqueued) {
+			blog(LOG_WARNING,
+			     "PULSAR_CEF_SHUTDOWN event=browser_close_enqueued browser_id=%d reason=shutdown_started",
+			     browser_id);
+			BrowserSourceScheduleNextClose();
+		}
 	}
 }
 
@@ -364,6 +386,118 @@ bool BrowserSourceRequestBrowserClose(CefRefPtr<CefBrowser> browser)
 	return true;
 }
 
+static CefRefPtr<CefBrowser> BrowserSourceFindBrowser(int browser_id)
+{
+	{
+		lock_guard<mutex> lock(browser_list_mutex);
+		for (BrowserSource *source = first_browser; source; source = source->next) {
+			CefRefPtr<CefBrowser> browser = source->GetBrowser();
+			if (browser && browser->GetIdentifier() == browser_id)
+				return browser;
+		}
+	}
+	/*
+	 * A source can be unlinked after Destroy() while its browser remains live
+	 * in the lifecycle map.  The lifecycle lock pins that map entry while the
+	 * source supplies one browser ref; no raw source pointer escapes this block.
+	 */
+	lock_guard<mutex> lifecycle_lock(browser_lifecycle_mutex);
+	const auto source_it = browser_sources_by_id.find(browser_id);
+	if (source_it != browser_sources_by_id.end() && source_it->second)
+		return source_it->second->GetBrowser();
+	return nullptr;
+}
+
+static void BrowserSourceHandleMissingCloseBrowser(int browser_id)
+{
+	bool retry = false;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		const bool live = live_browser_ids.find(browser_id) != live_browser_ids.end();
+		const bool mapped = browser_sources_by_id.find(browser_id) != browser_sources_by_id.end();
+		if (live && mapped) {
+			/* A prior close may already be in CEF; wait for its finalization. */
+			shutdown_close_in_flight = browser_id;
+			blog(LOG_ERROR,
+			     "PULSAR_CEF_SHUTDOWN event=browser_close_deferred browser_id=%d "
+			     "reason=browser_ref_missing action=await_finalization",
+			     browser_id);
+			return;
+		}
+		retry = live || mapped;
+	}
+	if (retry)
+		BrowserSourceDestroyFatal("close_browser_lookup_failed");
+	BrowserSourceScheduleNextClose();
+}
+
+static void BrowserSourceRequestNextCloseOnUi()
+{
+	int browser_id = -1;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		shutdown_close_next_task_posted = false;
+		if (!shutdown_close_sequence_started || shutdown_close_in_flight >= 0 ||
+		    shutdown_close_request_active || shutdown_close_ids.empty())
+			return;
+		browser_id = shutdown_close_ids.front();
+		shutdown_close_ids.pop_front();
+	}
+
+	/* Resolve one browser by stable ID, retaining no batch of CefRefPtr objects. */
+	CefRefPtr<CefBrowser> browser = BrowserSourceFindBrowser(browser_id);
+	if (!browser) {
+		BrowserSourceHandleMissingCloseBrowser(browser_id);
+		return;
+	}
+
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		if (!shutdown_close_sequence_started || shutdown_close_in_flight >= 0 ||
+		    shutdown_close_request_active) {
+			shutdown_close_ids.push_front(browser_id);
+			return;
+		}
+		shutdown_close_in_flight = browser_id;
+		shutdown_close_request_active = true;
+	}
+
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_close_call browser_id=%d reason=shutdown_started",
+	     browser_id);
+	const bool requested = BrowserSourceRequestBrowserClose(browser);
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_close_return browser_id=%d requested=%d",
+	     browser_id, requested ? 1 : 0);
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		shutdown_close_request_active = false;
+		if (!requested && shutdown_close_in_flight == browser_id &&
+		    browser_close_observed_ids.find(browser_id) == browser_close_observed_ids.end())
+			shutdown_close_in_flight = -1;
+	}
+	/* A synchronous OnBeforeClose/finalization may have freed the turn. */
+	BrowserSourceScheduleNextClose();
+}
+
+static void BrowserSourceScheduleNextClose()
+{
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		if (!shutdown_close_sequence_started || shutdown_close_in_flight >= 0 ||
+		    shutdown_close_request_active || shutdown_close_ids.empty() ||
+		    shutdown_close_next_task_posted)
+			return;
+		shutdown_close_next_task_posted = true;
+	}
+
+	if (!QueueCEFTask([]() { BrowserSourceRequestNextCloseOnUi(); })) {
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		shutdown_close_next_task_posted = false;
+		BrowserSourceDestroyFatal("close_next_task_post_failed");
+	}
+}
+
 void BrowserSourceFinalizeBrowserClose(int browser_id)
 {
 	if (browser_id < 0)
@@ -411,6 +545,13 @@ void BrowserSourceFinalizeBrowserClose(int browser_id)
 		const auto task_state = source->task_state;
 		BrowserSourceCompleteTaskRelease(BrowserSourceRequestDeleteIfIdle(task_state, true));
 	}
+
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		if (shutdown_close_in_flight == browser_id)
+			shutdown_close_in_flight = -1;
+	}
+	BrowserSourceScheduleNextClose();
 
 	blog(LOG_INFO,
 	     "PULSAR_CEF_SHUTDOWN event=browser_closed browser_id=%d browser_count=%llu",
@@ -540,34 +681,44 @@ void BrowserSourceDestroyTaskComplete()
 void BrowserSourceCloseAllBrowsers()
 {
 	const std::size_t browser_count = BrowserSourceLiveBrowserCount();
-	std::size_t source_count = 0;
-	std::vector<CefRefPtr<CefBrowser>> browsers;
+	std::deque<int> close_ids;
+	std::set<int> unique_ids;
+	/* Open admission before the source snapshot so a concurrent creation is
+	 * enqueued by BrowserSourceBrowserCreated instead of falling through the
+	 * gap between discovery and sequence activation. */
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		shutdown_close_sequence_started = true;
+	}
 	{
 		lock_guard<mutex> lock(browser_list_mutex);
 		for (BrowserSource *bs = first_browser; bs; bs = bs->next) {
 			CefRefPtr<CefBrowser> browser = bs->GetBrowser();
-			if (browser)
-				browsers.push_back(browser);
+			if (browser && unique_ids.insert(browser->GetIdentifier()).second)
+				close_ids.push_back(browser->GetIdentifier());
 		}
 	}
 	/*
-	 * Never invoke a close callback while walking the raw BrowserSource list.
-	 * A CefRefPtr is a safe snapshot of the browser identity; the source may be
-	 * unlinked and deleted by a concurrent Destroy() after this lock is released.
+	 * Keep only stable browser IDs, never a batch of owning CefRefPtr objects.
+	 * Each ID is resolved and closed on its own CEF turn after the preceding
+	 * browser has reached BrowserSourceFinalizeBrowserClose().
 	 */
-	for (const CefRefPtr<CefBrowser> &browser : browsers) {
-		if (BrowserSourceRequestBrowserClose(browser)) {
-			++source_count;
-			blog(LOG_INFO,
-			     "PULSAR_CEF_SHUTDOWN event=browser_close_requested browser_id=%d reason=shutdown_started",
-			     browser->GetIdentifier());
+	std::size_t source_count;
+	{
+		lock_guard<mutex> lock(browser_lifecycle_mutex);
+		std::set<int> queued_ids(shutdown_close_ids.begin(), shutdown_close_ids.end());
+		for (const int browser_id : close_ids) {
+			if (queued_ids.insert(browser_id).second)
+				shutdown_close_ids.push_back(browser_id);
 		}
+		source_count = shutdown_close_ids.size();
 	}
 
 	blog(LOG_INFO,
 	     "PULSAR_CEF_SHUTDOWN event=close_requested browser_count=%llu source_count=%llu",
 	     static_cast<unsigned long long>(browser_count),
 	     static_cast<unsigned long long>(source_count));
+	BrowserSourceScheduleNextClose();
 }
 
 BrowserSource::~BrowserSource()
