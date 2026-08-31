@@ -1,0 +1,46 @@
+From 27a64413ce2e4166c9969b57a6f6c25119944fb5 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 31 Aug 2026 21:54:56 +0200
+Subject: [PATCH] perf(nvenc): drain ULL bitstreams immediately
+
+Keep the encoder surface pool intact while removing OBS-side completed-frame queueing exclusively for ultra-low-latency tuning.
+
+Agent-Role: eleven
+
+Agent-Thread: 01a045e2-996f-7913-99f0-2cd237d3a6f8
+
+Work-Unit: pulsar-ac12b-build-optimization-20260831
+
+Issue: fastpath-no-issue
+
+ADR-Revision: amendment-1-draft-r1-ac12-boundaries-20260831
+
+Evidence: NVENC pre-patch FERC-to-PIR p95 33.35ms
+---
+ plugins/obs-nvenc/nvenc.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/plugins/obs-nvenc/nvenc.c b/plugins/obs-nvenc/nvenc.c
+index fb3894525..acf6646e2 100644
+--- a/plugins/obs-nvenc/nvenc.c
++++ b/plugins/obs-nvenc/nvenc.c
+@@ -314,7 +314,14 @@ static bool init_encoder_base(struct nvenc_data *enc, obs_data_t *settings)
+ 	buf_count = min(64, buf_count);
+ 	enc->buf_count = buf_count;
+ 
+-	const int output_delay = buf_count - 1;
++	/* ULL deliberately trades asynchronous queue depth for latency.  Keep the
++	 * full surface pool required by the encoder, but synchronously collect the
++	 * first submitted bitstream instead of holding three completed frames in
++	 * OBS before attempting a lock.  Other tuning modes retain the historical
++	 * buf_count - 1 pipeline. */
++	const int output_delay = nv_tuning == NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY
++				 ? max(1, config->frameIntervalP)
++				 : buf_count - 1;
+ 	enc->output_delay = output_delay;
+ 
+ 	if (lookahead) {
+-- 
+2.54.0.windows.1
+

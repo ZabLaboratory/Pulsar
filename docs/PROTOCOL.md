@@ -1109,6 +1109,25 @@ value — operator/env-controlled only.
 | `PULSAR_VIDEO_PROFILE` | `pulsar-frontend-stub` | `high` | `baseline`\|`main`\|`high`. |
 | `PULSAR_VIDEO_KEYINT_SEC` | `pulsar-frontend-stub` | `2` | Keyframe interval, `0..20` seconds. |
 | `PULSAR_VIDEO_PRESET` | `pulsar-frontend-stub` | family-specific | Validated against the preset set of the resolved encoder family — x264 `ultrafast..veryslow` (default `veryfast`), NVENC `p1..p7` (`p5`, written to `preset` on `obs_nvenc_h264_tex` but to **`preset2` on the compat ids `jim_nvenc` / `ffmpeg_nvenc`** — the property name is resolved per encoder id, not per family), **QSV `TU1..TU7` (`TU4`, written to the `target_usage` property, not `preset`)**, AMF `speed`/`balanced`/`quality` (`balanced`). Matched case-insensitively, applied in the canonical spelling `capabilities.encoder_families` publishes; unknown value ⇒ family default (logged). |
+| `PULSAR_NVENC_LOW_LATENCY` | `pulsar-frontend-stub` | enabled for NVENC | Selects NVENC `tune=ull` while preserving the historical preset, multipass, lookahead and B-frame compression tools. Explicit `0`, `false`, `off` or `no` restores the historical HQ tune; malformed values fail closed to HQ and are logged. This switch does not alter audio routing. |
+
+The local NVENC non-regression gate compares the historical HQ tune with the
+quality-safe ULL tune at identical 1080p60, preset and bitrate settings over
+broadcast, complex and chaotic deterministic sources. It fails independently
+on VMAF, PSNR-Y or SSIM regression:
+
+```powershell
+python scripts/probe-nvenc-quality.py --report nvenc-quality.json
+```
+
+The canonical local Full build is incremental and fingerprint-checked:
+
+```powershell
+.\scripts\build-win.ps1 -Stage build -Full
+```
+
+Use `-RefreshPatches` after explicitly requesting a patch-stack replay, and
+`-Clean` only when a cold CMake/object rebuild is required.
 | `PULSAR_AUDIO_BITRATE` | `pulsar-frontend-stub` | `160` (kbps) | Default `ffmpeg_aac` bitrate for every track, `32..512`. Mutable live via `pulsar:SetVideoSettings` while the audio encoders are idle. |
 | `PULSAR_AUDIO_TRACKS` | `pulsar-frontend-stub` | `1` | Number of audio encoders created, `1..6` (`MAX_AUDIO_MIXES`). Encoder *i* is bound to libobs mixer index *i*, i.e. track *i+1*. Out of range ⇒ warning + `1`. Boot-fixed. |
 | `PULSAR_AUDIO_BITRATE_<n>` | `pulsar-frontend-stub` | `PULSAR_AUDIO_BITRATE` | Per-track bitrate override for track *n* (`1..PULSAR_AUDIO_TRACKS`), `32..512`. |

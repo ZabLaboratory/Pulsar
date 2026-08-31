@@ -863,3 +863,34 @@ def test_teardown_drains_in_flight_swap_before_destroying_views() -> None:
     assert "obs_view_remove(programView)" not in teardown
     assert "obs_view_destroy(programView)" not in teardown
     assert "dualLaneCutPending.store(false);" in teardown
+
+
+def test_non_traced_spawn_exports_shutdown_runtime_identity() -> None:
+    source = (_ROOT / "scripts/probe-dual-lane.py").read_text(encoding="utf-8")
+    spawn_at = source.index("    def spawn(self) -> None:")
+    trace_at = source.index("        if self.trace_path is not None:", spawn_at)
+    export = 'env["PULSAR_RUNTIME_INSTANCE_ID"] = self.runtime_id'
+    assert source.index(export, spawn_at) < trace_at
+
+
+def test_non_traced_drive_initializes_optional_trace_receiver() -> None:
+    source = (_ROOT / "scripts/probe-dual-lane.py").read_text(encoding="utf-8")
+    drive_at = source.index("async def drive(")
+    trace_guard = source.index("    if process.trace_path is not None:", drive_at)
+    initialization = "    trace_receiver = None"
+    assert source.index(initialization, drive_at) < trace_guard
+
+
+def test_probe_websockets_accept_full_resolution_screenshot_payloads() -> None:
+    source = (_ROOT / "scripts/probe-dual-lane.py").read_text(encoding="utf-8")
+    assert source.count('subprotocols=["obswebsocket.json"], open_timeout=15, max_size=2**24') == 2
+
+
+def test_traced_probe_leases_exact_directshow_module_per_user() -> None:
+    source = (_ROOT / "scripts/probe-dual-lane.py").read_text(encoding="utf-8")
+    lease = source[source.index("class DirectShowUserRegistrationLease:") :]
+    assert "HKEY_CURRENT_USER" in lease
+    assert "HKEY_LOCAL_MACHINE" not in lease
+    assert '"obs-virtualcam-module64.dll"' in lease
+    assert "directshow_lease.install()" in source
+    assert source.index("process.shutdown()") < source.index("directshow_lease.restore()")

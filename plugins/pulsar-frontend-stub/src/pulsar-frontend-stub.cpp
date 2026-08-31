@@ -3924,6 +3924,8 @@ bool PulsarFrontendAPI::setup()
     streamOutput = obs_output_create("rtmp_output", "PulsarStream", nullptr, nullptr);
     if (!streamOutput)
         blog(LOG_WARNING, "[pulsar-frontend-stub] rtmp_output unavailable");
+    else
+        obs_output_set_low_latency_interleave(streamOutput, true);
     hookOutputSignals(streamOutput, OnStreamStart, OnStreamStop);
 
     // Recording output (ffmpeg_muxer). Same shape: needs path + encoders before
@@ -4084,8 +4086,28 @@ bool PulsarFrontendAPI::setup()
         obs_data_set_int(vEncSettings, "keyint_sec", keyintSec);
         obs_data_set_string(vEncSettings, presetPropForId(encoderId, presets.prop), preset.c_str());
         obs_data_set_string(vEncSettings, "profile", profile.c_str());
-        if (std::strcmp(encoderId, "obs_x264") == 0)
+        const EnvBool nvencLowLatency =
+            parse_env_bool(std::getenv("PULSAR_NVENC_LOW_LATENCY"));
+        if (nvencLowLatency == EnvBool::Invalid) {
+            blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_NVENC_LOW_LATENCY "
+                 "rejected; preserving the encoder quality defaults");
+        }
+        const bool enableNvencLowLatency =
+            nvencLowLatency == EnvBool::Unset || nvencLowLatency == EnvBool::Enabled;
+        if (std::strcmp(reportFamily, "nvenc") == 0 && enableNvencLowLatency) {
+            // Select NVENC's ULL scheduling path, but deliberately preserve
+            // the historical multipass, lookahead and B-frame settings. They
+            // are compression tools, not an OBS-side packet backlog, and the
+            // quality A/B gate requires them to remain available.
+            obs_data_set_string(vEncSettings, "tune", "ull");
+            blog(LOG_INFO, "[pulsar-frontend-stub] NVENC latency profile: "
+                 "tune=ull with quality tools preserved");
+        } else if (std::strcmp(reportFamily, "nvenc") == 0) {
+            blog(LOG_INFO, "[pulsar-frontend-stub] NVENC quality profile preserved: "
+                 "PULSAR_NVENC_LOW_LATENCY=0 or invalid");
+        } else if (std::strcmp(encoderId, "obs_x264") == 0) {
             obs_data_set_string(vEncSettings, "tune", "zerolatency"); // x264-only knob
+        }
 
         videoEncoder = obs_video_encoder_create(encoderId, "PulsarVideoEnc", vEncSettings, nullptr);
         if (!videoEncoder && std::strcmp(encoderId, "obs_x264") != 0) {
