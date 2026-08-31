@@ -8,6 +8,7 @@ PATCH = ROOT / "patches" / "0012-feat-libobs-add-low-latency-output-interleaving
 VIDEO_FASTPATH_PATCH = (
     ROOT / "patches" / "0013-perf-libobs-decouple-live-video-from-audio-watermark.patch"
 )
+NVENC_DRAIN_PATCH = ROOT / "patches" / "0014-perf-nvenc-drain-ULL-bitstreams-immediately.patch"
 FRONTEND = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
 
 
@@ -51,3 +52,12 @@ def test_nvenc_uses_a_real_low_latency_profile() -> None:
     assert 'obs_data_set_bool(vEncSettings, "lookahead", false);' in frontend
     assert 'obs_data_set_int(vEncSettings, "bf", 0);' in frontend
     assert "NVENC latency profile" in frontend
+
+
+def test_nvenc_ull_drains_without_shrinking_the_surface_pool() -> None:
+    patch = NVENC_DRAIN_PATCH.read_text(encoding="utf-8")
+
+    assert "const int output_delay =" in patch
+    assert "NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY ? 1 : buf_count - 1" in patch
+    assert "enc->buf_count = buf_count;" in patch
+    assert "buf_count = min(64, buf_count);" in patch
