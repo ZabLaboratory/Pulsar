@@ -4086,8 +4086,20 @@ bool PulsarFrontendAPI::setup()
         obs_data_set_int(vEncSettings, "keyint_sec", keyintSec);
         obs_data_set_string(vEncSettings, presetPropForId(encoderId, presets.prop), preset.c_str());
         obs_data_set_string(vEncSettings, "profile", profile.c_str());
-        if (std::strcmp(encoderId, "obs_x264") == 0)
+        if (std::strcmp(reportFamily, "nvenc") == 0) {
+            // Broadcast cuts must not sit behind NVENC's quality-oriented
+            // reorder queue. Keep the same codec/profile/bitrate, but select
+            // the encoder's ultra-low-latency path and remove B-frame,
+            // lookahead and multipass buffering.
+            obs_data_set_string(vEncSettings, "tune", "ull");
+            obs_data_set_string(vEncSettings, "multipass", "disabled");
+            obs_data_set_bool(vEncSettings, "lookahead", false);
+            obs_data_set_int(vEncSettings, "bf", 0);
+            blog(LOG_INFO, "[pulsar-frontend-stub] NVENC latency profile: "
+                 "tune=ull multipass=disabled lookahead=0 bf=0");
+        } else if (std::strcmp(encoderId, "obs_x264") == 0) {
             obs_data_set_string(vEncSettings, "tune", "zerolatency"); // x264-only knob
+        }
 
         videoEncoder = obs_video_encoder_create(encoderId, "PulsarVideoEnc", vEncSettings, nullptr);
         if (!videoEncoder && std::strcmp(encoderId, "obs_x264") != 0) {

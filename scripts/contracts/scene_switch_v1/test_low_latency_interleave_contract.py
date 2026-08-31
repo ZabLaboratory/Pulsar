@@ -40,3 +40,14 @@ def test_video_fastpath_keeps_audio_and_orders_video_tracks() -> None:
     assert "Audio remains encoded" in patch
     assert "has_higher_opposing_ts(output, pkt)" in patch
     assert "obs_output_set_audio_encoder" not in patch
+
+
+def test_nvenc_uses_a_real_low_latency_profile() -> None:
+    frontend = FRONTEND.read_text(encoding="utf-8")
+
+    assert 'std::strcmp(reportFamily, "nvenc") == 0' in frontend
+    assert 'obs_data_set_string(vEncSettings, "tune", "ull");' in frontend
+    assert 'obs_data_set_string(vEncSettings, "multipass", "disabled");' in frontend
+    assert 'obs_data_set_bool(vEncSettings, "lookahead", false);' in frontend
+    assert 'obs_data_set_int(vEncSettings, "bf", 0);' in frontend
+    assert "NVENC latency profile" in frontend
