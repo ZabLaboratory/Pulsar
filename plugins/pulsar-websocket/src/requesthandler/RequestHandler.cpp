@@ -49,6 +49,17 @@ bool IsReadOnlyRequest(const std::string &requestType)
 	return requestType.rfind("Get", 0) == 0;
 }
 
+bool IsSafetyStopRequest(const std::string &requestType)
+{
+	// A rollback freeze protects the Preview/scene graph, but operators must
+	// still be able to stop active outputs to contain an incident or complete
+	// process teardown. Keep this escape hatch explicit and finite: starts,
+	// toggles, and all scene/input mutations remain gated.
+	return requestType == "StopRecord" || requestType == "StopStream" ||
+	       requestType == "StopReplayBuffer" || requestType == "StopVirtualCam" ||
+	       requestType == "StopOutput";
+}
+
 // Abort is intentionally not labelled read-only: it mutates the scene-switch
 // state, but must reach that adapter to cancel a frozen, pre-boundary Take.
 // This is the sole controlled bypass of the generic dual-lane mutation lease.
@@ -336,11 +347,15 @@ RequestResult RequestHandler::ProcessRequest(const Request &request)
 	// Acquire the process bridge before validating/looking up the handler. A
 	// non-Get command which arrives after TakeAccepted must fail closed even if
 	// it is unknown to this build: future mutation-capable handlers cannot
-	// silently bypass AC-04. The lease serializes the whole handler invocation
-	// so a mutation already in flight completes before a Cut publishes pending.
+	// silently bypass AC-04. The explicit safety-stop allowlist is the only
+	// exception: stopping an already-running output must remain available for
+	// incident containment and graceful teardown after a rollback freeze.
+	// The lease serializes every other handler invocation so a mutation already
+	// in flight completes before a Cut publishes pending.
 	const bool controlledSceneSwitchBypass = IsControlledSceneSwitchPendingBypass(request);
+	const bool safetyStop = IsSafetyStopRequest(request.RequestType);
 	pulsar_dual_lane_control::MutationLease mutationLease(
-		!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass);
+		!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass && !safetyStop);
 	if (!mutationLease.allowed()) {
 		const char *reason = mutationLease.frozen()
 			? "PREVIEW_FROZEN: WebSocket mutation rejected after the dual-lane rollback freeze."

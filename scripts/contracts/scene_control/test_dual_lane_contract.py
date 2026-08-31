@@ -670,17 +670,44 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "vendor->is_string() || !nestedRequest->is_string()" in handler
     assert "json::value() here" in handler
     assert "const bool controlledSceneSwitchBypass" in handler
-    assert "!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass" in handler
+    assert "bool IsSafetyStopRequest(const std::string &requestType)" in handler
+    for safety_stop in ("StopRecord", "StopStream", "StopReplayBuffer", "StopVirtualCam", "StopOutput"):
+        assert f'requestType == "{safety_stop}"' in handler
+    assert "const bool safetyStop" in handler
+    assert (
+        "!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass && !safetyStop"
+        in handler
+    )
     assert "RequestStatus::RequestProcessingFailed" in handler
     assert "PREVIEW_FROZEN" in handler
     assert "after the dual-lane rollback freeze" in handler
-    # The gate is central and acquired before handler lookup. The only pending
-    # bypass is the exact vendor Abort/GetState pair; Prepare/Take/Dispatch,
-    # malformed CallVendorRequest data, and every other vendor remain gated.
+    # The gate is central and acquired before handler lookup. The only scene
+    # switch pending bypass is the exact vendor Abort/GetState pair; the
+    # finite output-stop allowlist is unrelated to Preview mutations.
+    # Prepare/Take/Dispatch, malformed CallVendorRequest data, and every other
+    # vendor remain gated.
     assert 'nested == "Prepare"' not in handler
     assert 'nested == "Take"' not in handler
     assert 'nested == "Dispatch"' not in handler
     assert handler.index("const bool controlledSceneSwitchBypass") < handler.index("_handlerMap.at")
+
+
+def test_rollback_probe_stops_outputs_after_freeze_but_keeps_scene_mutations_blocked() -> None:
+    handler = _read(_WEBSOCKET_HANDLER)
+    rollback_probe = _read(_ROLLBACK_PROBE)
+
+    # The probe's post-freeze cleanup must be able to stop an active recorder;
+    # this is an output-safety action, not a Preview/scene mutation. The
+    # central gateway still verifies every scene mutation as PREVIEW_FROZEN.
+    assert 'request(inbox, ws, "StopRecord", "rollback-stop-record")' in rollback_probe
+    assert 'assert_success(response, "StopRecord")' in rollback_probe
+    assert 'request(\n            inbox,\n            ws,\n            "CreateInput",' in rollback_probe
+    assert 'assert_preview_frozen(response, "CreateInput after rollback")' in rollback_probe
+    allowlist = _between(handler, "bool IsSafetyStopRequest", "// Abort is intentionally")
+    assert 'requestType == "StopRecord"' in allowlist
+    assert 'requestType == "StopOutput"' in allowlist
+    assert 'requestType == "StartRecord"' not in allowlist
+    assert 'requestType == "ToggleRecord"' not in allowlist
 
 
 def test_runtime_probe_exercises_serial_frame_preview_freeze() -> None:
