@@ -710,6 +710,8 @@ def test_rollback_probe_stops_outputs_after_freeze_but_keeps_scene_mutations_blo
     assert '"--record-dir"' in rollback_probe
     assert "probe.prepare_record_directory(args.record_dir)" in rollback_probe
     assert "persistent recording directory" in rollback_probe
+    assert "owned_output_path = probe.ensure_recording_output_owned(output_path, runtime.record_dir)" in rollback_probe
+    assert "probe.verify_recording(str(owned_output_path), ffprobe)" in rollback_probe
     allowlist = _between(handler, "bool IsSafetyStopRequest", "// Abort is intentionally")
     assert 'requestType == "StopRecord"' in allowlist
     assert 'requestType == "StopOutput"' in allowlist

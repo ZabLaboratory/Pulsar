@@ -403,7 +403,8 @@ async def drive_rollback(process: Any) -> None:
         ffprobe = probe.find_ffprobe()
         if not ffprobe:
             raise probe.ProbeSkip("ffprobe is required for the rollback recording proof")
-        probe.verify_recording(output_path, ffprobe)
+        owned_output_path = probe.ensure_recording_output_owned(output_path, runtime.record_dir)
+        probe.verify_recording(str(owned_output_path), ffprobe)
 
     bind_lines_after = [line for line in runtime.snapshot() if probe.ENCODER_BIND_RE.search(line)]
     if len(bind_lines_after) != 1:
