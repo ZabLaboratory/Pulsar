@@ -61,6 +61,7 @@ def test_nvenc_ull_drains_without_shrinking_the_surface_pool() -> None:
     patch = NVENC_DRAIN_PATCH.read_text(encoding="utf-8")
 
     assert "const int output_delay =" in patch
-    assert "NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY ? 1 : buf_count - 1" in patch
+    assert "NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY" in patch
+    assert "max(1, config->frameIntervalP)" in patch
     assert "enc->buf_count = buf_count;" in patch
     assert "buf_count = min(64, buf_count);" in patch
