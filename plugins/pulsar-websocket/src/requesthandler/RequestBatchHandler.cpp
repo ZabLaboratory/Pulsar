@@ -18,14 +18,17 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #include <queue>
 #include <condition_variable>
+#include <utility>
 #include <util/profiler.hpp>
 
 #include "RequestBatchHandler.h"
 #include "../utils/Compat.h"
 #include "../obs-websocket.h"
+#include "../websocketserver/WebSocketServer.h"
 
 struct SerialFrameBatch {
 	RequestHandler &requestHandler;
+	WebSocketServerPtr webSocketServer;
 	std::queue<RequestBatchRequest> requests;
 	std::vector<RequestResult> results;
 	json &variables;
@@ -35,9 +38,12 @@ struct SerialFrameBatch {
 	size_t sleepUntilFrame = 0;
 	std::mutex conditionMutex;
 	std::condition_variable condition;
+	bool callbackEntryReported = false;
 
-	SerialFrameBatch(RequestHandler &requestHandler, json &variables, bool haltOnFailure)
+	SerialFrameBatch(RequestHandler &requestHandler, WebSocketServerPtr webSocketServer, json &variables,
+			bool haltOnFailure)
 		: requestHandler(requestHandler),
+		  webSocketServer(std::move(webSocketServer)),
 		  variables(variables),
 		  haltOnFailure(haltOnFailure)
 	{
@@ -114,6 +120,21 @@ static void ObsTickCallback(void *param, float)
 	ScopeProfiler prof{"obs_websocket_request_batch_frame_tick"};
 
 	auto serialFrameBatch = static_cast<SerialFrameBatch *>(param);
+	// notify_one() below wakes the worker before this callback returns.  Keep a
+	// distinct lease on the graphics callback itself so quiesce cannot publish
+	// its ACK in that small interval while the callback still touches libobs.
+	auto callbackLease = serialFrameBatch->webSocketServer
+		? serialFrameBatch->webSocketServer->EnterBatchHandler()
+		: nullptr;
+	if (!callbackLease) {
+		serialFrameBatch->requests = std::queue<RequestBatchRequest>();
+		serialFrameBatch->condition.notify_one();
+		return;
+	}
+	if (!serialFrameBatch->callbackEntryReported) {
+		serialFrameBatch->callbackEntryReported = true;
+		blog(LOG_INFO, "PULSAR_WEBSOCKET_HANDLER event=frame_callback_enter");
+	}
 
 	// Increment frame count
 	serialFrameBatch->frameCount++;
@@ -165,6 +186,23 @@ RequestBatchHandler::ProcessRequestBatch(QThreadPool &threadPool, SessionPtr ses
 					 RequestBatchExecutionType::RequestBatchExecutionType executionType,
 					 std::vector<RequestBatchRequest> &requests, json &variables, bool haltOnFailure)
 {
+	// Keep a batch-specific lease in addition to the outer websocket-message
+	// lease.  It remains alive until SerialFrame has removed its graphics tick
+	// callback or Parallel has joined every worker, so the host cannot publish
+	// the quiesce ACK while either fan-out still touches libobs.
+	WebSocketServerPtr webSocketServer = GetWebSocketServer();
+	auto batchLease = webSocketServer ? webSocketServer->EnterBatchHandler() : nullptr;
+	if (webSocketServer && !batchLease) {
+		std::vector<RequestResult> rejected;
+		rejected.reserve(requests.size());
+		for (size_t i = 0; i < requests.size(); ++i)
+			rejected.emplace_back(RequestStatus::NotReady, "WebSocket server is quiescing.");
+		return rejected;
+	}
+	if (batchLease)
+		blog(LOG_INFO, "PULSAR_WEBSOCKET_HANDLER event=batch_enter execution_type=%d",
+		     static_cast<int>(executionType));
+
 	RequestHandler requestHandler(session);
 	if (executionType == RequestBatchExecutionType::SerialRealtime) {
 		std::vector<RequestResult> ret;
@@ -185,7 +223,7 @@ RequestBatchHandler::ProcessRequestBatch(QThreadPool &threadPool, SessionPtr ses
 
 		return ret;
 	} else if (executionType == RequestBatchExecutionType::SerialFrame) {
-		SerialFrameBatch serialFrameBatch(requestHandler, variables, haltOnFailure);
+		SerialFrameBatch serialFrameBatch(requestHandler, webSocketServer, variables, haltOnFailure);
 
 		// Create Request objects in the worker thread (avoid unnecessary processing in graphics thread)
 		for (auto &request : requests)
@@ -210,8 +248,11 @@ RequestBatchHandler::ProcessRequestBatch(QThreadPool &threadPool, SessionPtr ses
 
 		// Submit each request as a task to the thread pool to be processed ASAP
 		for (auto &request : requests) {
-			threadPool.start(Utils::Compat::CreateFunctionRunnable([&parallelResults, &request]() {
-				RequestResult requestResult = parallelResults.requestHandler.ProcessRequest(request);
+			threadPool.start(Utils::Compat::CreateFunctionRunnable([&parallelResults, &request, webSocketServer]() {
+				auto workerLease = webSocketServer ? webSocketServer->EnterBatchHandler() : nullptr;
+				RequestResult requestResult = (webSocketServer && !workerLease)
+					? RequestResult::Error(RequestStatus::NotReady, "WebSocket server is quiescing.")
+					: parallelResults.requestHandler.ProcessRequest(request);
 
 				std::unique_lock<std::mutex> lock(parallelResults.conditionMutex);
 				parallelResults.results.push_back(requestResult);

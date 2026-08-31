@@ -16,13 +16,17 @@ interpolation over the sorted sample values; the rank is `(n - 1) * q`.
 | --- | --- | --- | --- |
 | `encoder_input_raw` | `ProgramView` / `encoder_input` | First valid Program frame received at the encoder/raw input. | AC-07, p95 `<=50 ms` |
 | `directshow_return` | `ProgramReturn` / `DirectShow` | First valid Program frame observed by the DirectShow return consumer. | AC-08, p95 `<=75 ms` |
-| `encoded_first_packet` | `EncoderOutput` / `encoder_callback` | First encoded video packet handed to the encoder-output callback (`packet_index=0`), before any network or RTMP receiver. | AC-12, p95 compared with `<=15 ms` baseline |
+| `encoded_first_packet` | `EncoderOutput` / `encoder_callback` | First encoded video packet handed to the encoder-output callback, before any network or RTMP receiver. It is auxiliary only. | Diagnostic; never AC-12 |
+| `rtmp_first_packet` | `RTMP` / `receiver` | First video packet observed by the dedicated FFmpeg loopback receiver/demux. It must be the same packet as the producer callback: packet index, frame/PTS identity and rational PTS/DTS mux offset are checked. | AC-12a/b |
 | `decoded_first_frame` | `RTMP` / `decoder` | First decoded frame, diagnostic only. | No SLO |
 | `antenna_first_frame` | `Antenna` / `antenna` | First antenna/player frame, diagnostic only. | No SLO |
 
-The latency clock starts at
-`TakeAccepted.observed_at_monotonic_ns`. A valid observation is admitted only
-when it is post-commit, has the same `runtime_instance_id`, `command_id`,
+The AC-12b latency clock starts at the monotonic timestamp captured when the
+Take is logically admitted/reserved, exposed as
+`TakeAccepted.observed_at_monotonic_ns`. This capture precedes the atomic queue
+operation; it is not evidence that an event was published or that a Cut
+committed. A valid observation is admitted only when it is post-commit, has the
+same `runtime_instance_id`, `command_id`,
 `intent_id`, and post-commit `revisions`, and has frame ID/PTS greater than or
 equal to the `TakeCommitted` frame boundary. Frames seen continuously before
 the commit are retained as diagnostics and excluded from the percentile.
@@ -30,6 +34,17 @@ the commit are retained as diagnostics and excluded from the percentile.
 The DirectShow result is never substituted with the raw result. RTMP and
 decoded/player results are also separate, so a decoder delay cannot be
 misreported as a Cut failure or hidden by a fast first packet.
+
+AC-12 is split into two required views over the same packet set. AC-12a is the
+transport boundary from `packet_callback_monotonic_ns` to the explicit
+`receiver_observed_normalized_ns`, with the declared receiver clock bound
+added to p95; its conservative p95 must remain `<=15 ms`. AC-12b is the full
+`TakeAccepted` to normalized receiver path. It publishes count, p50, p95,
+p99 and max, plus the six distributions
+`TakeAccepted->CTS`, `CTS->FER`, `FER->FERC`, `FERC->PIR`,
+`PIR->callback`, and `callback->receiver`. AC-12b has no additional latency
+threshold in this revision, but it is mandatory: missing, partial or
+ambiguous AC-12b evidence leaves AC-12 `UNPROVEN`.
 
 ## Trace contract
 
@@ -46,7 +61,20 @@ metadata:
   "warmup_takes": 100,
   "video": {"width": 1920, "height": 1080, "fps_num": 60, "fps_den": 1},
   "workload": {"wgc": true, "cef": true, "nvenc": true},
-  "capture_paths": ["encoder_input_raw", "directshow_return", "encoded_first_packet"],
+  "capture_paths": ["encoder_input_raw", "directshow_return", "encoded_first_packet", "rtmp_first_packet"],
+  "rtmp_receiver": {
+    "server_url": "rtmp://127.0.0.1:<port>/pulsar",
+    "stream_key": "runtime-001-nvenc",
+    "endpoint": "rtmp://127.0.0.1:<port>/pulsar/runtime-001-nvenc",
+    "receiver_id": "ffmpeg-rtmp-receiver",
+    "stream_id": "runtime-001-nvenc",
+    "clock_source": "perf_counter_ns/qpc",
+    "clock_offset_ns": 0,
+    "clock_bound_ns": 5000000,
+    "packet_timebase_num": 1,
+    "packet_timebase_den": 1000
+  },
+  "rtmp_load_requested": true,
   "source_types": ["window_capture", "browser_source"],
   "resource_reference": {
     "extra_frame_render_ms": 0.091,
@@ -68,7 +96,14 @@ commit's `previous_revisions` must equal the acceptance's `revisions` and its
 frame ID/PTS are the atomic frame boundary.
 
 An observation record has the following required fields (plus optional
-`frame_hash`, `packet_index`, and `notes`):
+`frame_hash`, packet metadata, clock metadata, DirectShow stage timing, and
+`notes`). For
+`rtmp_first_packet`, `packet_index`, `packet_pts`, `packet_dts`,
+`packet_timebase_num`, `packet_timebase_den`, `packet_identity`,
+`clock_source`, `clock_offset_ns`, and `clock_bound_ns` are mandatory. A
+current acceptance trace additionally carries
+`receiver_observed_normalized_ns`; it is the receiver timestamp after the
+calibrated clock offset and must equal the observation's normalized timestamp.
 
 ```json
 {
@@ -90,15 +125,27 @@ An observation record has the following required fields (plus optional
 }
 ```
 
+Current `directshow_return` producers may also emit the complete optional
+`frame_entry_monotonic_ns`, `lock_sample_data_acquired_monotonic_ns`,
+`queue_read_start_monotonic_ns`, `queue_read_completed_monotonic_ns`,
+`unlock_sample_data_completed_monotonic_ns`, and `emission_monotonic_ns`
+sequence. These QPC-derived timestamps are diagnostics only: they must be
+strictly positive and ordered, and `observed_at_monotonic_ns` equals the
+unlock-completed timestamp. The fields are all-or-none; legacy traces without
+the sequence remain parseable, while malformed or partial sequences are
+rejected fail-closed. They do not change the AC-08 latency boundary or its
+percentile calculation.
+
 If the atomic queue rejects a reserved Take, the producer emits a terminal
 `TakeAborted` event with `reason=queue_rejected` and the
-`last_committed_frame_id`/`last_committed_pts_ns` pair. No `TakeAccepted` is
-emitted for that candidate: the acceptance timestamp is assigned only after
-the queue primitive returns success. The pair identifies the last committed
-frame before the rejected reservation and makes the terminal path observable
-without pretending that a commit occurred. Accepted and committed events are
-placed in a FIFO writer queue; disk I/O runs on its worker and cannot inflate
-the acceptance-to-frame latency.
+`last_committed_frame_id`/`last_committed_pts_ns` pair. No `TakeAccepted` event
+is published for that candidate: its reservation timestamp may already have
+been captured, but publication remains fail-closed until the queue operation
+and the subsequent `obs_view_queue_atomic_swap` both return success. The pair
+identifies the last committed frame before the rejected reservation and makes
+the terminal path observable without pretending that a commit occurred.
+Accepted and committed events are placed in a FIFO writer queue; disk I/O runs
+on its worker and cannot inflate the acceptance-to-frame latency.
 
 If the frame-boundary callback observes a frame ID or PTS below the last
 telemetry commit, the physical swap has already happened: the callback runs
@@ -114,19 +161,85 @@ require a separate contract decision. Duplicate callbacks for the accepted Take
 are ignored; the physical role map remains the one reported by the callback.
 
 The pre-network encoded callback uses the same correlation fields, with
-`boundary=encoded_first_packet`, `surface=EncoderOutput`,
-`consumer=encoder_callback`, and `packet_index=0`. It still carries the frame
-ID/PTS associated with the packet; the script refuses a packet-only timestamp
-that cannot be correlated to the Take frame boundary. RTMP receiver ingress is
-an external Probe measurement and must not be labelled as this boundary.
+`boundary=encoded_first_packet`, `surface=EncoderOutput`, and
+`consumer=encoder_callback`. Current runtimes additionally expose the sender
+packet PTS/DTS/timebase and a monotone video-packet sequence. This boundary is
+auxiliary: it can never satisfy AC-12.
+
+For diagnosis, current runtimes also preserve libobs' four timestamps for the
+same video packet: `packet_cts_monotonic_ns` (composition),
+`packet_fer_monotonic_ns` (encode request),
+`packet_ferc_monotonic_ns` (encode request complete), and
+`packet_pir_monotonic_ns` (A/V interleave request), plus
+`packet_callback_monotonic_ns` on entry into Pulsar's callback. The analyzer reports the
+three sub-stage distributions separately under `encoder_pipeline`. These
+fields explain where latency accumulates. Together with the normalized
+receiver timestamp they form AC-12a/b only when the packet identity is the
+same; callback-only evidence cannot satisfy AC-12.
+
+Pulsar boots libobs audio with a fixed 20 ms buffer through
+`obs_reset_audio2`. This is the engine's live-production policy: the legacy
+dynamically growing audio buffer can retain an encoded Program video packet in
+the A/V interleaver after an otherwise timely Cut. A candidate that does not
+log this bounded mode is not the low-latency configuration described here.
+
+The AC-12 boundary is produced by
+`scripts/probe-dual-lane.py --rtmp-receiver`. The driver starts FFmpeg with the
+same command used for the campaign, configures Pulsar's native `streamOutput`
+through `SetStreamServiceSettings` (`rtmp_custom`, `server` plus `key`), and
+starts `StartStream`. The receiver listens on the full `server/key` endpoint.
+After the stream and Pulsar process have stopped, the driver fuses the
+receiver records into a new deterministic JSONL artifact; it never writes to
+the producer JSONL while the runtime is active. OBS chooses the FLV
+`start_dts_offset` from the first audio or video packet and subtracts it from
+subsequent video timestamps. Therefore an absolute equality between the raw
+video encoder PTS and the demuxed FLV PTS is invalid. The probe instead
+requires the exact same monotone video-packet index, then intersects the
+PTS/DTS rational intervals (half of one FLV millisecond tick) to prove one
+constant mux offset for every correlated Take. The final interval and packet
+count are recorded in `session.rtmp_receiver` and recomputed by the analyzer.
+An index gap at a selected packet, a duplicate, offset drift, incomplete
+calibration, mixed session, or metadata mismatch fails closed.
+
+On failure, the producer sidecar remains non-acceptance evidence and a sibling
+`*.receiver-diagnostic.json` preserves the receiver packet snapshot, the last
+200 FFmpeg lines, clock metadata, and any live mux-offset calibration. Failure
+text is emitted only after the bounded DirectShow, RTMP and Pulsar cleanup
+paths have run, so a strict stderr supervisor cannot interrupt child reaping.
+
+The receiver timestamp is the time FFmpeg's demux log is observed by the
+driver, normalized into the QPC-compatible runtime monotonic domain. The
+`receiver_observed_normalized_ns` field makes that conversion explicit. It is
+a receiver/demux measurement, not a wire-level timestamp and not a decoded or
+antenna/player latency guarantee.
+
+The AC-12a p95 gate is conservative: the report exposes the callback-to-
+receiver p95, the calibrated `clock_bound_ns` converted to milliseconds, and
+`p95_conservative_ms = p95_ms + clock_bound_ms`. AC-12a passes only when the
+conservative value is `<=15 ms`; the declared clock uncertainty cannot be
+silently ignored. AC-12b's p95 is reported for diagnosis and has no threshold
+in this revision. The parser never pools packets between codecs, sessions or
+different Take identities.
 
 Resource samples use `sample_mode=reference` and `sample_mode=dual_lane` and
 record `frame_render_ms`, `resident_bytes`, `process_cpu_percent`,
 `host_gpu_percent`, `callback_backlog_estimate`, and
-`encoder_utilization_percent`. The report
-computes actual deltas from the two sample sets and shows them beside the
+`encoder_utilization_percent`, plus strict `encoder_active` and
+`encoder_family` and `rtmp_load_active` fields read from the actual bound
+encoder and native `streamOutput` at sample time. Reference and dual-lane
+resource phases must each collect their minimum samples while
+`rtmp_load_active=true`; early samples taken before `StartStream` remain
+diagnostic and cannot be promoted after the fact. The report computes actual
+deltas from the two sample sets and shows them beside the
 known `+0.091 ms/frame` and `+3.13 MB` references. It never declares runtime
-capacity from the reference alone.
+capacity from the reference alone. Samples with `encoder_active=false` remain
+diagnostic and cannot satisfy the AC-13 minimum.
+
+The `encoder_active` and `encoder_family` fields are optional for backward
+parsing of older traces; when either is absent or the family is not `nvenc`,
+the sample is treated as ineligible for acceptance. This
+keeps historical evidence inspectable without allowing it to satisfy the
+new active-encoder resource gate.
 
 Every resource sample also carries `measurement_phase`, the exact candidate
 `build_revision`, `hardware.host`/`hardware.gpu`, and the explicit
@@ -146,22 +259,56 @@ not accepted as proof of the A/B topology.
 ## Reproducible execution
 
 Run each codec as an independent campaign on the exact binary and host. The
-producer must complete at least 100 warm-up Takes and retain at least 100
-measured Takes for each required boundary. Capture the source/binary revision,
+producer must complete at least 100 warm-up Takes followed by at least 100
+measured Takes in the same runtime session for each required boundary. The
+standard dual-lane probe executes 200 committed Takes for `--takes 100`; the
+parser excludes the first 100 from latency percentiles and reports both
+observed counts. Capture the source/binary revision,
 redacted command line, resolution/FPS, adapter/driver, and the WGC/CEF/NVENC
 flags in the session record.
 
 ```powershell
-# Run the runtime producer/instrumentation for x264 and save x264.jsonl.
-# Repeat with PULSAR_VIDEO_ENCODER=nvenc and save nvenc.jsonl.
-# The DirectShow reader and encoder-output callback must write observations
-# using the same runtime/session IDs and monotonic clock; RTMP receiver timing
-# is an external Probe measurement and must not be merged from wall-clock logs.
+# Run the runtime producer/instrumentation for x264 and save x264.jsonl.  This
+# campaign has no resource phase; AC-13 is NOT_APPLICABLE for x264.
+# Repeat with PULSAR_VIDEO_ENCODER=nvenc and save nvenc.jsonl; only the NVENC
+# campaign performs the reference/dual resource comparison while recording.
+# The probe itself keeps the ProgramReturn DirectShow reader open; the reader
+# and encoder-output callback write observations using the same runtime/session
+# IDs and monotonic clock. Add --rtmp-receiver to exercise the native RTMP
+# streamOutput and fuse correlated receiver/demux observations after shutdown.
 
 python scripts/probe-take-latency.py `
   --trace artifacts/246/x264.jsonl artifacts/246/nvenc.jsonl `
   --output artifacts/246/latency-report.json
 ```
+
+For an AC-12-enabled latency run (one independent command per codec), use the
+exact candidate artifact and a visible WGC/CEF workload:
+
+```powershell
+python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder x264 --takes 100 `
+  --trace artifacts/249/x264-rtmp.jsonl --build-revision <candidate-sha> `
+  --capture-window <visible-title:class:exe> --cef-workload --rtmp-receiver
+python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 `
+  --trace artifacts/249/nvenc-rtmp.jsonl --build-revision <candidate-sha> `
+  --capture-window <visible-title:class:exe> --cef-workload --rtmp-receiver
+python scripts/probe-take-latency.py --trace artifacts/249/x264-rtmp.jsonl artifacts/249/nvenc-rtmp.jsonl `
+  --output artifacts/249/latency-report.json
+```
+
+Each traced run executes 100 observed warm-up Takes followed by 100 measured
+Takes. The two final files are independent sessions and must not be pooled by
+the harness; the aggregate parser requires both codec campaigns. The producer
+sidecar named `.producer.jsonl` is retained for audit, while the named trace
+is the fused artifact.
+
+Add `--record-dir <evidence-root>` to retain the verified MP4 outside the
+checkout. The probe creates a unique session directory below that root, passes
+it as `PULSAR_RECORD_DIR`, prints the exact retained `outputPath`, and never
+deletes the session. The root must be outside the Pulsar repository and must
+not contain a direct pre-existing MP4; this prevents ambiguous evidence
+collection. Without this option, the historical temporary-directory cleanup
+remains in effect.
 
 The default gate is 100 measured Takes, 100 warm-up Takes, and 10 resource
 samples per resource mode. Use smaller thresholds only in unit tests; fixture
@@ -176,16 +323,23 @@ with the same runtime ID:
 python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc `
   --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 `
   --build-revision <candidate-sha> --capture-window <visible-title:class:exe> `
-  --cef-workload --resource-mode reference --resource-only
+  --cef-workload --resource-mode reference --resource-only --rtmp-receiver
 python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 100 `
   --trace artifacts/246/nvenc.jsonl --runtime-id runtime-nvenc-001 `
   --build-revision <candidate-sha> --capture-window <visible-title:class:exe> `
-  --cef-workload --trace-append --resource-mode dual_lane
+  --cef-workload --trace-append --resource-mode dual_lane --rtmp-receiver
 ```
 
 `reference` is an explicit legacy single-canvas run; it does not emit Take
-events. Both invocations require a real visible WGC target and the local CEF
-workload. The driver sets `PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD=1`, so the
+events. With `--rtmp-receiver`, it starts the same native `streamOutput` and
+FFmpeg receiver as the dual-lane run before sampling, and the runtime emits
+`rtmp_load_active` per sample. It nevertheless starts a real local NVENC
+recording, waits for `OUTPUT_STARTED`, keeps both output paths active while
+collecting resource samples, then stops/verifies the stream and recording
+before returning. An inactive or
+missing encoder attestation cannot satisfy AC-13. Both invocations require a
+real visible WGC target and the local CEF workload. The driver sets
+`PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD=1`, so the
 frontend suppresses its `Default` bootstrap WGC/CEF sources and the probe alone
 creates one producer pair on A for `reference`, or two independent pairs on A/B
 for `dual_lane`. The second invocation appends its real scene-switch events and

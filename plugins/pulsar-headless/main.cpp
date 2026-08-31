@@ -37,6 +37,8 @@
 #include <chrono>
 #include <cctype>
 #include <cstdarg>
+#include <cerrno>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -583,6 +585,103 @@ BOOL WINAPI console_ctrl_handler(DWORD ctrl_type)
     }
 }
 
+HANDLE g_shutdown_event = nullptr;
+
+// The parent creates an anonymous manual-reset event and passes this one
+// inheritable handle through STARTUPINFOEX's handle list. The numeric value
+// never enters logs or the evidence artifact; only the explicit opt-in
+// presence and lifecycle state are observable.
+bool adopt_shutdown_event_from_environment(const std::string &instance_id)
+{
+    const char *raw = std::getenv("PULSAR_SHUTDOWN_EVENT_HANDLE");
+    if (!raw) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=absent id=%s mechanism=console_compat\n",
+                     instance_id.c_str());
+        return true;
+    }
+    if (!*raw) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=invalid id=%s reason=empty_handle\n",
+                     instance_id.c_str());
+        return false;
+    }
+
+    for (const char *cursor = raw; *cursor; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') {
+            std::fprintf(stderr,
+                         "PULSAR_SHUTDOWN_CONTROL event=invalid id=%s reason=handle_syntax\n",
+                         instance_id.c_str());
+            return false;
+        }
+    }
+    errno = 0;
+    char *end = nullptr;
+    const unsigned long long parsed = std::strtoull(raw, &end, 10);
+    if (errno == ERANGE || end == raw || *end != '\0' || parsed == 0 ||
+        parsed > static_cast<unsigned long long>(UINTPTR_MAX)) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=invalid id=%s reason=handle_range\n",
+                     instance_id.c_str());
+        return false;
+    }
+
+    HANDLE candidate = reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(parsed));
+    DWORD handle_flags = 0;
+    if (!GetHandleInformation(candidate, &handle_flags) ||
+        WaitForSingleObject(candidate, 0) == WAIT_FAILED) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=invalid id=%s reason=closed_handle\n",
+                     instance_id.c_str());
+        return false;
+    }
+    // Do not let this control capability leak into any later child process
+    // (CEF, FFmpeg, or a plugin) that might use inheritable handles.
+    if (!SetHandleInformation(candidate, HANDLE_FLAG_INHERIT, 0)) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=invalid id=%s reason=inherit_clear\n",
+                     instance_id.c_str());
+        return false;
+    }
+    g_shutdown_event = candidate;
+    std::fprintf(stderr,
+                 "PULSAR_SHUTDOWN_CONTROL event=ready id=%s mechanism=inherited_event\n",
+                 instance_id.c_str());
+    return true;
+}
+
+void close_shutdown_event()
+{
+    if (g_shutdown_event) {
+        CloseHandle(g_shutdown_event);
+        g_shutdown_event = nullptr;
+    }
+}
+
+bool shutdown_event_requested(const std::string &instance_id)
+{
+    if (!g_shutdown_event)
+        return false;
+    // Bound the wait so a signaled event interrupts the idle loop promptly,
+    // while still allowing the existing lease-renewal cadence to run. A
+    // failed wait is fail-closed: the process must not continue operating
+    // when its explicit shutdown control has become invalid.
+    const DWORD result = WaitForSingleObject(g_shutdown_event, 100);
+    if (result == WAIT_OBJECT_0) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=signaled id=%s mechanism=inherited_event\n",
+                     instance_id.c_str());
+        return true;
+    }
+    if (result == WAIT_FAILED) {
+        std::fprintf(stderr,
+                     "PULSAR_SHUTDOWN_CONTROL event=wait_failed id=%s error=%lu\n",
+                     instance_id.c_str(), static_cast<unsigned long>(GetLastError()));
+        return true;
+    }
+    return false;
+}
+
 // /SUBSYSTEM:WINDOWS support -- since pulsar.exe is built without a
 // console subsystem (so Windows never allocates a window for it), the
 // CRT does NOT auto-wire stdout/stderr to a terminal. Three cases to
@@ -770,14 +869,24 @@ std::string resolve_default_render_device_id()
 
 bool reset_audio()
 {
-    obs_audio_info oai = {};
+    // Pulsar is a live production engine, not an offline renderer.  The
+    // legacy obs_reset_audio() wrapper leaves libobs in its dynamically
+    // increasing buffering mode with a 45-tick ceiling (roughly 960 ms at
+    // 48 kHz).  That can make the encoded A/V interleaver retain otherwise
+    // ready Program video packets behind a growing audio timeline.  Use the
+    // same bounded mode exposed by OBS' low-latency audio option so a Cut is
+    // not hidden behind an inherited, unbounded-for-our-SLO audio queue.
+    obs_audio_info2 oai = {};
     oai.samples_per_sec = 48000;
     oai.speakers = SPEAKERS_STEREO;
+    oai.max_buffering_ms = 20;
+    oai.fixed_buffering = true;
 
-    if (!obs_reset_audio(&oai)) {
-        blog(LOG_ERROR, "[pulsar-headless] obs_reset_audio failed");
+    if (!obs_reset_audio2(&oai)) {
+        blog(LOG_ERROR, "[pulsar-headless] obs_reset_audio2 low-latency setup failed");
         return false;
     }
+    blog(LOG_INFO, "[pulsar-headless] audio buffering fixed at %u ms", oai.max_buffering_ms);
 
     // Bind the system's DEFAULT playback device as the audio monitoring
     // output, by its RESOLVED CONCRETE id -- never the "default" sentinel
@@ -861,6 +970,97 @@ bool websocket_server_ready(std::string &reason)
     }
     if (!listening) {
         reason = "obs_websocket_bind_failed";
+        return false;
+    }
+    return true;
+}
+
+// Quiesce the WebSocket admission/dispatch boundary before any frontend or
+// browser callback teardown. The websocket plugin owns the handler leases and
+// returns a bounded, explicit drain ACK; this host only consumes that contract
+// through the global proc handler.
+bool websocket_pre_shutdown_ready(std::string &reason)
+{
+    proc_handler_t *global_ph = obs_get_proc_handler();
+    if (!global_ph) {
+        reason = "obs_websocket_proc_handler_unavailable";
+        return false;
+    }
+
+    calldata_t cd;
+    calldata_init(&cd);
+    calldata_set_int(&cd, "timeout_ms", 5000);
+    const bool called = proc_handler_call(global_ph, "pulsar_websocket_pre_shutdown", &cd);
+    const bool success = calldata_bool(&cd, "success");
+    const long long activeHandlers = calldata_int(&cd, "active_handlers");
+    const long long sessions = calldata_int(&cd, "sessions");
+    const char *phaseValue = calldata_string(&cd, "phase");
+    const std::string phase = phaseValue ? phaseValue : "unknown";
+    calldata_free(&cd);
+    if (!called) {
+        reason = "obs_websocket_quiesce_proc_unavailable";
+        return false;
+    }
+    if (!success || activeHandlers != 0 || sessions != 0) {
+        reason = "obs_websocket_quiesce_failed phase=" + phase +
+                 " active_handlers=" + std::to_string(activeHandlers) +
+                 " sessions=" + std::to_string(sessions);
+        return false;
+    }
+    return true;
+}
+
+// A failed websocket quiesce is a process-integrity failure, not a recoverable
+// module error.  Returning through main would run the DLL/static destructors;
+// WebSocketServer::~WebSocketServer() calls the unbounded Stop(), which can
+// retain admitted worker threads after the host has already released its
+// runtime/alias leases.  Emit a direct, credential-free and flushed marker,
+// then bypass C++/Qt/libobs teardown entirely.  On Windows, _Exit ultimately
+// permits DLL_PROCESS_DETACH and a plugin's static destructors to run, so use
+// TerminateProcess for the stronger no-destructor boundary.  Kernel-backed
+// leases and handles are released by the operating system only once this
+// process exits, so no successor can overlap a still-live failed runtime.
+[[noreturn]] void fail_closed_websocket_quiesce(const std::string &reason)
+{
+    std::fprintf(stderr,
+                 "PULSAR_WEBSOCKET_QUIESCE event=fail_closed_exit action=process_exit reason=%s\n",
+                 reason.c_str());
+    std::fflush(stderr);
+    std::fflush(stdout);
+#ifdef _WIN32
+    if (!TerminateProcess(GetCurrentProcess(), 1)) {
+        std::fprintf(stderr,
+                     "PULSAR_WEBSOCKET_QUIESCE event=terminate_process_failed error=%lu fallback=exit\n",
+                     static_cast<unsigned long>(GetLastError()));
+        std::fflush(stderr);
+    }
+#endif
+    std::_Exit(1);
+}
+
+// Browser CEF/audio teardown must complete before obs_shutdown() stops the
+// process-wide libobs audio bus.  The browser plugin owns the barrier and
+// exposes it as a private global proc so the host does not link against a DLL
+// implementation detail.
+bool browser_pre_shutdown_ready(std::string &reason)
+{
+    proc_handler_t *global_ph = obs_get_proc_handler();
+    if (!global_ph) {
+        reason = "browser_pre_shutdown_proc_handler_unavailable";
+        return false;
+    }
+
+    calldata_t cd;
+    calldata_init(&cd);
+    const bool called = proc_handler_call(global_ph, "pulsar_browser_pre_shutdown", &cd);
+    const bool success = calldata_bool(&cd, "success");
+    calldata_free(&cd);
+    if (!called) {
+        reason = "browser_pre_shutdown_proc_unavailable";
+        return false;
+    }
+    if (!success) {
+        reason = "browser_pre_shutdown_barrier_failed";
         return false;
     }
     return true;
@@ -1062,6 +1262,19 @@ int main(int argc, char **argv)
     auto runtime_state = std::make_unique<RuntimeState>();
     if (!runtime_state->initialize())
         return 1;
+
+#ifdef _WIN32
+    // CTRL_BREAK_EVENT requires a console shared with the target. A
+    // /SUBSYSTEM:WINDOWS child whose stdout is a redirected pipe has no such
+    // console, so an explicitly inherited anonymous event is the graceful
+    // control primitive. Invalid opt-in handles fail closed; absent opt-in
+    // retains the console-control compatibility path.
+    if (!adopt_shutdown_event_from_environment(runtime_state->identity.instance_id)) {
+        runtime_state->release();
+        return 1;
+    }
+#endif
+
     // Force the offscreen Qt platform so QApplication can construct
     // without a display server / platform plugin DLL. obs-websocket
     // (and other libobs plugins) link against Qt6 and assume a
@@ -1155,9 +1368,39 @@ int main(int argc, char **argv)
         std::fprintf(stderr,
                      "PULSAR_RUNTIME_ERROR code=websocket_not_ready id=%s reason=%s\n",
                      runtime_state->identity.instance_id.c_str(), websocket_error.c_str());
+        std::string websocket_shutdown_error;
+        if (!websocket_pre_shutdown_ready(websocket_shutdown_error)) {
+            std::fprintf(stderr,
+                         "PULSAR_RUNTIME_ERROR code=websocket_pre_shutdown_failed reason=%s\n",
+                         websocket_shutdown_error.c_str());
+            fail_closed_websocket_quiesce(websocket_shutdown_error);
+        }
         // The frontend callback table was installed before module loading;
-        // pair its teardown with obs_shutdown on this fail-closed path too.
+        // fence CEF before handing that table back, then pair its teardown
+        // with obs_shutdown on this fail-closed path too.
+        std::string browser_shutdown_error;
+        if (!browser_pre_shutdown_ready(browser_shutdown_error)) {
+            std::fprintf(stderr,
+                         "PULSAR_RUNTIME_ERROR code=browser_pre_shutdown_failed reason=%s\n",
+                         browser_shutdown_error.c_str());
+            // Do not enter obs_shutdown after the browser fence failed: that
+            // path stops libobs audio while a CEF callback may still be live.
+            runtime_state->release();
+#ifdef _WIN32
+            close_shutdown_event();
+#endif
+            return 1;
+        }
         pulsar_frontend_shutdown();
+        if (!pulsar_frontend_cleanup_succeeded()) {
+            std::fprintf(stderr,
+                         "PULSAR_RUNTIME_ERROR code=frontend_source_cleanup_failed\n");
+            runtime_state->release();
+#ifdef _WIN32
+            close_shutdown_event();
+#endif
+            return 1;
+        }
         obs_shutdown();
         return 1;
     }
@@ -1191,20 +1434,71 @@ int main(int argc, char **argv)
 
     auto next_lease_renew = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (g_running.load(std::memory_order_acquire)) {
+#ifdef _WIN32
+        if (shutdown_event_requested(runtime_state->identity.instance_id))
+            g_running.store(false, std::memory_order_release);
+#endif
+        if (!g_running.load(std::memory_order_acquire))
+            break;
         if (std::chrono::steady_clock::now() >= next_lease_renew) {
             if (!runtime_state->renew())
                 blog(LOG_ERROR, "[pulsar-runtime] lease metadata renewal failed; "
                                 "kernel ownership retained and no alias takeover is allowed");
             next_lease_renew = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         }
+#ifdef _WIN32
+        if (!g_shutdown_event)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+#else
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+#endif
     }
 
+    // blog() is intentionally retained for the structured logger, but its
+    // INFO sink is not mirrored to a redirected stdout/stderr pipe on every
+    // Windows configuration. Emit one credential-free, flushed lifecycle
+    // marker on the same graceful path so pipe consumers can prove teardown.
+    std::fprintf(stderr, "[pulsar-headless] shutting down\n");
+    std::fflush(stderr);
     blog(LOG_INFO, "[pulsar-headless] shutting down");
 
+    std::string websocket_shutdown_error;
+    if (!websocket_pre_shutdown_ready(websocket_shutdown_error)) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=websocket_pre_shutdown_failed reason=%s\n",
+                     websocket_shutdown_error.c_str());
+        fail_closed_websocket_quiesce(websocket_shutdown_error);
+    }
+
+    std::string browser_shutdown_error;
+    if (!browser_pre_shutdown_ready(browser_shutdown_error)) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=browser_pre_shutdown_failed reason=%s\n",
+                     browser_shutdown_error.c_str());
+        // A failed or missing browser proc is deliberately fail-closed.  The
+        // host must not call obs_shutdown and tear down libobs audio under a
+        // still-live CEF callback; process exit performs the final cleanup.
+        runtime_state->release();
+#ifdef _WIN32
+        close_shutdown_event();
+#endif
+        return 1;
+    }
     pulsar_frontend_shutdown();
+    if (!pulsar_frontend_cleanup_succeeded()) {
+        std::fprintf(stderr,
+                     "PULSAR_RUNTIME_ERROR code=frontend_source_cleanup_failed\n");
+        runtime_state->release();
+#ifdef _WIN32
+        close_shutdown_event();
+#endif
+        return 1;
+    }
     obs_shutdown();
 
     runtime_state->release();
+#ifdef _WIN32
+    close_shutdown_event();
+#endif
     return 0;
 }

@@ -97,6 +97,7 @@
 #endif
 
 #include "pulsar-frontend-stub.h"
+#include "pulsar-dual-lane-config.h"
 #include "pulsar-dual-lane-control.h"
 #include "pulsar-runtime-telemetry.h"
 #include "pulsar-program-audio.h"
@@ -106,6 +107,80 @@
 namespace {
 
 using json = nlohmann::json;
+
+// Boot-time feature switches are deliberately process-local and fail closed.
+// `PULSAR_DISABLE_DUAL_LANE` is retained as the backwards-compatible probe
+// switch used by the single-canvas reference campaign.  The positive flag is
+// useful for operators that want an explicit capability declaration; when it
+// is absent, the approved dual-lane path remains enabled.  Neither value is
+// read after setup(), and no WebSocket/leaf request can mutate it.
+enum class EnvBool : uint8_t { Unset, Enabled, Disabled, Invalid };
+
+EnvBool parse_env_bool(const char *value)
+{
+    if (!value)
+        return EnvBool::Unset;
+    // An explicitly present empty value is configuration, not absence.  It
+    // must fail closed just like every other malformed boot switch; treating
+    // it as Unset would silently select the default dual-lane topology.
+    if (!*value)
+        return EnvBool::Invalid;
+    std::string lower;
+    for (const char *p = value; *p; ++p)
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(*p))));
+    if (lower == "1" || lower == "true" || lower == "on" || lower == "yes")
+        return EnvBool::Enabled;
+    if (lower == "0" || lower == "false" || lower == "off" || lower == "no")
+        return EnvBool::Disabled;
+    return EnvBool::Invalid;
+}
+
+struct DualLaneActivation {
+    bool enabled = true;
+    const char *reason = "default";
+};
+
+DualLaneActivation resolve_dual_lane_activation()
+{
+    const EnvBool positive = parse_env_bool(std::getenv("PULSAR_DUAL_LANE_ENABLED"));
+    const EnvBool legacyDisable = parse_env_bool(std::getenv("PULSAR_DISABLE_DUAL_LANE"));
+
+    // A malformed explicit capability is never treated as an enable.  This
+    // prevents a typo in a deployment environment from silently activating a
+    // topology that was meant to stay in the compatibility path.
+    if (positive == EnvBool::Invalid)
+        return {false, "invalid-PULSAR_DUAL_LANE_ENABLED"};
+    if (legacyDisable == EnvBool::Invalid)
+        return {false, "invalid-PULSAR_DISABLE_DUAL_LANE"};
+    if (legacyDisable == EnvBool::Enabled)
+        return {false, "PULSAR_DISABLE_DUAL_LANE"};
+    if (positive == EnvBool::Disabled)
+        return {false, "PULSAR_DUAL_LANE_ENABLED=0"};
+    if (positive == EnvBool::Enabled)
+        return {true, "PULSAR_DUAL_LANE_ENABLED=1"};
+    return {true, "default"};
+}
+
+struct DualLaneRollbackSetting {
+    uint64_t takes = 0;
+    bool valid = true;
+    const char *reason = "unset";
+};
+
+DualLaneRollbackSetting resolve_dual_lane_rollback_after_takes()
+{
+    const char *value = std::getenv("PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES");
+    const auto parsed = pulsar_dual_lane_config::parse_rollback_after_takes(value);
+    if (!parsed.valid) {
+        blog(LOG_WARNING,
+             "[pulsar-dual-lane] PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES rejected; "
+             "expected an integer in 1..100000");
+        return {0, false, "invalid-PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES"};
+    }
+    if (!parsed.present)
+        return {0, true, "unset"};
+    return {parsed.takes, true, "valid"};
+}
 
 class PulsarFrontendAPI;
 PulsarFrontendAPI *g_api = nullptr;
@@ -138,7 +213,7 @@ public:
 
         proc_handler_add(global,
                          "void pulsar_dual_lane_mutation_enter(in bool mutating, out bool available, "
-                         "out bool allowed, out bool held)",
+                         "out bool allowed, out bool held, out bool frozen)",
                          &MutationEnter, this);
         proc_handler_add(global, "void pulsar_dual_lane_mutation_leave()", &MutationLeave, this);
     }
@@ -149,13 +224,34 @@ public:
         lifecycle_.store(Lifecycle::Active, std::memory_order_release);
     }
 
+    // Frame-boundary callbacks use this non-blocking transition.  It closes
+    // admission immediately and lets any mutation which was already holding
+    // dispatchMutex_ finish after the callback releases dualLaneMutex.  The
+    // draining wait belongs to deactivate(), which is called from teardown,
+    // never from the graphics thread.
+    void freeze()
+    {
+        lifecycle_.store(Lifecycle::ShuttingDown, std::memory_order_release);
+        pending_.store(true, std::memory_order_release);
+    }
+
+    // This is the single effective rollback/teardown latch. Readers such as
+    // the scene-switch GetState adapter must observe the same atomic bit as
+    // websocket mutation admission; a separately updated vendor boolean
+    // would leave a window in which GetState says "ready" after admission was
+    // already closed.
+    bool frozen() const
+    {
+        return lifecycle_.load(std::memory_order_acquire) == Lifecycle::ShuttingDown;
+    }
+
     // Stop admitting new mutations, then wait for the one already inside the
     // supported websocket dispatch path to finish.  The graphics callback
     // only changes the atomic pending bit and never waits on this mutex, so a
     // Cut cannot deadlock teardown or vice versa.
     void deactivate()
     {
-        lifecycle_.store(Lifecycle::ShuttingDown, std::memory_order_release);
+        freeze();
         std::unique_lock<std::mutex> lock(dispatchMutex_);
         pending_.store(false, std::memory_order_release);
         // Keep ShuttingDown published until the next install().  A late
@@ -180,6 +276,7 @@ private:
         const bool available = state != Lifecycle::Disabled;
         bool allowed = true;
         bool held = false;
+        const bool frozen = state == Lifecycle::ShuttingDown;
 
         if (mutating && available) {
             // Lock before checking pending.  This makes a mutation which was
@@ -199,6 +296,7 @@ private:
         calldata_set_bool(cd, "available", available);
         calldata_set_bool(cd, "allowed", allowed);
         calldata_set_bool(cd, "held", held);
+        calldata_set_bool(cd, "frozen", frozen);
     }
 
     static void MutationLeave(void *param, calldata_t *)
@@ -272,7 +370,8 @@ public:
     }
 
     void initialize(const char *encoderFamily, const obs_video_info &video, bool wgcWorkload,
-                    bool cefWorkload, bool wgcSourceBound)
+                    bool cefWorkload, bool wgcSourceBound, obs_encoder_t *videoEncoder,
+                    obs_output_t *streamOutput)
     {
         stopResourceSampler();
         stopTraceWriter();
@@ -303,6 +402,9 @@ public:
             traceGpu_.clear();
             producerTopology_.clear();
             producerCount_ = 0;
+            encoderFamily_.clear();
+            videoEncoder_ = nullptr;
+            streamOutput_ = nullptr;
         }
 
         const char *tracePath = std::getenv("PULSAR_TRACE_PATH");
@@ -312,6 +414,13 @@ public:
         const char *traceGpu = std::getenv("PULSAR_TRACE_GPU");
         const char *producerTopology = std::getenv("PULSAR_TRACE_PRODUCER_TOPOLOGY");
         const char *producerCount = std::getenv("PULSAR_TRACE_PRODUCER_COUNT");
+        {
+            // Even non-traced rollback runs use the same validated process
+            // identity in their operational marker.  Do not fall back to a
+            // caller-controlled or stale value after a failed trace setup.
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            runtimeInstanceId_ = validIdentifier(runtimeId) ? runtimeId : "pulsar-runtime";
+        }
         char *producerCountEnd = nullptr;
         const unsigned long parsedProducerCount = producerCount
                                                          ? std::strtoul(producerCount, &producerCountEnd, 10)
@@ -352,6 +461,11 @@ public:
             }
             wgcWorkload_ = wgcWorkload;
             cefWorkload_ = cefWorkload;
+            encoderFamily_ = encoderFamily && *encoderFamily ? encoderFamily : "unknown";
+            videoEncoder_ = videoEncoder;
+            // Non-owning: setup owns streamOutput and teardown joins this
+            // sampler before stopping/releasing the output.
+            streamOutput_ = streamOutput;
             session = sessionJson(encoderFamily, video, wgcWorkload, cefWorkload, wgcSourceBound);
         }
 
@@ -419,12 +533,24 @@ public:
         committed_ = {};
         lastRawTake_.clear();
         lastPacketTake_.clear();
+        encoderFamily_.clear();
+        videoEncoder_ = nullptr;
+        streamOutput_ = nullptr;
     }
 
     bool enabled()
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         return enabled_;
+    }
+
+    // This is the runtime identity accepted by the trace initializer.  The
+    // rollback marker uses the same value so an operational observation
+    // cannot be attributed to a caller-controlled or stale process ID.
+    std::string runtimeInstanceId()
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        return runtimeInstanceId_.empty() ? std::string("pulsar-runtime") : runtimeInstanceId_;
     }
 
     // A post-swap telemetry integrity fault is fail-stop: the physical role
@@ -475,8 +601,6 @@ public:
             }
             reserved_.valid = false;
             accepted_.valid = false;
-            lastRawTake_.clear();
-            lastPacketTake_.clear();
         }
 
         // A queue rejection is terminal without a preceding TakeAccepted: the
@@ -506,8 +630,10 @@ public:
     // deliberately emits no event and performs no trace-file operation.  The
     // reservation is promoted to accepted only after the queue primitive
     // returns success.
-    bool reserve(obs_source_t *scene, int onAirLane, int previewLane)
+    bool reserve(obs_source_t *scene, int onAirLane, int previewLane, uint64_t *admissionFloorNs)
     {
+        if (admissionFloorNs)
+            *admissionFloorNs = 0;
         TakeContext context;
         const char *rejectReason = nullptr;
         std::string diagnosticCommandId;
@@ -548,6 +674,8 @@ public:
                         } else {
                             context = candidate;
                             context.acceptedAtNs = diagnosticNowNs;
+                            if (admissionFloorNs)
+                                *admissionFloorNs = context.acceptedAtNs;
                             context.programRevision = programRevision_;
                             context.previewRevision = previewRevision_;
                             context.roleMapRevision = roleMapRevision_;
@@ -555,8 +683,12 @@ public:
                             context.previewLane = previewLane;
                             reserved_ = context;
                             reserved_.valid = true;
-                            lastRawTake_.clear();
-                            lastPacketTake_.clear();
+                            // committed_ still names the previous Take until
+                            // the frame-boundary callback runs.  Keep its raw
+                            // and packet latches armed; clearing them here (or
+                            // in markAccepted/rejection) would attribute
+                            // pre-commit frames for this reservation to the
+                            // previous committed transaction a second time.
                         }
                     }
                 }
@@ -603,13 +735,14 @@ public:
             std::lock_guard<std::mutex> lock(stateMutex_);
             if (!enabled_ || !reserved_.valid || accepted_.valid)
                 return false;
+            // reserve() captured the logical admission instant before the
+            // frame-boundary queue operation.  Preserve that causal timestamp
+            // even when the callback reaches markAccepted later; replacing it
+            // here would move TakeAccepted after the actual admission.
             context = reserved_;
-            context.acceptedAtNs = nowNs();
             accepted_ = context;
             accepted_.valid = true;
             reserved_ = {};
-            lastRawTake_.clear();
-            lastPacketTake_.clear();
         }
 
         const uint64_t seq = nextServerSeq();
@@ -808,9 +941,13 @@ public:
     {
         if (!packet || packet->type != OBS_ENCODER_VIDEO)
             return;
-        packetFrameCount_.fetch_add(1, std::memory_order_relaxed);
+        // Monotone video-packet sequence on the native streamOutput callback.
+        // The external RTMP receiver has its own sequence and is correlated
+        // by rational PTS/timebase, never by log order alone.
+        const uint64_t packetIndex = packetFrameCount_.fetch_add(1, std::memory_order_relaxed);
         TakeContext context;
-        uint64_t observed = nowNs();
+        const uint64_t callbackAt = nowNs();
+        uint64_t observed = callbackAt;
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             if (!enabled_ || !committed_.valid || lastPacketTake_ == committed_.takeCommandId)
@@ -835,7 +972,20 @@ public:
                     << revisionJson(context.programRevision, context.previewRevision, context.roleMapRevision)
                     << ",\"frame_id\":" << context.frameId << ",\"pts_ns\":" << context.ptsNs
                     << ",\"observed_at_monotonic_ns\":" << observed
-                    << ",\"valid\":true,\"packet_index\":0,\"surface\":\"EncoderOutput\",\"consumer\":\"encoder_callback\"}";
+                    << ",\"valid\":true,\"packet_index\":" << packetIndex
+                    << ",\"packet_pts\":" << packet->pts
+                    << ",\"packet_dts\":" << packet->dts
+                    << ",\"packet_timebase_num\":" << packet->timebase_num
+                    << ",\"packet_timebase_den\":" << packet->timebase_den;
+        if (packetTime) {
+            observation << ",\"packet_cts_monotonic_ns\":" << packetTime->cts
+                        << ",\"packet_fer_monotonic_ns\":" << packetTime->fer
+                        << ",\"packet_ferc_monotonic_ns\":" << packetTime->ferc
+                        << ",\"packet_pir_monotonic_ns\":" << packetTime->pir
+                        << ",\"packet_callback_monotonic_ns\":" << callbackAt;
+        }
+        observation
+                    << ",\"surface\":\"EncoderOutput\",\"consumer\":\"encoder_callback\"}";
         writeLine(observation.str());
     }
 
@@ -1002,7 +1152,10 @@ private:
             std::string host;
             std::string gpuName;
             std::string producerTopology;
+            std::string encoderFamily;
             uint64_t producerCount = 0;
+            obs_encoder_t *videoEncoder = nullptr;
+            obs_output_t *streamOutput = nullptr;
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
                 if (!enabled_ || resourceMode_.empty())
@@ -1013,8 +1166,13 @@ private:
                 host = traceHost_;
                 gpuName = traceGpu_;
                 producerTopology = producerTopology_;
+                encoderFamily = encoderFamily_;
                 producerCount = producerCount_;
+                videoEncoder = videoEncoder_;
+                streamOutput = streamOutput_;
             }
+            const bool encoderActive = videoEncoder && obs_encoder_active(videoEncoder);
+            const bool rtmpLoadActive = streamOutput && obs_output_active(streamOutput);
 
             std::ostringstream sample;
             sample << "{\"record_type\":\"resource_sample\",\"sample_mode\":\"" << mode
@@ -1026,6 +1184,9 @@ private:
                    << ",\"host_gpu_percent\":" << gpu.utilization
                    << ",\"callback_backlog_estimate\":" << queueDepth
                    << ",\"encoder_utilization_percent\":" << gpu.encoderUtilization
+                   << ",\"encoder_active\":" << (encoderActive ? "true" : "false")
+                   << ",\"encoder_family\":\"" << escape(encoderFamily) << "\""
+                   << ",\"rtmp_load_active\":" << (rtmpLoadActive ? "true" : "false")
                    << ",\"gpu_memory_bytes\":" << gpu.memoryBytes
                    << ",\"measurement_phase\":\"" << mode
                    << "\",\"build_revision\":\"" << escape(buildRevision)
@@ -1406,7 +1567,7 @@ private:
     bool enabled_ = false;
     bool degraded_ = false;
     std::string tracePath_;
-    std::string runtimeInstanceId_;
+    std::string runtimeInstanceId_ = "pulsar-runtime";
     std::string sessionId_;
     std::string buildRevision_;
     std::string traceHost_;
@@ -1414,6 +1575,12 @@ private:
     std::string producerTopology_;
     uint64_t producerCount_ = 0;
     std::string resourceMode_;
+    std::string encoderFamily_;
+    // Non-owning: setup owns the encoder; teardown stops and joins the
+    // resource sampler before releasing it.
+    obs_encoder_t *videoEncoder_ = nullptr;
+    // Non-owning; resourceLoop is joined before setup releases streamOutput.
+    obs_output_t *streamOutput_ = nullptr;
     bool wgcWorkload_ = false;
     bool cefWorkload_ = false;
     uint64_t serverSeq_ = 0;
@@ -1443,6 +1610,84 @@ private:
 };
 
 PulsarRuntimeTelemetry g_runtimeTelemetry;
+
+// The rollback marker is operational evidence, not a scene-switch command.
+// Keep its filesystem work away from the graphics callback: the callback only
+// transfers an immutable path/payload to this process-lifetime worker and can
+// return without directory creation, file open, or JSON serialization I/O.
+class PulsarRollbackMarkerWriter {
+public:
+    ~PulsarRollbackMarkerWriter() { stop(); }
+
+    void start()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (worker_.joinable())
+            return;
+        stopping_ = false;
+        worker_ = std::thread([this] { run(); });
+    }
+
+    void enqueue(std::filesystem::path path, std::string payload)
+    {
+        start();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            pendingPath_ = std::move(path);
+            pendingPayload_ = std::move(payload);
+            pending_ = true;
+        }
+        condition_.notify_one();
+    }
+
+private:
+    void run()
+    {
+        for (;;) {
+            std::filesystem::path path;
+            std::string payload;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                condition_.wait(lock, [this] { return pending_ || stopping_; });
+                if (!pending_ && stopping_)
+                    return;
+                path = std::move(pendingPath_);
+                payload = std::move(pendingPayload_);
+                pending_ = false;
+            }
+
+            std::error_code ec;
+            std::filesystem::create_directories(path.parent_path(), ec);
+            if (ec)
+                continue;
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            if (out)
+                out << payload;
+        }
+    }
+
+    void stop()
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+        }
+        condition_.notify_one();
+        if (worker_.joinable())
+            worker_.join();
+    }
+
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    std::filesystem::path pendingPath_;
+    std::string pendingPayload_;
+    bool pending_ = false;
+    bool stopping_ = false;
+    std::thread worker_;
+};
+
+PulsarRollbackMarkerWriter g_rollbackMarkerWriter;
+std::atomic<bool> g_frontend_cleanup_succeeded{true};
 
 static void pulsar_runtime_raw_video_callback(void *, struct video_data *frame)
 {
@@ -1679,6 +1924,11 @@ public:
         bool changed = false;
         {
             std::lock_guard<std::mutex> lk(dualLaneMutex);
+            if (dualLaneReady && !dualLaneOperational) {
+                blog(LOG_WARNING,
+                     "[pulsar-dual-lane] Preview mutation rejected: rollback freeze is active");
+                return;
+            }
             if (dualLaneCutPending.load()) {
                 blog(LOG_WARNING, "[pulsar-dual-lane] Preview mutation rejected while Take is pending");
                 return;
@@ -1797,6 +2047,58 @@ private:
     static char *bstrdup_or_null(const char *s) { return s ? bstrdup(s) : nullptr; }
 
     void teardown();
+    void clear_libobs_scene_data();
+    void verify_libobs_scene_data_drained();
+
+    // Write a compact machine-readable rollback marker beside the recording
+    // output.  This is intentionally not a scene-switch-v1 event: the
+    // rollback freezes an already committed route and does not represent a
+    // new scene command.  Keeping it as a separate operational record avoids
+    // widening the shared command contract while giving the runbook a durable
+    // assertion to verify alongside the structured log line.
+    struct RollbackObservation {
+        bool laneRootBindingValid = false;
+        bool programViewStable = false;
+        bool programVideoStable = false;
+        bool previewViewStable = false;
+        bool currentProgramPreserved = false;
+        bool activeVideoTRebound = true;
+        bool newTakesEnabled = true;
+        bool frozen = false;
+    };
+
+    void writeDualLaneRollbackStatus(uint64_t frameId, uint64_t ptsNs,
+                                     int committedOnAirLane, int committedPreviewLane,
+                                     const RollbackObservation &observation)
+    {
+        if (recordDirectory.empty()) {
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] rollback status marker unavailable: recording directory is unset");
+            return;
+        }
+        const std::filesystem::path marker =
+            std::filesystem::path(recordDirectory) / "pulsar-dual-lane-rollback.json";
+        const json status = {
+            {"schema", "pulsar.dual-lane-rollback.v1"},
+            {"runtime_instance_id", g_runtimeTelemetry.runtimeInstanceId()},
+            {"state", observation.frozen ? "frozen" : "active"},
+            {"frame_id", frameId},
+            {"pts_ns", ptsNs},
+            {"onair_lane", committedOnAirLane},
+            {"preview_lane", committedPreviewLane},
+            {"lane_root_binding_valid", observation.laneRootBindingValid},
+            {"current_program_preserved", observation.currentProgramPreserved},
+            {"active_video_t_rebound", observation.activeVideoTRebound},
+            {"new_takes_enabled", observation.newTakesEnabled},
+            {"program_view_stable", observation.programViewStable},
+            {"program_video_stable", observation.programVideoStable},
+            {"preview_view_stable", observation.previewViewStable},
+        };
+        // Queue only: directory creation and file I/O happen on the
+        // process-lifetime marker worker, after the frame callback returns.
+        g_rollbackMarkerWriter.enqueue(marker, status.dump() + "\n");
+        blog(LOG_INFO, "[pulsar-dual-lane] rollback status marker queued=%s", marker.string().c_str());
+    }
 
     // Dual-lane video topology (ADR-PULSAR-DUAL-LANE-001).  The two view
     // contexts and their video_t objects are created once; a Take only queues
@@ -2139,13 +2441,20 @@ private:
 
     // state
     std::mutex dualLaneMutex;
+    // Resolved exactly once during setup().  `dualLaneReady` describes the
+    // physical topology; `dualLaneOperational` is separately cleared by the
+    // frame-boundary rollback drill so the current Program route remains live
+    // while new scene mutations fail closed.
+    bool dualLaneEnabled = true;
     bool dualLaneReady = false;
+    bool dualLaneOperational = false;
     std::atomic<bool> dualLaneCutPending{false};
     std::string sceneSwitchPreparedCommandId;
     std::string sceneSwitchPendingTakeId;
     std::atomic<uint64_t> lastCutFrameId{0};
     std::atomic<uint64_t> lastCutPtsNs{0};
     uint64_t cutCount = 0;
+    uint64_t rollbackAfterTakes = 0;
     int onAirLane = 0;
     int previewLane = 1;
     obs_source_t *laneSources[2] = {};
@@ -2277,6 +2586,11 @@ public:
     {
         if (vendor_)
             return true;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            operational_ = true;
+            state_ = "ready";
+        }
         vendor_ = obs_websocket_register_vendor(kVendorName);
         if (!vendor_ || !obs_websocket_vendor_register_request(vendor_, "Prepare", &Prepare, this) ||
             !obs_websocket_vendor_register_request(vendor_, "Take", &Take, this) ||
@@ -2334,6 +2648,25 @@ public:
 
     void takeCommitted(const std::string &takeId, uint64_t frameId, uint64_t ptsNs)
     {
+        takeCommitted(takeId, frameId, ptsNs, false);
+    }
+
+    void freezeAfterFrontendRollback()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // The rollback drill may be armed through the legacy
+        // TriggerStudioModeTransition path rather than a v1 vendor Take.  In
+        // that case there is no pending vendor command to complete, but
+        // GetState must still expose the same operational freeze.
+        operational_ = false;
+        state_ = "frozen";
+        pendingPrepare_.reset();
+        pendingTake_.reset();
+    }
+
+    void takeCommitted(const std::string &takeId, uint64_t frameId, uint64_t ptsNs,
+                       bool freezeAfterCommit)
+    {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!pendingTake_ || pendingTake_->commandId != takeId)
             return;
@@ -2350,7 +2683,14 @@ public:
         advanceRevision("program");
         advanceRevision("role_map");
         std::swap(roleMap_["on_air"], roleMap_["preview"]);
-        state_ = "ready";
+        // The v1 terminal event keeps lifecycle `state="ready"` (the schema
+        // deliberately models the completed Take).  GetState exposes the
+        // separate operational status below: after this commit it is
+        // `state="frozen", operational=false`.  Keeping these two views
+        // explicit avoids publishing a non-schema event state while still
+        // making the rollback freeze machine-readable.
+        state_ = freezeAfterCommit ? "frozen" : "ready";
+        operational_ = !freezeAfterCommit;
         pendingTake_.reset();
         pendingPrepare_.reset();
         json extra = {{"take_command_id", take.commandId}, {"target_lane_id", take.lane},
@@ -2511,6 +2851,25 @@ private:
         obs_data_apply(response, temporary);
         obs_data_release(temporary);
     }
+    void respondFrozen(const Pending &p, obs_data_t *response)
+    {
+        // This direct-vendor guard uses the canonical v1 CommandRejected
+        // envelope.  The websocket gateway normally rejects the request
+        // before it reaches this adapter; a direct vendor caller therefore
+        // receives the same typed reason without a schema fork.  The
+        // rejection may advance the protocol's server sequence, as any
+        // canonical rejection does, but it never changes route/revision state.
+        const json event = reject(p, "PREVIEW_FROZEN", "dual-lane rollback freeze is active");
+        // The frozen path is reachable before the normal capacity guard. Do
+        // not let an unbounded stream of new command IDs grow the idempotency
+        // map after it has reached its fixed limit; known entries were
+        // replayed above, while new frozen requests remain fail-closed without
+        // an insertion.
+        if (outcomes_.size() < kMaxOutcomes)
+            outcomes_[p.key] = {p.digest, event};
+        emit(event);
+        respond(response, event);
+    }
     static void Dispatch(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, nullptr); }
     static void Prepare(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, "Prepare"); }
     static void Take(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, "Take"); }
@@ -2534,13 +2893,25 @@ private:
         // caller-controlled key: doing so would turn RUNTIME_MISMATCH into an
         // unbounded remote-memory allocation surface.
         if (p.runtimeId != runtimeId_) { json event=reject(p,"RUNTIME_MISMATCH","command runtime_instance_id does not belong to this runtime"); emit(event); respond(response,event); return; }
+        // A post-rollback direct vendor call must not be confused with a
+        // stale lane or missing preparation.  The gateway rejects this path
+        // first; retain the same explicit, mutation-free guard here for
+        // callers that reach the registered vendor directly.
+        const std::string type = command["command_type"];
+        // The frontend publishes the bridge latch first at the frame
+        // boundary. Consult it directly so a direct vendor caller cannot
+        // observe or mutate through the short interval before the adapter's
+        // own bookkeeping lock is updated.
+        if ((g_dualLaneControlBridge.frozen() || !operational_) && type != "Abort") {
+            respondFrozen(p, response);
+            return;
+        }
         // Process-lifetime idempotency history is intentionally bounded. Once
         // full, every new command fails closed before any lane mutation; known
         // command IDs remain replayable exactly and are never evicted.
         if (outcomes_.size() >= kMaxOutcomes) { json event=reject(p,"SCHEMA_INVALID","idempotency history capacity reached; restart runtime before a new command",{{"max_entries",kMaxOutcomes}}); emit(event); respond(response,event); return; }
         if (command["expected_revisions"] != revisions_) { json event=reject(p,"REVISION_STALE","expected revisions do not match the current runtime revisions",{{"expected_revisions",command["expected_revisions"]},{"actual_revisions",revisions_}}); outcomes_[key]={digest,event}; emit(event); respond(response,event); return; }
         if (command.contains("expected_server_seq") && command["expected_server_seq"] != serverSeq_) { json event=reject(p,"SERVER_SEQ_STALE","expected server sequence does not match the current runtime sequence"); outcomes_[key]={digest,event}; emit(event); respond(response,event); return; }
-        const std::string type = command["command_type"];
         if (type == "Prepare") { doPrepare(command,p,response); return; }
         if (type == "Take") { doTake(command,p,response); return; }
         doAbort(command,p,response,lock);
@@ -2591,11 +2962,25 @@ private:
     }
     void state(obs_data_t *response)
     {
-        std::lock_guard<std::mutex> lock(mutex_); json out={{"contract","pulsar.scene-switch.v1"},{"schema_version",1},{"runtime_instance_id",runtimeId_},{"state",state_},{"server_seq",serverSeq_},{"revisions",revisions_},{"role_map",roleMap_},{"idempotency_cache_entries",outcomes_.size()},{"idempotency_cache_capacity",kMaxOutcomes}}; respond(response,out);
+        std::lock_guard<std::mutex> lock(mutex_);
+        const bool effectiveFrozen = g_dualLaneControlBridge.frozen() || !operational_;
+        const std::string effectiveState = effectiveFrozen ? "frozen" : state_;
+        json out = { {"contract", "pulsar.scene-switch.v1"},
+            {"schema_version", 1},
+            {"runtime_instance_id", runtimeId_},
+            {"state", effectiveState},
+            {"operational", !effectiveFrozen},
+            {"frozen", effectiveFrozen},
+            {"server_seq", serverSeq_},
+            {"revisions", revisions_},
+            {"role_map", roleMap_},
+            {"idempotency_cache_entries",outcomes_.size()},
+            {"idempotency_cache_capacity",kMaxOutcomes} };
+        respond(response, out);
     }
     std::mutex mutex_; obs_websocket_vendor vendor_ = nullptr; bool running_ = false;
     std::string runtimeId_ = [] { const char *v=std::getenv("PULSAR_RUNTIME_INSTANCE_ID"); return (v && *v) ? std::string(v) : std::string("pulsar-runtime"); }();
-    uint64_t serverSeq_ = 0; json revisions_={{"program",0},{"preview",0},{"role_map",0}}; json roleMap_={{"on_air","A"},{"preview","B"}}; std::string state_="ready";
+    uint64_t serverSeq_ = 0; json revisions_={{"program",0},{"preview",0},{"role_map",0}}; json roleMap_={{"on_air","A"},{"preview","B"}}; std::string state_="ready"; bool operational_ = true;
     static constexpr size_t kMaxOutcomes = 4096;
     std::optional<Pending> pendingPrepare_, pendingTake_; std::map<std::string,std::pair<std::string,json>> outcomes_;
 };
@@ -3057,20 +3442,15 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
         return false;
     }
 
-    // The encoder is intentionally bound once, before any output can start.
-    // obs_encoder_set_video rejects active/initialized encoders; the dual-lane
-    // callback never calls it.
-    if (videoEncoder) {
-        obs_encoder_set_video(videoEncoder, programVideo);
-        blog(LOG_INFO, "[pulsar-dual-lane] encoder video_t bound once to ProgramView");
-    }
-
     // ProgramView aliases the main canvas, so channel 0 is already the legacy
     // output source and obs_get_video()/GetStats observe programVideo directly.
     // Do not create a third mix or rebind the main route after setup.
 
     dualLaneReady = true;
+    dualLaneOperational = true;
     if (!dualLaneInvariantLocked("setup")) {
+        dualLaneOperational = false;
+        dualLaneReady = false;
         blog(LOG_ERROR, "[pulsar-dual-lane] setup invariant failed");
         return false;
     }
@@ -3100,8 +3480,12 @@ bool PulsarFrontendAPI::sceneSwitchPrepare(const std::string &commandId, char la
     bool prepared = false;
     {
         std::lock_guard<std::mutex> lock(dualLaneMutex);
+        if (dualLaneReady && !dualLaneOperational) {
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] Prepare rejected: rollback freeze is active");
+        }
         const char expectedLane = previewLane == 0 ? 'A' : 'B';
-        if (dualLaneReady && !dualLaneCutPending.load() && laneId == expectedLane &&
+        if (dualLaneReady && dualLaneOperational && !dualLaneCutPending.load() && laneId == expectedLane &&
             scene != programSelection && scene != currentScene && obs_scene_from_source(scene)) {
             // Hold the previous public selection before the physical child is
             // replaced.  A postcondition failure must be able to restore both
@@ -3151,7 +3535,8 @@ bool PulsarFrontendAPI::sceneSwitchTake(const std::string &takeCommandId)
     obs_source_t *preview = nullptr;
     {
         std::lock_guard<std::mutex> lock(dualLaneMutex);
-        if (!dualLaneReady || dualLaneCutPending.load() || sceneSwitchPreparedCommandId.empty())
+        if (!dualLaneReady || !dualLaneOperational || dualLaneCutPending.load() ||
+            sceneSwitchPreparedCommandId.empty())
             return false;
         sceneSwitchPendingTakeId = takeCommandId;
         preview = obs_source_get_ref(previewSelection);
@@ -3214,13 +3599,17 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
     obs_view_t *queuedPreviewView = nullptr;
     int queuedOnAirLane = -1;
     int queuedPreviewLane = -1;
+    uint64_t queuedAdmissionFloorNs = 0;
     bool queued = false;
     bool telemetryReserved = false;
     bool telemetryAccepted = false;
     {
         std::lock_guard<std::mutex> lk(dualLaneMutex);
-        if (!dualLaneReady || !scene || !dualLaneInvariantLocked("queue-before")) {
+        if (!dualLaneReady || !dualLaneOperational || !scene || !dualLaneInvariantLocked("queue-before")) {
             g_runtimeTelemetry.cancelPending();
+            if (dualLaneReady && !dualLaneOperational)
+                blog(LOG_WARNING,
+                     "[pulsar-dual-lane] Take rejected: rollback freeze is active");
             return false;
         }
         if (dualLaneCutPending.load()) {
@@ -3256,16 +3645,17 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
         // Reserve the metadata while the same role mutex protects the pair.
         // This consumes state only; no event is timestamped or written until
         // libobs accepts the frame-boundary queue operation.
-        telemetryReserved = g_runtimeTelemetry.reserve(scene, queuedOnAirLane, queuedPreviewLane);
+        telemetryReserved = g_runtimeTelemetry.reserve(scene, queuedOnAirLane, queuedPreviewLane,
+                                                        &queuedAdmissionFloorNs);
         const bool reservationStillOwned =
             dualLaneReady && dualLaneCutPending.load() && currentScene == queuedOnAir &&
             previewScene == queuedPreview && onAirLane == queuedOnAirLane &&
             previewLane == queuedPreviewLane && programView == queuedProgramView &&
             previewView == queuedPreviewView;
         if (reservationStillOwned) {
-            queued = obs_view_queue_atomic_swap(
+            queued = obs_view_queue_atomic_swap_with_floor(
                 queuedProgramView, 0, queuedPreview, queuedPreviewView, 0, queuedOnAir,
-                OnDualLaneCutCommitted, this);
+                queuedAdmissionFloorNs, OnDualLaneCutCommitted, this);
         }
         if (queued) {
             // The primitive has admitted the pair.  Mark acceptance and put
@@ -3325,6 +3715,8 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
     bool programMainViewValid = false;
     bool programMainVideoValid = false;
     bool previewDistinctValid = false;
+    bool rollbackNow = false;
+    PulsarFrontendAPI::RollbackObservation rollbackObservation;
     std::string sceneSwitchTakeId;
     {
         std::lock_guard<std::mutex> lk(self->dualLaneMutex);
@@ -3350,18 +3742,71 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
         previewDistinctValid = self->programView != self->previewView &&
                                self->programVideo != self->previewVideo &&
                                self->currentScene != self->previewScene;
-        self->dualLaneCutPending.store(false);
-        g_dualLaneControlBridge.set_pending(false);
         sceneSwitchTakeId = self->sceneSwitchPendingTakeId;
         self->sceneSwitchPendingTakeId.clear();
         self->sceneSwitchPreparedCommandId.clear();
         if (!self->dualLaneInvariantLocked("commit"))
             blog(LOG_ERROR, "[pulsar-dual-lane] commit invariant failed");
+        if (self->rollbackAfterTakes > 0 && self->cutCount >= self->rollbackAfterTakes &&
+            self->dualLaneOperational) {
+            // The atomic swap has completed and the current Program root is
+            // already producing the committed frame.  Rollback therefore
+            // closes the mutation gate before publishing the pending=false
+            // boundary.  It never calls output-source setters or the encoder
+            // binding and cannot rebind the active video_t.
+            //
+            // A websocket mutation may already hold dispatchMutex_ and be
+            // waiting for this lane mutex.  Setting the bridge pending bit is
+            // therefore the non-blocking admission close; deactivate() drains
+            // the bridge only after this lane lock is released, avoiding an
+            // inverse-lock deadlock while preventing a post-freeze admission.
+            g_dualLaneControlBridge.freeze();
+            self->dualLaneOperational = false;
+            rollbackObservation.laneRootBindingValid = laneRootBindingValid;
+            rollbackObservation.programViewStable = programMainViewValid;
+            rollbackObservation.programVideoStable = self->programVideo == obs_get_video();
+            rollbackObservation.previewViewStable = self->previewView && self->previewVideo &&
+                                                    self->programView != self->previewView &&
+                                                    self->programVideo != self->previewVideo;
+            rollbackObservation.currentProgramPreserved =
+                rollbackObservation.laneRootBindingValid && rollbackObservation.programViewStable &&
+                rollbackObservation.programVideoStable;
+            rollbackObservation.activeVideoTRebound = !rollbackObservation.programVideoStable;
+            rollbackObservation.newTakesEnabled = self->dualLaneOperational;
+            rollbackObservation.frozen = !self->dualLaneOperational;
+            rollbackNow = true;
+        }
+        self->dualLaneCutPending.store(false);
+        if (!rollbackNow)
+            g_dualLaneControlBridge.set_pending(false);
     }
 
     g_runtimeTelemetry.commit(frameId, ptsNs, committedOnAirLane, committedPreviewLane);
-    if (auto *vendor = g_sceneSwitchVendor.load(std::memory_order_acquire); !sceneSwitchTakeId.empty() && vendor)
-        vendor->takeCommitted(sceneSwitchTakeId, frameId, ptsNs);
+    if (rollbackNow) {
+        self->writeDualLaneRollbackStatus(frameId, ptsNs, committedOnAirLane, committedPreviewLane,
+                                           rollbackObservation);
+        blog(LOG_WARNING,
+             "[pulsar-dual-lane] rollback committed at frame_id=%llu pts_ns=%llu "
+             "onair_lane=%d preview_lane=%d current_program_preserved=%d "
+             "active_video_t_rebound=%d new_takes_enabled=%d lane_root_binding_valid=%d "
+             "program_view_stable=%d program_video_stable=%d preview_view_stable=%d frozen=%d",
+             static_cast<unsigned long long>(frameId), static_cast<unsigned long long>(ptsNs),
+             committedOnAirLane, committedPreviewLane, rollbackObservation.currentProgramPreserved,
+             rollbackObservation.activeVideoTRebound, rollbackObservation.newTakesEnabled,
+             rollbackObservation.laneRootBindingValid, rollbackObservation.programViewStable,
+             rollbackObservation.programVideoStable, rollbackObservation.previewViewStable,
+             rollbackObservation.frozen);
+    }
+    if (auto *vendor = g_sceneSwitchVendor.load(std::memory_order_acquire); vendor) {
+        if (!sceneSwitchTakeId.empty()) {
+            if (rollbackNow)
+                vendor->takeCommitted(sceneSwitchTakeId, frameId, ptsNs, true);
+            else
+                vendor->takeCommitted(sceneSwitchTakeId, frameId, ptsNs);
+        }
+        if (rollbackNow)
+            vendor->freezeAfterFrontendRollback();
+    }
 
     blog(LOG_INFO, "[pulsar-dual-lane] TakeCommitted count=%llu frame_id=%llu pts_ns=%llu "
          "onair_lane=%d preview_lane=%d lane_root_binding_valid=%d "
@@ -3866,6 +4311,28 @@ bool PulsarFrontendAPI::setup()
              "[pulsar-frontend-stub] external lane workload owner: suppressing Default PulsarCefWorkload; probe must bind public A/B browser_source producers");
     }
 
+    // Resolve the dual-lane capability once, before binding the output views.
+    // The legacy disable switch is consumed here (rather than only being set
+    // by the probe), so a reference run genuinely retains one canvas and an
+    // operator can perform a deterministic compatibility-path boot.
+    const DualLaneActivation activation = resolve_dual_lane_activation();
+    const bool resourceReference = PulsarRuntimeTelemetry::resourceReferenceRequested();
+    const DualLaneRollbackSetting rollbackSetting = resolve_dual_lane_rollback_after_takes();
+    // A reference resource phase is an explicit compatibility measurement,
+    // so its effective topology is single-canvas even if a caller forgot the
+    // legacy disable variable.  Keep the effective decision in the startup
+    // log so evidence cannot mistake an enabled request for an enabled path.
+    dualLaneEnabled = activation.enabled && !resourceReference && rollbackSetting.valid;
+    const char *activationReason = resourceReference
+                                       ? "resource-reference"
+                                       : (!rollbackSetting.valid ? rollbackSetting.reason : activation.reason);
+    rollbackAfterTakes = rollbackSetting.takes;
+    blog(LOG_INFO,
+         "[pulsar-dual-lane] activation=%s source=%s rollback_after_takes=%llu "
+         "flag_resolved_at=setup",
+         dualLaneEnabled ? "enabled" : "disabled", activationReason,
+         static_cast<unsigned long long>(rollbackAfterTakes));
+
     // Build the two independent hot roots only after the bootstrap scene has
     // its initial producer.  ProgramView is the existing main canvas/video_t;
     // PreviewView is the single auxiliary mix.  Production encoder/Program
@@ -3874,10 +4341,28 @@ bool PulsarFrontendAPI::setup()
     // canvas before the dual-lane topology is allocated.  This is opt-in and
     // only reachable with an explicit trace resource mode; normal runtime
     // starts retain the dual-lane setup and Cut semantics.
-    if (PulsarRuntimeTelemetry::resourceReferenceRequested()) {
-        blog(LOG_INFO, "[pulsar-runtime-telemetry] reference resource mode: retaining legacy single canvas");
+    if (!dualLaneEnabled || resourceReference) {
+        if (resourceReference)
+            blog(LOG_INFO, "[pulsar-runtime-telemetry] reference resource mode: retaining legacy single canvas");
+        else
+            blog(LOG_INFO, "[pulsar-dual-lane] compatibility single-canvas path selected");
     } else if (!setupDualLane(scene)) {
         blog(LOG_WARNING, "[pulsar-frontend-stub] dual-lane setup unavailable; keeping legacy canvas path");
+    }
+
+    // Bind the requested encoder exactly once for both the hot dual-lane and
+    // compatibility/reference paths.  The latter uses libobs's main video_t
+    // directly because it intentionally has no auxiliary PreviewView.
+    // obs_encoder_set_video rejects active/initialized encoders; no Cut path
+    // can reach this setup-only binding.
+    if (videoEncoder) {
+        video_t *encoderVideo = programVideo ? programVideo : obs_get_video();
+        if (encoderVideo) {
+            obs_encoder_set_video(videoEncoder, encoderVideo);
+            blog(LOG_INFO, "[pulsar-dual-lane] encoder video_t bound once to ProgramView");
+        } else {
+            blog(LOG_ERROR, "[pulsar-dual-lane] encoder video_t binding skipped: no Program video");
+        }
     }
     obs_scene_release(scene);
     scene = nullptr;
@@ -3899,6 +4384,13 @@ bool PulsarFrontendAPI::setup()
         obs_data_set_string(desktopSettings, "device_id", id);
     else
         obs_data_set_string(desktopSettings, "device_id", "default");
+    // Keep the live mixer clock on libobs' fixed audio timeline.  Device
+    // timing is useful for monitoring, but it can make the WASAPI capture
+    // source wait for endpoint-clock alignment before handing audio to the
+    // common Program route.  Pulsar's encoder/interleaver already has an
+    // explicit bounded audio policy, so opt out before source creation.
+    obs_data_set_bool(desktopSettings, "use_device_timing", false);
+    blog(LOG_INFO, "[pulsar-frontend-stub] desktop audio configured use_device_timing=false");
     desktopAudioSource = obs_source_create("wasapi_output_capture", "PulsarDesktopAudio",
                                             desktopSettings, nullptr);
     if (desktopAudioSource) {
@@ -4060,7 +4552,7 @@ bool PulsarFrontendAPI::setup()
         const bool wgcSourceBound = externalLaneWorkload ? captureWindowRequested :
                                     captureItem != nullptr;
         g_runtimeTelemetry.initialize(encoderFamily.c_str(), telemetryVideo, wgcWorkload, cefWorkload,
-                                      wgcSourceBound);
+                                      wgcSourceBound, videoEncoder, streamOutput);
         if (g_runtimeTelemetry.enabled()) {
             obs_add_raw_video_callback(nullptr, pulsar_runtime_raw_video_callback, nullptr);
             if (streamOutput)
@@ -4083,6 +4575,107 @@ bool PulsarFrontendAPI::setup()
     }
 
     return true;
+}
+
+void PulsarFrontendAPI::clear_libobs_scene_data()
+{
+    // Keep one owning reference per enumerated object while the source graph
+    // is being changed.  obs_enum_* holds libobs's enumeration lock only for
+    // the callback; retaining the refs here makes the subsequent remove and
+    // prune phases independent of that lock and of source_remove callbacks.
+    std::vector<obs_source_t *> sceneRefs;
+    std::vector<obs_source_t *> sourceRefs;
+    const auto collect_ref = [](void *param, obs_source_t *source) {
+        auto *refs = static_cast<std::vector<obs_source_t *> *>(param);
+        if (obs_source_t *ref = obs_source_get_ref(source))
+            refs->push_back(ref);
+        return true;
+    };
+    obs_enum_scenes(collect_ref, &sceneRefs);
+    obs_enum_sources(collect_ref, &sourceRefs);
+
+    std::set<obs_source_t *> sceneSet(sceneRefs.begin(), sceneRefs.end());
+    std::set<obs_source_t *> removed;
+    blog(LOG_INFO,
+         "PULSAR_FRONTEND_CLEANUP event=source_graph_begin scenes=%llu sources=%llu",
+         static_cast<unsigned long long>(sceneRefs.size()),
+         static_cast<unsigned long long>(sourceRefs.size()));
+
+    // Match OBSBasic's dependency order: scene roots first, then the rest of
+    // the global source registry.  A source can appear in both enumerations;
+    // the identity set makes the remove operation exactly once per object.
+    for (obs_source_t *scene : sceneRefs) {
+        if (scene && removed.insert(scene).second)
+            obs_source_remove(scene);
+    }
+    for (obs_source_t *source : sourceRefs) {
+        if (source && removed.insert(source).second)
+            obs_source_remove(source);
+    }
+
+    // obs_source_remove() only marks a source and emits source_remove.  Scene
+    // items own the remaining refs, so pruning must happen after enumeration
+    // has returned and after all roots have been marked removed.
+    for (obs_source_t *scene : sceneRefs) {
+        if (sceneSet.find(scene) == sceneSet.end())
+            continue;
+        if (obs_scene_t *sc = obs_scene_from_source(scene))
+            obs_scene_prune_sources(sc);
+    }
+
+    // Release the enumeration refs only after the second-phase prune.  The
+    // frontend-owned refs are released later by teardown(); the final scan
+    // must not run until those refs, views, and vectors have also gone away.
+    for (obs_source_t *source : sourceRefs)
+        if (source)
+            obs_source_release(source);
+    for (obs_source_t *scene : sceneRefs)
+        if (scene)
+            obs_source_release(scene);
+}
+
+void PulsarFrontendAPI::verify_libobs_scene_data_drained()
+{
+    // This is intentionally a separate phase from clear_libobs_scene_data().
+    // That phase still runs with source_remove connected and releases only
+    // its enumeration refs.  This phase is called after teardown has released
+    // every frontend member ref, so an object retained in the registry is a
+    // real orphan rather than a legitimate setup owner.
+    blog(LOG_INFO, "PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin");
+
+    // Destruction is deferred by libobs.  Follow OBSBasic's contract and wait
+    // until the queue reports empty.  This is a synchronous upstream
+    // primitive; the headless parent/harness supervises the overall process
+    // lifetime rather than pretending that a loop count is a wall-clock bound.
+    int pass = 0;
+    while (obs_wait_for_destroy_queue())
+        ++pass;
+
+    std::size_t orphan_scenes = 0;
+    std::size_t orphan_sources = 0;
+    obs_enum_scenes(
+        [](void *param, obs_source_t *) {
+            ++*static_cast<std::size_t *>(param);
+            return true;
+        },
+        &orphan_scenes);
+    obs_enum_sources(
+        [](void *param, obs_source_t *) {
+            ++*static_cast<std::size_t *>(param);
+            return true;
+        },
+        &orphan_sources);
+    if (orphan_scenes != 0 || orphan_sources != 0) {
+        g_frontend_cleanup_succeeded.store(false, std::memory_order_release);
+        blog(LOG_ERROR,
+             "PULSAR_FRONTEND_CLEANUP event=source_graph_orphans scenes=%llu sources=%llu",
+             static_cast<unsigned long long>(orphan_scenes),
+             static_cast<unsigned long long>(orphan_sources));
+    } else {
+        blog(LOG_INFO,
+             "PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=%d",
+             pass);
+    }
 }
 
 void PulsarFrontendAPI::teardown()
@@ -4126,6 +4719,7 @@ void PulsarFrontendAPI::teardown()
     // while its stable views and role refs are being torn down.
     {
         std::lock_guard<std::mutex> lk(dualLaneMutex);
+        dualLaneOperational = false;
         dualLaneReady = false;
         dualLaneCutPending.store(false);
     }
@@ -4139,6 +4733,17 @@ void PulsarFrontendAPI::teardown()
     obs_set_output_source(2, nullptr);
     obs_set_output_source(3, nullptr);
 
+    // Clear every view root before removing the libobs source graph.  The
+    // main view is a libobs-owned canvas, while the auxiliary views are
+    // frontend-owned; both can otherwise retain a scene after the source
+    // enumeration below and make the orphan check meaningless.
+    if (programView)
+        obs_view_set_source(programView, 0, nullptr);
+    if (previewView)
+        obs_view_set_source(previewView, 0, nullptr);
+    if (vcamView)
+        obs_view_set_source(vcamView, 0, nullptr);
+
     // M10: output 0 is now a transition holding the scene (and possibly a
     // stinger media source as an active child). Clear each transition's held
     // sources before releasing so libobs drops those child refs cleanly and
@@ -4147,8 +4752,17 @@ void PulsarFrontendAPI::teardown()
         if (t)
             obs_transition_clear(t);
 
-    // Issue #129: drop the global source_remove handler before the sources it
-    // would walk start being released below.
+    // Mirror OBSBasic::ClearSceneData: remove the complete libobs source
+    // graph while the frontend's source_remove callback is still installed,
+    // prune scene items in a second phase, drain deferred destruction, then
+    // check for orphans.  This is deliberately before dropping our setup refs
+    // or disconnecting the callback; otherwise sources created by WebSocket
+    // remain owned by libobs until obs_free_data(), where the CEF/plugin
+    // teardown order is already too late to be safe.
+    clear_libobs_scene_data();
+
+    // The source graph is now drained; no callback may walk this object while
+    // its remaining setup refs are released below.
     if (signal_handler_t *globalSh = obs_get_signal_handler())
         signal_handler_disconnect(globalSh, "source_remove", OnSourceRemove, this);
 
@@ -4300,6 +4914,11 @@ void PulsarFrontendAPI::teardown()
     release_source_vec(scenes);
     release_source_vec(transitions);
 
+    // Only now are all frontend-owned source refs gone.  The orphan scan is
+    // deliberately after this point; scanning earlier would report the
+    // sources that teardown still legitimately owns as leaks.
+    verify_libobs_scene_data_drained();
+
     std::lock_guard<std::mutex> lk(callbacksMutex);
     eventCallbacks.clear();
     saveCallbacks.clear();
@@ -4354,6 +4973,11 @@ void PulsarFrontendAPI::obs_frontend_set_current_scene(obs_source_t *scene)
     bool dualLaneDirect = false;
     {
         std::lock_guard<std::mutex> lk(dualLaneMutex);
+        if (dualLaneReady && !dualLaneOperational) {
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] Program mutation rejected: rollback freeze is active");
+            return;
+        }
         if (dualLaneReady && dualLaneCutPending.load()) {
             blog(LOG_WARNING, "[pulsar-dual-lane] Program mutation rejected while Take is pending");
             return;
@@ -4933,6 +5557,7 @@ static void pulsar_ui_task_handler(obs_task_t task, void *param, bool /*wait*/)
 
 extern "C" void pulsar_frontend_init(void)
 {
+    g_frontend_cleanup_succeeded.store(true, std::memory_order_release);
     if (g_api) {
         blog(LOG_WARNING, "[pulsar-frontend-stub] init called twice");
         return;
@@ -4942,6 +5567,7 @@ extern "C" void pulsar_frontend_init(void)
     // Heavy state -- scenes, encoders, outputs, sources, services -- depends
     // on plugins that aren't loaded yet, so it lives in setup() called from
     // pulsar_frontend_finished_loading() once obs_post_load_modules has run.
+    g_rollbackMarkerWriter.start();
     g_dualLaneControlBridge.install();
     g_runtimeTelemetry.install();
     auto *api = new PulsarFrontendAPI();
@@ -4979,4 +5605,9 @@ extern "C" void pulsar_frontend_shutdown(void)
     obs_frontend_set_callbacks_internal(nullptr);
     g_api = nullptr;
     blog(LOG_INFO, "[pulsar-frontend-stub] callbacks uninstalled");
+}
+
+extern "C" bool pulsar_frontend_cleanup_succeeded(void)
+{
+    return g_frontend_cleanup_succeeded.load(std::memory_order_acquire);
 }

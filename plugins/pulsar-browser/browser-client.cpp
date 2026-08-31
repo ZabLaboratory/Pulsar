@@ -19,6 +19,7 @@
 #include "browser-client.hpp"
 #include "obs-browser-source.hpp"
 #include "base64/base64.hpp"
+#include <functional>
 #include <nlohmann/json.hpp>
 #include <obs-frontend-api.h>
 #include <obs.hpp>
@@ -38,9 +39,63 @@
 #include "drm-format.hpp"
 #endif
 
+extern bool QueueCEFTask(std::function<void()> task);
+
 inline bool BrowserClient::valid() const
 {
 	return !!bs && !bs->destroying;
+}
+
+bool BrowserClient::begin_audio_callback()
+{
+	return audio_callbacks.try_acquire();
+}
+
+void BrowserClient::end_audio_callback(int browser_id)
+{
+	if (!audio_callbacks.release_and_try_claim())
+		return;
+
+	schedule_browser_close_finalization(browser_id);
+}
+
+void BrowserClient::maybe_finalize_browser_close(int browser_id)
+{
+	if (!audio_callbacks.try_claim_finalization())
+		return;
+
+	schedule_browser_close_finalization(browser_id);
+}
+
+void BrowserClient::schedule_browser_close_finalization(int browser_id)
+{
+	/* Always defer to the next CEF UI turn, even when the claimant is UI. */
+	CefRefPtr<BrowserClient> self(this);
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_finalization_intent browser_id=%d",
+	     browser_id);
+	if (!QueueCEFTask([self, browser_id]() { self->finalize_browser_close(browser_id); })) {
+		blog(LOG_ERROR, "PULSAR_CEF_SHUTDOWN event=audio_quiescence_task_failed action=watchdog");
+		return;
+	}
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_finalization_scheduled browser_id=%d",
+	     browser_id);
+}
+
+void BrowserClient::finalize_browser_close(int browser_id)
+{
+	/* Keep this object alive while BrowserSource detaches and destroys state. */
+	CefRefPtr<BrowserClient> self(this);
+	/* This is the sole BrowserClient::bs write.  It follows audio quiescence. */
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=audio_quiescent browser_id=%d",
+	     browser_id);
+	bs = nullptr;
+	BrowserSourceFinalizeBrowserClose(browser_id);
+	/* Release the self-cycle only after all source/browser teardown is done. */
+	close_keepalive = nullptr;
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=client_keepalive_released browser_id=%d",
+	     browser_id);
 }
 
 CefRefPtr<CefLoadHandler> BrowserClient::GetLoadHandler()
@@ -78,6 +133,36 @@ CefRefPtr<CefRequestHandler> BrowserClient::GetRequestHandler()
 	return this;
 }
 
+void BrowserClient::OnAfterCreated(CefRefPtr<CefBrowser> browser)
+{
+	BrowserSourceBrowserCreated(browser, bs);
+}
+
+void BrowserClient::OnBeforeClose(CefRefPtr<CefBrowser> browser)
+{
+	/*
+	 * CEF invokes this on the UI thread, but audio packets can still be
+	 * in-flight on the audio thread.  Keep the client/source association until
+	 * the stopped callback and the in-flight counter prove quiescence.
+	 */
+	CefRefPtr<BrowserClient> self(this);
+	const int browser_id = browser ? browser->GetIdentifier() : -1;
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_on_before_close_entry browser_id=%d",
+	     browser_id);
+	if (!close_keepalive) {
+		close_keepalive = self;
+		blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=client_keepalive_acquired browser_id=%d",
+		     browser ? browser->GetIdentifier() : -1);
+	}
+	audio_callbacks.mark_close_callback_seen();
+	BrowserSourceBrowserClosed(browser_id);
+	maybe_finalize_browser_close(browser_id);
+	blog(LOG_INFO,
+	     "PULSAR_CEF_SHUTDOWN event=browser_on_before_close_exit browser_id=%d",
+	     browser_id);
+}
+
 CefRefPtr<CefResourceRequestHandler> BrowserClient::GetResourceRequestHandler(CefRefPtr<CefBrowser>,
 									      CefRefPtr<CefFrame>,
 									      CefRefPtr<CefRequest> request, bool, bool,
@@ -108,8 +193,9 @@ void BrowserClient::OnRenderProcessTerminated(CefRefPtr<CefBrowser>, Termination
 
 	const char *sourceName = "<unknown>";
 
-	if (bs && bs->source)
-		sourceName = obs_source_get_name(bs->source);
+	OBSSourceAutoRelease source_ref = bs->GetStrongSource();
+	if (source_ref)
+		sourceName = obs_source_get_name(source_ref);
 
 	blog(LOG_ERROR, "[obs-browser: '%s'] Webpage has crashed unexpectedly! Reason: '%s'", sourceName,
 	     str_text.c_str());
@@ -151,6 +237,10 @@ bool BrowserClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
 	if (!valid()) {
 		return false;
 	}
+	OBSSourceAutoRelease source_ref = bs->GetStrongSource();
+	if (!source_ref)
+		return false;
+	const char *sourceName = obs_source_get_name(source_ref);
 
 	// Fall-through switch, so that higher levels also have lower-level rights
 	switch (webpage_control_level) {
@@ -184,10 +274,10 @@ bool BrowserClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
 			if (!source) {
 				blog(LOG_WARNING,
 				     "Browser source '%s' tried to switch to scene '%s' which doesn't exist",
-				     obs_source_get_name(bs->source), scene_name.c_str());
+				     sourceName, scene_name.c_str());
 			} else if (!obs_source_is_scene(source)) {
 				blog(LOG_WARNING, "Browser source '%s' tried to switch to '%s' which isn't a scene",
-				     obs_source_get_name(bs->source), scene_name.c_str());
+				     sourceName, scene_name.c_str());
 			} else {
 				obs_frontend_set_current_scene(source);
 			}
@@ -212,7 +302,7 @@ bool BrowserClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefR
 			else
 				blog(LOG_WARNING,
 				     "Browser source '%s' tried to change the current transition to '%s' which doesn't exist",
-				     obs_source_get_name(bs->source), transition_name.c_str());
+				     sourceName, transition_name.c_str());
 		}
 		[[fallthrough]];
 	case ControlLevel::Basic:
@@ -550,7 +640,9 @@ static speaker_layout GetSpeakerLayout(CefAudioHandler::ChannelLayout cefLayout)
 void BrowserClient::OnAudioStreamStarted(CefRefPtr<CefBrowser> browser, const CefAudioParameters &params_,
 					 int channels_)
 {
-	UNUSED_PARAMETER(browser);
+	audio_callbacks.mark_stream_started();
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=audio_stream_started browser_id=%d",
+	     browser ? browser->GetIdentifier() : -1);
 	channels = channels_;
 	channel_layout = (ChannelLayout)params_.channel_layout;
 	sample_rate = params_.sample_rate;
@@ -559,27 +651,50 @@ void BrowserClient::OnAudioStreamStarted(CefRefPtr<CefBrowser> browser, const Ce
 
 void BrowserClient::OnAudioStreamPacket(CefRefPtr<CefBrowser> browser, const float **data, int frames, int64_t pts)
 {
-	UNUSED_PARAMETER(browser);
-	if (!valid()) {
+	const int browser_id = browser ? browser->GetIdentifier() : -1;
+	if (!begin_audio_callback())
+		return;
+	if (!audio_callbacks.should_deliver() || !valid()) {
+		end_audio_callback(browser_id);
 		return;
 	}
-	struct obs_source_audio audio = {};
-	const uint8_t **pcm = (const uint8_t **)data;
-	speaker_layout speakers = GetSpeakerLayout(channel_layout);
-	int speaker_count = get_audio_channels(speakers);
-	for (int i = 0; i < speaker_count; i++)
-		audio.data[i] = pcm[i];
-	audio.samples_per_sec = sample_rate;
-	audio.frames = frames;
-	audio.format = AUDIO_FORMAT_FLOAT_PLANAR;
-	audio.speakers = speakers;
-	audio.timestamp = (uint64_t)pts * 1000000LLU;
-	obs_source_output_audio(bs->source, &audio);
+	{
+		/* Hold a strong libobs reference across the host callback. */
+		OBSSourceAutoRelease source_ref = bs->GetStrongSource();
+		if (!source_ref) {
+			end_audio_callback(browser_id);
+			return;
+		}
+		struct obs_source_audio audio = {};
+		const uint8_t **pcm = (const uint8_t **)data;
+		speaker_layout speakers = GetSpeakerLayout(channel_layout);
+		int speaker_count = get_audio_channels(speakers);
+		for (int i = 0; i < speaker_count; i++)
+			audio.data[i] = pcm[i];
+		audio.samples_per_sec = sample_rate;
+		audio.frames = frames;
+		audio.format = AUDIO_FORMAT_FLOAT_PLANAR;
+		audio.speakers = speakers;
+		audio.timestamp = (uint64_t)pts * 1000000LLU;
+		obs_source_output_audio(source_ref, &audio);
+	}
+	end_audio_callback(browser_id);
 }
 
 void BrowserClient::OnAudioStreamStopped(CefRefPtr<CefBrowser> browser)
 {
-	UNUSED_PARAMETER(browser);
+	/*
+	 * finalize_browser_close() may release close_keepalive synchronously.
+	 * Keep this callback's BrowserClient alive until CEF regains control.
+	 */
+	CefRefPtr<BrowserClient> callback_self(this);
+	(void)callback_self;
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=client_callback_keepalive_acquired browser_id=%d",
+	     browser ? browser->GetIdentifier() : -1);
+	audio_callbacks.mark_stream_stopped();
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=audio_stream_stopped browser_id=%d",
+	     browser ? browser->GetIdentifier() : -1);
+	maybe_finalize_browser_close(browser ? browser->GetIdentifier() : -1);
 }
 
 void BrowserClient::OnAudioStreamError(CefRefPtr<CefBrowser> browser, const CefString &message)
@@ -660,8 +775,11 @@ bool BrowserClient::OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t l
 
 	const char *sourceName = "<unknown>";
 
-	if (bs && bs->source)
-		sourceName = obs_source_get_name(bs->source);
+	if (!valid())
+		return false;
+	OBSSourceAutoRelease source_ref = bs->GetStrongSource();
+	if (source_ref)
+		sourceName = obs_source_get_name(source_ref);
 
 	blog(errorLevel, "[obs-browser: '%s'] %s: %s (%s:%d)", sourceName, code, message.ToString().c_str(),
 	     source.ToString().c_str(), line);

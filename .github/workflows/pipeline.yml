@@ -337,6 +337,12 @@ jobs:
         # Keeper's antenna run (needs the VPS).
         run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py -v
 
+      - name: Run offline Pulsar probe contract tests
+        # The AC-12 RTMP boundary and AC-13 dual-lane probe contracts are
+        # hardware-free; keep them in the required Python gate so changes to
+        # their parser, trace, and evidence invariants cannot bypass CI.
+        run: pytest tests/probe-take-latency tests/probe-dual-lane -v
+
   # ── Stage 2 : build pulsar.exe (THE ONE BUILD) ────────────────────
   # Every downstream Windows job consumes the `pulsar-rundir` artefact
   # this job uploads. retention-days is short -- the artefact only

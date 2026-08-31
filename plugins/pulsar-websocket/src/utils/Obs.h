@@ -335,6 +335,10 @@ namespace Utils {
 			// (clamped to 0..2000); read once, cached.
 			uint32_t VerifyTimeoutMs();
 
+			// Longer bounded flush window used by StopRecord before its
+			// completed-file response may be issued.
+			uint32_t RecordStopVerifyTimeoutMs();
+
 			// obs_output_get_last_error(), normalised to std::string ("" when
 			// libobs recorded no cause).
 			std::string GetLastError(obs_output_t *output);
@@ -373,6 +377,11 @@ namespace Utils {
 			// mute and the active-state read is what decides.
 			ActionVerdict SettleStart(obs_output_t *output, const ActionWatch &watch);
 			ActionVerdict SettleStop(obs_output_t *output, const ActionWatch &watch);
+
+			// StopRecord returns a completed-file path, so it gets a longer but
+			// still bounded flush window than generic stop requests. Pending is
+			// returned only after this window, never as a Success path.
+			ActionVerdict SettleRecordStop(obs_output_t *output, const ActionWatch &watch);
 		}
 	}
 }

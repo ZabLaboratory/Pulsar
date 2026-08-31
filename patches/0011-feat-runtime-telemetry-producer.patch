@@ -1,4 +1,4 @@
-From 4b44f947e9c3ddf0c307a51b3baa2d9720ee98fe Mon Sep 17 00:00:00 2001
+From 8e9cadc3d58d920d70998dd2e6ded0a5409fa64a Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Sat, 29 Aug 2026 17:05:25 +0200
@@ -18,15 +18,15 @@ ADR-Revision: draft-r2-dual-lane-20260828
 
 Evidence: csf_8f564977366045d762be66e4; bounded-directshow-identifiers; mapping-layout-validation
 ---
- .../virtualcam-module/virtualcam-filter.cpp   | 131 ++++++++-
- .../virtualcam-module/virtualcam-filter.hpp   |   5 +-
+ .../virtualcam-module/virtualcam-filter.cpp   | 165 ++++++++++-
+ .../virtualcam-module/virtualcam-filter.hpp   |  15 +-
  plugins/win-dshow/virtualcam.c                |  73 ++++-
  .../shared-memory-queue.c                     | 262 +++++++++++++++---
  .../shared-memory-queue.h                     |  26 ++
- 5 files changed, 459 insertions(+), 38 deletions(-)
+ 5 files changed, 503 insertions(+), 38 deletions(-)
 
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
-index 2cde01233..274ade2d1 100644
+index 2cde01233..2ca4f9c9f 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 +++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 @@ -5,7 +5,10 @@
@@ -40,7 +40,16 @@ index 2cde01233..274ade2d1 100644
  
  using namespace DShow;
  
-@@ -46,6 +49,7 @@ static std::wstring queue_name_for_filter(enum directshow_queue_namespace queue_
+@@ -14,6 +17,8 @@ extern const uint8_t *get_placeholder_ptr();
+ extern const bool get_placeholder_size(int *out_cx, int *out_cy);
+ extern volatile long locks;
+ 
++static uint64_t trace_monotonic_ns();
++
+ /* ========================================================================= */
+ 
+ static std::wstring queue_name_for_filter(enum directshow_queue_namespace queue_namespace,
+@@ -46,6 +51,7 @@ static std::wstring queue_name_for_filter(enum directshow_queue_namespace queue_
  VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
  	: OutputFilter()
  {
@@ -48,24 +57,40 @@ index 2cde01233..274ade2d1 100644
  	const enum directshow_queue_namespace queue_namespace = directshow_queue_namespace_for_consumer(filter_kind);
  	queue_namespace_rejected = queue_namespace == DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
  	queue_name = queue_name_for_filter(queue_namespace, filter_kind);
-@@ -337,23 +341,142 @@ void VCamFilter::Frame(uint64_t ts)
+@@ -237,6 +243,7 @@ void VCamFilter::Thread()
+ 
+ void VCamFilter::Frame(uint64_t ts)
+ {
++	const uint64_t frame_entry_monotonic_ns = trace_monotonic_ns();
+ 	if (queue_namespace_rejected) {
+ 		uint8_t *ptr;
+ 		if (LockSampleData(&ptr)) {
+@@ -337,23 +344,173 @@ void VCamFilter::Frame(uint64_t ts)
  
  	/* Actual output */
  	uint8_t *ptr;
 +	struct video_queue_frame_metadata metadata = {};
++	struct directshow_stage_timing timing = {};
++	timing.frame_entry_monotonic_ns = frame_entry_monotonic_ns;
 +	bool consumed_program_frame = false;
  	if (LockSampleData(&ptr)) {
++		timing.lock_sample_data_acquired_monotonic_ns = trace_monotonic_ns();
++		if (state == SHARED_QUEUE_STATE_READY)
++			timing.queue_read_start_monotonic_ns = trace_monotonic_ns();
  		if (state == SHARED_QUEUE_STATE_READY)
 -			ShowOBSFrame(ptr);
 +			consumed_program_frame = ShowOBSFrame(ptr, &metadata);
++		if (state == SHARED_QUEUE_STATE_READY)
++			timing.queue_read_completed_monotonic_ns = trace_monotonic_ns();
  		else
  			ShowDefaultFrame(ptr);
  
  		UnlockSampleData(ts, ts + obs_interval);
++		timing.unlock_sample_data_completed_monotonic_ns = trace_monotonic_ns();
  	}
 +
 +	if (consumed_program_frame && program_return)
-+		EmitDirectShowObservation(metadata);
++		EmitDirectShowObservation(metadata, timing);
  }
  
 -void VCamFilter::ShowOBSFrame(uint8_t *ptr)
@@ -151,13 +176,14 @@ index 2cde01233..274ade2d1 100644
 +		DWORD written = 0;
 +		WriteFile(file, payload.data(), (DWORD)payload.size(), &written, nullptr);
 +		CloseHandle(file);
- 	}
++	}
 +
 +	ReleaseMutex(mutex);
 +	CloseHandle(mutex);
 +}
 +
-+void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metadata &metadata)
++void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metadata &metadata,
++						   const struct directshow_stage_timing &timing)
 +{
 +	std::string runtime_id;
 +	std::string runtime_id_json;
@@ -177,6 +203,15 @@ index 2cde01233..274ade2d1 100644
 +	    take_command_id.empty() || last_trace_take == take_command_id)
 +		return;
 +
++	const uint64_t emission_monotonic_ns = trace_monotonic_ns();
++	const bool timing_complete = timing.frame_entry_monotonic_ns > 0 &&
++		timing.lock_sample_data_acquired_monotonic_ns > timing.frame_entry_monotonic_ns &&
++		timing.queue_read_start_monotonic_ns > timing.lock_sample_data_acquired_monotonic_ns &&
++		timing.queue_read_completed_monotonic_ns > timing.queue_read_start_monotonic_ns &&
++		timing.unlock_sample_data_completed_monotonic_ns > timing.queue_read_completed_monotonic_ns &&
++		emission_monotonic_ns > timing.unlock_sample_data_completed_monotonic_ns;
++	const uint64_t observed_at_monotonic_ns = timing.unlock_sample_data_completed_monotonic_ns;
++
 +	std::ostringstream observation;
 +	observation << "{\"record_type\":\"observation\",\"boundary\":\"directshow_return\","
 +			<< "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
@@ -187,19 +222,47 @@ index 2cde01233..274ade2d1 100644
 +			<< "\"program\":" << metadata.program_revision << ",\"preview\":"
 +			<< metadata.preview_revision << ",\"role_map\":" << metadata.role_map_revision << "},"
 +			<< "\"frame_id\":" << metadata.frame_id << ",\"pts_ns\":" << metadata.pts_ns
-+			<< ",\"observed_at_monotonic_ns\":" << trace_monotonic_ns()
++			<< ",\"observed_at_monotonic_ns\":" << observed_at_monotonic_ns
 +			<< ",\"valid\":true,\"program_frame\":true,\"surface\":\"ProgramReturn\","
 +			<< "\"consumer\":\"DirectShow\"}";
++	if (timing_complete) {
++		observation.seekp(-1, std::ios_base::end);
++		observation << ",\"frame_entry_monotonic_ns\":" << timing.frame_entry_monotonic_ns
++				<< ",\"lock_sample_data_acquired_monotonic_ns\":"
++				<< timing.lock_sample_data_acquired_monotonic_ns
++				<< ",\"queue_read_start_monotonic_ns\":"
++				<< timing.queue_read_start_monotonic_ns
++				<< ",\"queue_read_completed_monotonic_ns\":"
++				<< timing.queue_read_completed_monotonic_ns
++				<< ",\"unlock_sample_data_completed_monotonic_ns\":"
++				<< timing.unlock_sample_data_completed_monotonic_ns
++				<< ",\"emission_monotonic_ns\":" << emission_monotonic_ns << "}";
+ 	}
 +	append_trace_line(observation.str(), runtime_id);
 +	last_trace_take = take_command_id;
  }
  
  void VCamFilter::ShowDefaultFrame(uint8_t *ptr)
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
-index 775d0893f..550724d29 100644
+index 775d0893f..192703f81 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
 +++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
-@@ -36,6 +36,7 @@ class VCamFilter : public DShow::OutputFilter {
+@@ -30,12 +30,22 @@ typedef struct {
+ 	uint8_t *scaled_data;
+ } placeholder_t;
+ 
++struct directshow_stage_timing {
++	uint64_t frame_entry_monotonic_ns = 0;
++	uint64_t lock_sample_data_acquired_monotonic_ns = 0;
++	uint64_t queue_read_start_monotonic_ns = 0;
++	uint64_t queue_read_completed_monotonic_ns = 0;
++	uint64_t unlock_sample_data_completed_monotonic_ns = 0;
++	uint64_t emission_monotonic_ns = 0;
++};
++
+ class VCamFilter : public DShow::OutputFilter {
+ 	std::thread th;
+ 
  	video_queue_t *vq = nullptr;
  	std::wstring queue_name;
  	bool queue_namespace_rejected = false;
@@ -207,7 +270,7 @@ index 775d0893f..550724d29 100644
  	int queue_mode = 0;
  	bool in_obs = false;
  	enum queue_state prev_state = SHARED_QUEUE_STATE_INVALID;
-@@ -51,6 +52,7 @@ class VCamFilter : public DShow::OutputFilter {
+@@ -51,6 +61,7 @@ class VCamFilter : public DShow::OutputFilter {
  	volatile bool active = false;
  
  	nv12_scale_t scaler = {};
@@ -215,14 +278,15 @@ index 775d0893f..550724d29 100644
  
  	inline bool stopped() const { return WaitForSingleObject(thread_stop, 0) != WAIT_TIMEOUT; }
  
-@@ -58,8 +60,9 @@ class VCamFilter : public DShow::OutputFilter {
+@@ -58,8 +69,10 @@ class VCamFilter : public DShow::OutputFilter {
  
  	void Thread();
  	void Frame(uint64_t ts);
 -	void ShowOBSFrame(uint8_t *ptr);
 +	bool ShowOBSFrame(uint8_t *ptr, struct video_queue_frame_metadata *metadata);
  	void ShowDefaultFrame(uint8_t *ptr);
-+	void EmitDirectShowObservation(const struct video_queue_frame_metadata &metadata);
++	void EmitDirectShowObservation(const struct video_queue_frame_metadata &metadata,
++					      const struct directshow_stage_timing &timing);
  	void UpdatePlaceholder(void);
  	const int GetOutputBufferSize(void);
  

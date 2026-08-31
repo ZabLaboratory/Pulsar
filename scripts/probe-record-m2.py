@@ -117,6 +117,8 @@ RECORD_DURATION_SEC = 3.0
 # A 3 s 1080p60 h264+aac MP4 is ~2 MB; 100 KB cleanly separates a real
 # capture from an empty/truncated container.
 MIN_MP4_BYTES = 100 * 1024
+STOP_PENDING_CODE = 702
+STOP_EVENT_TIMEOUT_SEC = 15.0
 
 SCENE_NAME = "probe-m2-scene"
 INPUT_NAME = "probe-m2-color"
@@ -319,6 +321,82 @@ async def expect_event(
         if predicate is None or predicate(e.get("eventData") or {}):
             return inbox.events.pop(i)
     raise RuntimeError("unreachable")
+
+
+async def wait_record_stop(
+    inbox: Inbox, ws, response: dict, record_dir: pathlib.Path
+) -> dict | None:
+    """Drain a StopRecord response without treating pending as success.
+
+    A 702 means the request was accepted and the muxer is still flushing. The
+    authoritative completion is RecordStateChanged=STOPPED followed by an
+    inactive GetRecordStatus observation. The output path must come from that
+    event, be present, and belong to this run's isolated record directory;
+    missing, stale, or unrelated paths are rejected.
+    """
+    status = response.get("requestStatus") or {}
+    if status.get("result") is not True and int(status.get("code") or 0) != STOP_PENDING_CODE:
+        print(f"error: StopRecord failed before acceptance: {status}")
+        return None
+    if status.get("result") is not True:
+        print("   StopRecord pending (702); waiting for RecordStateChanged STOPPED")
+
+    try:
+        event = await expect_event(
+            inbox,
+            ws,
+            "RecordStateChanged",
+            predicate=lambda d: d.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STOPPED",
+            timeout=STOP_EVENT_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        print(f"error: StopRecord did not emit STOPPED within {STOP_EVENT_TIMEOUT_SEC:.0f}s")
+        return None
+    except Exception as exc:
+        print(f"error: StopRecord STOPPED wait failed: {exc}")
+        return None
+
+    event_data = event.get("eventData") or {}
+    raw_path = event_data.get("outputPath")
+    if not isinstance(raw_path, str) or not raw_path:
+        print("error: STOPPED event did not carry an outputPath")
+        return None
+    try:
+        output_path = pathlib.Path(raw_path).resolve()
+        output_path.relative_to(record_dir.resolve())
+    except (OSError, ValueError):
+        print(f"error: STOPPED event outputPath is stale or outside this run: {raw_path}")
+        return None
+
+    deadline = asyncio.get_event_loop().time() + STOP_EVENT_TIMEOUT_SEC
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            status_response = await request(
+                inbox, ws, "GetRecordStatus", f"stop-status-{attempt}"
+            )
+        except Exception as exc:
+            print(f"error: could not re-read GetRecordStatus after STOPPED: {exc}")
+            return None
+        response_data = status_response.get("responseData")
+        if not isinstance(response_data, dict):
+            print("error: GetRecordStatus responseData is malformed after STOPPED")
+            return None
+        output_active = response_data.get("outputActive")
+        if output_active is False:
+            if not output_path.is_file():
+                print(f"error: STOPPED event outputPath does not exist: {output_path}")
+                return None
+            return event
+        if output_active is not True:
+            print("error: GetRecordStatus.outputActive is malformed after STOPPED")
+            return None
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            print("error: STOPPED event arrived but GetRecordStatus.outputActive stayed true")
+            return None
+        await asyncio.sleep(min(0.25, remaining))
 
 
 # --------------------------------------------------------------------------
@@ -566,18 +644,10 @@ async def drive_record(url: str, password: str, record_dir: pathlib.Path) -> int
 
         print("-> StopRecord")
         r = await request(inbox, ws, "StopRecord", "stop-1")
-        if not r["requestStatus"]["result"]:
-            print(f"error: StopRecord declined: {r['requestStatus']}")
+        evt = await wait_record_stop(inbox, ws, r, record_dir)
+        if evt is None:
             return 1
 
-        evt = await expect_event(
-            inbox,
-            ws,
-            "RecordStateChanged",
-            predicate=lambda d: d.get("outputState")
-            == "OBS_WEBSOCKET_OUTPUT_STOPPED",
-            timeout=10.0,
-        )
         output_path = evt["eventData"].get("outputPath") or ""
         print(f"   <- RecordStateChanged STOPPED outputPath={output_path}")
 
@@ -588,21 +658,10 @@ async def drive_record(url: str, password: str, record_dir: pathlib.Path) -> int
         await ws.close(code=1000, reason="m2 complete")
 
     # --- Resolve + verify the produced MP4 ---
-    if not output_path:
-        print("error: no outputPath in the STOPPED event")
-        return 1
     path = pathlib.Path(output_path)
-    if not path.exists():
+    if not path.is_file():
         print(f"error: output file does not exist on disk: {path}")
         return 1
-    # Sanity: it should live in our isolated record dir.
-    try:
-        path.relative_to(record_dir)
-    except ValueError:
-        print(
-            f"warn: output {path} is not under the requested record dir "
-            f"{record_dir} (PULSAR_RECORD_DIR may have been ignored)"
-        )
 
     size = path.stat().st_size
     if size < MIN_MP4_BYTES:

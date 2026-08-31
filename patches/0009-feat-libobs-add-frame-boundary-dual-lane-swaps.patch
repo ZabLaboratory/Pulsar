@@ -35,7 +35,7 @@ diff --git a/libobs/obs-internal.h b/libobs/obs-internal.h
 index d88093eec..ba55e6dc8 100644
 --- a/libobs/obs-internal.h
 +++ b/libobs/obs-internal.h
-@@ -281,8 +281,25 @@ struct obs_view {
+@@ -281,8 +281,26 @@ struct obs_view {
  	enum view_type type;
  };
  
@@ -53,6 +53,7 @@ index d88093eec..ba55e6dc8 100644
 +	struct obs_source *second_source;
 +	obs_view_atomic_swap_cb callback;
 +	void *callback_param;
++	uint64_t admission_floor_ns;
 +};
 +
  extern bool obs_view_init(struct obs_view *view, enum view_type type);
@@ -97,7 +98,7 @@ diff --git a/libobs/obs-view.c b/libobs/obs-view.c
 index 9aa321407..7f87afc08 100644
 --- a/libobs/obs-view.c
 +++ b/libobs/obs-view.c
-@@ -115,6 +115,154 @@ void obs_view_set_source(obs_view_t *view, uint32_t channel, obs_source_t *sourc
+@@ -115,6 +115,171 @@ void obs_view_set_source(obs_view_t *view, uint32_t channel, obs_source_t *sourc
  	}
  }
  
@@ -121,10 +122,10 @@ index 9aa321407..7f87afc08 100644
 +	return pthread_equal(pthread_self(), obs->video.video_thread) != 0;
 +}
 +
-+bool obs_view_queue_atomic_swap(obs_view_t *first_view, uint32_t first_channel,
++bool obs_view_queue_atomic_swap_with_floor(obs_view_t *first_view, uint32_t first_channel,
 +					obs_source_t *first_source, obs_view_t *second_view,
 +					uint32_t second_channel, obs_source_t *second_source,
-+					obs_view_atomic_swap_cb callback, void *param)
++					uint64_t admission_floor_ns, obs_view_atomic_swap_cb callback, void *param)
 +{
 +	if (!obs || !obs->video.atomic_swap_initialized || !first_view || !second_view || first_view == second_view ||
 +	    first_channel >= MAX_CHANNELS || second_channel >= MAX_CHANNELS)
@@ -139,6 +140,7 @@ index 9aa321407..7f87afc08 100644
 +	swap->second_source = obs_source_get_ref(second_source);
 +	swap->callback = callback;
 +	swap->callback_param = param;
++	swap->admission_floor_ns = admission_floor_ns;
 +
 +	/* A non-null input must have produced a retained reference. */
 +	if ((first_source && !swap->first_source) || (second_source && !swap->second_source)) {
@@ -159,6 +161,15 @@ index 9aa321407..7f87afc08 100644
 +	obs->video.pending_atomic_swap = swap;
 +	pthread_mutex_unlock(&obs->video.atomic_swap_mutex);
 +	return true;
++}
++
++bool obs_view_queue_atomic_swap(obs_view_t *first_view, uint32_t first_channel,
++					obs_source_t *first_source, obs_view_t *second_view,
++					uint32_t second_channel, obs_source_t *second_source,
++					obs_view_atomic_swap_cb callback, void *param)
++{
++	return obs_view_queue_atomic_swap_with_floor(first_view, first_channel, first_source,
++									second_view, second_channel, second_source, 0, callback, param);
 +}
 +
 +void obs_view_cancel_atomic_swap(void)
@@ -190,6 +201,13 @@ index 9aa321407..7f87afc08 100644
 +
 +	pthread_mutex_lock(&obs->video.atomic_swap_mutex);
 +	struct obs_view_atomic_swap *swap = obs->video.pending_atomic_swap;
++	/* Keep the exact pending request until the graphics timestamp reaches the
++	 * immutable admission floor.  No refs, callback, or inflight state may be
++	 * touched by an earlier frame. */
++	if (swap && pts_ns < swap->admission_floor_ns) {
++		pthread_mutex_unlock(&obs->video.atomic_swap_mutex);
++		return;
++	}
 +	obs->video.pending_atomic_swap = NULL;
 +	if (swap)
 +		obs->video.atomic_swap_inflight = true;
@@ -315,7 +333,7 @@ diff --git a/libobs/obs.h b/libobs/obs.h
 index 57844b056..199df7720 100644
 --- a/libobs/obs.h
 +++ b/libobs/obs.h
-@@ -967,6 +967,35 @@ EXPORT void obs_view_set_source(obs_view_t *view, uint32_t channel, obs_source_t
+@@ -967,6 +967,45 @@ EXPORT void obs_view_set_source(obs_view_t *view, uint32_t channel, obs_source_t
  /** Gets the source currently in use for this view context */
  EXPORT obs_source_t *obs_view_get_source(obs_view_t *view, uint32_t channel);
  
@@ -327,6 +345,16 @@ index 57844b056..199df7720 100644
 + * `pts_ns` is the libobs video timestamp for that boundary.
 + */
 +typedef void (*obs_view_atomic_swap_cb)(void *param, uint64_t frame_id, uint64_t pts_ns);
++
++/**
++ * Queue an atomic source swap with an immutable monotonic admission floor.
++ * Frames whose `pts_ns` is below the floor leave the request pending.
++ */
++EXPORT bool obs_view_queue_atomic_swap_with_floor(obs_view_t *first_view, uint32_t first_channel,
++                                       obs_source_t *first_source, obs_view_t *second_view,
++                                       uint32_t second_channel, obs_source_t *second_source,
++                                       uint64_t admission_floor_ns,
++                                       obs_view_atomic_swap_cb callback, void *param);
 +
 +/**
 + * Queue an atomic source swap for two independent view channels.

@@ -150,4 +150,36 @@ if(WIN32)
     # no libobs/Qt: the went-active state machine itself is exercised by
     # scripts/probe-multi-stream.py instead (see the probe's own header).
     add_subdirectory(tests/output-attempt-settled-probe)
+
+    # #249 -- the rollback trigger is parsed by the same header-only helper
+    # used by the frontend, so whitespace/sign/zero/overflow values cannot
+    # silently arm or disarm a drill. This native truth table needs no OBS,
+    # GPU, or running Pulsar process.
+    add_subdirectory(tests/dual-lane-config)
+
+    # #249 -- admission, in-flight callback accounting, and CEF close
+    # finalization share one linearization point. This native test forces the
+    # close/admission interleaving without requiring OBS or a running CEF.
+    add_subdirectory(tests/pulsar-headless-shutdown)
+
+    # #249 -- /SUBSYSTEM:WINDOWS Pulsar is spawned with stdout redirected to
+    # a pipe by the real probe. Prove its anonymous inherited event control
+    # path releases both runtime leases without falling back to kill().
+    if(TARGET pulsar-headless)
+        add_test(
+            NAME pulsar-headless-graceful-shutdown
+            # Resolve Python through the runner PATH at test execution time.
+            # The CI job installs websockets after setup-python; baking the
+            # configure-time interpreter here can select a different Python
+            # minor with no probe dependencies.
+            COMMAND python
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/pulsar-headless-shutdown/test_graceful_shutdown.py"
+                    "$<TARGET_FILE:pulsar-headless>"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        )
+        set_tests_properties(pulsar-headless-graceful-shutdown PROPERTIES
+            TIMEOUT 120
+            LABELS "integration;runtime"
+        )
+    endif()
 endif()

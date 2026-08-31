@@ -104,6 +104,15 @@ def test_runtime_adapter_guards_the_exact_v1_lifecycle_edges() -> None:
     assert "RUNTIME_MISMATCH into an" in source
     assert '"idempotency_cache_entries",outcomes_.size()' in source
     assert '"idempotency_cache_capacity",kMaxOutcomes' in source
+    assert 'const bool effectiveFrozen = g_dualLaneControlBridge.frozen() || !operational_;' in source
+    assert 'const std::string effectiveState = effectiveFrozen ? "frozen" : state_;' in source
+    assert '"operational", !effectiveFrozen' in source
+    assert '"frozen", effectiveFrozen' in source
+    assert 'if ((g_dualLaneControlBridge.frozen() || !operational_) && type != "Abort")' in source
+    assert "outcomes_.size() < kMaxOutcomes" in source
+    frozen = source[source.index("void respondFrozen") : source.index("static void Dispatch", source.index("void respondFrozen"))]
+    assert "PREVIEW_FROZEN" in frozen
+    assert "outcomes_.size() < kMaxOutcomes" in frozen
     committed = source[source.index("void takeCommitted") : source.index("private:", source.index("void takeCommitted"))]
     assert "outcomes_[take.key]" not in committed
     assert "original Dispatch(Take) response (TakeAccepted)" in committed

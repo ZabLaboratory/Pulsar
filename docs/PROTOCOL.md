@@ -22,6 +22,9 @@ compatibility alias when the envelope's `command_type` is present. The response 
 is emitted to subscribed clients as an obs-websocket `VendorEvent`, with the
 v1 event in `eventData` and its `eventType` set to the v1 event type. `GetState`
 returns the current runtime ID, state, revisions, role map, and server sequence.
+It also exposes `operational` and `frozen`; after the frame-boundary rollback
+freeze these are `false` and `true` respectively while the committed Program
+route remains live.
 It also reports `idempotency_cache_entries` and
 `idempotency_cache_capacity` so an operator can observe the active retention
 window. The process/session retains at most 4096 current-runtime command
@@ -102,17 +105,24 @@ Three things to keep in mind when driving the baseline against Pulsar:
    `StartVirtualCam`/`StopVirtualCam` — **and the by-name generic trio
    `StartOutput`/`StopOutput`/`ToggleOutput`** — re-read the real output
    state after the action and answer:
-   - **success** when the output reached the requested state, or when
-     libobs accepted the action and is completing it asynchronously (an
-     rtmp connect thread, an `ffmpeg_muxer` flush);
+   - **success** when the output reached the requested state, or, for the
+     asynchronous start/stop requests that do not return a completed file,
+     when libobs accepted the action and is completing it (an rtmp connect
+     thread, an `ffmpeg_muxer` flush);
    - **error** — `OutputNotRunning` (501) for a start, `OutputRunning`
-     (500) for a stop — when the action was refused. The `comment`
-     carries `obs_output_get_last_error()` verbatim, never a generic
-     message.
+     (500) for a refused stop, or `RequestProcessingFailed` (702) for an
+     accepted `StopRecord` that remains active after its bounded 2.5 s flush
+     window. `StopRecord` includes `outputPath`, so it returns success only
+     after the output is inactive and never returns a stale path on the
+     pending branch. On a 702 response, the client must consume the later
+     `RecordStateChanged=STOPPED` event and re-read `GetRecordStatus` before
+     reusing the process; that event carries the final output path. The
+     `comment` carries the observed cause or state.
 
-   These requests stay bounded and short: they verify a *refusal*, they
-   never wait for activation. The request signatures, response fields and
-   status enum are unchanged.
+   These requests stay bounded: generic actions use the short verification
+   window, while `StopRecord` uses the dedicated 2.5 s muxer-flush bound. The
+   request signatures and status enum are unchanged. `GetRecordStatus` also
+   exposes the additive `outputTotalFrames` readiness counter.
 
    This replaces the pre-`#120` behaviour where an unconfigured output was
    reported as started (`result: true` followed by
@@ -138,14 +148,15 @@ Three things to keep in mind when driving the baseline against Pulsar:
    - `OutputNotRunning` (501) when no recording is running at all —
      `obs_output_pause()` returns false on an inactive output and the
      frontend entry point is `void`, so this used to answer success;
-   - `InvalidResourceState` (604) when `GetRecordStatus.outputBytes` is
-     still `0`. Pausing before the muxer wrote its first byte wedges
+   - `InvalidResourceState` (604) when `GetRecordStatus.outputTotalFrames` is
+     still `0`. Pausing before the muxer received its first video frame wedges
      libobs' pause timeline permanently (upstream defect: the pause
      window is computed from an encoder timestamp that is still zero, so
      the pause never lifts and the replay buffer sharing those encoders
-     stops producing files). The `comment` names that cause; the client
-     lifts the condition itself by polling `outputBytes` — the field is
-     already part of `GetRecordStatus`.
+     stops producing files). Audio can make `outputBytes` non-zero before
+     this point, so bytes are not a sufficient readiness test. The `comment`
+     names the cause; the client lifts the condition itself by polling
+     `outputTotalFrames`, which is part of `GetRecordStatus`.
 2. **`StartStream` ≠ go live.** The v5 `StartStream` request talks to
    the singleton `PulsarStream` rtmp_output created by
    `pulsar-frontend-stub`. Since `#131` the frontend **binds the

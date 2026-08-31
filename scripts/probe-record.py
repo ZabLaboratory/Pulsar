@@ -56,7 +56,8 @@ def parse_rate(rate_str: str) -> float:
     if "/" in rate_str:
         num, den = rate_str.split("/", 1)
         try:
-            n = float(num); d = float(den)
+            n = float(num)
+            d = float(den)
             return n / d if d else 0.0
         except ValueError:
             return 0.0
@@ -139,6 +140,8 @@ CONFIG_PATH = (
 EVENT_SUBSCRIPTION_ALL = 0x7FF
 RECORD_DURATION_SEC = 3.0
 MIN_MP4_BYTES = 100 * 1024  # 100 KB sanity threshold
+STOP_PENDING_CODE = 702
+STOP_EVENT_TIMEOUT_SEC = 15.0
 
 
 def compute_auth(password: str, salt: str, challenge: str) -> str:
@@ -187,6 +190,48 @@ async def expect_event(inbox: Inbox, ws, event_type: str, timeout: float = 10.0,
         if predicate is None or predicate(e.get("eventData") or {}):
             return inbox.events.pop(i)
     raise RuntimeError("unreachable")
+
+
+async def wait_record_stop(inbox: Inbox, ws, response: dict) -> dict | None:
+    """Consume a StopRecord result without losing a late stop.
+
+    StopRecord returns a completed path only when its bounded server-side
+    settlement lands.  A typed 702 means the stop was accepted but the muxer
+    is still flushing; the probe must then wait for the authoritative STOPPED
+    event and re-read outputActive before the shared process is reused.  No
+    path or success is inferred from the 702 response itself.
+    """
+    status = response.get("requestStatus") or {}
+    if not status.get("result") and int(status.get("code") or 0) != STOP_PENDING_CODE:
+        print(f"error: StopRecord declined before acceptance: {status}")
+        return None
+    if not status.get("result"):
+        print("   StopRecord pending (702); waiting for RecordStateChanged STOPPED")
+
+    try:
+        event = await expect_event(
+            inbox,
+            ws,
+            "RecordStateChanged",
+            timeout=STOP_EVENT_TIMEOUT_SEC,
+            predicate=lambda d: d.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STOPPED",
+        )
+    except asyncio.TimeoutError:
+        print(f"error: StopRecord did not emit STOPPED within {STOP_EVENT_TIMEOUT_SEC:.0f}s")
+        return None
+
+    deadline = asyncio.get_event_loop().time() + STOP_EVENT_TIMEOUT_SEC
+    n = 0
+    while True:
+        n += 1
+        status_response = await request(inbox, ws, "GetRecordStatus", f"stop-status-{n}")
+        if not (status_response.get("responseData") or {}).get("outputActive"):
+            return event
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            print("error: STOPPED event arrived but GetRecordStatus.outputActive stayed true")
+            return None
+        await asyncio.sleep(min(0.25, remaining))
 
 
 async def request(inbox: Inbox, ws, request_type: str, request_id: str,
@@ -251,15 +296,9 @@ async def probe(url: str, password: str) -> int:
 
         print("-> StopRecord")
         resp = await request(inbox, ws, "StopRecord", "stop-1")
-        if not resp["requestStatus"]["result"]:
-            print(f"error: StopRecord declined: {resp['requestStatus']}")
+        evt = await wait_record_stop(inbox, ws, resp)
+        if evt is None:
             return 1
-
-        evt = await expect_event(
-            inbox, ws, "RecordStateChanged",
-            predicate=lambda d: d.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STOPPED",
-            timeout=10.0,
-        )
         output_path = evt["eventData"].get("outputPath") or ""
         print(f"   <- RecordStateChanged outputState=STOPPED outputPath={output_path}")
 

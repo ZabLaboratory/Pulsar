@@ -10,7 +10,10 @@ and a teardown barrier for an extracted (in-flight) swap.
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -23,7 +26,11 @@ _WEBSOCKET_HANDLER = _ROOT / "plugins/pulsar-websocket/src/requesthandler/Reques
 _DUAL_LANE_PATCH = _ROOT / "patches/0009-feat-libobs-add-frame-boundary-dual-lane-swaps.patch"
 _DIRECTSHOW_NAMESPACE_PATCH = _ROOT / "patches/0010-fix-win-dshow-reject-ambiguous-queue-namespaces.patch"
 _RUNTIME_PROBE = _ROOT / "scripts/probe-dual-lane.py"
+_ROLLBACK_PROBE = _ROOT / "scripts/probe-dual-lane-rollback.py"
 _OUTPUT_EFFECT_PROBE = _ROOT / "scripts/probe-output-effect.py"
+_DUAL_LANE_CONFIG = _ROOT / "plugins/pulsar-frontend-stub/include/pulsar-dual-lane-config.h"
+_DUAL_LANE_CONFIG_TEST = _ROOT / "tests/dual-lane-config/dual-lane-config-probe.cpp"
+_DUAL_LANE_CONFIG_CMAKE = _ROOT / "tests/dual-lane-config/CMakeLists.txt"
 
 
 def _read(path: Path) -> str:
@@ -43,6 +50,102 @@ def _load_probe(path: Path, module_name: str):
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_directshow_cleanup_keeps_owned_handle_and_fails_closed() -> None:
+    probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_cleanup")
+
+    class ExitingProcess:
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            assert timeout is None or timeout >= 0
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("fake", timeout)
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+    class StuckProcess(ExitingProcess):
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    class StuckReader:
+        def join(self, timeout: float | None = None) -> None:
+            assert timeout == 2
+
+        def is_alive(self) -> bool:
+            return True
+
+    def process_with(fake: object):
+        instance = probe.PulsarProcess.__new__(probe.PulsarProcess)
+        instance.directshow_proc = fake
+        instance.directshow_thread = threading.Thread(target=lambda: None)
+        instance.directshow_thread.start()
+        instance.directshow_cleanup_failure = None
+        return instance
+
+    clean = process_with(ExitingProcess())
+    clean.stop_directshow_consumer()
+    assert clean.directshow_proc is None
+    assert clean.directshow_thread is None
+
+    stuck = process_with(StuckProcess())
+    with pytest.raises(probe.ProbeFailure, match="remained alive|exit was not confirmed|could not be killed"):
+        stuck.stop_directshow_consumer()
+    assert stuck.directshow_proc is not None
+    assert stuck.directshow_cleanup_failure is not None
+
+    reader_stuck = process_with(ExitingProcess())
+    reader_stuck.directshow_thread = StuckReader()
+    with pytest.raises(probe.ProbeFailure, match="reader thread did not exit"):
+        reader_stuck.stop_directshow_consumer()
+    assert reader_stuck.directshow_proc is not None
+    assert reader_stuck.directshow_thread is not None
+
+    lease_probe = probe.PulsarProcess(
+        Path("pulsar.exe"),
+        "x264",
+        Path("record"),
+        trace_path=Path("trace.jsonl"),
+        runtime_id="runtime-test",
+    )
+    finished = ExitingProcess()
+    finished.returncode = 0
+    lease_probe.proc = finished
+    lease_probe.lines.append("PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=runtime-test")
+    with pytest.raises(probe.ProbeFailure, match="runtime instance lease"):
+        lease_probe.assert_shutdown_clean(require_runtime_lease=True)
+    lease_probe.lines.append("PULSAR_RUNTIME_INSTANCE lease=released id=runtime-test")
+    with pytest.raises(probe.ProbeFailure, match="legacy DirectShow alias state"):
+        lease_probe.assert_shutdown_clean(require_runtime_lease=True)
+    lease_probe.lines.append("PULSAR_LEGACY_ALIAS lease=disabled id=runtime-test")
+    lease_probe.assert_shutdown_clean(require_runtime_lease=True)
+
+    log_thread_probe = probe.PulsarProcess(
+        Path("pulsar.exe"),
+        "x264",
+        Path("record"),
+        trace_path=Path("trace.jsonl"),
+        runtime_id="runtime-test",
+    )
+    log_thread_probe.proc = finished
+    log_thread_probe.lines.extend(lease_probe.lines)
+    log_thread_probe.thread = StuckReader()
+    with pytest.raises(probe.ProbeFailure, match="log reader thread did not exit"):
+        log_thread_probe.assert_shutdown_clean(require_runtime_lease=True)
+    assert log_thread_probe.thread is not None
 
 
 def test_physical_roots_are_fixed_and_roles_point_at_their_lane() -> None:
@@ -128,8 +231,7 @@ def test_preview_and_direct_selection_mutate_composition_not_view_identity() -> 
 
 def test_encoder_and_stable_surfaces_are_bound_only_during_setup() -> None:
     source = _read(_FRONTEND)
-    assert source.count("obs_encoder_set_video(videoEncoder, programVideo)") == 1
-    assert "obs_encoder_set_video(videoEncoder, obs_get_video())" not in source
+    assert source.count("obs_encoder_set_video(videoEncoder, encoderVideo)") == 1
 
     setup = _between(
         source,
@@ -157,6 +259,11 @@ def test_encoder_and_stable_surfaces_are_bound_only_during_setup() -> None:
     assert "obs_view_add(programView)" not in setup
     assert "obs_view_remove(programView)" not in setup
     assert "obs_view_destroy(programView)" not in setup
+    main_setup = _between(source, "bool PulsarFrontendAPI::setup()", "void PulsarFrontendAPI::teardown()")
+    assert "video_t bound once to ProgramView" in main_setup
+    assert main_setup.index("setupDualLane(scene)") < main_setup.index(
+        "obs_encoder_set_video(videoEncoder, encoderVideo)"
+    )
     assert "obs_view_set_source(" not in cut
     assert "obs_encoder_set_video(" not in cut
     assert "obs_output_set_media(" not in cut
@@ -267,18 +374,256 @@ def test_take_logs_roles_frame_identity_and_stable_downstream_objects() -> None:
     assert "%p" not in ready + accepted + committed
 
 
+def test_dual_lane_activation_flag_is_consumed_and_rollback_preserves_surfaces() -> None:
+    source = _read(_FRONTEND)
+    probe = _read(_RUNTIME_PROBE)
+
+    # The reference campaign's environment assignment must have a matching
+    # boot-time consumer.  A probe-side env var without this decision would
+    # measure the wrong topology while still looking like a valid baseline.
+    assert "PULSAR_DISABLE_DUAL_LANE" in source
+    assert "PULSAR_DUAL_LANE_ENABLED" in source
+    assert "resolve_dual_lane_activation" in source
+    assert "flag_resolved_at=setup" in source
+    assert "positive == EnvBool::Invalid" in source
+    assert "legacyDisable == EnvBool::Invalid" in source
+    assert 'return {false, "invalid-PULSAR_DUAL_LANE_ENABLED"}' in source
+    assert 'return {false, "invalid-PULSAR_DISABLE_DUAL_LANE"}' in source
+    assert "dualLaneEnabled = activation.enabled && !resourceReference && rollbackSetting.valid" in source
+    assert '"invalid-PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES"' in source
+    config = _read(_DUAL_LANE_CONFIG)
+    config_test = _read(_DUAL_LANE_CONFIG_TEST)
+    config_cmake = _read(_DUAL_LANE_CONFIG_CMAKE)
+    rollback_parser = _between(
+        source,
+        "DualLaneRollbackSetting resolve_dual_lane_rollback_after_takes()",
+        "class PulsarFrontendAPI;",
+    )
+    assert "parse_rollback_after_takes" in rollback_parser
+    assert "strtoull" not in rollback_parser
+    assert "ASCII digits" in config
+    assert "parsed == 100000ULL / 10ULL && digitValue > 0" in config
+    for value in ('""', '"0"', '"100001"', '" 1"', '"+1"', '"1.0"'):
+        assert value in config_test
+    for value in ('"1"', '"0001"', '"100000"'):
+        assert value in config_test
+    assert "add_test(NAME pulsar-dual-lane-config-probe" in config_cmake
+    assert 'RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests/nv-probe"' in config_cmake
+    assert "parse_env_bool" in source
+    assert "if (!*value)" in source
+    assert "assert_dual_lane_activation" in probe
+    assert 'required_source="resource-reference" if expected_reference else "PULSAR_DUAL_LANE_ENABLED=1"' in probe
+    assert 'required_source="PULSAR_DUAL_LANE_ENABLED=1"' in probe
+
+    # Rollback is a post-commit operational freeze.  It must leave the
+    # already-selected Program route and both stable downstream identities in
+    # place; changing an active video_t here would violate the ADR invariant.
+    assert "PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES" in source
+    assert "rollbackAfterTakes" in source
+    assert "dualLaneOperational = false" in source
+    assert "rollback committed at frame_id=%llu" in source
+    assert "current_program_preserved=%d" in source
+    assert "active_video_t_rebound=%d" in source
+    assert "lane_root_binding_valid=%d" in source
+    assert "program_video_stable=%d" in source
+    assert "frozen=%d" in source
+    assert "operational_" in source
+    assert 'state_ = freezeAfterCommit ? "frozen" : "ready"' in source
+    callback = _between(
+        source,
+        "void PulsarFrontendAPI::OnDualLaneCutCommitted",
+        "bool PulsarFrontendAPI::setup()",
+    )
+    assert "g_dualLaneControlBridge.freeze()" in callback
+    assert "g_dualLaneControlBridge.deactivate()" not in callback
+    assert "obs_set_output_source(" not in callback
+    assert "obs_view_set_source(" not in callback
+    assert "obs_encoder_set_video(" not in callback
+    rollback_probe = _read(_ROLLBACK_PROBE)
+    assert "PULSAR_DUAL_LANE_ROLLBACK_AFTER_TAKES" in rollback_probe
+    assert "pulsar-dual-lane-rollback.json" in rollback_probe
+    assert "pulsar.dual-lane-rollback.v1" in rollback_probe
+    assert "current_program_preserved" in rollback_probe
+    assert "stable encoder/video binding count=1" in rollback_probe
+    assert "CallVendorRequest" in rollback_probe
+    assert "rollback-vendor-prepare" in rollback_probe
+    assert "rollback-vendor-take" in rollback_probe
+    assert "rollback-vendor-dispatch" in rollback_probe
+    assert "rollback-getstate-race-" in rollback_probe
+    assert "ready/operational=true after the frame-boundary freeze" in rollback_probe
+    assert "validate_commit(identity, None, commit)" in rollback_probe
+    assert 'state_before["state"] != "frozen"' in rollback_probe
+    assert "freezeAfterFrontendRollback" in source
+    assert "runtime and DirectShow lease state was observable" in rollback_probe
+    assert "CTRL_BREAK_EVENT" in rollback_probe
+    assert "PulsarRollbackMarkerWriter" in source
+    assert "g_rollbackMarkerWriter.start()" in source
+    assert "g_rollbackMarkerWriter.enqueue" in source
+    assert "status.dump()" in source
+    assert '"runtime_instance_id", g_runtimeTelemetry.runtimeInstanceId()' in source
+    callback = _between(
+        source,
+        "void PulsarFrontendAPI::OnDualLaneCutCommitted",
+        "bool PulsarFrontendAPI::setup()",
+    )
+    assert "std::ofstream" not in callback
+    assert "create_directories" not in callback
+
+
 def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> None:
     probe = _read(_RUNTIME_PROBE)
     assert "--encoder" in probe
     assert "--takes" in probe
     assert '"StartRecord"' in probe
     assert '"StopRecord"' in probe
+    assert "start_directshow_consumer" in probe
+    assert "Pulsar Program Return" in probe
+    assert '"PULSAR_TRACE_PATH"' in probe
+    assert '"PULSAR_DIRECTSHOW_LEGACY_ALIAS"' in probe
+    assert '"PULSAR_LEGACY_ALIAS"] = "disabled"' in probe
+    assert 'boundary="directshow_return"' in probe
+    assert "assert_directshow_consumer_alive" in probe
+    assert "directshow_cleanup_failure" in probe
+    assert "def _join_directshow_reader" in probe
+    assert "reader_failure = self._join_directshow_reader()" in probe
+    assert "def _join_process_reader" in probe
+    assert "assert_shutdown_clean" in probe
+    assert '"PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released"' in probe
+    assert '"PULSAR_RUNTIME_INSTANCE lease=released"' in probe
+    assert "PULSAR_LEGACY_ALIAS lease=" in probe
+    assert "require_pixels=True" in probe
+    assert "require_pixels=False" not in probe
     assert "OBS_WEBSOCKET_OUTPUT_STARTED" in probe
     assert "OBS_WEBSOCKET_OUTPUT_STOPPED" in probe
+    assert "async def start_resource_recording" in probe
+    assert "async def stop_resource_recording" in probe
+    assert "active_count >= minimum_samples" in probe
+    assert 'record.get("encoder_active") is True' in probe
+    assert "verify_recording(output_path, ffprobe)" in probe
+    resource_start = probe.index("async def start_resource_recording")
+    resource_stop = probe.index("async def stop_resource_recording")
+    resource_collect = probe.index("async def collect_resource_samples")
+    assert resource_start < resource_stop < resource_collect
+    start_helper = probe[resource_start:resource_stop]
+    stop_helper = probe[resource_stop:resource_collect]
+    assert start_helper.index('"StartRecord"') < start_helper.index("OBS_WEBSOCKET_OUTPUT_STARTED")
+    assert stop_helper.index('"StopRecord"') < stop_helper.index("OBS_WEBSOCKET_OUTPUT_STOPPED")
+    collect_body = probe[resource_collect:probe.index("async def assert_distinct_selected_scenes", resource_collect)]
+    assert collect_body.index("await start_resource_recording") < collect_body.index("active_count >= minimum_samples")
+    assert collect_body.index("await stop_resource_recording") < collect_body.index("verify_recording(output_path, ffprobe)")
+    assert "stop_recording_after_error" in collect_body
     assert "-count_frames" in probe
     assert "encoder video_t bound once to ProgramView" in probe
     assert "lane_root_binding_valid=(\\d) program_main_view_valid=(\\d)" in probe
     assert "TakeCommitted reported an invalid surface relation" in probe
+    assert "TRACE_WARMUP_TAKES = 100" in probe
+    assert "total_takes = warmup_takes + takes" in probe
+    assert "warmup_takes_observed" in _read(_ROOT / "scripts/probe-take-latency.py")
+    assert "validate_trace_append" in probe
+    assert "--trace-append requires --runtime-id matching the reference session" in probe
+    assert "--resource-mode is supported only with --encoder nvenc" in probe
+    assert 'sample.get("encoder_family") == "nvenc"' in probe
+
+
+def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: Path) -> None:
+    probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_append_preflight")
+    common = [
+        "--trace",
+        str(tmp_path / "trace.jsonl"),
+        "--build-revision",
+        "a" * 40,
+        "--capture-window",
+        "title:class:exe",
+        "--cef-workload",
+    ]
+    with pytest.raises(SystemExit):
+        probe.parse_args(["--encoder", "x264", *common, "--resource-mode", "dual_lane"])
+    with pytest.raises(SystemExit):
+        probe.parse_args(
+            ["--encoder", "x264", *common, "--runtime-id", "runtime-x264", "--trace-append", "--resource-mode", "dual_lane"]
+        )
+
+    session = {
+        "record_type": "session",
+        "codec": "nvenc",
+        "runtime_instance_id": "runtime-reference",
+        "build_revision": "a" * 40,
+        "hardware": {"host": "host-reference", "gpu": "gpu-reference"},
+        "producer_topology": "single_lane_reference",
+        "producer_count": 1,
+        "workload": {"wgc": True, "cef": True, "nvenc": True},
+    }
+    resource = {
+        "record_type": "resource_sample",
+        "sample_mode": "reference",
+        "runtime_instance_id": session["runtime_instance_id"],
+        "build_revision": session["build_revision"],
+        "hardware": session["hardware"],
+        "producer_topology": "single_lane_reference",
+        "producer_count": 1,
+        "encoder_active": True,
+        "encoder_family": "nvenc",
+    }
+    trace_path = tmp_path / "reference.jsonl"
+    trace_path.write_text(
+        json.dumps(session) + "\n" + json.dumps(resource) + "\n",
+        encoding="utf-8",
+    )
+    original_trace = trace_path.read_bytes()
+    probe.validate_trace_append(
+        trace_path,
+        runtime_id="runtime-reference",
+        build_revision="a" * 40,
+        trace_host="host-reference",
+        trace_gpu="gpu-reference",
+    )
+    assert trace_path.read_bytes() == original_trace
+
+    for field, value in (
+        ("runtime_id", "runtime-other"),
+        ("build_revision", "b" * 40),
+        ("trace_host", "host-other"),
+        ("trace_gpu", "gpu-other"),
+    ):
+        kwargs = {
+            "runtime_id": "runtime-reference",
+            "build_revision": "a" * 40,
+            "trace_host": "host-reference",
+            "trace_gpu": "gpu-reference",
+        }
+        kwargs[field] = value
+        with pytest.raises(probe.ProbeFailure, match="does not match"):
+            probe.validate_trace_append(trace_path, **kwargs)
+
+    wrong_family = dict(resource)
+    wrong_family["encoder_family"] = "x264"
+    trace_path.write_text(
+        json.dumps(session) + "\n" + json.dumps(wrong_family) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(probe.ProbeFailure, match="active sample"):
+        probe.validate_trace_append(
+            trace_path,
+            runtime_id="runtime-reference",
+            build_revision="a" * 40,
+            trace_host="host-reference",
+            trace_gpu="gpu-reference",
+        )
+
+    wrong_codec = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
+    wrong_codec["codec"] = "x264"
+    trace_path.write_text(
+        json.dumps(wrong_codec) + "\n" + json.dumps(resource) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(probe.ProbeFailure, match="existing NVENC"):
+        probe.validate_trace_append(
+            trace_path,
+            runtime_id="runtime-reference",
+            build_revision="a" * 40,
+            trace_host="host-reference",
+            trace_gpu="gpu-reference",
+        )
 
 
 def test_runtime_probe_exercises_live_mutation_and_post_take_isolation() -> None:
@@ -309,6 +654,9 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "std::mutex dispatchMutex_" in frontend
     assert "std::atomic<bool> pending_" in frontend
     assert "Lifecycle::ShuttingDown" in frontend
+    assert "out bool frozen" in frontend
+    assert "bool frozen() const" in bridge
+    assert "void freeze()" in frontend
     assert "g_dualLaneControlBridge.set_pending(true)" in frontend
     assert "g_dualLaneControlBridge.set_pending(false)" in frontend
     assert "g_dualLaneControlBridge.deactivate()" in frontend
@@ -322,16 +670,53 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "vendor->is_string() || !nestedRequest->is_string()" in handler
     assert "json::value() here" in handler
     assert "const bool controlledSceneSwitchBypass" in handler
-    assert "!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass" in handler
+    assert "bool IsSafetyStopRequest(const std::string &requestType)" in handler
+    for safety_stop in ("StopRecord", "StopStream", "StopReplayBuffer", "StopVirtualCam", "StopOutput"):
+        assert f'requestType == "{safety_stop}"' in handler
+    assert "const bool safetyStop" in handler
+    assert (
+        "!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass && !safetyStop"
+        in handler
+    )
     assert "RequestStatus::RequestProcessingFailed" in handler
     assert "PREVIEW_FROZEN" in handler
-    # The gate is central and acquired before handler lookup. The only pending
-    # bypass is the exact vendor Abort/GetState pair; Prepare/Take/Dispatch,
-    # malformed CallVendorRequest data, and every other vendor remain gated.
+    assert "after the dual-lane rollback freeze" in handler
+    # The gate is central and acquired before handler lookup. The only scene
+    # switch pending bypass is the exact vendor Abort/GetState pair; the
+    # finite output-stop allowlist is unrelated to Preview mutations.
+    # Prepare/Take/Dispatch, malformed CallVendorRequest data, and every other
+    # vendor remain gated.
     assert 'nested == "Prepare"' not in handler
     assert 'nested == "Take"' not in handler
     assert 'nested == "Dispatch"' not in handler
     assert handler.index("const bool controlledSceneSwitchBypass") < handler.index("_handlerMap.at")
+
+
+def test_rollback_probe_stops_outputs_after_freeze_but_keeps_scene_mutations_blocked() -> None:
+    handler = _read(_WEBSOCKET_HANDLER)
+    rollback_probe = _read(_ROLLBACK_PROBE)
+
+    # The probe's post-freeze cleanup must be able to stop an active recorder;
+    # this is an output-safety action, not a Preview/scene mutation. The
+    # central gateway still verifies every scene mutation as PREVIEW_FROZEN.
+    assert 'request(inbox, ws, "StopRecord", "rollback-stop-record")' in rollback_probe
+    assert 'assert_success(response, "StopRecord")' in rollback_probe
+    assert 'request(\n            inbox,\n            ws,\n            "CreateInput",' in rollback_probe
+    assert 'assert_preview_frozen(response, "CreateInput after rollback")' in rollback_probe
+    assert "ROLLBACK_MIN_RECORDING_SECONDS = 1.0" in rollback_probe
+    assert "recording_started_at = time.monotonic()" in rollback_probe
+    assert "recording_elapsed = time.monotonic() - recording_started_at" in rollback_probe
+    assert "await asyncio.sleep(ROLLBACK_MIN_RECORDING_SECONDS - recording_elapsed)" in rollback_probe
+    assert '"--record-dir"' in rollback_probe
+    assert "probe.prepare_record_directory(args.record_dir)" in rollback_probe
+    assert "persistent recording directory" in rollback_probe
+    assert "owned_output_path = probe.ensure_recording_output_owned(output_path, runtime.record_dir)" in rollback_probe
+    assert "probe.verify_recording(str(owned_output_path), ffprobe)" in rollback_probe
+    allowlist = _between(handler, "bool IsSafetyStopRequest", "// Abort is intentionally")
+    assert 'requestType == "StopRecord"' in allowlist
+    assert 'requestType == "StopOutput"' in allowlist
+    assert 'requestType == "StartRecord"' not in allowlist
+    assert 'requestType == "ToggleRecord"' not in allowlist
 
 
 def test_runtime_probe_exercises_serial_frame_preview_freeze() -> None:
@@ -415,6 +800,7 @@ def test_output_effect_probe_settles_record_stop_before_next_case() -> None:
 
 def test_core_swap_is_frame_boundary_and_rejects_concurrent_requests() -> None:
     patch = _read(_DUAL_LANE_PATCH)
+    frontend = _read(_FRONTEND)
 
     assert "pthread_cond_t atomic_swap_cond;" in patch
     assert "bool atomic_swap_initialized;" in patch
@@ -427,12 +813,36 @@ def test_core_swap_is_frame_boundary_and_rejects_concurrent_requests() -> None:
     assert "a successor may queue while the previous callback is" in patch
     assert "+obs_view_t *obs_get_main_view(void)" in patch
     assert "+EXPORT obs_view_t *obs_get_main_view(void);" in patch
+    assert "uint64_t admission_floor_ns;" in patch
+    assert "obs_view_queue_atomic_swap_with_floor" in patch
+    assert "return obs_view_queue_atomic_swap_with_floor" in patch
 
     apply_at = patch.index("obs_view_apply_pending_atomic_swap(++obs->video.video_frame_id")
     output_at = patch.index("output_frames();", apply_at)
     assert apply_at < output_at
     assert "obs->video.atomic_swap_inflight = true;" in patch
     assert "obs->video.atomic_swap_inflight = false;" in patch
+
+    apply_fn = patch.index("+void obs_view_apply_pending_atomic_swap")
+    apply_fn_end = patch.index(" void obs_view_render", apply_fn)
+    apply = patch[apply_fn:apply_fn_end]
+    assert "if (swap && pts_ns < swap->admission_floor_ns)" in apply
+    # A below-floor frame must return while the same pending pointer remains
+    # installed; equality and later timestamps must reach the detach path.
+    floor_guard = apply.index("if (swap && pts_ns < swap->admission_floor_ns)")
+    detach = apply.index("obs->video.pending_atomic_swap = NULL;", floor_guard)
+    assert apply.index("return;", floor_guard) < detach
+    assert apply.count("obs->video.pending_atomic_swap = NULL;") == 1
+
+    queue = frontend[frontend.index("bool PulsarFrontendAPI::queueDualLaneCut"):]
+    assert "uint64_t queuedAdmissionFloorNs = 0;" in queue
+    assert "g_runtimeTelemetry.reserve(scene, queuedOnAirLane, queuedPreviewLane,\n                                                        &queuedAdmissionFloorNs)" in queue
+    assert "obs_view_queue_atomic_swap_with_floor(" in queue
+    assert "queuedAdmissionFloorNs, OnDualLaneCutCommitted" in queue
+    # The call site must use the reservation's immutable clock value, not a
+    # second nowNs() sample after queue admission.
+    assert queue.index("g_runtimeTelemetry.reserve") < queue.index("obs_view_queue_atomic_swap_with_floor")
+    assert "obs_view_queue_atomic_swap(\n" not in queue
 
 
 def test_teardown_drains_in_flight_swap_before_destroying_views() -> None:

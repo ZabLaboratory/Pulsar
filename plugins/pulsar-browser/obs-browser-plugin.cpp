@@ -25,6 +25,9 @@
 #include <obs.hpp>
 #include <functional>
 #include <cstdlib>
+#include <chrono>
+#include <atomic>
+#include <condition_variable>
 #include <sstream>
 #include <thread>
 #include <mutex>
@@ -73,6 +76,35 @@ static thread manager_thread;
 static bool manager_initialized = false;
 os_event_t *cef_started_event = nullptr;
 
+enum class CefReadinessState : int {
+	Starting,
+	Ready,
+	Failed,
+};
+static mutex cef_readiness_mutex;
+static condition_variable cef_readiness_cv;
+static CefReadinessState cef_readiness_state = CefReadinessState::Starting;
+static constexpr auto cef_readiness_timeout = std::chrono::seconds(5);
+
+/*
+ * CEF requires every browser to have reached OnBeforeClose before
+ * CefShutdown.  The manager thread owns the message loop, so the barrier is
+ * released by a CEF UI task and never by a wall-clock sleep on the unload
+ * thread.  A timeout is deliberately fail-closed: CefShutdown is skipped and
+ * the process is left to its outer lifecycle rather than tearing down CEF
+ * underneath a still-live browser; the outer process exits non-zero so a
+ * caller cannot mistake the failed unload for a successful shutdown.
+ */
+static constexpr auto cef_shutdown_timeout = std::chrono::seconds(5);
+static constexpr auto cef_shutdown_watchdog_timeout = std::chrono::seconds(6);
+static std::atomic<bool> cef_shutdown_barrier_released{false};
+static std::atomic<bool> cef_shutdown_barrier_failed{false};
+static mutex cef_shutdown_completion_mutex;
+static condition_variable cef_shutdown_completion_cv;
+static bool cef_shutdown_completion_signaled = false;
+static bool cef_shutdown_completion_success = false;
+static atomic<bool> cef_pre_obs_shutdown_complete{false};
+
 #if defined(_WIN32)
 static int adapterCount = 0;
 #endif
@@ -109,7 +141,83 @@ public:
 
 bool QueueCEFTask(std::function<void()> task)
 {
-	return CefPostTask(TID_UI, CefRefPtr<BrowserTask>(new BrowserTask(task)));
+	if (!BrowserSourceCefReady()) {
+		blog(LOG_WARNING, "PULSAR_CEF_SHUTDOWN event=post_rejected reason=cef_not_ready");
+		return false;
+	}
+	const bool posted = CefPostTask(TID_UI, CefRefPtr<BrowserTask>(new BrowserTask(task)));
+	if (!posted)
+		blog(LOG_ERROR, "PULSAR_CEF_SHUTDOWN event=post_rejected reason=cef_task_post_failed");
+	return posted;
+}
+
+bool BrowserSourceCefReady()
+{
+	lock_guard<mutex> lock(cef_readiness_mutex);
+	return cef_readiness_state == CefReadinessState::Ready;
+}
+
+bool BrowserSourceCefInitializationFailed()
+{
+	lock_guard<mutex> lock(cef_readiness_mutex);
+	return cef_readiness_state == CefReadinessState::Failed;
+}
+
+bool BrowserSourceWaitForCefReady()
+{
+	/* Keep the existing manual event as the fast path and readiness proof. */
+	if (cef_started_event && os_event_try(cef_started_event) == 0)
+		return true;
+
+	unique_lock<mutex> lock(cef_readiness_mutex);
+	const bool terminal = cef_readiness_cv.wait_for(lock, cef_readiness_timeout, []() {
+		return cef_readiness_state != CefReadinessState::Starting;
+	});
+	if (terminal && cef_readiness_state == CefReadinessState::Ready)
+		return true;
+
+	if (!terminal) {
+		blog(LOG_WARNING, "PULSAR_CEF_SHUTDOWN event=readiness_timeout action=reject_source");
+	} else {
+		blog(LOG_ERROR,
+		     "PULSAR_CEF_SHUTDOWN event=readiness_failed reason=cef_initialize_failed "
+		     "action=reject_source");
+	}
+	return false;
+}
+
+static void MarkCefReadinessFailed()
+{
+	{
+		lock_guard<mutex> lock(cef_readiness_mutex);
+		cef_readiness_state = CefReadinessState::Failed;
+	}
+	cef_readiness_cv.notify_all();
+}
+
+[[noreturn]] static void FailCefShutdown(const char *reason)
+{
+	std::fprintf(stderr,
+		     "PULSAR_CEF_SHUTDOWN event=watchdog_failure reason=%s action=exit_nonzero\n", reason);
+	std::fflush(stderr);
+	std::_Exit(EXIT_FAILURE);
+}
+
+static void ResetCefShutdownCompletion()
+{
+	lock_guard<mutex> lock(cef_shutdown_completion_mutex);
+	cef_shutdown_completion_signaled = false;
+	cef_shutdown_completion_success = false;
+}
+
+static void SignalCefShutdownCompletion(bool success)
+{
+	{
+		lock_guard<mutex> lock(cef_shutdown_completion_mutex);
+		cef_shutdown_completion_success = success;
+		cef_shutdown_completion_signaled = true;
+	}
+	cef_shutdown_completion_cv.notify_all();
 }
 
 /* ========================================================================= */
@@ -271,6 +379,7 @@ static CefRefPtr<BrowserApp> app;
 
 static void BrowserInit(void)
 {
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=manager_started");
 	string path = obs_get_module_binary_path(obs_current_module());
 	path = path.substr(0, path.find_last_of('/') + 1);
 	// PULSAR: subprocess helper renamed to pulsar-browser-page.exe
@@ -394,6 +503,7 @@ static void BrowserInit(void)
 #else
 		blog(LOG_ERROR, "[obs-browser]: CEF failed to initialize.");
 #endif
+		MarkCefReadinessFailed();
 		return;
 	}
 
@@ -401,27 +511,204 @@ static void BrowserInit(void)
 	CefRegisterSchemeHandlerFactory("http", "absolute", new BrowserSchemeHandlerFactory());
 
 	os_event_signal(cef_started_event);
+	{
+		lock_guard<mutex> lock(cef_readiness_mutex);
+		cef_readiness_state = CefReadinessState::Ready;
+	}
+	cef_readiness_cv.notify_all();
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=cef_ready");
 }
 
-static void BrowserShutdown(void)
+static void BrowserShutdown(bool allow_cef_shutdown)
 {
+	if (!allow_cef_shutdown) {
+		std::fprintf(stderr,
+			     "PULSAR_CEF_SHUTDOWN event=cef_shutdown_skipped reason=barrier_failed\n");
+		std::fflush(stderr);
+		blog(LOG_ERROR,
+		     "PULSAR_CEF_SHUTDOWN event=cef_shutdown_skipped reason=barrier_failed");
+		/*
+		 * There is no safe CEF teardown after the barrier deadline.  Terminate
+		 * with a deterministic non-zero status instead of returning through the
+		 * headless host as if module unload had succeeded (which would be a
+		 * false rc=0).  The explicit marker above is flushed by the host logger.
+		 */
+		FailCefShutdown("barrier_failed");
+	}
+
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=cef_shutdown_begin browser_count=%llu",
+	     static_cast<unsigned long long>(BrowserSourceLiveBrowserCount()));
 	CefClearSchemeHandlerFactories();
 
 #ifdef ENABLE_BROWSER_QT_LOOP
 	while (messageObject.ExecuteNextBrowserTask())
 		;
-	CefDoMessageLoopWork();
+		CefDoMessageLoopWork();
 #endif
 	CefShutdown();
 	app = nullptr;
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=cef_shutdown_complete browser_count=%llu",
+	     static_cast<unsigned long long>(BrowserSourceLiveBrowserCount()));
+}
+
+static void PollBrowserShutdown(std::chrono::steady_clock::time_point deadline)
+{
+	const std::size_t browser_count = BrowserSourceLiveBrowserCount();
+	if (BrowserSourceMarkDrained()) {
+		cef_shutdown_barrier_released.store(true, std::memory_order_release);
+		blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=barrier_released phase=Drained browser_count=%llu",
+		     static_cast<unsigned long long>(browser_count));
+		CefQuitMessageLoop();
+		return;
+	}
+
+	if (std::chrono::steady_clock::now() >= deadline) {
+		cef_shutdown_barrier_failed.store(true, std::memory_order_release);
+		blog(LOG_ERROR,
+		     "PULSAR_CEF_SHUTDOWN event=timeout browser_count=%llu action=skip_cef_shutdown",
+		     static_cast<unsigned long long>(browser_count));
+		CefQuitMessageLoop();
+		return;
+	}
+
+	const bool posted = CefPostDelayedTask(
+		TID_UI, CefRefPtr<BrowserTask>(new BrowserTask([deadline]() { PollBrowserShutdown(deadline); })), 25);
+	if (!posted) {
+		cef_shutdown_barrier_failed.store(true, std::memory_order_release);
+		blog(LOG_ERROR,
+		     "PULSAR_CEF_SHUTDOWN event=timeout browser_count=%llu reason=post_poll_failed "
+		     "action=skip_cef_shutdown",
+		     static_cast<unsigned long long>(browser_count));
+		CefQuitMessageLoop();
+	}
+}
+
+static void StartBrowserShutdownBarrier()
+{
+	const auto deadline = std::chrono::steady_clock::now() + cef_shutdown_timeout;
+	const bool posted = QueueCEFTask([deadline]() {
+		BrowserSourceCloseAllBrowsers();
+		PollBrowserShutdown(deadline);
+	});
+	if (!posted) {
+		cef_shutdown_barrier_failed.store(true, std::memory_order_release);
+		blog(LOG_ERROR,
+		     "PULSAR_CEF_SHUTDOWN event=timeout browser_count=%llu reason=post_close_failed "
+		     "action=skip_cef_shutdown",
+		     static_cast<unsigned long long>(BrowserSourceLiveBrowserCount()));
+		/*
+	 * There is no CEF UI task left that can quit the loop.  CEF documents
+		 * CefQuitMessageLoop as the loop termination primitive; use it only on
+		 * a CEF UI task.  The unload-thread watchdog handles the no-post case;
+		 * never call the thread-affine primitive from this thread.
+		 */
+		FailCefShutdown("close_task_post_failed");
+	}
+}
+
+/*
+ * libobs stops its global audio output before unloading modules.  Browser
+ * audio callbacks must therefore be fenced while obs_get_audio() is still a
+ * valid host resource, rather than waiting for obs_module_unload().  The
+ * headless host invokes the private proc before frontend teardown and before
+ * obs_shutdown(); this keeps the browser plugin loaded while both the source
+ * graph and the libobs audio bus are still valid.  The existing
+ * manager-thread completion ACK remains the single bounded, fail-closed
+ * barrier.
+ */
+static bool BrowserSourcePrepareBeforeObsShutdown()
+{
+	if (cef_pre_obs_shutdown_complete.load(memory_order_acquire))
+		return true;
+
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin");
+
+#ifdef ENABLE_BROWSER_QT_LOOP
+	if (!BrowserSourceCefReady()) {
+		cef_pre_obs_shutdown_complete.store(true, memory_order_release);
+		blog(LOG_INFO,
+		     "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_not_running");
+		return true;
+	}
+	BrowserSourceBeginShutdown();
+	BrowserSourceCloseAllBrowsers();
+	const auto deadline = chrono::steady_clock::now() + cef_shutdown_timeout;
+	while (!BrowserSourceMarkDrained() && chrono::steady_clock::now() < deadline) {
+		CefDoMessageLoopWork();
+		this_thread::yield();
+	}
+	if (!BrowserSourceMarkDrained())
+		FailCefShutdown("pre_obs_shutdown_barrier_timeout");
+	cef_shutdown_barrier_released.store(true, memory_order_release);
+	BrowserShutdown(true);
+#else
+	if (!manager_thread.joinable()) {
+		cef_pre_obs_shutdown_complete.store(true, memory_order_release);
+		blog(LOG_INFO,
+		     "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_not_running");
+		return true;
+	}
+	if (BrowserSourceCefInitializationFailed()) {
+		manager_thread.join();
+		cef_pre_obs_shutdown_complete.store(true, memory_order_release);
+		blog(LOG_INFO,
+		     "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_init_failed");
+		return true;
+	}
+	if (!BrowserSourceWaitForCefReady()) {
+		if (BrowserSourceCefInitializationFailed()) {
+			manager_thread.join();
+			cef_pre_obs_shutdown_complete.store(true, memory_order_release);
+			blog(LOG_INFO,
+			     "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_init_failed");
+			return true;
+		}
+		FailCefShutdown("pre_obs_shutdown_readiness_timeout");
+	}
+
+	ResetCefShutdownCompletion();
+	BrowserSourceBeginShutdown();
+	StartBrowserShutdownBarrier();
+
+	unique_lock<mutex> lock(cef_shutdown_completion_mutex);
+	const bool completion_received = cef_shutdown_completion_cv.wait_for(
+		lock, cef_shutdown_watchdog_timeout, []() { return cef_shutdown_completion_signaled; });
+	const bool completion_success = completion_received && cef_shutdown_completion_success;
+	lock.unlock();
+	if (!completion_received)
+		FailCefShutdown("pre_obs_shutdown_completion_ack_timeout");
+	if (!completion_success)
+		FailCefShutdown("pre_obs_shutdown_completion_ack_failed");
+
+	manager_thread.join();
+#endif
+
+	cef_pre_obs_shutdown_complete.store(true, memory_order_release);
+	blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete");
+	return true;
+}
+
+static void BrowserSourcePrepareBeforeObsShutdownProc(void *, calldata_t *cd)
+{
+	const bool success = BrowserSourcePrepareBeforeObsShutdown();
+	if (cd)
+		calldata_set_bool(cd, "success", success);
 }
 
 #ifndef ENABLE_BROWSER_QT_LOOP
 static void BrowserManagerThread(void)
 {
 	BrowserInit();
+	if (!BrowserSourceCefReady()) {
+		cef_shutdown_barrier_failed.store(true, std::memory_order_release);
+		SignalCefShutdownCompletion(false);
+		return;
+	}
 	CefRunMessageLoop();
-	BrowserShutdown();
+	const bool shutdown_success = cef_shutdown_barrier_released.load(std::memory_order_acquire) &&
+				      !cef_shutdown_barrier_failed.load(std::memory_order_acquire);
+	BrowserShutdown(shutdown_success);
+	SignalCefShutdownCompletion(shutdown_success);
 }
 #endif
 
@@ -461,6 +748,13 @@ void RegisterBrowserSource()
 	};
 	info.create = [](obs_data_t *settings, obs_source_t *source) -> void * {
 		obs_browser_initialize();
+		if (!BrowserSourceWaitForCefReady()) {
+			blog(LOG_WARNING,
+			     "PULSAR_CEF_SHUTDOWN event=source_create_rejected reason=cef_not_ready");
+			return nullptr;
+		}
+		if (!BrowserSourceCanCreateBrowser())
+			return nullptr;
 		return new BrowserSource(settings, source);
 	};
 	info.destroy = [](void *data) {
@@ -738,6 +1032,10 @@ bool obs_module_load(void)
 	qRegisterMetaType<MessageTask>("MessageTask");
 #endif
 
+	{
+		lock_guard<mutex> lock(cef_readiness_mutex);
+		cef_readiness_state = CefReadinessState::Starting;
+	}
 	os_event_init(&cef_started_event, OS_EVENT_TYPE_MANUAL);
 
 #if defined(_WIN32) && CHROME_VERSION_BUILD < 5615
@@ -760,6 +1058,12 @@ bool obs_module_load(void)
 	     cef_version_info(5), cef_version_info(6), cef_version_info(7), CEF_VERSION);
 
 	RegisterBrowserSource();
+	if (proc_handler_t *global_ph = obs_get_proc_handler()) {
+		proc_handler_add(global_ph, "void pulsar_browser_pre_shutdown(out bool success)",
+				 &BrowserSourcePrepareBeforeObsShutdownProc, nullptr);
+	} else {
+		blog(LOG_ERROR, "[obs-browser] pre-obs-shutdown proc registration failed");
+	}
 	obs_frontend_add_event_callback(handle_obs_frontend_event, nullptr);
 
 #ifdef ENABLE_BROWSER_SHARED_TEXTURE
@@ -802,11 +1106,55 @@ void obs_module_post_load(void)
 void obs_module_unload(void)
 {
 #ifdef ENABLE_BROWSER_QT_LOOP
-	BrowserShutdown();
+	if (cef_pre_obs_shutdown_complete.load(memory_order_acquire)) {
+		os_event_destroy(cef_started_event);
+		return;
+	}
+	if (BrowserSourceCefInitializationFailed()) {
+		os_event_destroy(cef_started_event);
+		return;
+	}
+	BrowserSourceBeginShutdown();
+	BrowserSourceCloseAllBrowsers();
+	const auto deadline = std::chrono::steady_clock::now() + cef_shutdown_timeout;
+	while (!BrowserSourceMarkDrained() && std::chrono::steady_clock::now() < deadline) {
+		CefDoMessageLoopWork();
+		std::this_thread::yield();
+	}
+	if (BrowserSourceMarkDrained()) {
+		cef_shutdown_barrier_released.store(true, std::memory_order_release);
+		blog(LOG_INFO, "PULSAR_CEF_SHUTDOWN event=barrier_released phase=Drained browser_count=0");
+	} else {
+		cef_shutdown_barrier_failed.store(true, std::memory_order_release);
+		blog(LOG_ERROR, "PULSAR_CEF_SHUTDOWN event=timeout browser_count=%llu "
+		     "action=skip_cef_shutdown",
+		     static_cast<unsigned long long>(BrowserSourceLiveBrowserCount()));
+	}
+	BrowserShutdown(cef_shutdown_barrier_released.load(std::memory_order_acquire) &&
+			!cef_shutdown_barrier_failed.load(std::memory_order_acquire));
 #else
-	if (manager_thread.joinable()) {
-		if (!QueueCEFTask([]() { CefQuitMessageLoop(); }))
-			blog(LOG_DEBUG, "[obs-browser]: Failed to post CefQuit task to loop");
+	if (cef_pre_obs_shutdown_complete.load(memory_order_acquire)) {
+		if (manager_thread.joinable())
+			manager_thread.join();
+	} else if (manager_thread.joinable()) {
+		if (BrowserSourceCefInitializationFailed()) {
+			manager_thread.join();
+			os_event_destroy(cef_started_event);
+			return;
+		}
+		ResetCefShutdownCompletion();
+		BrowserSourceBeginShutdown();
+		StartBrowserShutdownBarrier();
+
+		unique_lock<mutex> lock(cef_shutdown_completion_mutex);
+		const bool completion_received = cef_shutdown_completion_cv.wait_for(
+			lock, cef_shutdown_watchdog_timeout, []() { return cef_shutdown_completion_signaled; });
+		const bool completion_success = completion_received && cef_shutdown_completion_success;
+		lock.unlock();
+		if (!completion_received)
+			FailCefShutdown("completion_ack_timeout");
+		if (!completion_success)
+			FailCefShutdown("completion_ack_failed");
 
 		manager_thread.join();
 	}

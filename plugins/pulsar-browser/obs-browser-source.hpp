@@ -22,10 +22,15 @@
 
 #include "cef-headers.hpp"
 #include "browser-app.hpp"
+#include "browser-source-task-state.hpp"
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <mutex>
+#include <memory>
+#include <vector>
 
 enum class ControlLevel : int {
 	None,
@@ -34,6 +39,12 @@ enum class ControlLevel : int {
 	Basic,
 	Advanced,
 	All,
+};
+
+enum class BrowserSourceDestroyDisposition : int {
+	QueueOnCefUi,
+	DeleteNow,
+	Fatal,
 };
 
 // Pulsar #158 / ADR Prism 028 §3.2 -- upstream obs-browser ships ReadObs here,
@@ -55,14 +66,45 @@ inline constexpr ControlLevel DEFAULT_CONTROL_LEVEL = ControlLevel::None;
 
 extern bool hwaccel;
 
+/*
+ * CEF owns the actual browser lifetime, which is longer than the
+ * BrowserSource object lifetime because CloseBrowser() is asynchronous.  The
+ * plugin unload path uses these hooks to keep CefRunMessageLoop alive until
+ * CEF has delivered OnBeforeClose for every browser it created.
+ */
+void BrowserSourceBeginShutdown();
+void BrowserSourceCloseAllBrowsers();
+std::size_t BrowserSourceLiveBrowserCount();
+bool BrowserSourceShutdownComplete();
+bool BrowserSourceMarkDrained();
+bool BrowserSourceShutdownStarted();
+/* Wait for the manager thread's successful CefInitialize, with a bound. */
+bool BrowserSourceWaitForCefReady();
+/* Non-blocking readiness state used by destruction/error paths. */
+bool BrowserSourceCefReady();
+/* Initialization failure is terminal for this plugin instance. */
+bool BrowserSourceCefInitializationFailed();
+bool BrowserSourceCanCreateBrowser();
+void BrowserSourceDestroyTaskComplete();
+void BrowserSourceBrowserCreated(CefRefPtr<CefBrowser> browser, BrowserSource *source);
+void BrowserSourceBrowserClosed(int browser_id);
+void BrowserSourceFinalizeBrowserClose(int browser_id);
+std::vector<int> BrowserSourceBrowserIdsForSource(BrowserSource *source);
+BrowserSourceDestroyDisposition BrowserSourcePrepareDestroy(BrowserSource *source,
+									std::vector<int> *browser_ids);
+void BrowserSourceEnqueueDestroyClose(int browser_id);
+bool BrowserSourceRequestBrowserClose(int browser_id, CefRefPtr<CefBrowserHost> browser_host);
+
 struct BrowserSource {
 	BrowserSource **p_prev_next = nullptr;
 	BrowserSource *next = nullptr;
 
 	obs_source_t *source = nullptr;
+	obs_weak_source_t *weak_source = nullptr;
+	uint64_t source_generation = 0;
 
 	bool tex_sharing_avail = false;
-	bool create_browser = false;
+	std::atomic<bool> create_browser = false;
 	std::recursive_mutex lockBrowser;
 	CefRefPtr<CefBrowser> cefBrowser;
 
@@ -93,6 +135,7 @@ struct BrowserSource {
 	bool first_update = true;
 	bool reroute_audio = true;
 	std::atomic<bool> destroying = false;
+	std::shared_ptr<BrowserSourceTaskState> task_state;
 	ControlLevel webpage_control_level = DEFAULT_CONTROL_LEVEL;
 #if defined(BROWSER_EXTERNAL_BEGIN_FRAME_ENABLED) && defined(ENABLE_BROWSER_SHARED_TEXTURE)
 	bool reset_frame = false;
@@ -120,6 +163,7 @@ struct BrowserSource {
 
 	bool CreateBrowser();
 	void DestroyBrowser();
+	void UnlinkFromBrowserList();
 	void ExecuteOnBrowser(BrowserFunc func, bool async = false);
 
 	/* ---------------------------- */
@@ -148,4 +192,6 @@ struct BrowserSource {
 
 	void SetBrowser(CefRefPtr<CefBrowser> b);
 	CefRefPtr<CefBrowser> GetBrowser();
+	void DetachBrowser(int browser_id);
+	obs_source_t *GetStrongSource();
 };

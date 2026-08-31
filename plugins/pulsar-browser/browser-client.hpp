@@ -21,6 +21,7 @@
 #include <graphics/graphics.h>
 #include <util/threading.h>
 #include "cef-headers.hpp"
+#include "browser-audio-callback-gate.hpp"
 #include "obs-browser-source.hpp"
 
 struct BrowserSource;
@@ -37,9 +38,21 @@ class BrowserClient : public CefClient,
 
 	bool sharing_available = false;
 	bool reroute_audio = true;
+	BrowserAudioCallbackGate audio_callbacks;
+	/*
+	 * CEF may release its last client reference from OnBeforeClose while
+	 * audio callbacks are still draining.  Hold the client until the gate has
+	 * proved quiescence and BrowserSource finalization has completed.
+	 */
+	CefRefPtr<BrowserClient> close_keepalive;
 	ControlLevel webpage_control_level = DEFAULT_CONTROL_LEVEL;
 
 	inline bool valid() const;
+	bool begin_audio_callback();
+	void end_audio_callback(int browser_id);
+	void maybe_finalize_browser_close(int browser_id);
+	void schedule_browser_close_finalization(int browser_id);
+	void finalize_browser_close(int browser_id);
 
 	void UpdateExtraTexture();
 
@@ -81,6 +94,9 @@ public:
 	virtual bool OnTooltip(CefRefPtr<CefBrowser> browser, CefString &text) override;
 
 	/* CefLifeSpanHandler */
+	virtual void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
+	virtual void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
+
 	virtual bool OnBeforePopup(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
 #if CHROME_VERSION_BUILD >= 6834
 				   int popup_id,

@@ -30,6 +30,7 @@ static const uint32_t POLL_STEP_MS = 5;
 
 static const uint32_t DEFAULT_VERIFY_TIMEOUT_MS = 250;
 static const uint32_t MAX_VERIFY_TIMEOUT_MS = 2000;
+static const uint32_t RECORD_STOP_VERIFY_TIMEOUT_MS = 2500;
 
 uint32_t Utils::Obs::OutputHelper::VerifyTimeoutMs()
 {
@@ -50,6 +51,11 @@ uint32_t Utils::Obs::OutputHelper::VerifyTimeoutMs()
 	}();
 
 	return cached;
+}
+
+uint32_t Utils::Obs::OutputHelper::RecordStopVerifyTimeoutMs()
+{
+	return RECORD_STOP_VERIFY_TIMEOUT_MS;
 }
 
 std::string Utils::Obs::OutputHelper::GetLastError(obs_output_t *output)
@@ -99,8 +105,8 @@ void Utils::Obs::OutputHelper::ActionWatch::OnSignal(void *param, calldata_t *)
 //                         when a stop is already in flight, so silence there
 //                         is ambiguous and only the state read can conclude.
 static Utils::Obs::OutputHelper::ActionVerdict settle(obs_output_t *output,
-						      const Utils::Obs::OutputHelper::ActionWatch &watch, bool wantActive,
-						      bool signalProvesAccepted)
+							      const Utils::Obs::OutputHelper::ActionWatch &watch, bool wantActive,
+							      bool signalProvesAccepted, uint32_t timeoutMs)
 {
 	using Verdict = Utils::Obs::OutputHelper::ActionVerdict;
 
@@ -117,7 +123,6 @@ static Utils::Obs::OutputHelper::ActionVerdict settle(obs_output_t *output,
 
 	// Poll a short, bounded window -- never an open-ended wait for the
 	// output to activate.
-	const uint32_t timeoutMs = Utils::Obs::OutputHelper::VerifyTimeoutMs();
 	for (uint32_t waited = 0; waited < timeoutMs; waited += POLL_STEP_MS) {
 		os_sleep_ms(POLL_STEP_MS);
 		if (reached())
@@ -136,11 +141,17 @@ static Utils::Obs::OutputHelper::ActionVerdict settle(obs_output_t *output,
 Utils::Obs::OutputHelper::ActionVerdict Utils::Obs::OutputHelper::SettleStart(obs_output_t *output,
 									     const ActionWatch &watch)
 {
-	return settle(output, watch, true, true);
+	return settle(output, watch, true, true, Utils::Obs::OutputHelper::VerifyTimeoutMs());
 }
 
 Utils::Obs::OutputHelper::ActionVerdict Utils::Obs::OutputHelper::SettleStop(obs_output_t *output,
 									    const ActionWatch &watch)
 {
-	return settle(output, watch, false, false);
+	return settle(output, watch, false, false, Utils::Obs::OutputHelper::VerifyTimeoutMs());
+}
+
+Utils::Obs::OutputHelper::ActionVerdict Utils::Obs::OutputHelper::SettleRecordStop(
+	obs_output_t *output, const ActionWatch &watch)
+{
+	return settle(output, watch, false, false, Utils::Obs::OutputHelper::RecordStopVerifyTimeoutMs());
 }

@@ -19,6 +19,7 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "rpc/RequestResult.h"
@@ -35,14 +36,21 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 // millisecond.
 //
 // The v5 request signatures are unchanged -- no new request, no new status
-// enum, no blocking wait. The handler simply re-reads the state the server
-// already has (Utils::Obs::OutputHelper) and maps the verdict:
+// enum, no unbounded wait. The handler re-reads the state the server already
+// has (Utils::Obs::OutputHelper) and maps the verdict. StopRecord uses a
+// separate, longer bounded flush window because it returns a completed path:
 //
 //   Landed  -> Success. The effect is there.
-//   Pending -> Success. libobs accepted the action and is completing it
-//              asynchronously (rtmp connect thread, ffmpeg_muxer flush).
-//              Claiming failure here would be as wrong as claiming success
-//              on a refusal.
+//   Pending -> Success for the start/stop requests whose v5 contract describes
+//              acceptance of an asynchronous action (rtmp connect thread,
+//              ffmpeg_muxer flush). Claiming refusal there would be as wrong
+//              as claiming success on a refusal.
+//
+// StopRecord is deliberately stricter than those generic output actions: its
+// response includes outputPath, so Success means that the record output has
+// actually stopped and the path belongs to the completed action. Its handler
+// maps Pending to OutputStopPending instead of returning a stale path while
+// outputActive is still true.
 //   Refused -> Error, carrying the cause READ off the server:
 //              obs_output_get_last_error() when libobs recorded one, else
 //              the structural state that made libobs refuse (see
@@ -51,7 +59,9 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 //
 // Status mapping reuses the existing v5 codes so the wire contract does not
 // move: a start that produced nothing is OutputNotRunning ("an output is not
-// running and should be"), a stop that produced nothing is OutputRunning.
+// running and should be"), a refused stop is OutputRunning, and a
+// StopRecord timeout is RequestProcessingFailed because the accepted action
+// did not produce the completed path promised by that response.
 // ---------------------------------------------------------------------------
 
 // obs_output_start() bails on an unconfigured output BEFORE reaching
@@ -106,4 +116,24 @@ inline RequestResult OutputStopFailure(obs_output_t *output, const char *label)
 {
 	return RequestResult::Error(RequestStatus::OutputRunning,
 				    std::string(label) + " did not stop: " + DescribeOutputRefusal(output));
+}
+
+// StopRecord carries a completed-file path. An accepted stop that is still
+// pending is therefore not a successful StopRecord response: returning the
+// previous path would falsely claim that this action produced a completed
+// file. Keep the existing v5 status enum and make the transient state
+// explicit in the comment; the client may re-read GetRecordStatus until the
+// output becomes inactive. StopRecord must not be retried while it is already
+// inactive: the v5 request correctly returns OutputNotRunning then.
+inline RequestResult OutputStopPending(obs_output_t *output, const char *label, uint32_t timeoutMs)
+{
+	const bool active = output && obs_output_active(output);
+	const char *state = active ? "outputActive remains true" : "output state could not be verified";
+	const std::string comment =
+		std::string(label) + " accepted the stop, but it did not settle within " + std::to_string(timeoutMs) +
+		" ms; " + state +
+		". Poll GetRecordStatus until the output is inactive; no completed path is available in this response.";
+	return RequestResult::Error(
+		RequestStatus::RequestProcessingFailed,
+		comment);
 }

@@ -19,7 +19,17 @@ boundaries below:
 ``encoded_first_packet``
     First packet handed to the encoder-output callback.  This is a
     pre-network boundary; it is not an RTMP ingress or decoded-frame
-    guarantee.  RTMP reception remains an external Probe measurement.
+    guarantee.  It is auxiliary diagnostics only and can never satisfy AC-12.
+``rtmp_first_packet``
+    First video packet observed by the dedicated loopback RTMP receiver after
+    a committed Take.  This is a receiver/demux boundary, not a wire-level
+    timestamp and not a decoded-frame guarantee.  The receiver record must
+    carry the same video-packet index as the producer and preserve one
+    constant rational FLV mux-offset interval across the stream.
+    AC-12a measures the same packet from the producer callback timestamp to
+    ``receiver_observed_normalized_ns`` and applies the calibrated clock bound
+    conservatively.  AC-12b measures that exact packet from TakeAccepted and
+    reports every causal stage without adding a second threshold.
 ``decoded_first_frame`` / ``antenna_first_frame``
     Optional diagnostic timings.  They are reported, but have no SLO here.
 
@@ -41,7 +51,9 @@ The session record documents the exact build command, hardware/workload
 flags, warm-up count and the known resource reference (+0.091 ms/frame and
 +3.13 MB, represented as decimal bytes).  Resource samples are collected in
 ``reference`` and ``dual_lane`` modes so the delta is measured rather than
-declared from that reference.
+declared from that reference.  Each new sample carries the actual
+`encoder_active` state and `encoder_family`; only active NVENC samples can
+satisfy AC-13.
 
 Usage::
 
@@ -56,6 +68,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from fractions import Fraction
 import json
 import math
 from pathlib import Path
@@ -86,24 +99,26 @@ BOUNDARIES = (
     "encoder_input_raw",
     "directshow_return",
     "encoded_first_packet",
+    "rtmp_first_packet",
     "decoded_first_frame",
     "antenna_first_frame",
 )
 REQUIRED_BOUNDARIES = (
     "encoder_input_raw",
     "directshow_return",
-    "encoded_first_packet",
+    "rtmp_first_packet",
 )
 SLO_MS = {
     "encoder_input_raw": 50.0,
     "directshow_return": 75.0,
-    "encoded_first_packet": 15.0,
+    "rtmp_first_packet": 15.0,
 }
 RESOURCE_REFERENCE = {
     "extra_frame_render_ms": 0.091,
     "extra_resident_bytes": 3_130_000,
 }
 RESOURCE_MODES = ("reference", "dual_lane")
+REQUIRED_CODECS = ("x264", "nvenc")
 RESOURCE_METRICS = (
     "frame_render_ms",
     "resident_bytes",
@@ -131,8 +146,23 @@ SESSION_REQUIRED = {
     "producer_count",
     "evidence_kind",
 }
-SESSION_OPTIONAL = {"comparison_id", "notes", "source_types"}
+SESSION_OPTIONAL = {
+    "comparison_id",
+    "notes",
+    "source_types",
+    "rtmp_receiver",
+    "rtmp_load_requested",
+}
 SESSION_ALLOWED = SESSION_REQUIRED | SESSION_OPTIONAL
+
+DIRECTSHOW_TIMING_FIELDS = (
+    "frame_entry_monotonic_ns",
+    "lock_sample_data_acquired_monotonic_ns",
+    "queue_read_start_monotonic_ns",
+    "queue_read_completed_monotonic_ns",
+    "unlock_sample_data_completed_monotonic_ns",
+    "emission_monotonic_ns",
+)
 
 OBSERVATION_REQUIRED = {
     "record_type",
@@ -150,7 +180,27 @@ OBSERVATION_REQUIRED = {
     "surface",
     "consumer",
 }
-OBSERVATION_OPTIONAL = {"program_frame", "packet_index", "frame_hash", "notes"}
+OBSERVATION_OPTIONAL = {
+    "program_frame",
+    "packet_index",
+    "packet_pts",
+    "packet_dts",
+    "packet_timebase_num",
+    "packet_timebase_den",
+    "packet_identity",
+    "clock_source",
+    "clock_offset_ns",
+    "clock_bound_ns",
+    "packet_cts_monotonic_ns",
+    "packet_fer_monotonic_ns",
+    "packet_ferc_monotonic_ns",
+    "packet_pir_monotonic_ns",
+    "packet_callback_monotonic_ns",
+    *DIRECTSHOW_TIMING_FIELDS,
+    "receiver_observed_normalized_ns",
+    "frame_hash",
+    "notes",
+}
 OBSERVATION_ALLOWED = OBSERVATION_REQUIRED | OBSERVATION_OPTIONAL
 
 RESOURCE_REQUIRED = {
@@ -166,8 +216,39 @@ RESOURCE_REQUIRED = {
     "producer_count",
     *RESOURCE_METRICS,
 }
-RESOURCE_OPTIONAL = {"gpu_memory_bytes", "notes"}
+RESOURCE_OPTIONAL = {"encoder_active", "encoder_family", "gpu_memory_bytes", "rtmp_load_active", "notes"}
 RESOURCE_ALLOWED = RESOURCE_REQUIRED | RESOURCE_OPTIONAL
+
+RTMP_RECEIVER_REQUIRED = {
+    "server_url",
+    "stream_key",
+    "endpoint",
+    "receiver_id",
+    "stream_id",
+    "clock_source",
+    "clock_offset_ns",
+    "clock_bound_ns",
+    "packet_timebase_num",
+    "packet_timebase_den",
+}
+RTMP_CORRELATION_FIELDS = {
+    "correlation_method",
+    "mux_offset_min_num",
+    "mux_offset_min_den",
+    "mux_offset_max_num",
+    "mux_offset_max_den",
+    "correlated_packet_count",
+}
+RTMP_RECEIVER_ALLOWED = RTMP_RECEIVER_REQUIRED | RTMP_CORRELATION_FIELDS
+RTMP_CLOCK_SOURCES = ("perf_counter_ns/qpc", "qpc")
+RTMP_CLOCK_BOUND_MAX_NS = 5_000_000
+ENCODER_TIMING_FIELDS = (
+    "packet_cts_monotonic_ns",
+    "packet_fer_monotonic_ns",
+    "packet_ferc_monotonic_ns",
+    "packet_pir_monotonic_ns",
+    "packet_callback_monotonic_ns",
+)
 
 
 class EvidenceError(ValueError):
@@ -240,6 +321,84 @@ def _boolean(value: Any, name: str, *, line: int | None = None) -> bool:
     return value
 
 
+def _validate_rtmp_receiver(value: Any, *, line: int | None = None) -> dict[str, Any]:
+    obj = _object(value, "session.rtmp_receiver", line=line)
+    _exact_keys(obj, RTMP_RECEIVER_REQUIRED, RTMP_RECEIVER_ALLOWED, "session.rtmp_receiver", line=line)
+    result = dict(obj)
+    for key in ("receiver_id", "stream_id"):
+        _string(obj[key], f"session.rtmp_receiver.{key}", identifier=True, line=line)
+    for key in ("server_url", "endpoint"):
+        _string(obj[key], f"session.rtmp_receiver.{key}", line=line)
+    server_url = obj["server_url"]
+    endpoint = obj["endpoint"]
+    if not (server_url.startswith("rtmp://127.0.0.1:") or server_url.startswith("rtmp://localhost:")):
+        raise EvidenceError(
+            "SCHEMA_INVALID",
+            "session.rtmp_receiver.server_url must be a loopback rtmp:// endpoint",
+            line=line,
+        )
+    _string(obj["stream_key"], "session.rtmp_receiver.stream_key", identifier=True, line=line)
+    if endpoint != f"{server_url.rstrip('/')}/{obj['stream_key']}":
+        raise EvidenceError(
+            "CORRELATION_INVALID",
+            "session.rtmp_receiver.endpoint must be server_url plus stream_key",
+            line=line,
+        )
+    if obj["clock_source"] not in RTMP_CLOCK_SOURCES:
+        raise EvidenceError("SCHEMA_INVALID", "session.rtmp_receiver.clock_source is unsupported", line=line)
+    _integer(obj["clock_offset_ns"], "session.rtmp_receiver.clock_offset_ns", non_negative=False, line=line)
+    bound = _integer(obj["clock_bound_ns"], "session.rtmp_receiver.clock_bound_ns", line=line)
+    if bound <= 0 or bound > RTMP_CLOCK_BOUND_MAX_NS:
+        raise EvidenceError(
+            "SCHEMA_INVALID",
+            f"session.rtmp_receiver.clock_bound_ns must be in 1..{RTMP_CLOCK_BOUND_MAX_NS}",
+            line=line,
+        )
+    for key in ("packet_timebase_num", "packet_timebase_den"):
+        value_int = _integer(obj[key], f"session.rtmp_receiver.{key}", line=line)
+        if value_int <= 0:
+            raise EvidenceError("SCHEMA_INVALID", f"session.rtmp_receiver.{key} must be positive", line=line)
+    correlation_present = RTMP_CORRELATION_FIELDS & set(obj)
+    if correlation_present and correlation_present != RTMP_CORRELATION_FIELDS:
+        missing = sorted(RTMP_CORRELATION_FIELDS - correlation_present)
+        raise EvidenceError(
+            "SCHEMA_INVALID",
+            f"session.rtmp_receiver mux correlation metadata is incomplete; missing {missing}",
+            line=line,
+        )
+    if correlation_present:
+        method = _string(
+            obj["correlation_method"],
+            "session.rtmp_receiver.correlation_method",
+            identifier=True,
+            line=line,
+        )
+        if method != "packet_index_constant_mux_offset_v1":
+            raise EvidenceError("SCHEMA_INVALID", "unsupported RTMP packet correlation method", line=line)
+        for key in ("mux_offset_min_num", "mux_offset_max_num"):
+            _integer(obj[key], f"session.rtmp_receiver.{key}", non_negative=False, line=line)
+        for key in ("mux_offset_min_den", "mux_offset_max_den"):
+            denominator = _integer(obj[key], f"session.rtmp_receiver.{key}", line=line)
+            if denominator <= 0:
+                raise EvidenceError("SCHEMA_INVALID", f"session.rtmp_receiver.{key} must be positive", line=line)
+        count = _integer(
+            obj["correlated_packet_count"],
+            "session.rtmp_receiver.correlated_packet_count",
+            line=line,
+        )
+        if count <= 0:
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "session.rtmp_receiver.correlated_packet_count must be positive",
+                line=line,
+            )
+        lower = Fraction(obj["mux_offset_min_num"], obj["mux_offset_min_den"])
+        upper = Fraction(obj["mux_offset_max_num"], obj["mux_offset_max_den"])
+        if lower > upper:
+            raise EvidenceError("SCHEMA_INVALID", "RTMP mux offset interval is inverted", line=line)
+    return result
+
+
 def _revisions(value: Any, name: str, *, line: int | None = None) -> dict[str, int]:
     obj = _object(value, name, line=line)
     _exact_keys(obj, {"program", "preview", "role_map"}, {"program", "preview", "role_map"}, name, line=line)
@@ -303,6 +462,34 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
         raise EvidenceError("SCHEMA_INVALID", "session.capture_paths must list supported boundaries", line=line)
     if len(set(paths)) != len(paths):
         raise EvidenceError("SCHEMA_INVALID", "session.capture_paths must not contain duplicates", line=line)
+    if "rtmp_receiver" in obj:
+        result["rtmp_receiver"] = _validate_rtmp_receiver(obj["rtmp_receiver"], line=line)
+    if "rtmp_load_requested" in obj:
+        result["rtmp_load_requested"] = _boolean(
+            obj["rtmp_load_requested"], "session.rtmp_load_requested", line=line
+        )
+    has_rtmp_receiver = "rtmp_receiver" in obj
+    has_rtmp_load_request = obj.get("rtmp_load_requested") is True
+    if has_rtmp_receiver != has_rtmp_load_request:
+        raise EvidenceError(
+            "SCHEMA_INVALID",
+            "session.rtmp_receiver and session.rtmp_load_requested must be present together",
+            line=line,
+        )
+    if "rtmp_first_packet" in paths and not has_rtmp_receiver:
+        raise EvidenceError(
+            "SCHEMA_INVALID",
+            "session.capture_paths includes rtmp_first_packet without rtmp_receiver metadata",
+            line=line,
+        )
+    if "rtmp_first_packet" in paths and has_rtmp_receiver:
+        receiver = result["rtmp_receiver"]
+        if not RTMP_CORRELATION_FIELDS <= set(receiver):
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "rtmp_first_packet requires packet-index/mux-offset correlation metadata",
+                line=line,
+            )
     reference = _object(obj["resource_reference"], "session.resource_reference", line=line)
     _exact_keys(reference, set(RESOURCE_REFERENCE), set(RESOURCE_REFERENCE), "session.resource_reference", line=line)
     _number(reference["extra_frame_render_ms"], "resource_reference.extra_frame_render_ms", line=line)
@@ -395,6 +582,7 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
         "encoder_input_raw": ("ProgramView", "encoder_input"),
         "directshow_return": ("ProgramReturn", "DirectShow"),
         "encoded_first_packet": ("EncoderOutput", "encoder_callback"),
+        "rtmp_first_packet": ("RTMP", "receiver"),
         "decoded_first_frame": ("RTMP", "decoder"),
         "antenna_first_frame": ("Antenna", "antenna"),
     }[obj["boundary"]]
@@ -410,9 +598,123 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
         _boolean(obj["program_frame"], "observation.program_frame", line=line)
         if obj["valid"] and not obj["program_frame"]:
             raise EvidenceError("BOUNDARY_INVALID", "a valid raw/DirectShow sample must be a Program frame", line=line)
+    if obj["boundary"] == "directshow_return":
+        present_timing = [key in obj for key in DIRECTSHOW_TIMING_FIELDS]
+        if any(present_timing) and not all(present_timing):
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "DirectShow stage timing metadata must be complete",
+                line=line,
+            )
+        if all(present_timing):
+            timing = [_integer(obj[key], f"observation.{key}", line=line) for key in DIRECTSHOW_TIMING_FIELDS]
+            if any(value <= 0 for value in timing) or any(
+                left >= right for left, right in zip(timing, timing[1:])
+            ):
+                raise EvidenceError(
+                    "CLOCK_INVALID",
+                    "DirectShow stage timing must be strictly ordered and positive",
+                    line=line,
+                )
+            if obj["observed_at_monotonic_ns"] != obj["unlock_sample_data_completed_monotonic_ns"]:
+                raise EvidenceError(
+                    "CLOCK_INVALID",
+                    "directshow_return observed_at must equal unlock completion",
+                    line=line,
+                )
     if obj["boundary"] == "encoded_first_packet":
-        if "packet_index" not in obj or _integer(obj["packet_index"], "observation.packet_index", line=line) != 0:
-            raise EvidenceError("BOUNDARY_INVALID", "encoded_first_packet requires packet_index=0", line=line)
+        if "packet_index" not in obj:
+            raise EvidenceError("BOUNDARY_INVALID", "encoded_first_packet requires packet_index", line=line)
+        _integer(obj["packet_index"], "observation.packet_index", line=line)
+        # These optional fields make the producer packet usable for a receiver
+        # correlation when emitted by a current runtime.  Old traces remain
+        # parseable as auxiliary evidence, but can never satisfy AC-12.
+        packet_fields = ("packet_pts", "packet_dts", "packet_timebase_num", "packet_timebase_den")
+        if any(key in obj for key in packet_fields) and not all(key in obj for key in packet_fields):
+            raise EvidenceError("SCHEMA_INVALID", "encoded packet metadata must be complete", line=line)
+        for key in packet_fields:
+            if key in obj:
+                _integer(obj[key], f"observation.{key}", non_negative=key != "packet_dts", line=line)
+        for key in ("packet_timebase_num", "packet_timebase_den"):
+            if key in obj and obj[key] <= 0:
+                raise EvidenceError("SCHEMA_INVALID", f"observation.{key} must be positive", line=line)
+        timing_fields = (
+            "packet_cts_monotonic_ns",
+            "packet_fer_monotonic_ns",
+            "packet_ferc_monotonic_ns",
+            "packet_pir_monotonic_ns",
+            "packet_callback_monotonic_ns",
+        )
+        if any(key in obj for key in timing_fields) and not all(key in obj for key in timing_fields):
+            raise EvidenceError("SCHEMA_INVALID", "encoder packet timing metadata must be complete", line=line)
+        if all(key in obj for key in timing_fields):
+            timing = [_integer(obj[key], f"observation.{key}", line=line) for key in timing_fields]
+            if any(value <= 0 for value in timing) or timing != sorted(timing):
+                raise EvidenceError(
+                    "CLOCK_INVALID",
+                    "encoder packet timing must satisfy 0 < CTS <= FER <= FERC <= PIR <= callback",
+                    line=line,
+                )
+            if obj["observed_at_monotonic_ns"] != obj["packet_pir_monotonic_ns"]:
+                raise EvidenceError(
+                    "CLOCK_INVALID",
+                    "encoded_first_packet observed_at must equal packet PIR when timing metadata is present",
+                    line=line,
+                )
+    if obj["boundary"] == "rtmp_first_packet":
+        required_packet_fields = (
+            "packet_index",
+            "packet_pts",
+            "packet_dts",
+            "packet_timebase_num",
+            "packet_timebase_den",
+            "packet_identity",
+            "clock_source",
+            "clock_offset_ns",
+            "clock_bound_ns",
+        )
+        for key in required_packet_fields:
+            if key not in obj:
+                raise EvidenceError("SCHEMA_INVALID", f"rtmp_first_packet requires {key}", line=line)
+        _integer(obj["packet_index"], "observation.packet_index", line=line)
+        _integer(obj["packet_pts"], "observation.packet_pts", line=line)
+        _integer(obj["packet_dts"], "observation.packet_dts", non_negative=False, line=line)
+        for key in ("packet_timebase_num", "packet_timebase_den"):
+            value_int = _integer(obj[key], f"observation.{key}", line=line)
+            if value_int <= 0:
+                raise EvidenceError("SCHEMA_INVALID", f"observation.{key} must be positive", line=line)
+        _string(obj["packet_identity"], "observation.packet_identity", identifier=True, line=line)
+        if obj["clock_source"] not in RTMP_CLOCK_SOURCES:
+            raise EvidenceError("SCHEMA_INVALID", "observation.clock_source is unsupported", line=line)
+        _integer(obj["clock_offset_ns"], "observation.clock_offset_ns", non_negative=False, line=line)
+        bound = _integer(obj["clock_bound_ns"], "observation.clock_bound_ns", line=line)
+        if bound <= 0 or bound > RTMP_CLOCK_BOUND_MAX_NS:
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                f"observation.clock_bound_ns must be in 1..{RTMP_CLOCK_BOUND_MAX_NS}",
+                line=line,
+            )
+        receiver = session.get("rtmp_receiver")
+        if receiver is not None:
+            for key in ("clock_source", "clock_offset_ns", "clock_bound_ns"):
+                if obj[key] != receiver[key]:
+                    raise EvidenceError(
+                        "CORRELATION_INVALID",
+                        f"rtmp observation {key} differs from session receiver metadata",
+                        line=line,
+                    )
+        if "receiver_observed_normalized_ns" in obj:
+            normalized = _integer(
+                obj["receiver_observed_normalized_ns"],
+                "observation.receiver_observed_normalized_ns",
+                line=line,
+            )
+            if normalized != obj["observed_at_monotonic_ns"]:
+                raise EvidenceError(
+                    "CORRELATION_INVALID",
+                    "receiver_observed_normalized_ns must equal observed_at_monotonic_ns",
+                    line=line,
+                )
     if "frame_hash" in obj:
         _string(obj["frame_hash"], "observation.frame_hash", line=line)
     return result
@@ -463,6 +765,18 @@ def _validate_resource(value: Any, session: Mapping[str, Any], *, line: int | No
             line=line,
         )
     _integer(obj["observed_at_monotonic_ns"], "resource.observed_at_monotonic_ns", line=line)
+    if "encoder_active" in obj:
+        _boolean(obj["encoder_active"], "resource.encoder_active", line=line)
+    if "rtmp_load_active" in obj:
+        _boolean(obj["rtmp_load_active"], "resource.rtmp_load_active", line=line)
+    if "encoder_family" in obj:
+        _string(obj["encoder_family"], "resource.encoder_family", line=line)
+        if obj["encoder_family"] not in ("x264", "nvenc"):
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "resource.encoder_family must be x264 or nvenc",
+                line=line,
+            )
     for key in RESOURCE_METRICS:
         _number(obj[key], f"resource.{key}", line=line)
     if "gpu_memory_bytes" in obj:
@@ -569,6 +883,162 @@ def _stats(values: Sequence[float]) -> dict[str, Any]:
     }
 
 
+def _encoder_pipeline_stats(
+    first_by_take_boundary: Mapping[tuple[str, str], Mapping[str, Any]],
+    measured_take_ids: set[str],
+) -> dict[str, Any]:
+    """Split the native video path without changing any acceptance boundary."""
+
+    fields = (
+        "packet_cts_monotonic_ns",
+        "packet_fer_monotonic_ns",
+        "packet_ferc_monotonic_ns",
+        "packet_pir_monotonic_ns",
+        "packet_callback_monotonic_ns",
+    )
+    samples = [
+        observation
+        for (take_id, boundary), observation in first_by_take_boundary.items()
+        if boundary == "encoded_first_packet" and take_id in measured_take_ids
+    ]
+    timed = [observation for observation in samples if all(field in observation for field in fields)]
+    if not timed:
+        return {"status": "NOT_AVAILABLE", "sample_count": 0}
+    if len(timed) != len(samples):
+        return {
+            "status": "PARTIAL",
+            "sample_count": len(timed),
+            "encoded_sample_count": len(samples),
+        }
+
+    def stage(end: str, start: str) -> dict[str, Any]:
+        return _stats([(sample[end] - sample[start]) / 1_000_000.0 for sample in timed])
+
+    return {
+        "status": "MEASURED",
+        "sample_count": len(timed),
+        "composition_to_encode_request": stage("packet_fer_monotonic_ns", "packet_cts_monotonic_ns"),
+        "encode_request_to_complete": stage("packet_ferc_monotonic_ns", "packet_fer_monotonic_ns"),
+        "encode_complete_to_interleave": stage("packet_pir_monotonic_ns", "packet_ferc_monotonic_ns"),
+        "interleave_to_callback": stage("packet_callback_monotonic_ns", "packet_pir_monotonic_ns"),
+        "composition_to_interleave": stage("packet_pir_monotonic_ns", "packet_cts_monotonic_ns"),
+        "acceptance_boundary_unchanged": True,
+    }
+
+
+AC12B_STAGE_NAMES = (
+    "take_accepted_to_cts",
+    "cts_to_fer",
+    "fer_to_ferc",
+    "ferc_to_pir",
+    "pir_to_callback",
+    "callback_to_receiver",
+)
+
+
+def _ac12b_stats(
+    first_by_take_boundary: Mapping[tuple[str, str], Mapping[str, Any]],
+    accepted: Mapping[str, Mapping[str, Any]],
+    measured_take_ids: set[str],
+    rtmp_matches: Mapping[str, Mapping[str, Any]] | None,
+    minimum_takes: int,
+) -> dict[str, Any]:
+    """Measure the full causal path for the exact AC-12a packet set.
+
+    AC-12b has no latency threshold in Amendment 1, but it is still a
+    required completeness contract.  Every admitted row must be the same
+    packet already correlated by AC-12a and must expose all five producer
+    timestamps plus the receiver timestamp in the runtime's normalized clock.
+    Missing rows are reported as ``UNPROVEN``; contradictory clock order is
+    an evidence error and therefore fails closed.
+    """
+
+    empty: dict[str, Any] = {
+        "status": "UNPROVEN",
+        "boundary": "take_accepted_to_receiver",
+        "count": 0,
+        "p50_ms": None,
+        "p95_ms": None,
+        "p99_ms": None,
+        "max_ms": None,
+        "minimum_measurements_required": minimum_takes,
+        "same_packet_count": 0,
+        "stage_distributions": {name: _stats([]) for name in AC12B_STAGE_NAMES},
+        "reason": "requires complete AC-12a packet correlation and all six monotonic stages",
+    }
+    if rtmp_matches is None:
+        return empty
+
+    timing_fields = (
+        "packet_cts_monotonic_ns",
+        "packet_fer_monotonic_ns",
+        "packet_ferc_monotonic_ns",
+        "packet_pir_monotonic_ns",
+        "packet_callback_monotonic_ns",
+    )
+    full_path: list[tuple[int, int, int, int, int, int, int]] = []
+    for take_id in sorted(measured_take_ids):
+        if take_id not in rtmp_matches:
+            continue
+        producer = first_by_take_boundary.get((take_id, "encoded_first_packet"))
+        receiver = first_by_take_boundary.get((take_id, "rtmp_first_packet"))
+        if producer is None or receiver is None:
+            continue
+        if not all(field in producer for field in timing_fields):
+            continue
+        normalized = receiver.get("receiver_observed_normalized_ns")
+        if type(normalized) is not int:
+            continue
+        accepted_at = _integer(
+            accepted[take_id]["observed_at_monotonic_ns"],
+            f"TakeAccepted[{take_id}].observed_at_monotonic_ns",
+        )
+        values = (
+            accepted_at,
+            *(_integer(producer[field], f"{field}[{take_id}]") for field in timing_fields),
+            normalized,
+        )
+        if any(right < left for left, right in zip(values, values[1:])):
+            raise EvidenceError(
+                "CLOCK_INVALID",
+                f"AC-12b stages are not ordered for Take {take_id}; expected TakeAccepted <= CTS <= FER <= FERC <= PIR <= callback <= receiver",
+            )
+        # The producer/receiver packet identity and index have already been
+        # checked by _validate_rtmp_packet_correlations.  Keep the explicit
+        # same-packet check here so AC-12b cannot silently use a neighboring
+        # receiver observation if that validator evolves.
+        if take_id not in rtmp_matches:
+            continue
+        full_path.append(values)
+
+    if not full_path:
+        return empty
+
+    stage_values: dict[str, list[float]] = {name: [] for name in AC12B_STAGE_NAMES}
+    total_values: list[float] = []
+    for values in full_path:
+        total_values.append((values[-1] - values[0]) / 1_000_000.0)
+        for name, start, end in zip(AC12B_STAGE_NAMES, values, values[1:]):
+            stage_values[name].append((end - start) / 1_000_000.0)
+    total = _stats(total_values)
+    return {
+        "status": "PASS" if len(full_path) >= minimum_takes else "UNPROVEN",
+        "boundary": "take_accepted_to_receiver",
+        "count": len(full_path),
+        "p50_ms": total["p50_ms"],
+        "p95_ms": total["p95_ms"],
+        "p99_ms": total["p99_ms"],
+        "max_ms": total["max_ms"],
+        "minimum_measurements_required": minimum_takes,
+        "same_packet_count": len(full_path),
+        "stage_distributions": {
+            name: _stats(values) for name, values in stage_values.items()
+        },
+        "threshold": None,
+        "threshold_status": "NOT_APPLICABLE",
+    }
+
+
 def _resource_stats(values: Sequence[float | int]) -> dict[str, Any]:
     if not values:
         return {"count": 0, "p50": None, "p95": None, "p99": None}
@@ -580,13 +1050,183 @@ def _resource_stats(values: Sequence[float | int]) -> dict[str, Any]:
     }
 
 
-def _status_for_latency(summary: Mapping[str, Any], minimum_takes: int, boundary: str) -> str:
+def _status_for_latency(
+    summary: Mapping[str, Any],
+    minimum_takes: int,
+    boundary: str,
+    *,
+    uncertainty_ms: float = 0.0,
+) -> str:
     if summary["count"] < minimum_takes:
         return "UNPROVEN"
     slo = SLO_MS.get(boundary)
-    if slo is not None and float(summary["p95_ms"]) > slo:
+    if slo is not None and float(summary["p95_ms"]) + uncertainty_ms > slo:
         return "FAIL"
     return "PASS"
+
+
+def _packet_pts_fraction(observation: Mapping[str, Any]) -> Fraction:
+    """Return a packet PTS in seconds without going through a float.
+
+    The sender normally uses a 60/1 timebase while FLV/RTMP receivers expose
+    millisecond ticks.  Keeping this as a rational is what lets the analyzer
+    admit only the documented half-receiver-tick quantization, rather than
+    accepting a nearby packet by wall-clock order.
+    """
+
+    return Fraction(
+        int(observation["packet_pts"]) * int(observation["packet_timebase_num"]),
+        int(observation["packet_timebase_den"]),
+    )
+
+
+def _packet_match_tolerance(receiver: Mapping[str, Any]) -> Fraction:
+    """Return half of one receiver PTS tick as an exact rational."""
+
+    return Fraction(
+        int(receiver["packet_timebase_num"]),
+        2 * int(receiver["packet_timebase_den"]),
+    )
+
+
+def _validate_rtmp_packet_correlations(
+    selected: Mapping[str, Sequence[Mapping[str, Any]]],
+    session: Mapping[str, Any],
+) -> dict[str, dict[str, Any]] | None:
+    """Validate each receiver packet against exactly one producer packet.
+
+    Return the unique receiver-to-encoder matches keyed by Take ID.  ``None``
+    means that the trace is structurally readable but lacks the producer or
+    receiver metadata needed for an acceptance claim; the caller reports that
+    condition as ``UNPROVEN``.  Contradictory, duplicate, or ambiguous
+    metadata remains an error and therefore fails closed.
+    """
+
+    receiver_observations = selected.get("rtmp_first_packet", ())
+    if not receiver_observations:
+        return None
+    encoded_observations = selected.get("encoded_first_packet", ())
+    if not encoded_observations:
+        return None
+    encoded_by_take: dict[str, list[dict[str, Any]]] = {}
+    for observation in encoded_observations:
+        if not all(
+            key in observation
+            for key in ("packet_pts", "packet_dts", "packet_timebase_num", "packet_timebase_den")
+        ):
+            # Legacy callback records remain parseable for diagnostics, but
+            # cannot satisfy either AC-12a or AC-12b.
+            continue
+        encoded_by_take.setdefault(observation["take_command_id"], []).append(dict(observation))
+
+    receiver = session.get("rtmp_receiver")
+    if receiver is None:
+        return None
+    advertised_lower = Fraction(receiver["mux_offset_min_num"], receiver["mux_offset_min_den"])
+    advertised_upper = Fraction(receiver["mux_offset_max_num"], receiver["mux_offset_max_den"])
+    computed_lower: Fraction | None = None
+    computed_upper: Fraction | None = None
+
+    seen_identity: set[str] = set()
+    matches: dict[str, dict[str, Any]] = {}
+    for observation in receiver_observations:
+        # The normalized timestamp is intentionally explicit.  Falling back
+        # to a raw receiver timestamp would make the callback-to-receiver
+        # boundary depend on an unverified clock conversion.
+        if "receiver_observed_normalized_ns" not in observation:
+            return None
+        if observation["take_command_id"] in matches:
+            raise EvidenceError(
+                "CORRELATION_INVALID",
+                f"more than one valid RTMP first packet for Take {observation['take_command_id']}",
+            )
+        identity = str(observation["packet_identity"])
+        if identity in seen_identity:
+            raise EvidenceError("CORRELATION_INVALID", f"duplicate RTMP packet identity {identity!r}")
+        seen_identity.add(identity)
+        candidates = encoded_by_take.get(observation["take_command_id"], [])
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            raise EvidenceError(
+                "CORRELATION_INVALID",
+                f"more than one valid first encoded packet for Take(s) [{observation['take_command_id']}]",
+            )
+        match = candidates[0]
+        if observation["packet_index"] != match["packet_index"]:
+            raise EvidenceError(
+                "CORRELATION_INVALID",
+                f"RTMP packet index for Take {observation['take_command_id']} does not match "
+                "the encoded stream packet index",
+            )
+        for key in ("frame_id", "pts_ns", "revisions"):
+            if observation[key] != match[key]:
+                raise EvidenceError(
+                    "CORRELATION_INVALID",
+                    f"RTMP {key} for Take {observation['take_command_id']} does not match the producer packet",
+                )
+        receiver_pts = _packet_pts_fraction(observation)
+        receiver_dts = Fraction(
+            int(observation["packet_dts"]) * int(observation["packet_timebase_num"]),
+            int(observation["packet_timebase_den"]),
+        )
+        tolerance = _packet_match_tolerance(observation)
+        producer_pts = _packet_pts_fraction(match)
+        producer_dts = Fraction(
+            int(match["packet_dts"]) * int(match["packet_timebase_num"]),
+            int(match["packet_timebase_den"]),
+        )
+        pair_lower = max(
+            receiver_pts - producer_pts - tolerance,
+            receiver_dts - producer_dts - tolerance,
+        )
+        pair_upper = min(
+            receiver_pts - producer_pts + tolerance,
+            receiver_dts - producer_dts + tolerance,
+        )
+        if pair_lower > pair_upper:
+            raise EvidenceError(
+                "CORRELATION_INVALID",
+                f"RTMP PTS/DTS for Take {observation['take_command_id']} cannot share one mux offset",
+            )
+        computed_lower = pair_lower if computed_lower is None else max(computed_lower, pair_lower)
+        computed_upper = pair_upper if computed_upper is None else min(computed_upper, pair_upper)
+        if computed_lower > computed_upper:
+            raise EvidenceError(
+                "CORRELATION_INVALID",
+                f"RTMP mux offset drifted at Take {observation['take_command_id']}",
+            )
+        matches[observation["take_command_id"]] = {
+            "receiver_packet_identity": identity,
+            "receiver_packet_index": observation["packet_index"],
+            "producer_packet_index": match["packet_index"],
+            "pts_delta_seconds": float(receiver_pts - _packet_pts_fraction(match)),
+        }
+
+    if receiver["correlated_packet_count"] != len(receiver_observations):
+        raise EvidenceError(
+            "CORRELATION_INVALID",
+            "session RTMP correlated_packet_count does not match receiver observations",
+        )
+    if computed_lower != advertised_lower or computed_upper != advertised_upper:
+        raise EvidenceError(
+            "CORRELATION_INVALID",
+            "session RTMP mux-offset calibration does not equal the recomputed stream interval",
+        )
+
+    # The receiver's first-packet observations must form one monotone video
+    # stream.  Gaps are acceptable; regressions and duplicate indices are not.
+    previous_index = -1
+    previous_pts: Fraction | None = None
+    for observation in sorted(receiver_observations, key=lambda item: item["observed_at_monotonic_ns"]):
+        if observation["packet_index"] <= previous_index:
+            raise EvidenceError("FRAME_ORDER_INVALID", "RTMP receiver packet index regressed or repeated")
+        current_pts = _packet_pts_fraction(observation)
+        if previous_pts is not None and current_pts < previous_pts:
+            raise EvidenceError("FRAME_ORDER_INVALID", "RTMP receiver packet PTS regressed")
+        previous_index = observation["packet_index"]
+        previous_pts = current_pts
+    return matches
 
 
 def _event_order(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -689,7 +1329,9 @@ def analyze_trace(
         if take_commit is None and take_abort is None:
             unsettled.append(take_id)
             continue
-        outcome = take_commit or take_abort
+        outcome = take_commit if take_commit is not None else take_abort
+        if outcome is None:  # guarded by the unsettled branch above
+            raise EvidenceError("CORRELATION_INVALID", f"Take {take_id} has no terminal outcome")
         if outcome["command_id"] != take_accepted["command_id"] or outcome["intent_id"] != take_accepted["intent_id"]:
             raise EvidenceError("CORRELATION_INVALID", f"Take {take_id} outcome IDs do not match TakeAccepted")
         if outcome["observed_at_monotonic_ns"] < take_accepted["observed_at_monotonic_ns"]:
@@ -719,6 +1361,20 @@ def analyze_trace(
             raise EvidenceError("FRAME_ORDER_INVALID", f"TakeCommitted frame ID/PTS regressed at Take {take_id}")
         previous_commit_frame = event["frame_id"]
         previous_commit_pts = event["pts_ns"]
+
+    # ``session.warmup_takes`` is a partition of this same runtime session,
+    # not a declaration that the first measurements were already warm.  The
+    # driver executes those committed Takes first, then the measured sample;
+    # only the suffix after the observed warm-up partition may enter SLO
+    # percentiles.  Keeping the partition here prevents a trace from claiming
+    # 100 warm + 100 measured while actually measuring the warm-up frames.
+    committed_order = sorted(
+        committed,
+        key=lambda key: (committed[key]["observed_at_monotonic_ns"], committed[key]["server_seq"]),
+    )
+    declared_warmup = int(session["warmup_takes"])
+    warmup_take_ids = set(committed_order[:declared_warmup])
+    measured_take_ids = set(committed_order[declared_warmup:])
 
     # Observations before the accepted frame-boundary commit are deliberately
     # retained for diagnostics but never admitted as evidence.  This matters
@@ -766,9 +1422,11 @@ def analyze_trace(
             previous_frame = observation["frame_id"]
             previous_pts = observation["pts_ns"]
 
+    rtmp_matches = _validate_rtmp_packet_correlations(selected, session)
+
     first_by_take_boundary: dict[tuple[str, str], dict[str, Any]] = {}
     for boundary, observations in selected.items():
-        if boundary == "encoded_first_packet":
+        if boundary in ("encoded_first_packet", "rtmp_first_packet"):
             valid_packet_counts: dict[str, int] = {}
             for observation in observations:
                 take_id = observation["take_command_id"]
@@ -777,7 +1435,9 @@ def analyze_trace(
             if duplicate_packets:
                 raise EvidenceError(
                     "CORRELATION_INVALID",
-                    f"more than one valid first encoded packet for Take(s) {duplicate_packets}",
+                    f"more than one valid first "
+                    f"{'encoded' if boundary == 'encoded_first_packet' else 'RTMP'} packet "
+                    f"for Take(s) {duplicate_packets}",
                 )
         for observation in sorted(observations, key=lambda value: (value["observed_at_monotonic_ns"], value["frame_id"], value["pts_ns"])):
             key = (observation["take_command_id"], boundary)
@@ -789,13 +1449,52 @@ def analyze_trace(
         for (take_id, sample_boundary), observation in first_by_take_boundary.items():
             if sample_boundary != boundary:
                 continue
+            if take_id not in measured_take_ids:
+                continue
             accepted_at = accepted[take_id]["observed_at_monotonic_ns"]
-            delta_ns = observation["observed_at_monotonic_ns"] - accepted_at
+            if boundary == "rtmp_first_packet":
+                # AC-12a is the transport boundary from the exact producer
+                # callback to the normalized receiver observation.  The
+                # complete TakeAccepted-to-receiver path is AC-12b below.
+                producer = first_by_take_boundary.get((take_id, "encoded_first_packet"))
+                receiver_at = observation.get("receiver_observed_normalized_ns")
+                callback_at = producer.get("packet_callback_monotonic_ns") if producer else None
+                if (
+                    rtmp_matches is None
+                    or type(callback_at) is not int
+                    or type(receiver_at) is not int
+                ):
+                    continue
+                delta_ns = receiver_at - callback_at
+            else:
+                delta_ns = observation["observed_at_monotonic_ns"] - accepted_at
             if delta_ns < 0:
                 raise EvidenceError("CLOCK_INVALID", f"negative {boundary} latency for Take {take_id}")
             values.append(delta_ns / 1_000_000.0)
         summary = _stats(values)
-        status = _status_for_latency(summary, minimum_takes if boundary in REQUIRED_BOUNDARIES else 1, boundary) if values else "UNPROVEN"
+        uncertainty_ms = 0.0
+        if boundary == "rtmp_first_packet" and values:
+            receiver = session.get("rtmp_receiver")
+            if not isinstance(receiver, Mapping) or type(receiver.get("clock_bound_ns")) is not int:
+                raise EvidenceError(
+                    "CORRELATION_INVALID",
+                    "rtmp_first_packet latency requires a valid receiver clock bound",
+                )
+            uncertainty_ms = receiver["clock_bound_ns"] / 1_000_000.0
+            summary["clock_bound_ms"] = round(uncertainty_ms, 6)
+            summary["p95_conservative_ms"] = round(
+                float(summary["p95_ms"]) + uncertainty_ms, 6
+            )
+        status = (
+            _status_for_latency(
+                summary,
+                minimum_takes if boundary in REQUIRED_BOUNDARIES else 1,
+                boundary,
+                uncertainty_ms=uncertainty_ms,
+            )
+            if values
+            else "UNPROVEN"
+        )
         if boundary not in REQUIRED_BOUNDARIES and not values:
             status = "NOT_REQUIRED"
         latency[boundary] = {
@@ -805,36 +1504,113 @@ def analyze_trace(
             "separate_boundary": boundary != "encoder_input_raw",
         }
 
-    resource_report: dict[str, Any] = {"status": "UNPROVEN", "sample_counts": {}, "metrics": {}, "comparison": {}}
+    encoder_pipeline = _encoder_pipeline_stats(first_by_take_boundary, measured_take_ids)
+    ac12b = _ac12b_stats(
+        first_by_take_boundary,
+        accepted,
+        measured_take_ids,
+        rtmp_matches,
+        minimum_takes,
+    )
+
+    resource_report: dict[str, Any] = {
+        "status": "UNPROVEN",
+        "sample_counts": {},
+        "active_sample_counts": {},
+        "eligible_sample_counts": {},
+        "inactive_sample_counts": {},
+        "rtmp_load_active_sample_counts": {},
+        "rtmp_eligible_sample_counts": {},
+        "metrics": {},
+        "comparison": {},
+    }
     for mode in RESOURCE_MODES:
         samples = [sample for sample in trace.resources if sample["sample_mode"] == mode]
+        active_samples = [sample for sample in samples if sample.get("encoder_active") is True]
+        eligible_samples = [
+            sample
+            for sample in active_samples
+            if sample.get("encoder_family") == "nvenc"
+            and sample.get("rtmp_load_active") is True
+        ]
         resource_report["sample_counts"][mode] = len(samples)
+        resource_report["active_sample_counts"][mode] = len(active_samples)
+        resource_report["eligible_sample_counts"][mode] = len(eligible_samples)
+        resource_report["inactive_sample_counts"][mode] = len(samples) - len(active_samples)
+        resource_report["rtmp_load_active_sample_counts"][mode] = sum(
+            sample.get("rtmp_load_active") is True for sample in samples
+        )
+        resource_report["rtmp_eligible_sample_counts"][mode] = len(eligible_samples)
+        admitted_samples = eligible_samples if session["codec"] == "nvenc" else active_samples
         resource_report["metrics"][mode] = {
-            metric: _resource_stats([sample[metric] for sample in samples]) for metric in RESOURCE_METRICS
+            metric: _resource_stats([sample[metric] for sample in admitted_samples]) for metric in RESOURCE_METRICS
         }
-    reference_samples = [sample for sample in trace.resources if sample["sample_mode"] == "reference"]
-    dual_samples = [sample for sample in trace.resources if sample["sample_mode"] == "dual_lane"]
-    if (
-        len(reference_samples) >= minimum_resource_samples
-        and len(dual_samples) >= minimum_resource_samples
-        and all(bool(session["workload"][key]) for key in ("wgc", "cef", "nvenc"))
-    ):
-        for metric in ("frame_render_ms", "resident_bytes"):
-            reference_p50 = resource_report["metrics"]["reference"][metric]["p50"]
-            dual_p50 = resource_report["metrics"]["dual_lane"][metric]["p50"]
-            delta = float(dual_p50) - float(reference_p50)
-            expected = RESOURCE_REFERENCE["extra_frame_render_ms"] if metric == "frame_render_ms" else RESOURCE_REFERENCE["extra_resident_bytes"]
-            resource_report["comparison"][metric] = {
-                "reference_p50": reference_p50,
-                "dual_lane_p50": dual_p50,
-                "delta": round(delta, 6),
-                "known_reference_delta": expected,
-                "within_known_reference": delta <= expected,
-            }
-        resource_report["status"] = "MEASURED"
+    if session["codec"] == "x264":
+        # AC-13 is a resource delta for the NVENC workload specifically.  An
+        # x264 trace may carry diagnostic resource samples, but they must not
+        # be allowed to satisfy or substitute this criterion.
+        resource_report["status"] = "NOT_APPLICABLE"
+        resource_report["reason"] = "AC-13 applies only to the NVENC resource workload; x264 samples are diagnostic only"
     else:
-        resource_report["status"] = "UNPROVEN"
-        resource_report["reason"] = "requires both resource modes, minimum samples, and WGC+CEF+NVENC workload flags"
+        reference_samples = [
+            sample
+            for sample in trace.resources
+            if sample["sample_mode"] == "reference"
+            and sample.get("encoder_active") is True
+            and sample.get("encoder_family") == "nvenc"
+            and sample.get("rtmp_load_active") is True
+        ]
+        dual_samples = [
+            sample
+            for sample in trace.resources
+            if sample["sample_mode"] == "dual_lane"
+            and sample.get("encoder_active") is True
+            and sample.get("encoder_family") == "nvenc"
+            and sample.get("rtmp_load_active") is True
+        ]
+        if (
+            len(reference_samples) >= minimum_resource_samples
+            and len(dual_samples) >= minimum_resource_samples
+            and all(bool(session["workload"][key]) for key in ("wgc", "cef", "nvenc"))
+        ):
+            for metric in ("frame_render_ms", "resident_bytes"):
+                reference_p50 = resource_report["metrics"]["reference"][metric]["p50"]
+                dual_p50 = resource_report["metrics"]["dual_lane"][metric]["p50"]
+                delta = float(dual_p50) - float(reference_p50)
+                expected = RESOURCE_REFERENCE["extra_frame_render_ms"] if metric == "frame_render_ms" else RESOURCE_REFERENCE["extra_resident_bytes"]
+                resource_report["comparison"][metric] = {
+                    "reference_p50": reference_p50,
+                    "dual_lane_p50": dual_p50,
+                    "delta": round(delta, 6),
+                    "known_reference_delta": expected,
+                    "within_known_reference": delta <= expected,
+                }
+            resource_report["status"] = "MEASURED"
+        else:
+            resource_report["status"] = "UNPROVEN"
+            resource_report["reason"] = (
+                "requires both resource modes, minimum active NVENC-encoder samples, "
+                "WGC+CEF+NVENC workload flags, and symmetric active RTMP receiver load"
+            )
+
+    ac12a = {
+        "boundary": "packet_callback_monotonic_ns_to_receiver_observed_normalized_ns",
+        **latency["rtmp_first_packet"],
+        "correlated_packet_count": len(rtmp_matches or {}),
+        "correlation_complete": rtmp_matches is not None,
+        "clock_bound_included": "clock_bound_ms" in latency["rtmp_first_packet"],
+    }
+    if rtmp_matches is None and ac12a["status"] == "PASS":
+        # Defensive guard: a future change to the latency collector must not
+        # turn an uncorrelated receiver timestamp into an AC-12a PASS.
+        ac12a["status"] = "UNPROVEN"
+    ac12_status = (
+        "FAIL"
+        if ac12a["status"] == "FAIL"
+        else "PASS"
+        if ac12a["status"] == "PASS" and ac12b["status"] == "PASS"
+        else "UNPROVEN"
+    )
 
     criteria = {
         "AC-07": {"boundary": "encoder_input_raw", **latency["encoder_input_raw"]},
@@ -847,20 +1623,43 @@ def analyze_trace(
             "unsettled_take_count": len(unsettled),
             "all_events_contract_validated": True,
         },
-        "AC-12": {"boundary": "encoded_first_packet", **latency["encoded_first_packet"]},
+        "AC-12": {
+            "boundary": "rtmp_first_packet",
+            **latency["rtmp_first_packet"],
+            "status": ac12_status,
+            "ac12a": ac12a,
+            "ac12b": ac12b,
+            "correlated_packet_count": len(rtmp_matches or {}),
+            "correlations": rtmp_matches or {},
+            "encoder_callback_auxiliary": latency["encoded_first_packet"],
+            "encoder_pipeline_auxiliary": encoder_pipeline,
+        },
         "AC-13": {
             "status": resource_report["status"],
             "resource": resource_report,
             "capacity_not_declared_from_reference": True,
+            "applicable": session["codec"] == "nvenc",
         },
     }
+    # Keep the amendment's two named sub-criteria directly addressable while
+    # retaining the historical aggregate ``criteria["AC-12"]`` shape for
+    # existing consumers.
+    criteria["AC-12a"] = ac12a
+    criteria["AC-12b"] = ac12b
     hard_fail = any(criteria[key]["status"] == "FAIL" for key in ("AC-07", "AC-08", "AC-11", "AC-12"))
-    required_unproven = any(criteria[key]["status"] not in ("PASS", "MEASURED") for key in ("AC-07", "AC-08", "AC-12", "AC-13"))
+    required_unproven = any(criteria[key]["status"] not in ("PASS", "MEASURED") for key in ("AC-07", "AC-08", "AC-12"))
+    if session["codec"] == "nvenc":
+        required_unproven = required_unproven or criteria["AC-13"]["status"] not in ("MEASURED",)
     if hard_fail:
         status = "FAIL"
     elif session["evidence_kind"] != "runtime":
         status = "FIXTURE_ONLY"
-    elif required_unproven or session["warmup_takes"] < minimum_warmup or unsettled:
+    elif (
+        required_unproven
+        or len(warmup_take_ids) < minimum_warmup
+        or len(measured_take_ids) < minimum_takes
+        or unsettled
+    ):
         status = "UNPROVEN"
     else:
         status = "PASS"
@@ -877,6 +1676,8 @@ def analyze_trace(
             "take_aborted": len(aborted),
             "command_rejected": rejected_count,
             "unsettled_take_ids": unsettled,
+            "warmup_takes_observed": len(warmup_take_ids),
+            "measured_takes_observed": len(measured_take_ids),
             "server_seq": [event["server_seq"] for event in ordered_events],
         },
         "takes": {
@@ -884,18 +1685,31 @@ def analyze_trace(
             "committed": len(committed),
             "aborted": len(aborted),
             "warmup_takes_declared": session["warmup_takes"],
+            "warmup_takes_observed": len(warmup_take_ids),
+            "measured_takes_observed": len(measured_take_ids),
+            "total_committed_takes": len(committed_order),
             "minimum_warmup_required": minimum_warmup,
             "minimum_measurements_required": minimum_takes,
         },
         "latency": latency,
+        "encoder_pipeline": encoder_pipeline,
         "ignored_valid_samples_before_commit": ignored_pre_commit,
         "resources": resource_report,
+        "ac12a": ac12a,
+        "ac12b": ac12b,
         "criteria": criteria,
         "notes": [
             "Latency starts at TakeAccepted.observed_at_monotonic_ns and ends at the first valid post-commit observation for the named boundary.",
             "DirectShow return and encoder/raw input are separate boundaries; neither is inferred from the other.",
-            "encoded_first_packet is the pre-network encoder callback; RTMP receiver ingress is an external Probe boundary.",
+            "encoded_first_packet is auxiliary pre-network encoder evidence; its callback timestamp participates in AC-12a/b only when the same packet is fully correlated.",
+            "AC-12a measures packet_callback_monotonic_ns to receiver_observed_normalized_ns with the declared clock bound added conservatively to p95; it requires p95_conservative_ms <= 15.",
+            "AC-12b measures the same packets from TakeAccepted to the normalized receiver and publishes all six causal stage distributions without imposing an additional threshold.",
+            "rtmp_first_packet is the first video packet observed by the loopback receiver/demux; it is not wire-level or decoded-frame evidence.",
+            "Each valid RTMP packet must match the producer packet index and preserve one constant PTS/DTS mux offset within half a receiver tick.",
             "Decoded and antenna timings are diagnostic only and carry no acceptance SLO.",
+            "The first session.warmup_takes committed Takes are excluded from latency percentiles; measured counts are the observed committed suffix.",
+            "Resource sample counts include all records; AC-13 uses only samples with encoder_active=true and encoder_family=nvenc.",
+            "AC-13 admits only the conjunction encoder_active=true, encoder_family=nvenc, and observed rtmp_load_active=true in both phases; early pre-stream samples remain diagnostic.",
             "A fixture report is never a runtime acceptance; run the same command against a runtime trace with evidence_kind=runtime.",
         ],
     }
@@ -923,20 +1737,54 @@ def analyze_traces(
     ]
     if len(reports) == 1:
         return reports[0]
+
+    # Keep the campaign boundary visible in the aggregate report.  Latency
+    # and resource samples are analyzed inside each Trace above; this summary
+    # deliberately carries only per-session metadata and criterion statuses,
+    # so a passing x264 campaign can never donate samples to NVENC's AC-13.
+    codec_coverage = [
+        {
+            "codec": report["session"]["codec"],
+            "runtime_instance_id": report["session"]["runtime_instance_id"],
+            "session_id": report["session"]["session_id"],
+            "status": report["status"],
+            "criteria": {
+                key: report["criteria"][key]["status"]
+                for key in ("AC-07", "AC-08", "AC-11", "AC-12", "AC-12a", "AC-12b", "AC-13")
+            },
+            "resource_status": report["resources"]["status"],
+        }
+        for report in reports
+    ]
+    observed_codecs = sorted({entry["codec"] for entry in codec_coverage})
+    complete_codec_coverage = set(REQUIRED_CODECS).issubset(observed_codecs) and all(
+        entry["status"] == "PASS" for entry in codec_coverage
+    )
     statuses = {report["status"] for report in reports}
     if "FAIL" in statuses:
         status = "FAIL"
-    elif statuses == {"PASS"}:
-        status = "PASS"
-    elif "FIXTURE_ONLY" in statuses:
+    elif statuses == {"FIXTURE_ONLY"}:
         status = "FIXTURE_ONLY"
-    else:
+    elif not complete_codec_coverage:
+        # A multi-trace acceptance report is complete only when it contains
+        # one or more independent passing campaigns for both required
+        # codecs.  In particular, two passing NVENC traces cannot masquerade
+        # as x264 coverage, and no samples are pooled to make them pass.
         status = "UNPROVEN"
+    else:
+        status = "PASS"
     return {
         "schema": REPORT_SCHEMA,
         "status": status,
         "campaigns": reports,
-        "notes": ["Each campaign is an independent runtime/session; do not pool samples across codec/path boundaries."],
+        "codec_coverage": codec_coverage,
+        "required_codecs": list(REQUIRED_CODECS),
+        "observed_codecs": observed_codecs,
+        "complete_codec_coverage": complete_codec_coverage,
+        "notes": [
+            "Each campaign is an independent runtime/session; do not pool samples across codec/path boundaries.",
+            "AC-13 is measured only by the NVENC reference-versus-dual resource pair; x264 reports NOT_APPLICABLE.",
+        ],
     }
 
 
@@ -954,7 +1802,10 @@ def _print_summary(report: Mapping[str, Any]) -> None:
                 f"p99={summary.get('p99_ms')}ms status={summary.get('status')}"
             )
         resources = campaign.get("resources", {})
-        print(f"  {codec}/resources: status={resources.get('status')} samples={resources.get('sample_counts')}")
+        print(
+            f"  {codec}/resources: status={resources.get('status')} "
+            f"samples={resources.get('sample_counts')} active={resources.get('active_sample_counts')}"
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

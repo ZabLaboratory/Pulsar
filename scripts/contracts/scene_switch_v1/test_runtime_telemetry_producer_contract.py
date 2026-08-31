@@ -27,6 +27,7 @@ PATCH = ROOT / "patches" / "0011-feat-runtime-telemetry-producer.patch"
 FRONTEND_CMAKE = ROOT / "plugins" / "pulsar-frontend-stub" / "CMakeLists.txt"
 WEBSOCKET_CMAKE = ROOT / "plugins" / "pulsar-websocket" / "CMakeLists.txt"
 FRONTEND_SOURCE = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
+HEADLESS_SOURCE = ROOT / "plugins" / "pulsar-headless" / "main.cpp"
 WEBSOCKET_SOURCE = ROOT / "plugins" / "pulsar-websocket" / "src" / "requesthandler" / "RequestHandler.cpp"
 ABI_HEADER = ROOT / "plugins" / "pulsar-frontend-stub" / "include" / "pulsar-runtime-telemetry-abi.h"
 BRIDGE_HEADER = ROOT / "plugins" / "pulsar-frontend-stub" / "include" / "pulsar-runtime-telemetry.h"
@@ -104,6 +105,17 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "#ifdef _WIN32\n#include <windows.h>\n#endif" in frontend
     assert '\\"boundary\\":\\"encoder_input_raw\\"' in frontend
     assert '\\"boundary\\":\\"encoded_first_packet\\"' in frontend
+    assert '\\"packet_pts\\":' in frontend
+    assert '\\"packet_timebase_num\\":' in frontend
+    assert '\\"packet_cts_monotonic_ns\\":' in frontend
+    assert '\\"packet_fer_monotonic_ns\\":' in frontend
+    assert '\\"packet_ferc_monotonic_ns\\":' in frontend
+    assert '\\"packet_pir_monotonic_ns\\":' in frontend
+    assert '\\"packet_callback_monotonic_ns\\":' in frontend
+    assert '\\"capture_paths\\":[\\"encoder_input_raw\\",\\"directshow_return\\",\\"encoded_first_packet\\"' in frontend
+    assert "streamOutput_ = streamOutput" in frontend
+    assert "rtmp_load_active" in frontend
+    assert "obs_output_active(streamOutput)" in frontend
     assert "obs_add_raw_video_callback" in frontend
     assert "obs_output_add_packet_callback" in frontend
     assert 'obs_source_create("browser_source", "PulsarCefWorkload"' in frontend
@@ -117,6 +129,10 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "(std::max)(1, cefVideo.fps_num / cefVideo.fps_den)" not in frontend
     assert "process_cpu_percent" in frontend
     assert "callback_backlog_estimate" in frontend
+    assert "encoder_active" in frontend
+    assert "encoder_family" in frontend
+    assert "obs_encoder_active(videoEncoder)" in frontend
+    assert "obs_encoder_t *videoEncoder" in frontend
     assert "queue_rejected" in frontend
     assert "last_committed_frame_id" in frontend
     assert "last_committed_pts_ns" in frontend
@@ -155,6 +171,29 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert '"reason\\":\"frame_or_pts_regression\"' not in commit
     assert commit.count('commonEventFields("TakeCommitted"') == 1
     assert commit.count("writeLine(fault.str())") == 1
+    assert commit.count("lastRawTake_.clear()") == 2
+    assert commit.count("lastPacketTake_.clear()") == 2
+
+    reject_start = frontend.index("void rejectReserved(")
+    reserve_start = frontend.index("bool reserve(", reject_start)
+    accepted_start = frontend.index("bool markAccepted(", reserve_start)
+    reject = frontend[reject_start:reserve_start]
+    reserve = frontend[reserve_start:accepted_start]
+    accepted = frontend[accepted_start:commit_start]
+    for precommit in (reject, reserve, accepted):
+        assert "lastRawTake_.clear()" not in precommit
+        assert "lastPacketTake_.clear()" not in precommit
+    assert "committed_ still names the previous Take" in reserve
+
+    # The admission clock is captured by reserve() and must survive the
+    # successful queue promotion.  markAccepted() may run later on the frame
+    # callback, but it must never replace the causal timestamp with a second
+    # nowNs() sample.  A failed enqueue still retires accepted_ below and emits
+    # no TakeAccepted event, so this invariant cannot manufacture acceptance.
+    assert "context.acceptedAtNs = diagnosticNowNs;" in reserve
+    assert "context.acceptedAtNs = nowNs();" not in accepted
+    assert "commonEventFields(\"TakeAccepted\", context, seq, \"take_accepted\", context.acceptedAtNs," in accepted
+    assert accepted.index("context = reserved_;\n") < accepted.index("accepted_ = context;")
 
     assert "BeginRuntimeTakeTelemetry" in websocket
     assert "pulsar_runtime_telemetry::begin_take" in websocket
@@ -178,6 +217,40 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "copy_telemetry_counter" in patch
     assert "INT64_MAX" in patch
     assert "queue_rejected" in frontend
+
+
+def test_headless_audio_is_bounded_for_live_interleaving() -> None:
+    headless = HEADLESS_SOURCE.read_text(encoding="utf-8")
+    reset_start = headless.index("bool reset_audio()")
+    reset_end = headless.index("bool websocket_server_ready(", reset_start)
+    reset = headless[reset_start:reset_end]
+
+    assert "obs_audio_info2 oai" in reset
+    assert "oai.samples_per_sec = 48000" in reset
+    assert "oai.max_buffering_ms = 20" in reset
+    assert "oai.fixed_buffering = true" in reset
+    assert "obs_reset_audio2(&oai)" in reset
+    assert "obs_reset_audio(&oai)" not in reset
+
+
+def test_desktop_wasapi_uses_the_libobs_timeline_before_creation() -> None:
+    frontend = FRONTEND_SOURCE.read_text(encoding="utf-8")
+    settings_start = frontend.index('OBSDataAutoRelease desktopSettings = obs_data_create();')
+    create_start = frontend.index(
+        'obs_source_create("wasapi_output_capture", "PulsarDesktopAudio"',
+        settings_start,
+    )
+    settings = frontend[settings_start:create_start]
+
+    # Device-clock alignment can hold the common Program audio route behind
+    # the endpoint clock.  The setting must be explicit and applied before
+    # source creation, while the runtime log makes the effective policy
+    # auditable in a real Pulsar launch.
+    assert 'obs_data_set_bool(desktopSettings, "use_device_timing", false);' in settings
+    assert "desktop audio configured use_device_timing=false" in settings
+    assert settings.index('obs_data_set_bool(desktopSettings, "use_device_timing", false);') < settings.index(
+        "desktop audio configured use_device_timing=false"
+    )
 
 
 def _bounded_identifier_model(value: bytes, capacity: int = 129) -> tuple[str, str] | None:
@@ -436,6 +509,7 @@ def test_wire_clock_calibration_brackets_qpc_and_rejects_epoch_mismatch(
         "wire_now_ns": 1_000_000_050,
         "qpc_now_ns": 1_000_000_050,
         "qpc_delta_ns": 0,
+        "qpc_bound_ns": 50,
     }
 
     qpc_samples = iter((2_000_000_000, 2_000_000_100))

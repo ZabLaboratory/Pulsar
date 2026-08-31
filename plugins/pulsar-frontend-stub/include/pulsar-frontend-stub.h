@@ -7,6 +7,7 @@ extern "C" {
 void pulsar_frontend_init(void);
 void pulsar_frontend_finished_loading(void);
 void pulsar_frontend_shutdown(void);
+bool pulsar_frontend_cleanup_succeeded(void);
 
 #ifdef __cplusplus
 }
