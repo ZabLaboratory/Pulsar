@@ -4375,6 +4375,13 @@ bool PulsarFrontendAPI::setup()
         obs_data_set_string(desktopSettings, "device_id", id);
     else
         obs_data_set_string(desktopSettings, "device_id", "default");
+    // Keep the live mixer clock on libobs' fixed audio timeline.  Device
+    // timing is useful for monitoring, but it can make the WASAPI capture
+    // source wait for endpoint-clock alignment before handing audio to the
+    // common Program route.  Pulsar's encoder/interleaver already has an
+    // explicit bounded audio policy, so opt out before source creation.
+    obs_data_set_bool(desktopSettings, "use_device_timing", false);
+    blog(LOG_INFO, "[pulsar-frontend-stub] desktop audio configured use_device_timing=false");
     desktopAudioSource = obs_source_create("wasapi_output_capture", "PulsarDesktopAudio",
                                             desktopSettings, nullptr);
     if (desktopAudioSource) {

@@ -223,6 +223,26 @@ def test_headless_audio_is_bounded_for_live_interleaving() -> None:
     assert "obs_reset_audio(&oai)" not in reset
 
 
+def test_desktop_wasapi_uses_the_libobs_timeline_before_creation() -> None:
+    frontend = FRONTEND_SOURCE.read_text(encoding="utf-8")
+    settings_start = frontend.index('OBSDataAutoRelease desktopSettings = obs_data_create();')
+    create_start = frontend.index(
+        'obs_source_create("wasapi_output_capture", "PulsarDesktopAudio"',
+        settings_start,
+    )
+    settings = frontend[settings_start:create_start]
+
+    # Device-clock alignment can hold the common Program audio route behind
+    # the endpoint clock.  The setting must be explicit and applied before
+    # source creation, while the runtime log makes the effective policy
+    # auditable in a real Pulsar launch.
+    assert 'obs_data_set_bool(desktopSettings, "use_device_timing", false);' in settings
+    assert "desktop audio configured use_device_timing=false" in settings
+    assert settings.index('obs_data_set_bool(desktopSettings, "use_device_timing", false);') < settings.index(
+        "desktop audio configured use_device_timing=false"
+    )
+
+
 def _bounded_identifier_model(value: bytes, capacity: int = 129) -> tuple[str, str] | None:
     """Model the DirectShow boundary contract for adversarial metadata bytes."""
 
