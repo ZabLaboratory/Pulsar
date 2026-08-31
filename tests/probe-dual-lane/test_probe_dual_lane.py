@@ -48,6 +48,22 @@ def test_receiver_separates_server_url_and_stream_key():
     assert metadata["stream_key"] == receiver.stream_key
 
 
+def test_inbox_consumes_out_of_order_buffered_response_without_socket_read():
+    class NoReadSocket:
+        async def recv(self):
+            raise AssertionError("receive_until_response should consume the buffered response")
+
+    inbox = probe.Inbox()
+    later = {"requestId": "later", "requestStatus": {"result": True}}
+    target = {"requestId": "target", "requestStatus": {"result": True}}
+    inbox.responses.extend([later, target])
+
+    received = asyncio.run(inbox.receive_until_response(NoReadSocket(), "target"))
+
+    assert received == target
+    assert inbox.responses == [later]
+
+
 def test_prepare_record_directory_persists_unique_session(tmp_path):
     evidence_root = tmp_path / "evidence"
     context, session, persistent = probe.prepare_record_directory(evidence_root)

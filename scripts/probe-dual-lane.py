@@ -1863,7 +1863,18 @@ class Inbox:
         elif message.get("op") == 5:
             self.events.append(message.get("d", {}))
 
+    def take_buffered_response(self, request_id: str) -> dict[str, Any] | None:
+        """Consume a response that arrived while another request was awaited."""
+
+        for index, response in enumerate(self.responses):
+            if response.get("requestId") == request_id:
+                return self.responses.pop(index)
+        return None
+
     async def receive_until_response(self, ws: Any, request_id: str) -> dict[str, Any]:
+        buffered = self.take_buffered_response(request_id)
+        if buffered is not None:
+            return buffered
         while True:
             message = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
             if message.get("op") == 7:
