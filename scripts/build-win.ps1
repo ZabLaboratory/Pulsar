@@ -34,7 +34,12 @@ param(
     # The downloaded dependency caches under upstream/.deps/ are kept,
     # so re-configure does not re-download obs-deps / Qt6 / CEF; only
     # the CMake cache and compiled artefacts go.
-    [switch] $Clean
+    [switch] $Clean,
+    # Force the vendored OBS patch stacks to be rebuilt from their pins.
+    # Normally the script reuses an exact, clean, fingerprinted patched
+    # checkout so incremental CMake builds keep their object cache and source
+    # mtimes across every Pulsar test loop.
+    [switch] $RefreshPatches
 )
 
 # Windows PowerShell 5.1 wraps native command stderr lines as
@@ -47,6 +52,100 @@ $ErrorActionPreference = 'Continue'
 $root = Resolve-Path "$PSScriptRoot\.."
 $upstream = Join-Path $root 'upstream'
 $preset = if ($CI) { 'windows-ci-x64' } else { 'windows-x64' }
+
+function Get-PatchSetFingerprint {
+    param(
+        [string] $PinnedRevision,
+        [object[]] $PatchFiles
+    )
+
+    $manifest = @("pin=$PinnedRevision")
+    foreach ($patchFile in $PatchFiles) {
+        $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $patchFile.FullName).Hash.ToLowerInvariant()
+        $manifest += "$($patchFile.Name)=$digest"
+    }
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($manifest -join "`n"))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-TextFingerprint {
+    param([string[]] $Values)
+
+    $bytes = [Text.Encoding]::UTF8.GetBytes(($Values -join "`n"))
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-PatchStatePath {
+    param([string] $Repository, [string] $Name)
+
+    $path = (& git -C $Repository rev-parse --git-path "pulsar-$Name-patches.json").Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $path) {
+        throw "Could not resolve patch-state path for $Repository"
+    }
+    if (-not [IO.Path]::IsPathRooted($path)) {
+        $path = Join-Path $Repository $path
+    }
+    return $path
+}
+
+function Test-PatchedCheckout {
+    param(
+        [string] $Repository,
+        [string] $StatePath,
+        [string] $PinnedRevision,
+        [string] $Fingerprint,
+        [switch] $IgnoreObsBrowserGitlink
+    )
+
+    if ($RefreshPatches -or -not (Test-Path -LiteralPath $StatePath)) { return $false }
+    try {
+        $state = Get-Content -Raw -LiteralPath $StatePath | ConvertFrom-Json
+    } catch {
+        return $false
+    }
+    if ($state.pinned_revision -ne $PinnedRevision -or $state.fingerprint -ne $Fingerprint) {
+        return $false
+    }
+    $head = (& git -C $Repository rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $head -ne $state.applied_head) { return $false }
+
+    $pathspec = @('.')
+    if ($IgnoreObsBrowserGitlink) { $pathspec += ':(exclude)plugins/obs-browser' }
+    & git -C $Repository diff --quiet HEAD -- @pathspec
+    if ($LASTEXITCODE -ne 0) { return $false }
+    & git -C $Repository diff --cached --quiet HEAD -- @pathspec
+    return $LASTEXITCODE -eq 0
+}
+
+function Save-PatchState {
+    param(
+        [string] $Repository,
+        [string] $StatePath,
+        [string] $PinnedRevision,
+        [string] $Fingerprint
+    )
+
+    $head = (& git -C $Repository rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "Could not read patched HEAD for $Repository" }
+    $state = [ordered]@{
+        pinned_revision = $PinnedRevision
+        fingerprint = $Fingerprint
+        applied_head = $head
+    } | ConvertTo-Json
+    $tempPath = "$StatePath.tmp-$PID"
+    [IO.File]::WriteAllText($tempPath, $state + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    Move-Item -Force -LiteralPath $tempPath -Destination $StatePath
+}
 
 if (-not (Test-Path (Join-Path $upstream 'CMakePresets.json'))) {
     throw "upstream/ submodule not initialised. Run: git submodule update --init --recursive"
@@ -215,25 +314,36 @@ Write-Host "Pinned upstream commit: $recordedSha"
 Write-Host "Root patches found:     $($rootPatches.Count)"
 Write-Host "OBS-browser patches:    $($obsBrowserPatches.Count)"
 
-Push-Location $upstream
-try {
-    # Abort any half-applied am session from a previous failed run.
-    if (Test-Path '.git/rebase-apply') {
-        & git am --abort 2>$null
-    }
-    & git reset --hard $recordedSha | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Could not reset upstream/ to $recordedSha" }
+$rootPatchFingerprint = Get-PatchSetFingerprint $recordedSha $rootPatches
+$rootPatchState = Get-PatchStatePath $upstream 'root'
+$reuseRootPatches = Test-PatchedCheckout $upstream $rootPatchState $recordedSha $rootPatchFingerprint `
+    -IgnoreObsBrowserGitlink:($obsBrowserPatches.Count -gt 0)
 
-    foreach ($patch in $rootPatches) {
-        Write-Host "  applying $($patch.Name)"
-        & git am --keep-non-patch $patch.FullName
-        if ($LASTEXITCODE -ne 0) {
+if ($reuseRootPatches) {
+    Write-Host "  reusing exact patched upstream HEAD (fingerprint $($rootPatchFingerprint.Substring(0, 12)))"
+} else {
+    Push-Location $upstream
+    try {
+        # Abort any half-applied am session from a previous failed run.
+        $rebaseApply = (& git rev-parse --git-path rebase-apply).Trim()
+        if ($rebaseApply -and (Test-Path -LiteralPath $rebaseApply)) {
             & git am --abort 2>$null
-            throw "Failed to apply $($patch.Name) -- see error above"
         }
+        & git reset --hard $recordedSha | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Could not reset upstream/ to $recordedSha" }
+
+        foreach ($patch in $rootPatches) {
+            Write-Host "  applying $($patch.Name)"
+            & git am --keep-non-patch $patch.FullName
+            if ($LASTEXITCODE -ne 0) {
+                & git am --abort 2>$null
+                throw "Failed to apply $($patch.Name) -- see error above"
+            }
+        }
+        Save-PatchState $upstream $rootPatchState $recordedSha $rootPatchFingerprint
+    } finally {
+        Pop-Location
     }
-} finally {
-    Pop-Location
 }
 
 # obs-browser is a nested upstream submodule and cannot be changed by a
@@ -247,23 +357,31 @@ if ($obsBrowserPatches.Count -gt 0) {
         throw "Could not parse obs-browser SHA from: $obsBrowserStatus"
     }
     $obsBrowserRecordedSha = $Matches[1]
-    Push-Location $obsBrowser
-    try {
-        if (Test-Path '.git/rebase-apply') {
-            & git am --abort 2>$null
-        }
-        & git reset --hard $obsBrowserRecordedSha | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Could not reset obs-browser to $obsBrowserRecordedSha" }
-        foreach ($patch in $obsBrowserPatches) {
-            Write-Host "  applying $($patch.Name) in obs-browser"
-            & git am --keep-non-patch $patch.FullName
-            if ($LASTEXITCODE -ne 0) {
+    $obsBrowserFingerprint = Get-PatchSetFingerprint $obsBrowserRecordedSha $obsBrowserPatches
+    $obsBrowserState = Get-PatchStatePath $obsBrowser 'browser'
+    if (Test-PatchedCheckout $obsBrowser $obsBrowserState $obsBrowserRecordedSha $obsBrowserFingerprint) {
+        Write-Host "  reusing exact patched obs-browser HEAD (fingerprint $($obsBrowserFingerprint.Substring(0, 12)))"
+    } else {
+        Push-Location $obsBrowser
+        try {
+            $rebaseApply = (& git rev-parse --git-path rebase-apply).Trim()
+            if ($rebaseApply -and (Test-Path -LiteralPath $rebaseApply)) {
                 & git am --abort 2>$null
-                throw "Failed to apply $($patch.Name) in obs-browser -- see error above"
             }
+            & git reset --hard $obsBrowserRecordedSha | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Could not reset obs-browser to $obsBrowserRecordedSha" }
+            foreach ($patch in $obsBrowserPatches) {
+                Write-Host "  applying $($patch.Name) in obs-browser"
+                & git am --keep-non-patch $patch.FullName
+                if ($LASTEXITCODE -ne 0) {
+                    & git am --abort 2>$null
+                    throw "Failed to apply $($patch.Name) in obs-browser -- see error above"
+                }
+            }
+            Save-PatchState $obsBrowser $obsBrowserState $obsBrowserRecordedSha $obsBrowserFingerprint
+        } finally {
+            Pop-Location
         }
-    } finally {
-        Pop-Location
     }
 }
 
@@ -331,6 +449,20 @@ if ($Stage -in @('configure', 'all')) {
         # already exists! Duplicate library?" warnings.
         $extraArgs += '-DENABLE_WEBSOCKET=OFF'
     }
+    # Some non-interactive Windows runners strip PROCESSOR_ARCHITECTURE.
+    # CMake then leaves CMAKE_HOST_SYSTEM_PROCESSOR empty and OBS mistakes the
+    # literal DIRECTORY keyword for the host architecture. Point Qt at the
+    # target x64 host tools explicitly in that environment. Normal developer
+    # shells and CI keep OBS's native host/cross-compile detection unchanged.
+    if (-not $env:PROCESSOR_ARCHITECTURE -and ($Full -or $GuiBuild)) {
+        $presetDocument = Get-Content -Raw (Join-Path $upstream 'CMakePresets.json') | ConvertFrom-Json
+        $dependencyPreset = $presetDocument.configurePresets | Where-Object { $_.name -eq 'dependencies' }
+        $qtVersion = $dependencyPreset.vendor.'obsproject.com/obs-studio'.dependencies.qt6.version
+        if (-not $qtVersion) { throw "Could not resolve Qt dependency version from CMakePresets.json" }
+        $qtHostPath = Join-Path $upstream ".deps\obs-deps-qt6-$qtVersion-x64"
+        $extraArgs += "-DQT_HOST_PATH=$qtHostPath"
+        Write-Host "  host architecture env absent: QT_HOST_PATH=$qtHostPath"
+    }
     Push-Location $upstream
     try {
         & $cmake --preset $preset @extraArgs
@@ -347,7 +479,7 @@ if ($Stage -in @('build', 'all')) {
     # directory, so we cd into upstream/ for the build call.
     Push-Location $upstream
     try {
-        & $cmake --build --preset $preset --config RelWithDebInfo
+        & $cmake --build --preset $preset --config RelWithDebInfo --parallel
         if ($LASTEXITCODE -ne 0) { throw "Build failed" }
     } finally {
         Pop-Location
@@ -393,21 +525,59 @@ if ($Stage -in @('build', 'all')) {
             }
         }
 
-        Write-Host ""
-        Write-Host "--- Configuring Pulsar plugins ---"
         $pulsarBuild = Join-Path $root 'build'
-        & $cmake -S $root -B $pulsarBuild -G "Visual Studio 17 2022" -A x64 `
-                 -DPULSAR_BUILD_HEADLESS=ON `
-                 -DPULSAR_BUILD_FRONTEND_STUB=ON `
-                 -DPULSAR_BUILD_WEBSOCKET=ON `
-                 -DPULSAR_BUILD_MULTISTREAM=ON `
-                 -DPULSAR_BUILD_SCENE_SOURCE=ON `
-                 "-DPULSAR_BUILD_BROWSER=$(if ($Full) { 'ON' } else { 'OFF' })"
-        if ($LASTEXITCODE -ne 0) { throw "Pulsar configure failed" }
+        $pulsarConfigState = Join-Path $pulsarBuild '.pulsar-config-state.json'
+        $patchedUpstreamHead = (& git -C $upstream rev-parse HEAD).Trim()
+        if ($LASTEXITCODE -ne 0) { throw "Could not read patched upstream HEAD" }
+        $pulsarConfigFingerprint = Get-TextFingerprint @(
+            "root=$root",
+            "upstream=$upstream",
+            "upstream_head=$patchedUpstreamHead",
+            'generator=Visual Studio 17 2022',
+            'architecture=x64',
+            'headless=ON',
+            'frontend_stub=ON',
+            'websocket=ON',
+            'multistream=ON',
+            'scene_source=ON',
+            "browser=$(if ($Full) { 'ON' } else { 'OFF' })"
+        )
+        $reusePulsarConfigure = $false
+        if (-not $Clean -and (Test-Path (Join-Path $pulsarBuild 'CMakeCache.txt')) -and
+            (Test-Path $pulsarConfigState)) {
+            try {
+                $savedConfig = Get-Content -Raw $pulsarConfigState | ConvertFrom-Json
+                $reusePulsarConfigure = $savedConfig.fingerprint -eq $pulsarConfigFingerprint
+            } catch {
+                $reusePulsarConfigure = $false
+            }
+        }
+
+        if ($reusePulsarConfigure) {
+            Write-Host ""
+            Write-Host "--- Reusing exact Pulsar CMake configuration ---"
+        } else {
+            Write-Host ""
+            Write-Host "--- Configuring Pulsar plugins ---"
+            & $cmake -S $root -B $pulsarBuild -G "Visual Studio 17 2022" -A x64 `
+                     -DPULSAR_BUILD_HEADLESS=ON `
+                     -DPULSAR_BUILD_FRONTEND_STUB=ON `
+                     -DPULSAR_BUILD_WEBSOCKET=ON `
+                     -DPULSAR_BUILD_MULTISTREAM=ON `
+                     -DPULSAR_BUILD_SCENE_SOURCE=ON `
+                     "-DPULSAR_BUILD_BROWSER=$(if ($Full) { 'ON' } else { 'OFF' })"
+            if ($LASTEXITCODE -ne 0) { throw "Pulsar configure failed" }
+            $configState = [ordered]@{ fingerprint = $pulsarConfigFingerprint } | ConvertTo-Json
+            [IO.File]::WriteAllText(
+                $pulsarConfigState,
+                $configState + [Environment]::NewLine,
+                [Text.UTF8Encoding]::new($false)
+            )
+        }
 
         Write-Host ""
         Write-Host "--- Building Pulsar plugins ---"
-        & $cmake --build $pulsarBuild --config RelWithDebInfo
+        & $cmake --build $pulsarBuild --config RelWithDebInfo --parallel
         if ($LASTEXITCODE -ne 0) { throw "Pulsar build failed" }
 
         $pulsarExe = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo\bin\64bit\pulsar.exe'
