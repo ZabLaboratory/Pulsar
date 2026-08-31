@@ -27,6 +27,7 @@ PATCH = ROOT / "patches" / "0011-feat-runtime-telemetry-producer.patch"
 FRONTEND_CMAKE = ROOT / "plugins" / "pulsar-frontend-stub" / "CMakeLists.txt"
 WEBSOCKET_CMAKE = ROOT / "plugins" / "pulsar-websocket" / "CMakeLists.txt"
 FRONTEND_SOURCE = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
+HEADLESS_SOURCE = ROOT / "plugins" / "pulsar-headless" / "main.cpp"
 WEBSOCKET_SOURCE = ROOT / "plugins" / "pulsar-websocket" / "src" / "requesthandler" / "RequestHandler.cpp"
 ABI_HEADER = ROOT / "plugins" / "pulsar-frontend-stub" / "include" / "pulsar-runtime-telemetry-abi.h"
 BRIDGE_HEADER = ROOT / "plugins" / "pulsar-frontend-stub" / "include" / "pulsar-runtime-telemetry.h"
@@ -106,6 +107,11 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert '\\"boundary\\":\\"encoded_first_packet\\"' in frontend
     assert '\\"packet_pts\\":' in frontend
     assert '\\"packet_timebase_num\\":' in frontend
+    assert '\\"packet_cts_monotonic_ns\\":' in frontend
+    assert '\\"packet_fer_monotonic_ns\\":' in frontend
+    assert '\\"packet_ferc_monotonic_ns\\":' in frontend
+    assert '\\"packet_pir_monotonic_ns\\":' in frontend
+    assert '\\"packet_callback_monotonic_ns\\":' in frontend
     assert '\\"capture_paths\\":[\\"encoder_input_raw\\",\\"directshow_return\\",\\"encoded_first_packet\\"' in frontend
     assert "streamOutput_ = streamOutput" in frontend
     assert "rtmp_load_active" in frontend
@@ -201,6 +207,20 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "copy_telemetry_counter" in patch
     assert "INT64_MAX" in patch
     assert "queue_rejected" in frontend
+
+
+def test_headless_audio_is_bounded_for_live_interleaving() -> None:
+    headless = HEADLESS_SOURCE.read_text(encoding="utf-8")
+    reset_start = headless.index("bool reset_audio()")
+    reset_end = headless.index("bool websocket_server_ready(", reset_start)
+    reset = headless[reset_start:reset_end]
+
+    assert "obs_audio_info2 oai" in reset
+    assert "oai.samples_per_sec = 48000" in reset
+    assert "oai.max_buffering_ms = 20" in reset
+    assert "oai.fixed_buffering = true" in reset
+    assert "obs_reset_audio2(&oai)" in reset
+    assert "obs_reset_audio(&oai)" not in reset
 
 
 def _bounded_identifier_model(value: bytes, capacity: int = 129) -> tuple[str, str] | None:

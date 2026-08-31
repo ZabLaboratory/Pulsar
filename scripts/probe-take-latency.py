@@ -178,6 +178,11 @@ OBSERVATION_OPTIONAL = {
     "clock_source",
     "clock_offset_ns",
     "clock_bound_ns",
+    "packet_cts_monotonic_ns",
+    "packet_fer_monotonic_ns",
+    "packet_ferc_monotonic_ns",
+    "packet_pir_monotonic_ns",
+    "packet_callback_monotonic_ns",
     "frame_hash",
     "notes",
 }
@@ -587,6 +592,29 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
         for key in ("packet_timebase_num", "packet_timebase_den"):
             if key in obj and obj[key] <= 0:
                 raise EvidenceError("SCHEMA_INVALID", f"observation.{key} must be positive", line=line)
+        timing_fields = (
+            "packet_cts_monotonic_ns",
+            "packet_fer_monotonic_ns",
+            "packet_ferc_monotonic_ns",
+            "packet_pir_monotonic_ns",
+            "packet_callback_monotonic_ns",
+        )
+        if any(key in obj for key in timing_fields) and not all(key in obj for key in timing_fields):
+            raise EvidenceError("SCHEMA_INVALID", "encoder packet timing metadata must be complete", line=line)
+        if all(key in obj for key in timing_fields):
+            timing = [_integer(obj[key], f"observation.{key}", line=line) for key in timing_fields]
+            if any(value <= 0 for value in timing) or timing != sorted(timing):
+                raise EvidenceError(
+                    "CLOCK_INVALID",
+                    "encoder packet timing must satisfy 0 < CTS <= FER <= FERC <= PIR <= callback",
+                    line=line,
+                )
+            if obj["observed_at_monotonic_ns"] != obj["packet_pir_monotonic_ns"]:
+                raise EvidenceError(
+                    "CLOCK_INVALID",
+                    "encoded_first_packet observed_at must equal packet PIR when timing metadata is present",
+                    line=line,
+                )
     if obj["boundary"] == "rtmp_first_packet":
         required_packet_fields = (
             "packet_index",
@@ -794,6 +822,49 @@ def _stats(values: Sequence[float]) -> dict[str, Any]:
         "p99_ms": round(quantile(values, 0.99), 6) if values else None,
         "min_ms": round(min(values), 6) if values else None,
         "max_ms": round(max(values), 6) if values else None,
+    }
+
+
+def _encoder_pipeline_stats(
+    first_by_take_boundary: Mapping[tuple[str, str], Mapping[str, Any]],
+    measured_take_ids: set[str],
+) -> dict[str, Any]:
+    """Split the native video path without changing any acceptance boundary."""
+
+    fields = (
+        "packet_cts_monotonic_ns",
+        "packet_fer_monotonic_ns",
+        "packet_ferc_monotonic_ns",
+        "packet_pir_monotonic_ns",
+        "packet_callback_monotonic_ns",
+    )
+    samples = [
+        observation
+        for (take_id, boundary), observation in first_by_take_boundary.items()
+        if boundary == "encoded_first_packet" and take_id in measured_take_ids
+    ]
+    timed = [observation for observation in samples if all(field in observation for field in fields)]
+    if not timed:
+        return {"status": "NOT_AVAILABLE", "sample_count": 0}
+    if len(timed) != len(samples):
+        return {
+            "status": "PARTIAL",
+            "sample_count": len(timed),
+            "encoded_sample_count": len(samples),
+        }
+
+    def stage(end: str, start: str) -> dict[str, Any]:
+        return _stats([(sample[end] - sample[start]) / 1_000_000.0 for sample in timed])
+
+    return {
+        "status": "MEASURED",
+        "sample_count": len(timed),
+        "composition_to_encode_request": stage("packet_fer_monotonic_ns", "packet_cts_monotonic_ns"),
+        "encode_request_to_complete": stage("packet_ferc_monotonic_ns", "packet_fer_monotonic_ns"),
+        "encode_complete_to_interleave": stage("packet_pir_monotonic_ns", "packet_ferc_monotonic_ns"),
+        "interleave_to_callback": stage("packet_callback_monotonic_ns", "packet_pir_monotonic_ns"),
+        "composition_to_interleave": stage("packet_pir_monotonic_ns", "packet_cts_monotonic_ns"),
+        "acceptance_boundary_unchanged": True,
     }
 
 
@@ -1239,6 +1310,8 @@ def analyze_trace(
             "separate_boundary": boundary != "encoder_input_raw",
         }
 
+    encoder_pipeline = _encoder_pipeline_stats(first_by_take_boundary, measured_take_ids)
+
     resource_report: dict[str, Any] = {
         "status": "UNPROVEN",
         "sample_counts": {},
@@ -1336,6 +1409,7 @@ def analyze_trace(
             "correlated_packet_count": len(rtmp_matches),
             "correlations": rtmp_matches,
             "encoder_callback_auxiliary": latency["encoded_first_packet"],
+            "encoder_pipeline_auxiliary": encoder_pipeline,
         },
         "AC-13": {
             "status": resource_report["status"],
@@ -1390,6 +1464,7 @@ def analyze_trace(
             "minimum_measurements_required": minimum_takes,
         },
         "latency": latency,
+        "encoder_pipeline": encoder_pipeline,
         "ignored_valid_samples_before_commit": ignored_pre_commit,
         "resources": resource_report,
         "criteria": criteria,

@@ -537,6 +537,64 @@ def test_rtmp_receiver_requires_complete_session_and_packet_metadata():
         probe.parse_records(records)
 
 
+def test_encoder_pipeline_timing_is_complete_ordered_and_diagnostic_only():
+    records = _take_records(3)
+    encoded_packets = [
+        item
+        for item in records
+        if item.get("record_type") == "observation"
+        and item.get("boundary") == "encoded_first_packet"
+    ]
+    for packet in encoded_packets:
+        cts = packet["observed_at_monotonic_ns"] - 6_000_000
+        packet.update(
+            {
+                "packet_cts_monotonic_ns": cts,
+                "packet_fer_monotonic_ns": cts + 1_000_000,
+                "packet_ferc_monotonic_ns": cts + 3_000_000,
+                "packet_pir_monotonic_ns": packet["observed_at_monotonic_ns"],
+                "packet_callback_monotonic_ns": packet["observed_at_monotonic_ns"] + 100_000,
+            }
+        )
+
+    report = probe.analyze_trace(
+        probe.parse_records(records),
+        minimum_takes=3,
+        minimum_warmup=3,
+        minimum_resource_samples=2,
+    )
+    pipeline = report["encoder_pipeline"]
+    assert pipeline["status"] == "MEASURED"
+    assert pipeline["sample_count"] == 3
+    assert pipeline["encode_request_to_complete"]["p95_ms"] == 2.0
+    assert pipeline["encode_complete_to_interleave"]["p95_ms"] == 3.0
+    assert pipeline["interleave_to_callback"]["p95_ms"] == 0.1
+    assert pipeline["acceptance_boundary_unchanged"] is True
+    assert report["criteria"]["AC-12"]["boundary"] == "rtmp_first_packet"
+
+    broken = _take_records(3)
+    packet = next(
+        item
+        for item in broken
+        if item.get("record_type") == "observation"
+        and item.get("boundary") == "encoded_first_packet"
+    )
+    packet["packet_cts_monotonic_ns"] = packet["observed_at_monotonic_ns"] - 1
+    with pytest.raises(probe.EvidenceError, match="timing metadata must be complete"):
+        probe.parse_records(broken)
+
+    packet.update(
+        {
+            "packet_fer_monotonic_ns": packet["observed_at_monotonic_ns"] - 3,
+            "packet_ferc_monotonic_ns": packet["observed_at_monotonic_ns"] - 2,
+            "packet_pir_monotonic_ns": packet["observed_at_monotonic_ns"],
+            "packet_callback_monotonic_ns": packet["observed_at_monotonic_ns"] + 1,
+        }
+    )
+    with pytest.raises(probe.EvidenceError, match="CTS <= FER <= FERC <= PIR <= callback"):
+        probe.parse_records(broken)
+
+
 def test_rtmp_load_request_and_receiver_metadata_are_an_atomic_session_pair():
     records = _take_records(1)
     records[0].pop("rtmp_load_requested")
