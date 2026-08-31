@@ -3370,6 +3370,7 @@ async def drive(
     ffprobe = find_ffprobe()
     if not ffprobe:
         raise ProbeSkip("ffprobe is required for the active-recording acceptance proof")
+    trace_receiver = None
     if process.trace_path is not None:
         trace_receiver = process.rtmp_receiver
         if trace_receiver is None:

@@ -871,3 +871,11 @@ def test_non_traced_spawn_exports_shutdown_runtime_identity() -> None:
     trace_at = source.index("        if self.trace_path is not None:", spawn_at)
     export = 'env["PULSAR_RUNTIME_INSTANCE_ID"] = self.runtime_id'
     assert source.index(export, spawn_at) < trace_at
+
+
+def test_non_traced_drive_initializes_optional_trace_receiver() -> None:
+    source = (_ROOT / "scripts/probe-dual-lane.py").read_text(encoding="utf-8")
+    drive_at = source.index("async def drive(")
+    trace_guard = source.index("    if process.trace_path is not None:", drive_at)
+    initialization = "    trace_receiver = None"
+    assert source.index(initialization, drive_at) < trace_guard
