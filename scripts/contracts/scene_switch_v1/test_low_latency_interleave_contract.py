@@ -43,15 +43,18 @@ def test_video_fastpath_keeps_audio_and_orders_video_tracks() -> None:
     assert "obs_output_set_audio_encoder" not in patch
 
 
-def test_nvenc_uses_a_real_low_latency_profile() -> None:
+def test_nvenc_low_latency_profile_is_explicitly_opt_in() -> None:
     frontend = FRONTEND.read_text(encoding="utf-8")
 
     assert 'std::strcmp(reportFamily, "nvenc") == 0' in frontend
+    assert 'std::getenv("PULSAR_NVENC_LOW_LATENCY")' in frontend
+    assert "nvencLowLatency == EnvBool::Enabled" in frontend
     assert 'obs_data_set_string(vEncSettings, "tune", "ull");' in frontend
     assert 'obs_data_set_string(vEncSettings, "multipass", "disabled");' in frontend
     assert 'obs_data_set_bool(vEncSettings, "lookahead", false);' in frontend
     assert 'obs_data_set_int(vEncSettings, "bf", 0);' in frontend
     assert "NVENC latency profile" in frontend
+    assert "NVENC quality profile preserved" in frontend
 
 
 def test_nvenc_ull_drains_without_shrinking_the_surface_pool() -> None:
