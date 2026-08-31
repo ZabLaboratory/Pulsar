@@ -96,7 +96,8 @@ commit's `previous_revisions` must equal the acceptance's `revisions` and its
 frame ID/PTS are the atomic frame boundary.
 
 An observation record has the following required fields (plus optional
-`frame_hash`, packet metadata, clock metadata, and `notes`). For
+`frame_hash`, packet metadata, clock metadata, DirectShow stage timing, and
+`notes`). For
 `rtmp_first_packet`, `packet_index`, `packet_pts`, `packet_dts`,
 `packet_timebase_num`, `packet_timebase_den`, `packet_identity`,
 `clock_source`, `clock_offset_ns`, and `clock_bound_ns` are mandatory. A
@@ -123,6 +124,17 @@ calibrated clock offset and must equal the observation's normalized timestamp.
   "consumer": "DirectShow"
 }
 ```
+
+Current `directshow_return` producers may also emit the complete optional
+`frame_entry_monotonic_ns`, `lock_sample_data_acquired_monotonic_ns`,
+`queue_read_start_monotonic_ns`, `queue_read_completed_monotonic_ns`,
+`unlock_sample_data_completed_monotonic_ns`, and `emission_monotonic_ns`
+sequence. These QPC-derived timestamps are diagnostics only: they must be
+strictly positive and ordered, and `observed_at_monotonic_ns` equals the
+unlock-completed timestamp. The fields are all-or-none; legacy traces without
+the sequence remain parseable, while malformed or partial sequences are
+rejected fail-closed. They do not change the AC-08 latency boundary or its
+percentile calculation.
 
 If the atomic queue rejects a reserved Take, the producer emits a terminal
 `TakeAborted` event with `reason=queue_rejected` and the

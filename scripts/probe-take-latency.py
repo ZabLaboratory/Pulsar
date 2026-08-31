@@ -155,6 +155,15 @@ SESSION_OPTIONAL = {
 }
 SESSION_ALLOWED = SESSION_REQUIRED | SESSION_OPTIONAL
 
+DIRECTSHOW_TIMING_FIELDS = (
+    "frame_entry_monotonic_ns",
+    "lock_sample_data_acquired_monotonic_ns",
+    "queue_read_start_monotonic_ns",
+    "queue_read_completed_monotonic_ns",
+    "unlock_sample_data_completed_monotonic_ns",
+    "emission_monotonic_ns",
+)
+
 OBSERVATION_REQUIRED = {
     "record_type",
     "boundary",
@@ -187,6 +196,7 @@ OBSERVATION_OPTIONAL = {
     "packet_ferc_monotonic_ns",
     "packet_pir_monotonic_ns",
     "packet_callback_monotonic_ns",
+    *DIRECTSHOW_TIMING_FIELDS,
     "receiver_observed_normalized_ns",
     "frame_hash",
     "notes",
@@ -588,6 +598,30 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
         _boolean(obj["program_frame"], "observation.program_frame", line=line)
         if obj["valid"] and not obj["program_frame"]:
             raise EvidenceError("BOUNDARY_INVALID", "a valid raw/DirectShow sample must be a Program frame", line=line)
+    if obj["boundary"] == "directshow_return":
+        present_timing = [key in obj for key in DIRECTSHOW_TIMING_FIELDS]
+        if any(present_timing) and not all(present_timing):
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "DirectShow stage timing metadata must be complete",
+                line=line,
+            )
+        if all(present_timing):
+            timing = [_integer(obj[key], f"observation.{key}", line=line) for key in DIRECTSHOW_TIMING_FIELDS]
+            if any(value <= 0 for value in timing) or any(
+                left >= right for left, right in zip(timing, timing[1:])
+            ):
+                raise EvidenceError(
+                    "CLOCK_INVALID",
+                    "DirectShow stage timing must be strictly ordered and positive",
+                    line=line,
+                )
+            if obj["observed_at_monotonic_ns"] != obj["unlock_sample_data_completed_monotonic_ns"]:
+                raise EvidenceError(
+                    "CLOCK_INVALID",
+                    "directshow_return observed_at must equal unlock completion",
+                    line=line,
+                )
     if obj["boundary"] == "encoded_first_packet":
         if "packet_index" not in obj:
             raise EvidenceError("BOUNDARY_INVALID", "encoded_first_packet requires packet_index", line=line)

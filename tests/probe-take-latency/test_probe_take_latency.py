@@ -20,6 +20,7 @@ import pytest
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "probe-take-latency.py"
+TELEMETRY_PATCH = Path(__file__).resolve().parents[2] / "patches" / "0011-feat-runtime-telemetry-producer.patch"
 SPEC = importlib.util.spec_from_file_location("probe_take_latency", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 probe = importlib.util.module_from_spec(SPEC)
@@ -197,6 +198,17 @@ def _take_records(
             }
             if boundary in ("encoder_input_raw", "directshow_return"):
                 item["program_frame"] = valid
+            if boundary == "directshow_return":
+                item.update(
+                    {
+                        "frame_entry_monotonic_ns": observed - 5_000_000,
+                        "lock_sample_data_acquired_monotonic_ns": observed - 4_000_000,
+                        "queue_read_start_monotonic_ns": observed - 3_000_000,
+                        "queue_read_completed_monotonic_ns": observed - 2_000_000,
+                        "unlock_sample_data_completed_monotonic_ns": observed,
+                        "emission_monotonic_ns": observed + 1_000_000,
+                    }
+                )
             if boundary == "encoded_first_packet":
                 item.update(
                     {
@@ -819,6 +831,60 @@ def test_wrong_directshow_surface_is_rejected_instead_of_counted_as_raw():
             record["surface"] = "ProgramView"
             break
     with pytest.raises(probe.EvidenceError, match="BOUNDARY_INVALID"):
+        probe.parse_records(records)
+
+
+def test_directshow_stage_timing_is_optional_for_legacy_traces():
+    records = _take_records(3)
+    directshow = next(
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "directshow_return"
+    )
+    for key in probe.DIRECTSHOW_TIMING_FIELDS:
+        directshow.pop(key)
+    parsed = probe.parse_records(records)
+    report = probe.analyze_trace(parsed, minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
+    assert report["latency"]["directshow_return"]["count"] == 3
+
+
+def test_telemetry_patch_captures_directshow_stage_timing_without_changing_boundary():
+    patch_text = TELEMETRY_PATCH.read_text(encoding="utf-8")
+    for field in probe.DIRECTSHOW_TIMING_FIELDS:
+        assert field in patch_text
+    assert "observed_at_monotonic_ns" in patch_text
+    assert "EmitDirectShowObservation(metadata, timing)" in patch_text
+
+
+def test_directshow_stage_timing_requires_complete_strictly_ordered_metadata():
+    records = _take_records(3)
+    directshow = next(
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "directshow_return"
+    )
+    directshow.pop("queue_read_start_monotonic_ns")
+    with pytest.raises(probe.EvidenceError, match="metadata must be complete"):
+        probe.parse_records(records)
+
+    records = _take_records(3)
+    directshow = next(
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "directshow_return"
+    )
+    directshow["queue_read_completed_monotonic_ns"] = directshow["queue_read_start_monotonic_ns"]
+    with pytest.raises(probe.EvidenceError, match="strictly ordered"):
+        probe.parse_records(records)
+
+    records = _take_records(3)
+    directshow = next(
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "directshow_return"
+    )
+    directshow["observed_at_monotonic_ns"] += 1
+    with pytest.raises(probe.EvidenceError, match="equal unlock completion"):
         probe.parse_records(records)
 
 
