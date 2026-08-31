@@ -85,6 +85,41 @@ def test_prepare_record_directory_rejects_ambiguous_or_unsafe_paths(tmp_path):
         probe.prepare_record_directory(probe.REPO_ROOT)
 
 
+def test_prepare_record_directory_rejects_dangling_and_existing_symlinks(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    existing_link = tmp_path / "existing-link"
+    dangling_link = tmp_path / "dangling-link"
+    try:
+        existing_link.symlink_to(target, target_is_directory=True)
+        dangling_link.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(probe.ProbeFailure, match="symlink or reparse"):
+        probe.prepare_record_directory(existing_link)
+    with pytest.raises(probe.ProbeFailure, match="symlink or reparse"):
+        probe.prepare_record_directory(dangling_link)
+
+
+def test_prepare_record_directory_rejects_junction_component_on_windows(tmp_path):
+    if probe.os.name != "nt":
+        pytest.skip("junctions are Windows-specific")
+    target = tmp_path / "junction-target"
+    target.mkdir()
+    junction = tmp_path / "junction"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"junction creation unavailable: {result.stderr or result.stdout}")
+    with pytest.raises(probe.ProbeFailure, match="symlink or reparse"):
+        probe.prepare_record_directory(junction / "new-output")
+
+
 def test_parse_args_accepts_persistent_record_directory(tmp_path):
     args = probe.parse_args(
         ["--encoder", "x264", "--record-dir", str(tmp_path / "evidence")]

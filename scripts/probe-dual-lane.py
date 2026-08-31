@@ -129,6 +129,7 @@ EXIT_SKIP = 3
 
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_HANDLE_FLAG_INHERIT = 0x00000001
+WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 
 # The runtime's ``os_gettime_ns`` uses QueryPerformanceCounter on Windows.
 # Python's monotonic clocks are not interchangeable on every supported Python
@@ -2081,6 +2082,31 @@ def find_ffprobe() -> str | None:
     return shutil.which("ffprobe")
 
 
+def _is_symlink_or_reparse(path: pathlib.Path) -> bool:
+    """Detect links and Windows reparse points without following them."""
+
+    try:
+        if path.is_symlink():
+            return True
+        attributes = getattr(os.lstat(path), "st_file_attributes", 0)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ProbeFailure(f"--record-dir cannot inspect path component {path}: {exc}") from exc
+    return bool(attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def _reject_reparse_components(path: pathlib.Path) -> None:
+    """Reject a link/reparse component before ``Path.resolve`` can follow it."""
+
+    absolute = pathlib.Path(os.path.abspath(path))
+    current = pathlib.Path(absolute.anchor)
+    for component in absolute.parts[1:]:
+        current /= component
+        if _is_symlink_or_reparse(current):
+            raise ProbeFailure(f"--record-dir must not contain a symlink or reparse point: {current}")
+
+
 def prepare_record_directory(requested: pathlib.Path | None) -> tuple[Any, pathlib.Path, bool]:
     """Return the runtime directory and its cleanup context.
 
@@ -2096,8 +2122,7 @@ def prepare_record_directory(requested: pathlib.Path | None) -> tuple[Any, pathl
         return temporary, pathlib.Path(temporary.name), False
 
     raw = pathlib.Path(requested).expanduser()
-    if raw.exists() and raw.is_symlink():
-        raise ProbeFailure("--record-dir must not be a symlink")
+    _reject_reparse_components(raw)
     try:
         destination = raw.resolve(strict=False)
     except OSError as exc:
