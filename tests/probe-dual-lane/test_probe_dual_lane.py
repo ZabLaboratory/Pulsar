@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import hashlib
 import importlib.util
 import inspect
@@ -191,7 +192,7 @@ def _boundary_wait_fixture(count: int = 1, *, omit: tuple[int, str] | None = Non
                     }
                 )
             records.append(record)
-        packet_tick = round((number - 1) * 1000 / 60)
+        packet_tick = 1500 + round((number - 1) * 1000 / 60)
         packets.append(
             {
                 "packet_index": number - 1,
@@ -230,14 +231,39 @@ def test_wait_for_take_boundaries_requires_all_four_unique_correlations(tmp_path
     receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id=runtime_id, stream_id="stream-nvenc")
     receiver.packets = packets
     process = _boundary_wait_process(trace, runtime_id)
-    used: set[int] = set()
+    correlation = probe.RtmpPacketCorrelation()
 
     for commit in commits:
         result = asyncio.run(
-            probe.wait_for_take_boundaries(process, receiver, commit, used, timeout=0.1)
+            probe.wait_for_take_boundaries(process, receiver, commit, correlation, timeout=0.1)
         )
         assert set(result) == {*probe.PRODUCER_BOUNDARIES, "rtmp_first_packet"}
-    assert used == set(range(200))
+    assert correlation.used_packet_indices == set(range(200))
+    assert correlation.offset_min is not None
+    assert correlation.offset_max is not None
+
+
+def test_wait_for_take_boundaries_rejects_duplicate_or_shifted_receiver_index(tmp_path):
+    runtime_id, records, commits, packets = _boundary_wait_fixture(1)
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    process = _boundary_wait_process(trace, runtime_id)
+    receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id=runtime_id, stream_id="stream-x264")
+    receiver.packets = [packets[0], dict(packets[0])]
+    with pytest.raises(probe.ProbeFailure, match="ambiguous RTMP packet correlation"):
+        asyncio.run(
+            probe.wait_for_take_boundaries(
+                process, receiver, commits[0], probe.RtmpPacketCorrelation(), timeout=0.1
+            )
+        )
+
+    receiver.packets = [dict(packets[0], packet_index=packets[0]["packet_index"] + 1)]
+    with pytest.raises(probe.ProbeFailure, match="rtmp_candidates=0"):
+        asyncio.run(
+            probe.wait_for_take_boundaries(
+                process, receiver, commits[0], probe.RtmpPacketCorrelation(), timeout=0.05
+            )
+        )
 
 
 def test_wait_for_take_boundaries_rejects_n_minus_one_and_duplicate(tmp_path):
@@ -249,10 +275,10 @@ def test_wait_for_take_boundaries_rejects_n_minus_one_and_duplicate(tmp_path):
     receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id=runtime_id, stream_id="stream-nvenc")
     receiver.packets = packets
     process = _boundary_wait_process(trace, runtime_id)
-    used: set[int] = set()
-    asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], used, timeout=0.1))
+    correlation = probe.RtmpPacketCorrelation()
+    asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], correlation, timeout=0.1))
     with pytest.raises(probe.ProbeFailure, match="directshow_return=0"):
-        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[1], used, timeout=0.05))
+        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[1], correlation, timeout=0.05))
 
     runtime_id, records, commits, packets = _boundary_wait_fixture(1)
     encoded = next(record for record in records if record.get("boundary") == "encoded_first_packet")
@@ -260,7 +286,11 @@ def test_wait_for_take_boundaries_rejects_n_minus_one_and_duplicate(tmp_path):
     trace.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
     receiver.packets = packets
     with pytest.raises(probe.ProbeFailure, match="duplicate valid encoded_first_packet"):
-        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], set(), timeout=0.1))
+        asyncio.run(
+            probe.wait_for_take_boundaries(
+                process, receiver, commits[0], probe.RtmpPacketCorrelation(), timeout=0.1
+            )
+        )
 
 
 def test_wait_for_take_boundaries_rejects_frame_pts_mismatch_and_dead_process(tmp_path):
@@ -273,7 +303,11 @@ def test_wait_for_take_boundaries_rejects_frame_pts_mismatch_and_dead_process(tm
     receiver.packets = packets
     process = _boundary_wait_process(trace, runtime_id)
     with pytest.raises(probe.ProbeFailure, match="frame/PTS"):
-        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], set(), timeout=0.1))
+        asyncio.run(
+            probe.wait_for_take_boundaries(
+                process, receiver, commits[0], probe.RtmpPacketCorrelation(), timeout=0.1
+            )
+        )
 
     runtime_id, records, commits, packets = _boundary_wait_fixture(1)
     stale = next(record for record in records if record.get("boundary") == "encoder_input_raw")
@@ -282,23 +316,31 @@ def test_wait_for_take_boundaries_rejects_frame_pts_mismatch_and_dead_process(tm
     receiver.packets = packets
     process = _boundary_wait_process(trace, runtime_id)
     with pytest.raises(probe.ProbeFailure, match="stale runtime"):
-        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], set(), timeout=0.1))
+        asyncio.run(
+            probe.wait_for_take_boundaries(
+                process, receiver, commits[0], probe.RtmpPacketCorrelation(), timeout=0.1
+            )
+        )
 
-    runtime_id, records, commits, packets = _boundary_wait_fixture(1)
-    packets[0]["packet_pts"] += 1
-    packets[0]["packet_dts"] += 1
+    runtime_id, records, commits, packets = _boundary_wait_fixture(2)
+    packets[1]["packet_pts"] += 5
+    packets[1]["packet_dts"] += 5
     trace.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
     receiver.packets = packets
     process = _boundary_wait_process(trace, runtime_id)
+    correlation = probe.RtmpPacketCorrelation()
+    asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], correlation, timeout=0.1))
     with pytest.raises(probe.ProbeFailure, match="rtmp_candidates=0"):
-        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[0], set(), timeout=0.1))
+        asyncio.run(probe.wait_for_take_boundaries(process, receiver, commits[1], correlation, timeout=0.1))
 
     dead_process = _boundary_wait_process(trace, runtime_id)
     dead_process.proc = type("Dead", (), {"poll": lambda self: 17})()
 
     with pytest.raises(probe.ProbeFailure, match="runtime exited"):
         asyncio.run(
-            probe.wait_for_take_boundaries(dead_process, receiver, commits[0], set(), timeout=1.0)
+            probe.wait_for_take_boundaries(
+                dead_process, receiver, commits[0], probe.RtmpPacketCorrelation(), timeout=1.0
+            )
         )
 
 
@@ -445,13 +487,13 @@ def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path)
     receiver.calibration = {"source": "perf_counter_ns/qpc", "qpc_delta_ns": 0, "qpc_bound_ns": 42}
     receiver.packets = [
         {
-            "packet_index": 7,
-            "packet_pts": 0,
-            "packet_dts": 0,
-            "packet_pts_time_ms": 0,
-            "packet_dts_time_ms": 0,
+            "packet_index": 0,
+            "packet_pts": 1500,
+            "packet_dts": 1500,
+            "packet_pts_time_ms": 1500,
+            "packet_dts_time_ms": 1500,
             "observed_at_monotonic_ns": 1_020_000_000,
-            "packet_identity": "runtime-fixture-001-nvenc-video-7-0-0",
+            "packet_identity": "runtime-fixture-001-nvenc-video-0-1500-1500",
         }
     ]
     receiver.fuse_trace(producer, final)
@@ -484,13 +526,13 @@ def test_fusion_parser_failure_keeps_existing_final_byte_for_byte(tmp_path):
     receiver.calibration = {"source": "perf_counter_ns/qpc", "qpc_delta_ns": 0, "qpc_bound_ns": 42}
     receiver.packets = [
         {
-            "packet_index": 7,
-            "packet_pts": 0,
-            "packet_dts": 0,
-            "packet_pts_time_ms": 0,
-            "packet_dts_time_ms": 0,
+            "packet_index": 0,
+            "packet_pts": 1500,
+            "packet_dts": 1500,
+            "packet_pts_time_ms": 1500,
+            "packet_dts_time_ms": 1500,
             "observed_at_monotonic_ns": 1_020_000_000,
-            "packet_identity": "runtime-fixture-001-nvenc-video-7-0-0",
+            "packet_identity": "runtime-fixture-001-nvenc-video-0-1500-1500",
         }
     ]
     with pytest.raises(probe.ProbeFailure, match="parser validation failed"):
@@ -504,6 +546,71 @@ def test_receiver_metadata_rejects_unbounded_calibration():
     receiver.calibration = {"source": "perf_counter_ns/qpc", "qpc_delta_ns": 0, "qpc_bound_ns": 5_000_001}
     with pytest.raises(probe.ProbeFailure, match="calibration bound"):
         receiver.metadata()
+
+
+def test_receiver_diagnostic_preserves_packets_tail_and_mux_calibration(tmp_path):
+    runtime_id, records, _commits, packets = _boundary_wait_fixture(1)
+    encoded = next(record for record in records if record.get("boundary") == "encoded_first_packet")
+    receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id=runtime_id, stream_id="stream-x264")
+    receiver.calibration = {
+        "source": "perf_counter_ns/qpc",
+        "qpc_delta_ns": 0,
+        "qpc_bound_ns": 42,
+    }
+    receiver.packets = packets
+    receiver.lines = [f"line-{index}" for index in range(250)]
+    candidate = receiver.live_correlation.candidates(encoded, packets)[0]
+    receiver.live_correlation.commit(candidate)
+
+    diagnostic = receiver.persist_diagnostics(tmp_path / "producer.jsonl")
+    payload = json.loads(diagnostic.read_text(encoding="utf-8"))
+    assert payload["evidence_kind"] == "failed_run_diagnostic_only"
+    assert payload["packet_count"] == 1
+    assert payload["packets"] == packets
+    assert len(payload["line_tail"]) == 200
+    assert payload["line_tail"][0] == "line-50"
+    assert payload["correlation"]["correlation_method"] == "packet_index_constant_mux_offset_v1"
+
+
+def test_failure_diagnostic_is_emitted_only_after_owned_cleanup():
+    source = inspect.getsource(probe.run)
+    cleanup_index = source.index("process.shutdown()")
+    diagnostic_index = source.index('print(f"FAIL: {failure_message}"')
+    assert cleanup_index < diagnostic_index
+
+
+def test_injected_campaign_failure_runs_cleanup_before_reporting(monkeypatch, tmp_path):
+    executable = tmp_path / "pulsar.exe"
+    executable.write_bytes(b"fixture")
+    args = probe.parse_args(["--exe", str(executable), "--encoder", "x264", "--takes", "1"])
+    events: list[str] = []
+
+    class FakeProcess:
+        rtmp_receiver = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def shutdown(self):
+            events.append("cleanup")
+
+    async def fail_drive(*_args, **_kwargs):
+        raise probe.ProbeFailure("injected boundary failure")
+
+    original_print = builtins.print
+
+    def record_print(*values, **kwargs):
+        if values and str(values[0]).startswith("FAIL: injected boundary failure"):
+            events.append("failure-report")
+        return original_print(*values, **kwargs)
+
+    monkeypatch.setattr(probe, "PulsarProcess", FakeProcess)
+    monkeypatch.setattr(probe, "spawn_after_rtmp_ready", lambda _process: None)
+    monkeypatch.setattr(probe, "drive", fail_drive)
+    monkeypatch.setattr(builtins, "print", record_print)
+
+    assert probe.run(args) == probe.EXIT_FAIL
+    assert events == ["cleanup", "failure-report"]
 
 
 def _resource_only_args(*extra: str):

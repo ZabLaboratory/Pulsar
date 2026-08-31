@@ -10,6 +10,7 @@ measurements per required boundary.
 from __future__ import annotations
 
 from copy import deepcopy
+from fractions import Fraction
 import importlib.util
 import json
 from pathlib import Path
@@ -210,10 +211,10 @@ def _take_records(
                 # RTMP/FLV timestamps are millisecond ticks.  Round to the
                 # nearest tick so the parser exercises its documented
                 # half-receiver-tick rational matching rule.
-                receiver_pts = round(index * 1000 / 60)
+                receiver_pts = 1500 + round(index * 1000 / 60)
                 item.update(
                     {
-                        "packet_index": 1000 + index,
+                        "packet_index": index,
                         "packet_pts": receiver_pts,
                         "packet_dts": receiver_pts,
                         "packet_timebase_num": 1,
@@ -235,6 +236,46 @@ def _take_records(
         records.append(observation("decoded_first_frame", commit_at + 100_000_000, frame_id + 2, pts_ns + 2))
         records.append(observation("antenna_first_frame", commit_at + 120_000_000, frame_id + 3, pts_ns + 3))
         revisions = committed_revisions
+
+    encoded_packets = [
+        record for record in records if record.get("record_type") == "observation" and record.get("boundary") == "encoded_first_packet"
+    ]
+    receiver_packets = [
+        record for record in records if record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet"
+    ]
+    if receiver_packets:
+        lower: Fraction | None = None
+        upper: Fraction | None = None
+        for encoded, receiver_packet in zip(encoded_packets, receiver_packets, strict=True):
+            producer_pts = Fraction(
+                encoded["packet_pts"] * encoded["packet_timebase_num"],
+                encoded["packet_timebase_den"],
+            )
+            receiver_pts = Fraction(
+                receiver_packet["packet_pts"] * receiver_packet["packet_timebase_num"],
+                receiver_packet["packet_timebase_den"],
+            )
+            half_tick = Fraction(
+                receiver_packet["packet_timebase_num"],
+                2 * receiver_packet["packet_timebase_den"],
+            )
+            pair_lower = receiver_pts - producer_pts - half_tick
+            pair_upper = receiver_pts - producer_pts + half_tick
+            lower = pair_lower if lower is None else max(lower, pair_lower)
+            upper = pair_upper if upper is None else min(upper, pair_upper)
+        assert lower is not None and upper is not None and lower <= upper
+        session["rtmp_receiver"].update(
+            {
+                "correlation_method": "packet_index_constant_mux_offset_v1",
+                "mux_offset_min_num": lower.numerator,
+                "mux_offset_min_den": lower.denominator,
+                "mux_offset_max_num": upper.numerator,
+                "mux_offset_max_den": upper.denominator,
+                "correlated_packet_count": len(receiver_packets),
+            }
+        )
+    else:
+        session["capture_paths"].remove("rtmp_first_packet")
 
     if include_resources:
         # Resource values are deterministic and include both modes.  The
@@ -516,7 +557,7 @@ def test_rtmp_capture_path_requires_receiver_metadata():
         probe.parse_records(records)
 
 
-def test_rtmp_packet_must_match_one_producer_pts_within_half_receiver_tick():
+def test_rtmp_packet_must_preserve_one_constant_mux_offset():
     records = _take_records(3)
     rtmp = next(
         item
@@ -524,10 +565,43 @@ def test_rtmp_packet_must_match_one_producer_pts_within_half_receiver_tick():
         if item.get("record_type") == "observation" and item.get("boundary") == "rtmp_first_packet"
     )
     rtmp["packet_pts"] += 1
-    with pytest.raises(probe.EvidenceError, match="producer PTS matches"):
+    with pytest.raises(probe.EvidenceError, match="mux offset|PTS/DTS"):
         probe.analyze_trace(
             probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
         )
+
+
+def test_rtmp_packet_index_and_advertised_mux_calibration_are_fail_closed():
+    records = _take_records(3)
+    rtmp = next(
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "rtmp_first_packet"
+    )
+    rtmp["packet_index"] += 1
+    with pytest.raises(probe.EvidenceError, match="packet index"):
+        probe.analyze_trace(
+            probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+        )
+
+    records = _take_records(3)
+    records[0]["rtmp_receiver"]["correlated_packet_count"] -= 1
+    with pytest.raises(probe.EvidenceError, match="correlated_packet_count"):
+        probe.analyze_trace(
+            probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+        )
+
+    records = _take_records(3)
+    records[0]["rtmp_receiver"]["mux_offset_min_num"] += 1
+    with pytest.raises(probe.EvidenceError, match="calibration"):
+        probe.analyze_trace(
+            probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+        )
+
+    records = _take_records(3)
+    records[0]["rtmp_receiver"].pop("mux_offset_max_den")
+    with pytest.raises(probe.EvidenceError, match="metadata is incomplete"):
+        probe.parse_records(records)
 
 
 def test_rtmp_slo_includes_declared_receiver_clock_bound_conservatively():

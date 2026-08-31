@@ -24,8 +24,8 @@ boundaries below:
     First video packet observed by the dedicated loopback RTMP receiver after
     a committed Take.  This is a receiver/demux boundary, not a wire-level
     timestamp and not a decoded-frame guarantee.  The receiver record must
-    carry a unique packet identity and rational PTS/timebase correlation to
-    the producer's encoded packet observation.
+    carry the same video-packet index as the producer and preserve one
+    constant rational FLV mux-offset interval across the stream.
 ``decoded_first_frame`` / ``antenna_first_frame``
     Optional diagnostic timings.  They are reported, but have no SLO here.
 
@@ -211,7 +211,15 @@ RTMP_RECEIVER_REQUIRED = {
     "packet_timebase_num",
     "packet_timebase_den",
 }
-RTMP_RECEIVER_ALLOWED = RTMP_RECEIVER_REQUIRED
+RTMP_CORRELATION_FIELDS = {
+    "correlation_method",
+    "mux_offset_min_num",
+    "mux_offset_min_den",
+    "mux_offset_max_num",
+    "mux_offset_max_den",
+    "correlated_packet_count",
+}
+RTMP_RECEIVER_ALLOWED = RTMP_RECEIVER_REQUIRED | RTMP_CORRELATION_FIELDS
 RTMP_CLOCK_SOURCES = ("perf_counter_ns/qpc", "qpc")
 RTMP_CLOCK_BOUND_MAX_NS = 5_000_000
 
@@ -323,6 +331,44 @@ def _validate_rtmp_receiver(value: Any, *, line: int | None = None) -> dict[str,
         value_int = _integer(obj[key], f"session.rtmp_receiver.{key}", line=line)
         if value_int <= 0:
             raise EvidenceError("SCHEMA_INVALID", f"session.rtmp_receiver.{key} must be positive", line=line)
+    correlation_present = RTMP_CORRELATION_FIELDS & set(obj)
+    if correlation_present and correlation_present != RTMP_CORRELATION_FIELDS:
+        missing = sorted(RTMP_CORRELATION_FIELDS - correlation_present)
+        raise EvidenceError(
+            "SCHEMA_INVALID",
+            f"session.rtmp_receiver mux correlation metadata is incomplete; missing {missing}",
+            line=line,
+        )
+    if correlation_present:
+        method = _string(
+            obj["correlation_method"],
+            "session.rtmp_receiver.correlation_method",
+            identifier=True,
+            line=line,
+        )
+        if method != "packet_index_constant_mux_offset_v1":
+            raise EvidenceError("SCHEMA_INVALID", "unsupported RTMP packet correlation method", line=line)
+        for key in ("mux_offset_min_num", "mux_offset_max_num"):
+            _integer(obj[key], f"session.rtmp_receiver.{key}", non_negative=False, line=line)
+        for key in ("mux_offset_min_den", "mux_offset_max_den"):
+            denominator = _integer(obj[key], f"session.rtmp_receiver.{key}", line=line)
+            if denominator <= 0:
+                raise EvidenceError("SCHEMA_INVALID", f"session.rtmp_receiver.{key} must be positive", line=line)
+        count = _integer(
+            obj["correlated_packet_count"],
+            "session.rtmp_receiver.correlated_packet_count",
+            line=line,
+        )
+        if count <= 0:
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "session.rtmp_receiver.correlated_packet_count must be positive",
+                line=line,
+            )
+        lower = Fraction(obj["mux_offset_min_num"], obj["mux_offset_min_den"])
+        upper = Fraction(obj["mux_offset_max_num"], obj["mux_offset_max_den"])
+        if lower > upper:
+            raise EvidenceError("SCHEMA_INVALID", "RTMP mux offset interval is inverted", line=line)
     return result
 
 
@@ -409,6 +455,14 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
             "session.capture_paths includes rtmp_first_packet without rtmp_receiver metadata",
             line=line,
         )
+    if "rtmp_first_packet" in paths and has_rtmp_receiver:
+        receiver = result["rtmp_receiver"]
+        if not RTMP_CORRELATION_FIELDS <= set(receiver):
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "rtmp_first_packet requires packet-index/mux-offset correlation metadata",
+                line=line,
+            )
     reference = _object(obj["resource_reference"], "session.resource_reference", line=line)
     _exact_keys(reference, set(RESOURCE_REFERENCE), set(RESOURCE_REFERENCE), "session.resource_reference", line=line)
     _number(reference["extra_frame_render_ms"], "resource_reference.extra_frame_render_ms", line=line)
@@ -826,6 +880,10 @@ def _validate_rtmp_packet_correlations(
             "CORRELATION_INVALID",
             "rtmp_first_packet requires session.rtmp_receiver calibration metadata",
         )
+    advertised_lower = Fraction(receiver["mux_offset_min_num"], receiver["mux_offset_min_den"])
+    advertised_upper = Fraction(receiver["mux_offset_max_num"], receiver["mux_offset_max_den"])
+    computed_lower: Fraction | None = None
+    computed_upper: Fraction | None = None
 
     seen_identity: set[str] = set()
     matches: dict[str, dict[str, Any]] = {}
@@ -850,38 +908,61 @@ def _validate_rtmp_packet_correlations(
                 "CORRELATION_INVALID",
                 f"more than one valid first encoded packet for Take(s) [{observation['take_command_id']}]",
             )
+        match = candidates[0]
+        if observation["packet_index"] != match["packet_index"]:
+            raise EvidenceError(
+                "CORRELATION_INVALID",
+                f"RTMP packet index for Take {observation['take_command_id']} does not match "
+                "the encoded stream packet index",
+            )
         receiver_pts = _packet_pts_fraction(observation)
         receiver_dts = Fraction(
             int(observation["packet_dts"]) * int(observation["packet_timebase_num"]),
             int(observation["packet_timebase_den"]),
         )
         tolerance = _packet_match_tolerance(observation)
-        matches_for_take = [
-            candidate
-            for candidate in candidates
-            if abs(receiver_pts - _packet_pts_fraction(candidate)) <= tolerance
-            and abs(
-                receiver_dts
-                - Fraction(
-                    int(candidate["packet_dts"]) * int(candidate["packet_timebase_num"]),
-                    int(candidate["packet_timebase_den"]),
-                )
-            )
-            <= tolerance
-        ]
-        if len(matches_for_take) != 1:
+        producer_pts = _packet_pts_fraction(match)
+        producer_dts = Fraction(
+            int(match["packet_dts"]) * int(match["packet_timebase_num"]),
+            int(match["packet_timebase_den"]),
+        )
+        pair_lower = max(
+            receiver_pts - producer_pts - tolerance,
+            receiver_dts - producer_dts - tolerance,
+        )
+        pair_upper = min(
+            receiver_pts - producer_pts + tolerance,
+            receiver_dts - producer_dts + tolerance,
+        )
+        if pair_lower > pair_upper:
             raise EvidenceError(
                 "CORRELATION_INVALID",
-                f"RTMP packet for Take {observation['take_command_id']} has "
-                f"{len(matches_for_take)} producer PTS matches within half a receiver tick",
+                f"RTMP PTS/DTS for Take {observation['take_command_id']} cannot share one mux offset",
             )
-        match = matches_for_take[0]
+        computed_lower = pair_lower if computed_lower is None else max(computed_lower, pair_lower)
+        computed_upper = pair_upper if computed_upper is None else min(computed_upper, pair_upper)
+        if computed_lower > computed_upper:
+            raise EvidenceError(
+                "CORRELATION_INVALID",
+                f"RTMP mux offset drifted at Take {observation['take_command_id']}",
+            )
         matches[observation["take_command_id"]] = {
             "receiver_packet_identity": identity,
             "receiver_packet_index": observation["packet_index"],
             "producer_packet_index": match["packet_index"],
             "pts_delta_seconds": float(receiver_pts - _packet_pts_fraction(match)),
         }
+
+    if receiver["correlated_packet_count"] != len(receiver_observations):
+        raise EvidenceError(
+            "CORRELATION_INVALID",
+            "session RTMP correlated_packet_count does not match receiver observations",
+        )
+    if computed_lower != advertised_lower or computed_upper != advertised_upper:
+        raise EvidenceError(
+            "CORRELATION_INVALID",
+            "session RTMP mux-offset calibration does not equal the recomputed stream interval",
+        )
 
     # The receiver's first-packet observations must form one monotone video
     # stream.  Gaps are acceptable; regressions and duplicate indices are not.
@@ -1317,7 +1398,7 @@ def analyze_trace(
             "DirectShow return and encoder/raw input are separate boundaries; neither is inferred from the other.",
             "encoded_first_packet is auxiliary pre-network encoder evidence and can never satisfy AC-12.",
             "rtmp_first_packet is the first video packet observed by the loopback receiver/demux; it is not wire-level or decoded-frame evidence.",
-            "Each valid RTMP packet must match exactly one producer packet by rational PTS within half a receiver timebase tick.",
+            "Each valid RTMP packet must match the producer packet index and preserve one constant PTS/DTS mux offset within half a receiver tick.",
             "Decoded and antenna timings are diagnostic only and carry no acceptance SLO.",
             "The first session.warmup_takes committed Takes are excluded from latency percentiles; measured counts are the observed committed suffix.",
             "Resource sample counts include all records; AC-13 uses only samples with encoder_active=true and encoder_family=nvenc.",

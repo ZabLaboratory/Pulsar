@@ -17,7 +17,7 @@ interpolation over the sorted sample values; the rank is `(n - 1) * q`.
 | `encoder_input_raw` | `ProgramView` / `encoder_input` | First valid Program frame received at the encoder/raw input. | AC-07, p95 `<=50 ms` |
 | `directshow_return` | `ProgramReturn` / `DirectShow` | First valid Program frame observed by the DirectShow return consumer. | AC-08, p95 `<=75 ms` |
 | `encoded_first_packet` | `EncoderOutput` / `encoder_callback` | First encoded video packet handed to the encoder-output callback, before any network or RTMP receiver. It is auxiliary only. | Diagnostic; never AC-12 |
-| `rtmp_first_packet` | `RTMP` / `receiver` | First video packet observed by the dedicated FFmpeg loopback receiver/demux after the atomic Take. The packet has a receiver sequence, PTS/DTS/timebase, and unique identity matched to exactly one producer packet by rational PTS. | AC-12, p95 `<=15 ms` |
+| `rtmp_first_packet` | `RTMP` / `receiver` | First video packet observed by the dedicated FFmpeg loopback receiver/demux after the atomic Take. Its video-packet index must equal the producer index and its rational PTS/DTS must preserve one calibrated FLV mux offset for the whole stream. | AC-12, p95 `<=15 ms` |
 | `decoded_first_frame` | `RTMP` / `decoder` | First decoded frame, diagnostic only. | No SLO |
 | `antenna_first_frame` | `Antenna` / `antenna` | First antenna/player frame, diagnostic only. | No SLO |
 
@@ -143,10 +143,22 @@ through `SetStreamServiceSettings` (`rtmp_custom`, `server` plus `key`), and
 starts `StartStream`. The receiver listens on the full `server/key` endpoint.
 After the stream and Pulsar process have stopped, the driver fuses the
 receiver records into a new deterministic JSONL artifact; it never writes to
-the producer JSONL while the runtime is active. Each receiver packet is
-matched to exactly one encoded producer packet by rational PTS/timebase,
-allowing only half of one receiver tick for FLV millisecond quantization.
-Missing, ambiguous, mixed-session, or uncalibrated matches fail closed.
+the producer JSONL while the runtime is active. OBS chooses the FLV
+`start_dts_offset` from the first audio or video packet and subtracts it from
+subsequent video timestamps. Therefore an absolute equality between the raw
+video encoder PTS and the demuxed FLV PTS is invalid. The probe instead
+requires the exact same monotone video-packet index, then intersects the
+PTS/DTS rational intervals (half of one FLV millisecond tick) to prove one
+constant mux offset for every correlated Take. The final interval and packet
+count are recorded in `session.rtmp_receiver` and recomputed by the analyzer.
+An index gap at a selected packet, a duplicate, offset drift, incomplete
+calibration, mixed session, or metadata mismatch fails closed.
+
+On failure, the producer sidecar remains non-acceptance evidence and a sibling
+`*.receiver-diagnostic.json` preserves the receiver packet snapshot, the last
+200 FFmpeg lines, clock metadata, and any live mux-offset calibration. Failure
+text is emitted only after the bounded DirectShow, RTMP and Pulsar cleanup
+paths have run, so a strict stderr supervisor cannot interrupt child reaping.
 
 The receiver timestamp is the time FFmpeg's demux log is observed by the
 driver in the QPC-compatible monotonic domain. It is a receiver/demux
