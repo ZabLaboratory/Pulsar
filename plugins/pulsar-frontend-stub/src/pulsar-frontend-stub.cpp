@@ -630,8 +630,10 @@ public:
     // deliberately emits no event and performs no trace-file operation.  The
     // reservation is promoted to accepted only after the queue primitive
     // returns success.
-    bool reserve(obs_source_t *scene, int onAirLane, int previewLane)
+    bool reserve(obs_source_t *scene, int onAirLane, int previewLane, uint64_t *admissionFloorNs)
     {
+        if (admissionFloorNs)
+            *admissionFloorNs = 0;
         TakeContext context;
         const char *rejectReason = nullptr;
         std::string diagnosticCommandId;
@@ -672,6 +674,8 @@ public:
                         } else {
                             context = candidate;
                             context.acceptedAtNs = diagnosticNowNs;
+                            if (admissionFloorNs)
+                                *admissionFloorNs = context.acceptedAtNs;
                             context.programRevision = programRevision_;
                             context.previewRevision = previewRevision_;
                             context.roleMapRevision = roleMapRevision_;
@@ -3595,6 +3599,7 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
     obs_view_t *queuedPreviewView = nullptr;
     int queuedOnAirLane = -1;
     int queuedPreviewLane = -1;
+    uint64_t queuedAdmissionFloorNs = 0;
     bool queued = false;
     bool telemetryReserved = false;
     bool telemetryAccepted = false;
@@ -3640,16 +3645,17 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
         // Reserve the metadata while the same role mutex protects the pair.
         // This consumes state only; no event is timestamped or written until
         // libobs accepts the frame-boundary queue operation.
-        telemetryReserved = g_runtimeTelemetry.reserve(scene, queuedOnAirLane, queuedPreviewLane);
+        telemetryReserved = g_runtimeTelemetry.reserve(scene, queuedOnAirLane, queuedPreviewLane,
+                                                        &queuedAdmissionFloorNs);
         const bool reservationStillOwned =
             dualLaneReady && dualLaneCutPending.load() && currentScene == queuedOnAir &&
             previewScene == queuedPreview && onAirLane == queuedOnAirLane &&
             previewLane == queuedPreviewLane && programView == queuedProgramView &&
             previewView == queuedPreviewView;
         if (reservationStillOwned) {
-            queued = obs_view_queue_atomic_swap(
+            queued = obs_view_queue_atomic_swap_with_floor(
                 queuedProgramView, 0, queuedPreview, queuedPreviewView, 0, queuedOnAir,
-                OnDualLaneCutCommitted, this);
+                queuedAdmissionFloorNs, OnDualLaneCutCommitted, this);
         }
         if (queued) {
             // The primitive has admitted the pair.  Mark acceptance and put

@@ -764,6 +764,7 @@ def test_output_effect_probe_settles_record_stop_before_next_case() -> None:
 
 def test_core_swap_is_frame_boundary_and_rejects_concurrent_requests() -> None:
     patch = _read(_DUAL_LANE_PATCH)
+    frontend = _read(_FRONTEND)
 
     assert "pthread_cond_t atomic_swap_cond;" in patch
     assert "bool atomic_swap_initialized;" in patch
@@ -776,12 +777,36 @@ def test_core_swap_is_frame_boundary_and_rejects_concurrent_requests() -> None:
     assert "a successor may queue while the previous callback is" in patch
     assert "+obs_view_t *obs_get_main_view(void)" in patch
     assert "+EXPORT obs_view_t *obs_get_main_view(void);" in patch
+    assert "uint64_t admission_floor_ns;" in patch
+    assert "obs_view_queue_atomic_swap_with_floor" in patch
+    assert "return obs_view_queue_atomic_swap_with_floor" in patch
 
     apply_at = patch.index("obs_view_apply_pending_atomic_swap(++obs->video.video_frame_id")
     output_at = patch.index("output_frames();", apply_at)
     assert apply_at < output_at
     assert "obs->video.atomic_swap_inflight = true;" in patch
     assert "obs->video.atomic_swap_inflight = false;" in patch
+
+    apply_fn = patch.index("+void obs_view_apply_pending_atomic_swap")
+    apply_fn_end = patch.index(" void obs_view_render", apply_fn)
+    apply = patch[apply_fn:apply_fn_end]
+    assert "if (swap && pts_ns < swap->admission_floor_ns)" in apply
+    # A below-floor frame must return while the same pending pointer remains
+    # installed; equality and later timestamps must reach the detach path.
+    floor_guard = apply.index("if (swap && pts_ns < swap->admission_floor_ns)")
+    detach = apply.index("obs->video.pending_atomic_swap = NULL;", floor_guard)
+    assert apply.index("return;", floor_guard) < detach
+    assert apply.count("obs->video.pending_atomic_swap = NULL;") == 1
+
+    queue = frontend[frontend.index("bool PulsarFrontendAPI::queueDualLaneCut"):]
+    assert "uint64_t queuedAdmissionFloorNs = 0;" in queue
+    assert "g_runtimeTelemetry.reserve(scene, queuedOnAirLane, queuedPreviewLane,\n                                                        &queuedAdmissionFloorNs)" in queue
+    assert "obs_view_queue_atomic_swap_with_floor(" in queue
+    assert "queuedAdmissionFloorNs, OnDualLaneCutCommitted" in queue
+    # The call site must use the reservation's immutable clock value, not a
+    # second nowNs() sample after queue admission.
+    assert queue.index("g_runtimeTelemetry.reserve") < queue.index("obs_view_queue_atomic_swap_with_floor")
+    assert "obs_view_queue_atomic_swap(\n" not in queue
 
 
 def test_teardown_drains_in_flight_swap_before_destroying_views() -> None:
