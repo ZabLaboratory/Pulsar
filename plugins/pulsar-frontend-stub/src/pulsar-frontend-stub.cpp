@@ -3924,6 +3924,8 @@ bool PulsarFrontendAPI::setup()
     streamOutput = obs_output_create("rtmp_output", "PulsarStream", nullptr, nullptr);
     if (!streamOutput)
         blog(LOG_WARNING, "[pulsar-frontend-stub] rtmp_output unavailable");
+    else
+        obs_output_set_low_latency_interleave(streamOutput, true);
     hookOutputSignals(streamOutput, OnStreamStart, OnStreamStop);
 
     // Recording output (ffmpeg_muxer). Same shape: needs path + encoders before
