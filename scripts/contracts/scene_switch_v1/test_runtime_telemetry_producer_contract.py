@@ -165,6 +165,19 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert '"reason\\":\"frame_or_pts_regression\"' not in commit
     assert commit.count('commonEventFields("TakeCommitted"') == 1
     assert commit.count("writeLine(fault.str())") == 1
+    assert commit.count("lastRawTake_.clear()") == 2
+    assert commit.count("lastPacketTake_.clear()") == 2
+
+    reject_start = frontend.index("void rejectReserved(")
+    reserve_start = frontend.index("bool reserve(", reject_start)
+    accepted_start = frontend.index("bool markAccepted(", reserve_start)
+    reject = frontend[reject_start:reserve_start]
+    reserve = frontend[reserve_start:accepted_start]
+    accepted = frontend[accepted_start:commit_start]
+    for precommit in (reject, reserve, accepted):
+        assert "lastRawTake_.clear()" not in precommit
+        assert "lastPacketTake_.clear()" not in precommit
+    assert "committed_ still names the previous Take" in reserve
 
     assert "BeginRuntimeTakeTelemetry" in websocket
     assert "pulsar_runtime_telemetry::begin_take" in websocket

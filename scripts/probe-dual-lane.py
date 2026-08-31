@@ -4059,12 +4059,31 @@ def run(args: argparse.Namespace) -> int:
                             resource_only=args.resource_only,
                             minimum_samples=args.resource_samples,
                         )
-                    except ProbeFailure:
+                    except ProbeFailure as fusion_exc:
+                        receiver_diagnostic: pathlib.Path | None = None
+                        receiver_diagnostic_failure: str | None = None
+                        if process.rtmp_receiver is not None and producer_trace_path is not None:
+                            try:
+                                receiver_diagnostic = process.rtmp_receiver.persist_diagnostics(
+                                    producer_trace_path
+                                )
+                            except Exception as diagnostic_exc:
+                                receiver_diagnostic_failure = str(diagnostic_exc)
                         if producer_trace_path is not None:
                             print(
                                 f"RTMP fusion failed; producer sidecar preserved for diagnosis: {producer_trace_path}",
                                 file=sys.stderr,
                             )
+                        if receiver_diagnostic is not None:
+                            print(
+                                f"RTMP fusion receiver diagnostic preserved: {receiver_diagnostic}",
+                                file=sys.stderr,
+                            )
+                        if receiver_diagnostic_failure is not None:
+                            raise ProbeFailure(
+                                f"{fusion_exc}; RTMP receiver diagnostic persistence failed: "
+                                f"{receiver_diagnostic_failure}"
+                            ) from fusion_exc
                         raise
                     if producer_trace_path is not None:
                         print(
