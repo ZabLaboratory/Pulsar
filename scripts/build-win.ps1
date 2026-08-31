@@ -527,12 +527,9 @@ if ($Stage -in @('build', 'all')) {
 
         $pulsarBuild = Join-Path $root 'build'
         $pulsarConfigState = Join-Path $pulsarBuild '.pulsar-config-state.json'
-        $patchedUpstreamHead = (& git -C $upstream rev-parse HEAD).Trim()
-        if ($LASTEXITCODE -ne 0) { throw "Could not read patched upstream HEAD" }
         $pulsarConfigFingerprint = Get-TextFingerprint @(
             "root=$root",
             "upstream=$upstream",
-            "upstream_head=$patchedUpstreamHead",
             'generator=Visual Studio 17 2022',
             'architecture=x64',
             'headless=ON',

@@ -22,6 +22,7 @@ def test_patched_checkout_reuse_is_exact_and_fail_closed() -> None:
     assert "Get-TextFingerprint" in script
     assert ".pulsar-config-state.json" in script
     assert "Reusing exact Pulsar CMake configuration" in script
+    assert '"upstream_head=' not in script
 
 
 def test_refresh_and_full_build_semantics_are_preserved() -> None:
