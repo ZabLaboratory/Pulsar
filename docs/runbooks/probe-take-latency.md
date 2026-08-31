@@ -21,9 +21,12 @@ interpolation over the sorted sample values; the rank is `(n - 1) * q`.
 | `decoded_first_frame` | `RTMP` / `decoder` | First decoded frame, diagnostic only. | No SLO |
 | `antenna_first_frame` | `Antenna` / `antenna` | First antenna/player frame, diagnostic only. | No SLO |
 
-The AC-12b latency clock starts at
-`TakeAccepted.observed_at_monotonic_ns`. A valid observation is admitted only
-when it is post-commit, has the same `runtime_instance_id`, `command_id`,
+The AC-12b latency clock starts at the monotonic timestamp captured when the
+Take is logically admitted/reserved, exposed as
+`TakeAccepted.observed_at_monotonic_ns`. This capture precedes the atomic queue
+operation; it is not evidence that an event was published or that a Cut
+committed. A valid observation is admitted only when it is post-commit, has the
+same `runtime_instance_id`, `command_id`,
 `intent_id`, and post-commit `revisions`, and has frame ID/PTS greater than or
 equal to the `TakeCommitted` frame boundary. Frames seen continuously before
 the commit are retained as diagnostics and excluded from the percentile.
@@ -123,13 +126,14 @@ calibrated clock offset and must equal the observation's normalized timestamp.
 
 If the atomic queue rejects a reserved Take, the producer emits a terminal
 `TakeAborted` event with `reason=queue_rejected` and the
-`last_committed_frame_id`/`last_committed_pts_ns` pair. No `TakeAccepted` is
-emitted for that candidate: the acceptance timestamp is assigned only after
-the queue primitive returns success. The pair identifies the last committed
-frame before the rejected reservation and makes the terminal path observable
-without pretending that a commit occurred. Accepted and committed events are
-placed in a FIFO writer queue; disk I/O runs on its worker and cannot inflate
-the acceptance-to-frame latency.
+`last_committed_frame_id`/`last_committed_pts_ns` pair. No `TakeAccepted` event
+is published for that candidate: its reservation timestamp may already have
+been captured, but publication remains fail-closed until the queue operation
+and the subsequent `obs_view_queue_atomic_swap` both return success. The pair
+identifies the last committed frame before the rejected reservation and makes
+the terminal path observable without pretending that a commit occurred.
+Accepted and committed events are placed in a FIFO writer queue; disk I/O runs
+on its worker and cannot inflate the acceptance-to-frame latency.
 
 If the frame-boundary callback observes a frame ID or PTS below the last
 telemetry commit, the physical swap has already happened: the callback runs
