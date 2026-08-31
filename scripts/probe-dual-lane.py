@@ -93,6 +93,7 @@ import argparse
 import asyncio
 import base64
 import ctypes
+from contextlib import nullcontext
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
 from fractions import Fraction
 import hashlib
@@ -1196,6 +1197,7 @@ class PulsarProcess:
         self.rtmp_cleanup_failure: str | None = None
         self.rtmp_producer_trace_path: pathlib.Path | None = None
         self.rtmp_final_trace_path: pathlib.Path | None = None
+        self.recording_output_path: pathlib.Path | None = None
         self.lines: list[str] = []
         self.condition = threading.Condition()
         self.thread: threading.Thread | None = None
@@ -2079,6 +2081,68 @@ def find_ffprobe() -> str | None:
     return shutil.which("ffprobe")
 
 
+def prepare_record_directory(requested: pathlib.Path | None) -> tuple[Any, pathlib.Path, bool]:
+    """Return the runtime directory and its cleanup context.
+
+    The default remains an ephemeral ``TemporaryDirectory``.  An explicit
+    destination is treated as an evidence root: it is resolved and created,
+    then a unique child is allocated for this process.  The child is never
+    owned by the temporary-directory cleanup path, so a verified recording
+    remains available after the probe exits.
+    """
+
+    if requested is None:
+        temporary = tempfile.TemporaryDirectory(prefix="pulsar-dual-lane-")
+        return temporary, pathlib.Path(temporary.name), False
+
+    raw = pathlib.Path(requested).expanduser()
+    if raw.exists() and raw.is_symlink():
+        raise ProbeFailure("--record-dir must not be a symlink")
+    try:
+        destination = raw.resolve(strict=False)
+    except OSError as exc:
+        raise ProbeFailure(f"--record-dir cannot be resolved: {exc}") from exc
+    repository = REPO_ROOT.resolve()
+    try:
+        destination.relative_to(repository)
+    except ValueError:
+        pass
+    else:
+        raise ProbeFailure("--record-dir must be outside the Pulsar repository")
+
+    if destination.exists() and not destination.is_dir():
+        raise ProbeFailure(f"--record-dir is not a directory: {destination}")
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ProbeFailure(f"--record-dir cannot be created: {destination}: {exc}") from exc
+
+    # A direct MP4 in the supplied root makes an operator's later glob-based
+    # collection ambiguous.  Existing session subdirectories are fine: every
+    # invocation gets a fresh child below the root.
+    try:
+        ambiguous_outputs = any(
+            path.is_file() and path.suffix.lower() == ".mp4" for path in destination.iterdir()
+        )
+    except OSError as exc:
+        raise ProbeFailure(f"--record-dir cannot inspect existing outputs: {destination}: {exc}") from exc
+    if ambiguous_outputs:
+        raise ProbeFailure(
+            f"--record-dir contains existing MP4 output and is ambiguous: {destination}"
+        )
+    for _ in range(10):
+        session = destination / f"pulsar-dual-lane-{os.getpid()}-{secrets.token_hex(6)}"
+        try:
+            session.mkdir()
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise ProbeFailure(f"--record-dir session cannot be created: {session}: {exc}") from exc
+        print(f"   recording directory retained: {session}")
+        return nullcontext(session), session, True
+    raise ProbeFailure(f"--record-dir could not allocate a unique session directory: {destination}")
+
+
 def verify_recording(path_text: str, ffprobe: str) -> None:
     path = pathlib.Path(path_text)
     if not path.is_file():
@@ -2142,6 +2206,19 @@ def verify_recording(path_text: str, ffprobe: str) -> None:
         f"H.264 {CANVAS_W}x{CANVAS_H} {frame_rate:g}fps, frames={frame_text}, "
         f"duration={float(duration_text):.3f}s, AAC"
     )
+
+
+def ensure_recording_output_owned(path_text: str, record_dir: pathlib.Path) -> pathlib.Path:
+    """Require the runtime's reported recording to stay under its probe dir."""
+
+    output = pathlib.Path(path_text).resolve()
+    try:
+        output.relative_to(record_dir.resolve())
+    except ValueError as exc:
+        raise ProbeFailure(
+            f"recording output is outside this probe's PULSAR_RECORD_DIR: {output}"
+        ) from exc
+    return output
 
 
 def _paeth(a: int, b: int, c: int) -> int:
@@ -3090,6 +3167,7 @@ async def collect_resource_samples(
 
         if output_path is None:
             raise ProbeFailure("active resource phase stopped without a recording output path")
+        process.recording_output_path = ensure_recording_output_owned(output_path, process.record_dir)
         verify_recording(output_path, ffprobe)
         print(
             f"   active encoder+RTMP resource samples verified: total={count} active={active_count} "
@@ -3519,6 +3597,7 @@ async def drive(
         output_path = (stopped.get("eventData") or {}).get("outputPath") or ""
         if not output_path:
             raise ProbeFailure("RecordStateChanged STOPPED did not include outputPath")
+        process.recording_output_path = ensure_recording_output_owned(output_path, process.record_dir)
 
         all_commits = [
             parse_commit(match)
@@ -3751,6 +3830,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="opt-in #246 JSONL trace path; enables runtime event/raw/encoded-output producer hooks",
     )
     parser.add_argument(
+        "--record-dir",
+        type=pathlib.Path,
+        help=(
+            "persistent evidence root; a unique session directory is created below it and "
+            "retained after the probe (default: temporary directory)"
+        ),
+    )
+    parser.add_argument(
         "--build-revision",
         default=os.environ.get("PULSAR_BUILD_REVISION"),
         help="exact 40-character lowercase candidate SHA stamped into a --trace session (or PULSAR_BUILD_REVISION)",
@@ -3862,7 +3949,18 @@ def run(args: argparse.Namespace) -> int:
         print(f"SKIP: Pulsar binary not found: {args.exe}")
         return EXIT_SKIP
 
-    with tempfile.TemporaryDirectory(prefix="pulsar-dual-lane-") as record_dir_text:
+    try:
+        record_dir_context, record_dir, persistent_record_dir = prepare_record_directory(args.record_dir)
+    except ProbeFailure as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return EXIT_FAIL
+    with record_dir_context as record_dir_text:
+        # ``record_dir_text`` is the temporary-directory string in the default
+        # mode and the pre-created persistent session Path when --record-dir
+        # is supplied.  Normalize both before passing the path to Pulsar.
+        record_dir = pathlib.Path(record_dir_text)
+        if persistent_record_dir:
+            print(f"   persistent recording directory: {record_dir}")
         final_trace_path = args.trace.resolve() if args.trace is not None else None
         # A receiver must never append to a producer JSONL while the runtime
         # is alive.  Give the runtime a unique producer-only path and create
@@ -3891,7 +3989,7 @@ def run(args: argparse.Namespace) -> int:
         process = PulsarProcess(
             args.exe.resolve(),
             args.encoder,
-            pathlib.Path(record_dir_text),
+            record_dir,
             trace_path,
             args.runtime_id,
             args.resource_mode,
@@ -4099,6 +4197,14 @@ def run(args: argparse.Namespace) -> int:
             except ProbeFailure as exc:
                 print(f"FAIL: cleanup verification failed: {exc}", file=sys.stderr)
                 return EXIT_FAIL
+        if persistent_record_dir:
+            if result == 0:
+                output_path = process.recording_output_path
+                if output_path is None:
+                    raise ProbeFailure("persistent recording run did not report its output path")
+                print(f"PASS: recording retained at {output_path}")
+            else:
+                print(f"   persistent recording directory retained for diagnosis: {record_dir}")
         return result
 
 

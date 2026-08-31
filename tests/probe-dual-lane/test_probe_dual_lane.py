@@ -48,6 +48,62 @@ def test_receiver_separates_server_url_and_stream_key():
     assert metadata["stream_key"] == receiver.stream_key
 
 
+def test_prepare_record_directory_persists_unique_session(tmp_path):
+    evidence_root = tmp_path / "evidence"
+    context, session, persistent = probe.prepare_record_directory(evidence_root)
+    assert persistent is True
+    assert session.parent == evidence_root
+    assert session.is_dir()
+    (session / "pulsar-test.mp4").write_bytes(b"evidence")
+    with context as context_path:
+        assert Path(context_path) == session
+    assert (session / "pulsar-test.mp4").is_file()
+
+
+def test_prepare_record_directory_default_is_ephemeral():
+    context, session, persistent = probe.prepare_record_directory(None)
+    assert persistent is False
+    assert session.is_dir()
+    with context as context_path:
+        assert Path(context_path) == session
+    assert not session.exists()
+
+
+def test_prepare_record_directory_rejects_ambiguous_or_unsafe_paths(tmp_path):
+    existing_file = tmp_path / "recording.mp4"
+    existing_file.write_bytes(b"old")
+    with pytest.raises(probe.ProbeFailure, match="not a directory"):
+        probe.prepare_record_directory(existing_file)
+
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    (evidence_root / "old.mp4").write_bytes(b"old")
+    with pytest.raises(probe.ProbeFailure, match="ambiguous"):
+        probe.prepare_record_directory(evidence_root)
+
+    with pytest.raises(probe.ProbeFailure, match="outside the Pulsar repository"):
+        probe.prepare_record_directory(probe.REPO_ROOT)
+
+
+def test_parse_args_accepts_persistent_record_directory(tmp_path):
+    args = probe.parse_args(
+        ["--encoder", "x264", "--record-dir", str(tmp_path / "evidence")]
+    )
+    assert args.record_dir == tmp_path / "evidence"
+
+
+def test_recording_output_must_stay_under_runtime_directory(tmp_path):
+    record_dir = tmp_path / "session"
+    record_dir.mkdir()
+    owned = record_dir / "recording.mp4"
+    owned.write_bytes(b"evidence")
+    assert probe.ensure_recording_output_owned(str(owned), record_dir) == owned.resolve()
+    outside = tmp_path / "outside.mp4"
+    outside.write_bytes(b"evidence")
+    with pytest.raises(probe.ProbeFailure, match="outside this probe"):
+        probe.ensure_recording_output_owned(str(outside), record_dir)
+
+
 def test_rtmp_packet_identity_is_bounded_for_maximum_stream_id():
     first = probe._rtmp_packet_identity("s" * 128, 0, 0, 0)
     second = probe._rtmp_packet_identity("s" * 128, 1, 0, 0)

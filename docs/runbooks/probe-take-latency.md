@@ -302,6 +302,14 @@ the harness; the aggregate parser requires both codec campaigns. The producer
 sidecar named `.producer.jsonl` is retained for audit, while the named trace
 is the fused artifact.
 
+Add `--record-dir <evidence-root>` to retain the verified MP4 outside the
+checkout. The probe creates a unique session directory below that root, passes
+it as `PULSAR_RECORD_DIR`, prints the exact retained `outputPath`, and never
+deletes the session. The root must be outside the Pulsar repository and must
+not contain a direct pre-existing MP4; this prevents ambiguous evidence
+collection. Without this option, the historical temporary-directory cleanup
+remains in effect.
+
 The default gate is 100 measured Takes, 100 warm-up Takes, and 10 resource
 samples per resource mode. Use smaller thresholds only in unit tests; fixture
 campaigns are reported as `FIXTURE_ONLY` and can never be a runtime pass.
