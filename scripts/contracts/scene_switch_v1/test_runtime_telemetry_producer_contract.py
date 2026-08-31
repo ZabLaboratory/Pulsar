@@ -185,6 +185,16 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
         assert "lastPacketTake_.clear()" not in precommit
     assert "committed_ still names the previous Take" in reserve
 
+    # The admission clock is captured by reserve() and must survive the
+    # successful queue promotion.  markAccepted() may run later on the frame
+    # callback, but it must never replace the causal timestamp with a second
+    # nowNs() sample.  A failed enqueue still retires accepted_ below and emits
+    # no TakeAccepted event, so this invariant cannot manufacture acceptance.
+    assert "context.acceptedAtNs = diagnosticNowNs;" in reserve
+    assert "context.acceptedAtNs = nowNs();" not in accepted
+    assert "commonEventFields(\"TakeAccepted\", context, seq, \"take_accepted\", context.acceptedAtNs," in accepted
+    assert accepted.index("context = reserved_;\n") < accepted.index("accepted_ = context;")
+
     assert "BeginRuntimeTakeTelemetry" in websocket
     assert "pulsar_runtime_telemetry::begin_take" in websocket
     assert "pulsar_runtime_telemetry::cancel_take" in websocket

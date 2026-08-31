@@ -731,8 +731,11 @@ public:
             std::lock_guard<std::mutex> lock(stateMutex_);
             if (!enabled_ || !reserved_.valid || accepted_.valid)
                 return false;
+            // reserve() captured the logical admission instant before the
+            // frame-boundary queue operation.  Preserve that causal timestamp
+            // even when the callback reaches markAccepted later; replacing it
+            // here would move TakeAccepted after the actual admission.
             context = reserved_;
-            context.acceptedAtNs = nowNs();
             accepted_ = context;
             accepted_.valid = true;
             reserved_ = {};
