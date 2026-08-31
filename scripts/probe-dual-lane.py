@@ -3066,7 +3066,7 @@ async def collect_resource_samples(
     )
 
     async with websockets.connect(
-        ws_url, subprotocols=["obswebsocket.json"], open_timeout=15
+        ws_url, subprotocols=["obswebsocket.json"], open_timeout=15, max_size=2**24
     ) as ws:
         await identify(ws, process.password)
         inbox = Inbox()
@@ -3380,7 +3380,7 @@ async def drive(
         process.start_directshow_consumer()
 
     async with websockets.connect(
-        ws_url, subprotocols=["obswebsocket.json"], open_timeout=15
+        ws_url, subprotocols=["obswebsocket.json"], open_timeout=15, max_size=2**24
     ) as ws:
         await identify(ws, process.password)
         inbox = Inbox()

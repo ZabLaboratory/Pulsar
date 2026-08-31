@@ -879,3 +879,8 @@ def test_non_traced_drive_initializes_optional_trace_receiver() -> None:
     trace_guard = source.index("    if process.trace_path is not None:", drive_at)
     initialization = "    trace_receiver = None"
     assert source.index(initialization, drive_at) < trace_guard
+
+
+def test_probe_websockets_accept_full_resolution_screenshot_payloads() -> None:
+    source = (_ROOT / "scripts/probe-dual-lane.py").read_text(encoding="utf-8")
+    assert source.count('subprotocols=["obswebsocket.json"], open_timeout=15, max_size=2**24') == 2
