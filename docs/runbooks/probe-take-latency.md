@@ -136,6 +136,22 @@ The pre-network encoded callback uses the same correlation fields, with
 packet PTS/DTS/timebase and a monotone video-packet sequence. This boundary is
 auxiliary: it can never satisfy AC-12.
 
+For diagnosis, current runtimes also preserve libobs' four timestamps for the
+same video packet: `packet_cts_monotonic_ns` (composition),
+`packet_fer_monotonic_ns` (encode request),
+`packet_ferc_monotonic_ns` (encode request complete), and
+`packet_pir_monotonic_ns` (A/V interleave request), plus
+`packet_callback_monotonic_ns` on entry into Pulsar's callback. The analyzer reports the
+three sub-stage distributions separately under `encoder_pipeline`. These
+fields explain where latency accumulates; they do not replace the receiver
+boundary and cannot relax AC-12.
+
+Pulsar boots libobs audio with a fixed 20 ms buffer through
+`obs_reset_audio2`. This is the engine's live-production policy: the legacy
+dynamically growing audio buffer can retain an encoded Program video packet in
+the A/V interleaver after an otherwise timely Cut. A candidate that does not
+log this bounded mode is not the low-latency configuration described here.
+
 The AC-12 boundary is produced by
 `scripts/probe-dual-lane.py --rtmp-receiver`. The driver starts FFmpeg with the
 same command used for the campaign, configures Pulsar's native `streamOutput`

@@ -869,14 +869,24 @@ std::string resolve_default_render_device_id()
 
 bool reset_audio()
 {
-    obs_audio_info oai = {};
+    // Pulsar is a live production engine, not an offline renderer.  The
+    // legacy obs_reset_audio() wrapper leaves libobs in its dynamically
+    // increasing buffering mode with a 45-tick ceiling (roughly 960 ms at
+    // 48 kHz).  That can make the encoded A/V interleaver retain otherwise
+    // ready Program video packets behind a growing audio timeline.  Use the
+    // same bounded mode exposed by OBS' low-latency audio option so a Cut is
+    // not hidden behind an inherited, unbounded-for-our-SLO audio queue.
+    obs_audio_info2 oai = {};
     oai.samples_per_sec = 48000;
     oai.speakers = SPEAKERS_STEREO;
+    oai.max_buffering_ms = 20;
+    oai.fixed_buffering = true;
 
-    if (!obs_reset_audio(&oai)) {
-        blog(LOG_ERROR, "[pulsar-headless] obs_reset_audio failed");
+    if (!obs_reset_audio2(&oai)) {
+        blog(LOG_ERROR, "[pulsar-headless] obs_reset_audio2 low-latency setup failed");
         return false;
     }
+    blog(LOG_INFO, "[pulsar-headless] audio buffering fixed at %u ms", oai.max_buffering_ms);
 
     // Bind the system's DEFAULT playback device as the audio monitoring
     // output, by its RESOLVED CONCRETE id -- never the "default" sentinel

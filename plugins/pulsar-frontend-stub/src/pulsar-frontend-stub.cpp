@@ -939,7 +939,8 @@ public:
         // by rational PTS/timebase, never by log order alone.
         const uint64_t packetIndex = packetFrameCount_.fetch_add(1, std::memory_order_relaxed);
         TakeContext context;
-        uint64_t observed = nowNs();
+        const uint64_t callbackAt = nowNs();
+        uint64_t observed = callbackAt;
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             if (!enabled_ || !committed_.valid || lastPacketTake_ == committed_.takeCommandId)
@@ -968,7 +969,15 @@ public:
                     << ",\"packet_pts\":" << packet->pts
                     << ",\"packet_dts\":" << packet->dts
                     << ",\"packet_timebase_num\":" << packet->timebase_num
-                    << ",\"packet_timebase_den\":" << packet->timebase_den
+                    << ",\"packet_timebase_den\":" << packet->timebase_den;
+        if (packetTime) {
+            observation << ",\"packet_cts_monotonic_ns\":" << packetTime->cts
+                        << ",\"packet_fer_monotonic_ns\":" << packetTime->fer
+                        << ",\"packet_ferc_monotonic_ns\":" << packetTime->ferc
+                        << ",\"packet_pir_monotonic_ns\":" << packetTime->pir
+                        << ",\"packet_callback_monotonic_ns\":" << callbackAt;
+        }
+        observation
                     << ",\"surface\":\"EncoderOutput\",\"consumer\":\"encoder_callback\"}";
         writeLine(observation.str());
     }
