@@ -54,6 +54,12 @@ ROLLBACK_RE = re.compile(
     r"program_video_stable=(\d) preview_view_stable=(\d) frozen=(\d)"
 )
 
+# Keep the rollback recording long enough for the muxer to emit a meaningful
+# file.  The output stop itself remains exercised after the frame-boundary
+# freeze; this dwell only prevents a sub-frame smoke capture from being
+# misclassified as a recording failure.
+ROLLBACK_MIN_RECORDING_SECONDS = 1.0
+
 
 async def drive_rollback(process: Any) -> None:
     """Drive one accepted Cut, then prove the post-boundary freeze."""
@@ -115,6 +121,7 @@ async def drive_rollback(process: Any) -> None:
             "RecordStateChanged",
             lambda data: data.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STARTED",
         )
+        recording_started_at = time.monotonic()
         bind_lines = [line for line in runtime.snapshot() if probe.ENCODER_BIND_RE.search(line)]
         if len(bind_lines) != 1:
             raise probe.ProbeFailure(
@@ -380,6 +387,9 @@ async def drive_rollback(process: Any) -> None:
             inbox, ws, "rollback-frozen", expected_program=probe.SCENE_B, expected_preview=probe.SCENE_A
         )
 
+        recording_elapsed = time.monotonic() - recording_started_at
+        if recording_elapsed < ROLLBACK_MIN_RECORDING_SECONDS:
+            await asyncio.sleep(ROLLBACK_MIN_RECORDING_SECONDS - recording_elapsed)
         response = await probe.request(inbox, ws, "StopRecord", "rollback-stop-record")
         probe.assert_success(response, "StopRecord")
         stopped = await probe.wait_event(

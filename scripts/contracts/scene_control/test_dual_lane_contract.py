@@ -703,6 +703,10 @@ def test_rollback_probe_stops_outputs_after_freeze_but_keeps_scene_mutations_blo
     assert 'assert_success(response, "StopRecord")' in rollback_probe
     assert 'request(\n            inbox,\n            ws,\n            "CreateInput",' in rollback_probe
     assert 'assert_preview_frozen(response, "CreateInput after rollback")' in rollback_probe
+    assert "ROLLBACK_MIN_RECORDING_SECONDS = 1.0" in rollback_probe
+    assert "recording_started_at = time.monotonic()" in rollback_probe
+    assert "recording_elapsed = time.monotonic() - recording_started_at" in rollback_probe
+    assert "await asyncio.sleep(ROLLBACK_MIN_RECORDING_SECONDS - recording_elapsed)" in rollback_probe
     allowlist = _between(handler, "bool IsSafetyStopRequest", "// Abort is intentionally")
     assert 'requestType == "StopRecord"' in allowlist
     assert 'requestType == "StopOutput"' in allowlist
