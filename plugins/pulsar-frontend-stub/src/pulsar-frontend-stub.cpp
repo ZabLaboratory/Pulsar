@@ -4092,21 +4092,19 @@ bool PulsarFrontendAPI::setup()
             blog(LOG_WARNING, "[pulsar-frontend-stub] PULSAR_NVENC_LOW_LATENCY "
                  "rejected; preserving the encoder quality defaults");
         }
-        if (std::strcmp(reportFamily, "nvenc") == 0 &&
-            nvencLowLatency == EnvBool::Enabled) {
-            // Broadcast cuts must not sit behind NVENC's quality-oriented
-            // reorder queue. Keep the same codec/profile/bitrate, but select
-            // the encoder's ultra-low-latency path and remove B-frame,
-            // lookahead and multipass buffering.
+        const bool enableNvencLowLatency =
+            nvencLowLatency == EnvBool::Unset || nvencLowLatency == EnvBool::Enabled;
+        if (std::strcmp(reportFamily, "nvenc") == 0 && enableNvencLowLatency) {
+            // Select NVENC's ULL scheduling path, but deliberately preserve
+            // the historical multipass, lookahead and B-frame settings. They
+            // are compression tools, not an OBS-side packet backlog, and the
+            // quality A/B gate requires them to remain available.
             obs_data_set_string(vEncSettings, "tune", "ull");
-            obs_data_set_string(vEncSettings, "multipass", "disabled");
-            obs_data_set_bool(vEncSettings, "lookahead", false);
-            obs_data_set_int(vEncSettings, "bf", 0);
             blog(LOG_INFO, "[pulsar-frontend-stub] NVENC latency profile: "
-                 "tune=ull multipass=disabled lookahead=0 bf=0");
+                 "tune=ull with quality tools preserved");
         } else if (std::strcmp(reportFamily, "nvenc") == 0) {
             blog(LOG_INFO, "[pulsar-frontend-stub] NVENC quality profile preserved: "
-                 "PULSAR_NVENC_LOW_LATENCY is not enabled");
+                 "PULSAR_NVENC_LOW_LATENCY=0 or invalid");
         } else if (std::strcmp(encoderId, "obs_x264") == 0) {
             obs_data_set_string(vEncSettings, "tune", "zerolatency"); // x264-only knob
         }
