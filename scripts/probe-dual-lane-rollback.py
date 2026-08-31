@@ -30,7 +30,6 @@ import os
 import re
 import signal
 import sys
-import tempfile
 import time
 from typing import Any
 
@@ -422,6 +421,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", type=pathlib.Path, required=True)
     parser.add_argument("--encoder", choices=("x264", "nvenc"), required=True)
+    parser.add_argument(
+        "--record-dir",
+        type=pathlib.Path,
+        help=(
+            "persistent evidence root; a unique session directory is created below it and "
+            "retained after the probe (default: temporary directory)"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -429,7 +436,15 @@ def run(args: argparse.Namespace) -> int:
     if not args.exe.is_file():
         print(f"SKIP: Pulsar binary not found: {args.exe}")
         return probe.EXIT_SKIP
-    with tempfile.TemporaryDirectory(prefix="pulsar-dual-lane-rollback-") as record_dir_text:
+    try:
+        record_dir_context, record_dir, persistent_record_dir = probe.prepare_record_directory(args.record_dir)
+    except probe.ProbeFailure as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return probe.EXIT_FAIL
+    with record_dir_context as record_dir_text:
+        record_dir = pathlib.Path(record_dir_text)
+        if persistent_record_dir:
+            print(f"   persistent recording directory: {record_dir}")
         runtime_id = f"pulsar-249-rollback-{args.encoder}"
         process = probe.PulsarProcess(
             args.exe.resolve(), args.encoder, pathlib.Path(record_dir_text), runtime_id=runtime_id

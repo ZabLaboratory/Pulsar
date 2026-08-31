@@ -707,6 +707,9 @@ def test_rollback_probe_stops_outputs_after_freeze_but_keeps_scene_mutations_blo
     assert "recording_started_at = time.monotonic()" in rollback_probe
     assert "recording_elapsed = time.monotonic() - recording_started_at" in rollback_probe
     assert "await asyncio.sleep(ROLLBACK_MIN_RECORDING_SECONDS - recording_elapsed)" in rollback_probe
+    assert '"--record-dir"' in rollback_probe
+    assert "probe.prepare_record_directory(args.record_dir)" in rollback_probe
+    assert "persistent recording directory" in rollback_probe
     allowlist = _between(handler, "bool IsSafetyStopRequest", "// Abort is intentionally")
     assert 'requestType == "StopRecord"' in allowlist
     assert 'requestType == "StopOutput"' in allowlist
