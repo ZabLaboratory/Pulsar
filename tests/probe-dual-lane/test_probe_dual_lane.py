@@ -577,6 +577,8 @@ def test_failure_diagnostic_is_emitted_only_after_owned_cleanup():
     cleanup_index = source.index("process.shutdown()")
     diagnostic_index = source.index('print(f"FAIL: {failure_message}"')
     assert cleanup_index < diagnostic_index
+    fusion = source[source.index("process.finalize_rtmp_trace") :]
+    assert fusion.index("persist_diagnostics") < fusion.index("cleanup verification failed")
 
 
 def test_injected_campaign_failure_runs_cleanup_before_reporting(monkeypatch, tmp_path):

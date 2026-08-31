@@ -601,8 +601,6 @@ public:
             }
             reserved_.valid = false;
             accepted_.valid = false;
-            lastRawTake_.clear();
-            lastPacketTake_.clear();
         }
 
         // A queue rejection is terminal without a preceding TakeAccepted: the
@@ -681,8 +679,12 @@ public:
                             context.previewLane = previewLane;
                             reserved_ = context;
                             reserved_.valid = true;
-                            lastRawTake_.clear();
-                            lastPacketTake_.clear();
+                            // committed_ still names the previous Take until
+                            // the frame-boundary callback runs.  Keep its raw
+                            // and packet latches armed; clearing them here (or
+                            // in markAccepted/rejection) would attribute
+                            // pre-commit frames for this reservation to the
+                            // previous committed transaction a second time.
                         }
                     }
                 }
@@ -734,8 +736,6 @@ public:
             accepted_ = context;
             accepted_.valid = true;
             reserved_ = {};
-            lastRawTake_.clear();
-            lastPacketTake_.clear();
         }
 
         const uint64_t seq = nextServerSeq();
