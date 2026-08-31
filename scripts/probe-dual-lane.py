@@ -112,7 +112,7 @@ import tempfile
 import threading
 import time
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, cast
 
 try:
@@ -263,12 +263,86 @@ def _packet_str(value: object, name: str) -> str:
     return value
 
 
-def _rtmp_packet_candidates(
-    producer: Mapping[str, object],
-    receiver_packets: list[dict[str, int | str]],
-    used_packet_indices: set[int],
-) -> list[dict[str, int | str]]:
-    """Return receiver packets uniquely matching one encoded producer packet."""
+@dataclass(frozen=True)
+class RtmpPacketCandidate:
+    """One exact sequence match and its admissible mux-offset interval."""
+
+    packet: dict[str, int | str]
+    offset_min: Fraction
+    offset_max: Fraction
+
+
+@dataclass
+class RtmpPacketCorrelation:
+    """Correlate encoder callbacks with the FLV sequence after mux rebasing.
+
+    OBS rebases both FLV timestamps by ``start_dts_offset``.  That offset is
+    selected from the first audio *or* video packet, so an absolute PTS match
+    between the video encoder callback and the RTMP demuxer is not valid.  The
+    video packet index is unchanged by the local TCP/RTMP path; use it as the
+    exact identity and intersect the PTS/DTS quantization intervals to prove
+    one constant mux offset for the complete stream.
+    """
+
+    used_packet_indices: set[int] = field(default_factory=set)
+    offset_min: Fraction | None = None
+    offset_max: Fraction | None = None
+
+    def candidates(
+        self,
+        producer: Mapping[str, object],
+        receiver_packets: list[dict[str, int | str]],
+    ) -> list[RtmpPacketCandidate]:
+        producer_index = _packet_int(producer.get("packet_index"), "producer packet_index")
+        producer_pts, producer_dts = _producer_packet_times(producer)
+        receiver_tick = Fraction(RTMP_PACKET_TIMEBASE_NUM, RTMP_PACKET_TIMEBASE_DEN)
+        candidates: list[RtmpPacketCandidate] = []
+        for packet in receiver_packets:
+            index = _packet_int(packet.get("packet_index"), "receiver packet_index")
+            if index != producer_index or index in self.used_packet_indices:
+                continue
+            receiver_pts = Fraction(
+                _packet_int(packet.get("packet_pts"), "receiver packet_pts"),
+                RTMP_PACKET_TIMEBASE_DEN,
+            )
+            receiver_dts = Fraction(
+                _packet_int(packet.get("packet_dts"), "receiver packet_dts", non_negative=False),
+                RTMP_PACKET_TIMEBASE_DEN,
+            )
+            half_tick = receiver_tick / 2
+            lower = max(receiver_pts - producer_pts - half_tick, receiver_dts - producer_dts - half_tick)
+            upper = min(receiver_pts - producer_pts + half_tick, receiver_dts - producer_dts + half_tick)
+            if self.offset_min is not None:
+                lower = max(lower, self.offset_min)
+            if self.offset_max is not None:
+                upper = min(upper, self.offset_max)
+            if lower <= upper:
+                candidates.append(RtmpPacketCandidate(packet, lower, upper))
+        return candidates
+
+    def commit(self, candidate: RtmpPacketCandidate) -> None:
+        index = _packet_int(candidate.packet.get("packet_index"), "receiver packet_index")
+        if index in self.used_packet_indices:
+            raise ProbeFailure(f"RTMP receiver packet index {index} was correlated twice")
+        self.used_packet_indices.add(index)
+        self.offset_min = candidate.offset_min
+        self.offset_max = candidate.offset_max
+
+    def metadata(self) -> dict[str, int | str]:
+        if self.offset_min is None or self.offset_max is None or not self.used_packet_indices:
+            raise ProbeFailure("RTMP mux-offset correlation was not calibrated")
+        return {
+            "correlation_method": "packet_index_constant_mux_offset_v1",
+            "mux_offset_min_num": self.offset_min.numerator,
+            "mux_offset_min_den": self.offset_min.denominator,
+            "mux_offset_max_num": self.offset_max.numerator,
+            "mux_offset_max_den": self.offset_max.denominator,
+            "correlated_packet_count": len(self.used_packet_indices),
+        }
+
+
+def _producer_packet_times(producer: Mapping[str, object]) -> tuple[Fraction, Fraction]:
+    """Return producer PTS/DTS as exact seconds after strict metadata checks."""
 
     fields = ("packet_pts", "packet_dts", "packet_timebase_num", "packet_timebase_den")
     if any(field not in producer for field in fields):
@@ -294,26 +368,7 @@ def _rtmp_packet_candidates(
     producer_dts = Fraction(
         producer_dts_value * producer_timebase_num, producer_timebase_den
     )
-    receiver_tick = Fraction(RTMP_PACKET_TIMEBASE_NUM, RTMP_PACKET_TIMEBASE_DEN)
-    candidates: list[dict[str, int | str]] = []
-    for packet in receiver_packets:
-        index = _packet_int(packet.get("packet_index"), "receiver packet_index")
-        if index in used_packet_indices:
-            continue
-        receiver_pts = Fraction(
-            _packet_int(packet.get("packet_pts"), "receiver packet_pts"),
-            RTMP_PACKET_TIMEBASE_DEN,
-        )
-        receiver_dts = Fraction(
-            _packet_int(packet.get("packet_dts"), "receiver packet_dts", non_negative=False),
-            RTMP_PACKET_TIMEBASE_DEN,
-        )
-        if (
-            abs(receiver_pts - producer_pts) <= receiver_tick / 2
-            and abs(receiver_dts - producer_dts) <= receiver_tick / 2
-        ):
-            candidates.append(packet)
-    return candidates
+    return producer_pts, producer_dts
 
 # The dual-lane campaign must exercise an actual browser_source, but its
 # content must not depend on a public website or network availability.  This
@@ -621,6 +676,7 @@ class RtmpReceiver:
         self.packets: list[dict[str, int | str]] = []
         self.failure: str | None = None
         self.calibration: dict[str, int | str | None] | None = None
+        self.live_correlation = RtmpPacketCorrelation()
         self._lock = threading.Lock()
 
     def metadata(self) -> dict[str, int | str]:
@@ -759,6 +815,45 @@ class RtmpReceiver:
         with self._lock:
             return list(self.packets), self.failure
 
+    def persist_diagnostics(self, output_path: pathlib.Path) -> pathlib.Path:
+        """Persist receiver state after a failed run without claiming evidence."""
+
+        packets, failure = self.snapshot()
+        with self._lock:
+            line_tail = list(self.lines[-200:])
+        correlation: dict[str, int | str] | None = None
+        try:
+            correlation = self.live_correlation.metadata()
+        except ProbeFailure:
+            pass
+        diagnostic_path = output_path.with_name(output_path.name + ".receiver-diagnostic.json")
+        temp_path = diagnostic_path.with_name(f".{diagnostic_path.name}.{os.getpid()}.tmp")
+        payload = {
+            "evidence_kind": "failed_run_diagnostic_only",
+            "runtime_instance_id": self.runtime_id,
+            "receiver": self.metadata(),
+            "correlation": correlation,
+            "failure": failure,
+            "packet_count": len(packets),
+            "packets": packets,
+            "line_tail": line_tail,
+        }
+        diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+                json.dump(payload, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, diagnostic_path)
+        except Exception:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+            raise
+        return diagnostic_path
+
     def stop(self) -> None:
         process = self.proc
         if process is None:
@@ -869,6 +964,12 @@ class RtmpReceiver:
             raise ProbeFailure("resource-only RTMP load emitted no receiver video packets")
         session["rtmp_receiver"] = self.metadata()
         session["rtmp_load_requested"] = True
+        raw_paths = session.get("capture_paths")
+        if not isinstance(raw_paths, list) or any(not isinstance(path, str) for path in raw_paths):
+            raise ProbeFailure("producer trace capture_paths must be a list of strings")
+        # Resource-only evidence proves that an active RTMP load existed; it
+        # contains no Take and therefore no rtmp_first_packet correlation.
+        session["capture_paths"] = [path for path in raw_paths if path != "rtmp_first_packet"]
         resource_records = [record for record in records if record.get("record_type") == "resource_sample"]
         eligible = sum(
             record.get("encoder_active") is True
@@ -919,18 +1020,18 @@ class RtmpReceiver:
         if receiver_failure:
             raise ProbeFailure(receiver_failure)
 
-        used: set[int] = set()
+        correlation = RtmpPacketCorrelation()
         rtmp_observations: list[dict[str, object]] = []
         for producer in encoded:
-            candidates = _rtmp_packet_candidates(producer, receiver_packets, used)
+            candidates = correlation.candidates(producer, receiver_packets)
             if len(candidates) != 1:
                 raise ProbeFailure(
                     f"RTMP receiver packet correlation for {producer.get('take_command_id')} is ambiguous: "
-                    f"{len(candidates)} unique PTS candidates"
+                    f"{len(candidates)} packet-index/mux-offset candidates"
                 )
-            packet = candidates[0]
-            packet_index = _packet_int(packet.get("packet_index"), "receiver packet_index")
-            used.add(packet_index)
+            candidate = candidates[0]
+            packet = candidate.packet
+            correlation.commit(candidate)
             rtmp_observations.append(
                 {
                     "record_type": "observation",
@@ -961,6 +1062,7 @@ class RtmpReceiver:
                     "notes": "first video packet observed at FFmpeg RTMP demux; not wire-level or decoded timing",
                 }
             )
+        session["rtmp_receiver"] = {**self.metadata(), **correlation.metadata()}
         merged = [
             session,
             *records[1:],
@@ -2567,7 +2669,7 @@ async def wait_for_take_boundaries(
     process: PulsarProcess,
     receiver: RtmpReceiver,
     commit: Commit,
-    used_packet_indices: set[int],
+    correlation: RtmpPacketCorrelation,
     *,
     timeout: float = 20.0,
 ) -> dict[str, dict[str, Any]]:
@@ -2696,11 +2798,9 @@ async def wait_for_take_boundaries(
                     f"{len(observations[boundary])}"
                 )
         encoded_records = observations["encoded_first_packet"]
-        packet_candidates: list[dict[str, int | str]] = []
+        packet_candidates: list[RtmpPacketCandidate] = []
         if len(encoded_records) == 1:
-            packet_candidates = _rtmp_packet_candidates(
-                encoded_records[0], receiver_packets, used_packet_indices
-            )
+            packet_candidates = correlation.candidates(encoded_records[0], receiver_packets)
             if len(packet_candidates) > 1:
                 raise ProbeFailure(
                     f"{take_id} has ambiguous RTMP packet correlation: "
@@ -2709,9 +2809,9 @@ async def wait_for_take_boundaries(
 
         complete = all(len(observations[boundary]) == 1 for boundary in PRODUCER_BOUNDARIES)
         if complete and len(packet_candidates) == 1 and accepted_events and committed_events:
-            packet = packet_candidates[0]
-            packet_index = _packet_int(packet.get("packet_index"), "receiver packet_index")
-            used_packet_indices.add(packet_index)
+            candidate = packet_candidates[0]
+            packet = candidate.packet
+            correlation.commit(candidate)
             return {
                 **{boundary: observations[boundary][0] for boundary in PRODUCER_BOUNDARIES},
                 "rtmp_first_packet": packet,
@@ -3219,7 +3319,7 @@ async def drive(
 
         commits: list[Commit] = []
         complete_boundary_count = 0
-        used_rtmp_packet_indices: set[int] = set()
+        rtmp_correlation = trace_receiver.live_correlation if trace_receiver is not None else RtmpPacketCorrelation()
         for number in range(1, total_takes + 1):
             process.assert_directshow_consumer_alive()
             target = SCENE_B if number % 2 else SCENE_A
@@ -3299,7 +3399,7 @@ async def drive(
                     process,
                     trace_receiver,
                     commit,
-                    used_rtmp_packet_indices,
+                    rtmp_correlation,
                     timeout=20.0,
                 )
                 complete_boundary_count += 1
@@ -3810,6 +3910,8 @@ def run(args: argparse.Namespace) -> int:
             process.rtmp_final_trace_path = final_trace_path
         result = EXIT_FAIL
         cleanup_failure: ProbeFailure | None = None
+        failure_message: str | None = None
+        skip_message: str | None = None
         try:
             if args.trace_append:
                 if final_trace_path is None or not final_trace_path.is_file():
@@ -3904,15 +4006,10 @@ def run(args: argparse.Namespace) -> int:
                 )
                 result = 0
         except ProbeSkip as exc:
-            print(f"SKIP: {exc}")
+            skip_message = str(exc)
             result = EXIT_SKIP
         except (ProbeFailure, asyncio.TimeoutError, OSError, json.JSONDecodeError) as exc:
-            print(f"FAIL: {exc}", file=sys.stderr)
-            if producer_trace_path is not None:
-                print(
-                    f"producer trace sidecar preserved for diagnosis: {producer_trace_path}",
-                    file=sys.stderr,
-                )
+            failure_message = str(exc)
             result = EXIT_FAIL
         finally:
             try:
@@ -3921,6 +4018,30 @@ def run(args: argparse.Namespace) -> int:
                 cleanup_failure = exc
             if cef_server is not None:
                 cef_server.close()
+        diagnostic_path: pathlib.Path | None = None
+        diagnostic_failure: str | None = None
+        if result != 0 and process.rtmp_receiver is not None and producer_trace_path is not None:
+            try:
+                diagnostic_path = process.rtmp_receiver.persist_diagnostics(producer_trace_path)
+            except Exception as exc:
+                diagnostic_failure = str(exc)
+        # Emit the primary diagnostic only after every owned child and reader
+        # has traversed the bounded cleanup path.  This ordering prevents a
+        # strict stderr supervisor from interrupting cleanup on the first FAIL
+        # line and orphaning Pulsar or FFmpeg.
+        if skip_message is not None:
+            print(f"SKIP: {skip_message}")
+        if failure_message is not None:
+            print(f"FAIL: {failure_message}", file=sys.stderr)
+        if result != 0 and producer_trace_path is not None:
+            print(
+                f"producer trace sidecar preserved for diagnosis: {producer_trace_path}",
+                file=sys.stderr,
+            )
+        if diagnostic_path is not None:
+            print(f"RTMP receiver diagnostic preserved: {diagnostic_path}", file=sys.stderr)
+        if diagnostic_failure is not None:
+            print(f"FAIL: RTMP receiver diagnostic persistence failed: {diagnostic_failure}", file=sys.stderr)
         if cleanup_failure is not None:
             print(f"FAIL: cleanup did not release all owned resources: {cleanup_failure}", file=sys.stderr)
             if producer_trace_path is not None:

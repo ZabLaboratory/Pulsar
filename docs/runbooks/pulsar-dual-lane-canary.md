@@ -260,7 +260,7 @@ recreate them from prose.
 | AC-08 | independent DirectShow-return p95 report, count >=100 per codec |
 | AC-09 | #245 common Program audio evidence; no Preview/AFV claim |
 | AC-10 | runtime/alias lease logs and #243/#246/#248 evidence |
-| AC-12 | `rtmp_first_packet` from the real loopback receiver, correlated by rational packet PTS/timebase; encoded callback remains auxiliary |
+| AC-12 | `rtmp_first_packet` from the real loopback receiver, correlated by exact video-packet index plus one constant rational FLV mux-offset interval; encoded callback remains auxiliary |
 | AC-13 | NVENC-only reference versus dual-lane resource delta under WGC+CEF+NVENC; x264 is explicitly `NOT_APPLICABLE` |
 | AC-14 | rollback probe output with matching committed frame/PTS and one encoder bind |
 
