@@ -38,7 +38,7 @@ Historique :
 
 - `r1` : première rédaction du dual-lane.
 - `r2` : correction sémantique ciblée de la clôture core, des frontières SLO DirectShow, de l’isolation des alias DirectShow historiques et du cycle de vie post-Take.
-- Aucun amendement n’est encore approuvé, persisté ou mergé.
+- `Amendment 1` — `amendment-1-draft-r1-ac12-boundaries-20260831` : correction sémantique approuvée des frontières RTMP AC-12a/AC-12b ; corps canonique SHA-256 `eace0e37a0588d11983de31b4a49b13bb58b52af7809c6e344a7f316032cbba9` annexé ci-dessous sans réécriture de r2.
 
 ## 1. Contexte et réalité connue
 
@@ -961,3 +961,326 @@ La révision r2 applique uniquement les corrections sémantiques demandées :
    - ADR-ID, emplacement canonique cible, décision dual-lane, surfaces stables, absence de rebind `video_t`, contrat `pulsar.scene-switch.v1`, audio Programme commun, instrumentation, alternatives, risques, migration, rollback, rôles et découpage core restent inchangés sauf les précisions directement liées aux quatre corrections ci-dessus.
 
 `AGENT_REPORT` — Atlas-3 — `READY`.
+
+# ADR-PULSAR-DUAL-LANE-001 — Amendment 1 : frontières RTMP AC-12
+
+## 0. Identité et statut
+
+- `adr_id`: `ADR-PULSAR-DUAL-LANE-001`
+- `parent_revision_id`: `draft-r2-dual-lane-20260828`
+- `parent_merge_sha`: `1252c6e6079f34d6331a8c45f8303e8524552b0c`
+- `parent_content_sha256`: `68a8e87aa365bd17ca14a76a642d181f5e236ef6e20bcba3975b348c13218ae4`
+- `amendment_id`: `ADR-PULSAR-DUAL-LANE-001-Amendment-1`
+- `revision_id`: `amendment-1-draft-r1-ac12-boundaries-20260831`
+- `date`: `2026-08-31`
+- `author_agent`: `Atlas`
+- `author_thread`: `atlas_249_ac12_semantics`
+- `source_work_unit`: `ZabLaboratory/Pulsar#249`
+- `status_proposed`: `PENDING_VIGIL_REVIEW`
+- `decision_type`: `semantic correction of a normative SLO boundary`
+- `content_fingerprint`: `ADR-PULSAR-DUAL-LANE-001|Amendment-1|revision=amendment-1-draft-r1-ac12-boundaries-20260831|I14=raw+directshow+rtmp-transport+rtmp-command-to-egress+decoded+antenna-separate|AC12a=exact-correlated-packet:callback-to-receiver:conservative-p95<=15ms:100-warm+100-measured-per-codec|AC12b=TakeAccepted-to-same-correlated-receiver-packet:mandatory-stage-disclosure:no-r2-limit|historical-1-15ms=reference-only-uncorrelated-liveness|AC07+AC08=unchanged|decoded+antenna=no-guarantee|libobs-interleaver=not-core-required|issue249=blocked-until-amendment-merged`
+
+Cet amendement n'est ni approuvé ni applicable tant que Vigil n'a pas rendu `ADR_VERDICT: APPROVED` sur cette révision exacte, qu'une approbation humaine explicite n'a pas cité cette même révision et son SHA-256 de contenu, puis que Vigil n'a pas persisté et mergé fidèlement le texte avec le tag signé prévu par le protocole ADR.
+
+## 1. Contexte et problème
+
+La révision parente r2 impose :
+
+1. I14, qui sépare les mesures raw, retour DirectShow, premier paquet RTMP et première frame décodée/antenne ;
+2. AC-12, qui demande de mesurer le premier paquet RTMP séparément et de le comparer à une baseline p95 `<=15 ms` ;
+3. AC-07 et AC-08, qui définissent explicitement leurs propres frontières `TakeAccepted ->` raw et DirectShow ;
+4. l'absence de garantie r2 sur la première frame décodée ou antenne.
+
+R2 ne définit toutefois ni le timestamp de départ d'AC-12, ni l'identité du paquet à retenir, ni si ce paquet doit porter la frame Program committée. La baseline historique p95 `<=15 ms` provenait d'une observation exploratoire `Take -> premier paquet vidéo vu par le démuxeur FFmpeg`, sans corrélation exacte par runtime, Take, frame, index, PTS ou DTS. Cette observation qualifiait au mieux la continuité d'un flux déjà actif ; elle ne prouvait pas l'arrivée du contenu Program committé.
+
+Le runbook et le parseur construits après l'approbation r2 ont choisi une sémantique plus forte : `TakeAccepted -> observation par le récepteur RTMP du premier paquet exactement corrélé à la frame committée`, avec le même seuil de 15 ms. La campagne x264 exacte au head `26803eccdfc921e62cc41a8e86cb88e591334191` montre que cette combinaison frontière/seuil est physiquement incohérente à 1080p60 :
+
+- `TakeAccepted -> CTS` p95 `15.863394 ms` ;
+- `CTS -> FER` p95 environ `18.338 ms` ;
+- `FER -> FERC` p95 environ `7.881 ms` ;
+- `FERC -> PIR` p95 environ `115.328 ms` ;
+- `PIR -> callback` p95 environ `0.00383 ms` ;
+- `callback -> récepteur RTMP` pour le même paquet p95 `1.2515 ms` ;
+- `TakeAccepted -> récepteur RTMP` pour le même paquet p95 `151.798385 ms`, ou `151.823785 ms` de manière conservative avec la borne d'horloge.
+
+Même un contournement complet de l'attente d'interleave `FERC -> PIR` ne permettrait pas de tenir 15 ms, puisque les étages amont dépassent déjà ce budget. La correction ne peut donc pas consister à affaiblir la corrélation, à masquer le délai complet, ni à supprimer sans décision la barrière d'ordre audio/vidéo de libobs.
+
+## 2. Objectifs et non-objectifs
+
+### Objectifs
+
+- Donner au seuil historique de 15 ms une frontière RTMP explicite, mesurable et techniquement cohérente.
+- Conserver une preuve exacte du même paquet entre le producteur et le récepteur.
+- Rendre obligatoire la publication de la latence complète commande-vers-egress et de ses sous-étages afin qu'un transport rapide ne masque jamais un pipeline lent.
+- Maintenir AC-07, AC-08, l'audio Programme commun, les surfaces stables et l'absence de garantie decoded/antenna.
+- Permettre à #249 de juger le noyau avec des critères réalisables sans fabriquer de PASS.
+
+### Non-objectifs
+
+- Fixer dans cet amendement un nouveau SLO `TakeAccepted -> paquet Program committé au récepteur`.
+- Garantir la latence décodée, player ou antenne.
+- Autoriser un bypass de l'ordre A/V, un rebind du `video_t` actif ou une modification du contrat audio I12.
+- Imposer un patch libobs, win-wasapi, obs-x264 ou NVENC pour clore le noyau.
+- Requalifier la baseline historique non corrélée en preuve d'acceptation.
+- Modifier la topologie dual-lane, le Cut atomique, le namespace runtime, les leases ou les extensions non bloquantes.
+
+## 3. Options considérées
+
+### Option A — Conserver `TakeAccepted -> paquet committé <=15 ms`
+
+Rejetée. Les mesures exactes prouvent que le budget est dépassé avant même l'interleaver. Un patch libobs ne peut pas corriger les étages amont et risquerait l'ordre A/V pour poursuivre un critère incohérent.
+
+### Option B — Revenir à `TakeAccepted -> n'importe quel prochain paquet RTMP`
+
+Rejetée comme critère recommandé. Cette lecture est la plus proche de la provenance historique, mais devient presque un test de cadence sur un flux 60 fps continu. Elle peut passer avec un paquet antérieur au contenu committé et n'apporte pas la preuve de transport du paquet sélectionné.
+
+### Option C — Séparer garde transport et latence commande-vers-egress
+
+Retenue. AC-12a applique le seuil de 15 ms au transport du même paquet, depuis l'entrée dans le callback de sortie encodée Pulsar jusqu'au récepteur/démux RTMP. AC-12b conserve obligatoirement `TakeAccepted -> récepteur du même paquet` et toute sa décomposition, sans seuil r2. Cette option ne cache ni ne supprime la latence de 151.8 ms observée.
+
+## 4. Décision
+
+Adopter deux frontières RTMP nommées et non substituables :
+
+```text
+TakeAccepted
+  -> CTS -> FER -> FERC -> PIR -> Pulsar encoded-output callback
+                                      |                         |
+                                      |<-- AC-12a transport --->| RTMP receiver/demux
+  |                                                             |
+  |<---------------- AC-12b command-to-egress ----------------->|
+```
+
+AC-12a est le garde-fou RTMP normatif portant le p95 conservateur `<=15 ms`. AC-12b est une divulgation normative obligatoire, sans limite r2. Les deux utilisent le même paquet vidéo corrélé. AC-12a ne peut pas satisfaire AC-07 ou AC-08 ; AC-12b ne devient pas une garantie decoded/antenna.
+
+## 5. Clauses exactes modifiées
+
+### 5.1 I14 — remplacement intégral
+
+Remplacer I14 par :
+
+> **I14 — Mesures séparées et non substituables** : la première frame Program valide à l'entrée encodeur/raw, la première frame Program valide observée sur le retour DirectShow, le transport du premier paquet vidéo RTMP corrélé, la latence complète `TakeAccepted -> récepteur RTMP` de ce même paquet, la première frame décodée et la première frame antenne/player sont enregistrées et rapportées sous des frontières distinctes. Aucune de ces mesures ne peut être renommée, fusionnée ou substituée à une autre pour satisfaire un critère.
+
+### 5.2 Étape 0 — remplacement des lignes RTMP de baseline
+
+Dans `Migration par étapes / Étape 0 — Baseline et instrumentation minimale`, remplacer `premier paquet RTMP séparément` et la baseline RTMP associée par :
+
+> - pour le premier paquet vidéo corrélé à la frame Program committée, `entrée dans le callback de sortie encodée Pulsar -> observation du même paquet par le récepteur/démux RTMP`, séparément, avec p95 conservateur cible `<=15 ms` ;
+> - pour ce même paquet, `TakeAccepted -> observation par le récepteur/démux RTMP`, avec p50/p95/p99/max et décomposition des étages, obligatoire mais sans SLO r2 ;
+> - première frame décodée et antenne/player séparément, sans SLO r2.
+>
+> La baseline historique de 1 à 15 ms `Take -> premier paquet démux observé` ne possédait pas d'identité de paquet ou de frame committée. Elle est conservée comme observation de continuité `reference_only` et ne constitue pas une preuve d'acceptation du contenu Program commuté.
+
+Les baselines raw et DirectShow restent inchangées. Les observations decoded x264/NVENC restent diagnostiques et sans SLO r2.
+
+### 5.3 Pre-mortem — remplacement du risque RTMP/décodage
+
+Remplacer la ligne `La première frame décodée est prise à tort pour un échec du Cut` par les deux risques suivants :
+
+| Échec supposé | Signal précoce | Mitigation |
+|---|---|---|
+| Un transport RTMP rapide masque un pipeline commande-vers-egress lent | AC-12a passe sous 15 ms mais AC-12b ou `FERC -> PIR` augmente fortement | Rendre AC-12b et tous ses sous-étages obligatoires dans chaque rapport ; interdire qu'AC-12a soit présenté comme latence totale de switch ou première frame décodée |
+| Un paquet en vol non lié au nouveau Program crée un PASS vacu | Le paquet récepteur n'a pas le même index/PTS/DTS que le paquet producteur sélectionné ou précède la frontière `TakeCommitted` | Corrélation exacte et fail-closed par runtime, Take, révisions, frame/PTS, index monotone et intervalle rationnel d'offset FLV ; aucun fallback vers le prochain paquet arbitraire |
+
+Le risque déjà reconnu de confondre frame décodée et paquet RTMP reste couvert par I14 : decoded/player/antenna demeure une mesure séparée sans SLO r2.
+
+### 5.4 Observabilité — ajouts obligatoires
+
+Ajouter aux métriques :
+
+- `rtmp_transport_same_packet_ms = receiver_observed_normalized_ns - packet_callback_monotonic_ns` ;
+- `rtmp_command_to_egress_same_packet_ms = receiver_observed_normalized_ns - TakeAccepted.observed_at_monotonic_ns` ;
+- `take_to_cts_ms`, `cts_to_fer_ms`, `fer_to_ferc_ms`, `ferc_to_pir_ms`, `pir_to_callback_ms`, `callback_to_receiver_ms` ;
+- compte de paquets corrélés, duplicats, trous d'index, ambiguïtés, dérives d'offset et bornes d'horloge ;
+- identité exacte du runtime, de la session, du codec, du Take, des révisions, de la frame/PTS et du paquet.
+
+Ajouter aux alertes :
+
+- p95 conservateur AC-12a > 15 ms ;
+- paquet récepteur absent, dupliqué, ambigu ou non corrélable ;
+- croissance de AC-12b ou d'un sous-étage par rapport à la baseline exacte du codec, sans transformer cette alerte en SLO r2 implicite ;
+- rapport AC-12a sans rapport AC-12b correspondant.
+
+### 5.5 AC-12 — remplacement intégral
+
+Remplacer AC-12 par :
+
+> **AC-12a — Garde transport RTMP corrélée** : pour x264 et NVENC dans des campagnes indépendantes, après au moins 100 Takes warm-up observés, au moins 100 Takes mesurés sélectionnent chacun le premier paquet vidéo producteur dont la frame et le PTS sont égaux ou postérieurs à la frontière `TakeCommitted` correspondante. Le paquet producteur et le paquet observé par le récepteur/démux RTMP dédié doivent être prouvés identiques par `runtime_instance_id`, session, codec, `command_id`, `intent_id`, révisions post-commit, frame/PTS, index vidéo monotone, PTS/DTS dans leurs timebases rationnelles et un unique intervalle calibré d'offset mux FLV stable pour le flux. Mesurer `packet_callback_monotonic_ns -> receiver_observed_normalized_ns` pour ce même paquet. Le rapport publie count, p50/p95/p99/max bruts, borne d'horloge et p95 conservateur ; le p95 conservateur doit être `<=15 ms` pour chaque codec, sans pooling. Toute corrélation manquante, dupliquée, ambiguë, hors ordre ou hors borne échoue fermée. Cette preuve est un garde de transport récepteur/démux, pas une mesure wire-level, décodée ou antenne.
+>
+> **AC-12b — Latence commande-vers-egress corrélée obligatoire** : pour les mêmes campagnes, Takes et paquets qu'AC-12a, mesurer et publier séparément `TakeAccepted.observed_at_monotonic_ns -> receiver_observed_normalized_ns`, avec count, p50/p95/p99/max et les distributions `TakeAccepted -> CTS`, `CTS -> FER`, `FER -> FERC`, `FERC -> PIR`, `PIR -> callback` et `callback -> receiver`. AC-12b est obligatoire pour que la preuve AC-12 soit complète mais ne porte aucun seuil de réussite r2. AC-12a ne peut ni cacher, ni remplacer, ni renommer AC-12b, AC-07, AC-08, la première frame décodée ou la première frame antenne/player. Tout futur seuil pass/fail sur AC-12b requiert une décision SLO approuvée séparément.
+
+### 5.6 PUL-DL-05 et PUL-DL-08 — conséquences de mapping
+
+Le périmètre et les sorties de PUL-DL-05 doivent nommer AC-12a et AC-12b séparément. Les preuves attendues deviennent : au moins 100 warm-up observés puis 100 Takes mesurés par codec, même-paquet corrélé, p95 conservateur AC-12a, rapport AC-12b complet et sous-étages, sans pooling x264/NVENC.
+
+PUL-DL-08/#249 ne peut marquer AC-12 couvert que si AC-12a passe indépendamment pour x264 et NVENC et si AC-12b est publié pour les deux codecs. Un AC-12a rapide sans AC-12b est `UNPROVEN`, pas `PASS`.
+
+## 6. Clauses explicitement inchangées
+
+- I1 à I13, notamment I5/I6 sur les sorties stables et l'absence de rebind actif, et I12 sur l'audio Programme commun.
+- AC-01 à AC-11, en particulier AC-07 raw p95 `<=50 ms` et AC-08 retour DirectShow p95 `<=75 ms`.
+- AC-13 et AC-14.
+- La décision de deux lanes physiques chaudes, les rôles permutables, les surfaces stables, le Cut atomique et le cycle Preview post-Take.
+- L'absence de garantie r2 decoded/player/antenna.
+- Le caractère non bloquant de Fade/Stinger/T-bar, Preview audio/AFV, tuning decoder et soak complet.
+- Les règles de namespace runtime et de lease des alias DirectShow.
+
+## 7. Absence d'affaiblissement
+
+Cet amendement ne transforme pas un échec en PASS en supprimant des données :
+
+1. le seuil `<=15 ms` est conservé sur une frontière RTMP explicitement nommée ;
+2. l'identité exacte du même paquet est plus forte que la baseline historique non corrélée ;
+3. la borne d'horloge reste incluse dans le p95 conservateur ;
+4. x264 et NVENC restent indépendants, avec 100 warm-up et 100 mesurés chacun ;
+5. le chemin complet qui échouait à 151.8 ms devient une divulgation obligatoire et ne peut pas disparaître du rapport ;
+6. AC-07 et AC-08 restent les SLO du Cut aux frontières raw et DirectShow ;
+7. aucune garantie decoded/antenna n'est inventée ;
+8. aucun seuil AC-12b n'est inventé sans baseline x264/NVENC et choix produit ;
+9. aucun paquet arbitraire en vol ne peut satisfaire AC-12a.
+
+La modification est néanmoins sémantique, parce qu'elle assigne formellement le seuil de 15 ms à `callback -> receiver`. C'est pourquoi elle exige le cycle complet d'amendement au lieu d'une simple correction silencieuse du runbook.
+
+## 8. Conséquences positives et négatives
+
+### Positives
+
+- Le seuil AC-12 devient cohérent avec un segment de transport mesurable.
+- L'evidence reste exacte et corrélée de bout en bout.
+- Le délai d'interleaver, d'encodage ou de frame phase ne peut plus être caché.
+- Les responsabilités sont nettes : AC-07/08 qualifient le Cut, AC-12a le transport RTMP, AC-12b la performance totale observée, decoded/antenna restent diagnostiques.
+- Un patch upstream peut être décidé sur une mesure causale, pas pour satisfaire artificiellement un mauvais budget.
+
+### Négatives
+
+- La clôture de #249 est suspendue pendant la validation et la persistance de l'amendement.
+- Le runbook, le parseur, les fixtures et rapports doivent être alignés avant une nouvelle preuve d'acceptation.
+- Un AC-12a passant ne signifie pas que la latence command-to-egress de 151.8 ms est acceptable pour le produit ; cette question reste ouverte et visible.
+- Une nouvelle exigence produit sur AC-12b pourra nécessiter une autre ADR, du tuning Pulsar ou une modification upstream avec validation A/V.
+
+## 9. Pre-mortem de l'amendement
+
+| Échec supposé | Détection | Prévention/mitigation |
+|---|---|---|
+| Le rapport n'affiche que le 1.25 ms transport | AC-12b ou un sous-étage absent | Schéma et parseur fail-closed ; AC-12 complet = AC-12a PASS + AC-12b présent |
+| Le paquet sélectionné n'est pas celui du Program committé | index/PTS/DTS/frame/révisions incohérents | Corrélation exacte et intervalle FLV unique ; ambiguïté = FAIL |
+| L'incertitude d'horloge est ignorée | p95 brut seul publié | Borne et p95 conservateur obligatoires |
+| Des codecs sont poolés | un rapport agrégé masque un échec codec | Deux sessions et verdicts indépendants requis |
+| Un patch libobs dégrade l'A/V sans besoin core | continuité/PTS/drift audio régressent alors qu'AC-12a passait déjà | Ne pas imposer de patch upstream pour cet amendement ; traiter tout nouveau SLO complet séparément |
+| La baseline historique est présentée comme preuve de contenu commuté | absence de même-paquet corrélé | Marquage `reference_only`, jamais acceptance |
+
+## 10. Migration
+
+1. Vigil revoit ce payload exact et rend un verdict citant `amendment_id`, `revision_id`, `content_fingerprint` et SHA-256 du contenu.
+2. Après `APPROVED`, un humain autorisé approuve explicitement la même révision et le même SHA-256.
+3. Vigil persiste fidèlement l'amendement sans changement sémantique, ouvre/met à jour la PR ADR, publie son attestation, merge et crée le tag signé `adr/ADR-PULSAR-DUAL-LANE-001/amendment-1`.
+4. Après `ADR_MERGED`, Atlas met à jour le mapping de #249 vers Amendment 1 ; aucune nouvelle issue dérivée n'est requise pour le seul alignement du banc existant.
+5. Conduit/Probe alignent contrat de trace, parseur, fixtures, rapport et runbooks : AC-12a calcule callback-vers-récepteur même-paquet avec borne ; AC-12b calcule et publie le chemin complet et ses étages.
+6. Les traces anciennes restent immuables. Elles peuvent être re-analysées comme diagnostics si tous les champs existent, mais ne deviennent pas automatiquement une preuve du head final.
+7. Keeper exécute sur l'artefact exact final, sans pooling : x264 puis NVENC, chacun 100 warm-up observés + 100 mesurés, WGC+CEF, consommateur DirectShow réel, stream/record actifs, récepteur RTMP dédié, corrélation exacte et cleanup gracieux.
+8. Probe vérifie indépendamment les deux rapports, les absences de substitution et toutes les autres preuves #249 ; Bastion revalide uniquement si le diff final touche une surface de sécurité ou d'intégrité.
+9. #249 ne peut être mergée/fermée qu'après AC-12a PASS x264+NVENC, AC-12b complet x264+NVENC, les autres AC/I applicables et les rapports requis.
+
+## 11. Rollback
+
+Si Vigil ou l'humain rejette l'amendement :
+
+- ne modifier ni l'ADR r2 ni les critères de #249 ;
+- conserver le candidat `26803ecc...` et ses 151.8 ms comme échec selon l'interprétation actuelle du runbook ;
+- ne pas remplacer le gate par le prochain paquet arbitraire et ne pas affaiblir la corrélation ;
+- maintenir #249 ouverte jusqu'à une nouvelle décision.
+
+Si l'amendement est mergé puis doit être retiré avant clôture core :
+
+- produire un amendement de retrait explicite ; ne pas réécrire silencieusement l'historique ;
+- revenir aux runbooks/parseurs de la révision précédente par commits signés et preuves de non-régression ;
+- invalider tout PASS AC-12 dépendant de la frontière retirée ;
+- aucun rollback ne touche les lanes, surfaces, encodeurs actifs, mappings ou leases en production.
+
+Un changement expérimental WASAPI/libobs/encodeur reste réversible indépendamment de cet amendement. Il ne fait pas partie du rollback architectural AC-12.
+
+## 12. Preuves requises
+
+### Preuves de décision déjà observées
+
+- ADR parent exact, SHA et digest approuvé ci-dessus.
+- Trace x264 exacte `26803ecc...`: SHA-256 `d499a304cf083bd4293112dd7497f0f29d9ab609c52d006ac2987a39a896909b`.
+- Rapport analyseur x264 : SHA-256 `b72b7e4c549dcdbc8050410441d31b924be17e5c075cf89fc97c623108f95a85`.
+- 200/200 paquets producteur/récepteur corrélés, 100 warm-up + 100 mesurés, borne horloge `0.0254 ms`.
+- AC-07 raw p95 `33.292715 ms` PASS ; AC-08 DirectShow p95 `25.995510 ms` PASS ; AC-11 200 acceptés/committés PASS.
+- AC-12 actuel full path p95 `151.798385 ms`, conservateur `151.823785 ms`, FAIL contre 15 ms.
+- Même-paquet callback-vers-récepteur p95 `1.2515 ms`, observation suffisante pour justifier la frontière proposée mais pas pour accepter le futur head final.
+
+### Preuves d'acceptation après amendement
+
+- exact SHA du code et de l'artefact, hash du binaire, identité runtime/session/host/GPU/codec ;
+- 100 warm-up observés + 100 mesurés par codec, sans pooling ;
+- corrélation même-paquet fail-closed et calibration FLV stable ;
+- AC-12a count/p50/p95/p99/max, borne d'horloge et p95 conservateur `<=15 ms` pour x264 puis NVENC ;
+- AC-12b count/p50/p95/p99/max et six sous-étages pour x264 puis NVENC ;
+- AC-07/08/11 toujours PASS ;
+- audio Programme/AAC continu, PTS/DTS monotones, absence de régression A/V si un changement audio ou interleaver intervient ;
+- aucune frame décodée/antenne présentée comme garantie ;
+- shutdown gracieux, leases libérés, readers/writers joints, aucun processus ou registre temporaire résiduel ;
+- CI exacte verte et AGENT_REPORT des rôles requis.
+
+## 13. Impact sur #249 et la clôture du noyau
+
+Jusqu'au merge de l'amendement :
+
+- #249 reste `OPEN / BLOCKED_BY_ADR_SEMANTICS` pour AC-12 ;
+- aucun nouveau hardware AC-12 n'est accepté comme preuve de clôture ;
+- les travaux de performance peuvent continuer seulement comme expériences explicitement non qualifiées, sans claim AC-12.
+
+Après merge de l'amendement :
+
+- #249 conserve son identité `PUL-DL-08`; elle n'est pas remplacée ;
+- sa checklist AC-12 devient `AC-12a PASS x264 + NVENC` et `AC-12b complet x264 + NVENC` ;
+- le rapport de clôture doit citer le SHA mergé et le tag signé de l'amendement ;
+- les 151.8 ms x264 observés restent dans le ledger comme performance command-to-egress, même si AC-12a passe ;
+- la clôture core n'implique toujours ni Fade/Stinger/T-bar, ni Preview audio/AFV, ni decoded/antenna, ni soak complet ;
+- si la latence AC-12b devient ultérieurement un objectif produit, elle reçoit un seuil et un work unit distincts après décision approuvée.
+
+## 14. Décision sur les modifications upstream
+
+Pulsar est autorisé à modifier upstream lorsque nécessaire, mais Amendment 1 ne rend aucun patch upstream obligatoire pour le noyau. La campagne montre que :
+
+- obs-x264 n'est pas le segment dominant ;
+- le callback et le récepteur RTMP sont rapides ;
+- l'attente `FERC -> PIR` est réelle mais sa suppression ne permettrait toujours pas `TakeAccepted -> paquet committé <=15 ms` ;
+- affaiblir la barrière d'ordre A/V sans SLO AC-12b approuvé serait un risque non justifié.
+
+Un patch Pulsar/libobs pourra être proposé pour améliorer AC-12b uniquement avec : objectif chiffré distinct, source-to-sink, invariants audio/PTS, A/B x264+NVENC, drift/soak, rollback et validation indépendante. Son absence ne bloque pas AC-12a si le transport même-paquet tient le seuil.
+
+## 15. Gates de validation
+
+Le verdict Vigil attendu doit citer exactement :
+
+```text
+ADR_VERDICT: APPROVED | CHANGES_REQUIRED | REJECTED
+ADR: ADR-PULSAR-DUAL-LANE-001
+AMENDMENT: ADR-PULSAR-DUAL-LANE-001-Amendment-1
+REVISION: amendment-1-draft-r1-ac12-boundaries-20260831
+CONTENT_FINGERPRINT: ADR-PULSAR-DUAL-LANE-001|Amendment-1|revision=amendment-1-draft-r1-ac12-boundaries-20260831|I14=raw+directshow+rtmp-transport+rtmp-command-to-egress+decoded+antenna-separate|AC12a=exact-correlated-packet:callback-to-receiver:conservative-p95<=15ms:100-warm+100-measured-per-codec|AC12b=TakeAccepted-to-same-correlated-receiver-packet:mandatory-stage-disclosure:no-r2-limit|historical-1-15ms=reference-only-uncorrelated-liveness|AC07+AC08=unchanged|decoded+antenna=no-guarantee|libobs-interleaver=not-core-required|issue249=blocked-until-amendment-merged
+CONTENT_SHA256: <sha256 du corps canonique exact>
+```
+
+Après un verdict `APPROVED`, l'approbation humaine doit citer exactement :
+
+```text
+HUMAN_APPROVAL: APPROVED
+ADR: ADR-PULSAR-DUAL-LANE-001
+AMENDMENT: ADR-PULSAR-DUAL-LANE-001-Amendment-1
+REVISION: amendment-1-draft-r1-ac12-boundaries-20260831
+CONTENT_SHA256: <sha256 du corps canonique exact>
+```
+
+Toute modification sémantique de I14, AC-12a, AC-12b, du seuil, de la corrélation, du nombre de Takes, du statut de la baseline historique, de l'absence de SLO AC-12b ou de l'impact #249 crée une nouvelle révision et invalide les validations de celle-ci.
+
+## 16. Verdict Atlas
+
+`AMENDMENT_RECOMMENDATION: GO`
+
+`ISSUE_249_CORE_CLOSURE: NO_GO_UNTIL_AMENDMENT_MERGED_AND_EVIDENCED`
+
+Raison : l'amendement conserve le seuil RTMP, renforce l'identité du paquet, maintient toutes les frontières du Cut et rend obligatoire la latence totale observée. Il corrige une ambiguïté devenue un critère physiquement incohérent sans fabriquer de performance, sans cacher l'échec de 151.8 ms et sans imposer un patch upstream risqué.
