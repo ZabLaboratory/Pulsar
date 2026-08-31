@@ -503,6 +503,7 @@ def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path)
     assert rtmp[0]["packet_identity"] == receiver.packets[0]["packet_identity"]
     assert rtmp[0]["surface"] == "RTMP"
     assert rtmp[0]["consumer"] == "receiver"
+    assert rtmp[0]["receiver_observed_normalized_ns"] == rtmp[0]["observed_at_monotonic_ns"]
 
 
 def test_fusion_parser_failure_keeps_existing_final_byte_for_byte(tmp_path):

@@ -1047,6 +1047,13 @@ class RtmpReceiver:
                     "observed_at_monotonic_ns": _packet_int(
                         packet.get("observed_at_monotonic_ns"), "receiver observed_at_monotonic_ns"
                     ),
+                    # This is the receiver timestamp after the calibrated
+                    # perf_counter/QPC offset has been applied.  Keep it
+                    # explicit so AC-12a never has to infer clock normalization
+                    # from a generic observation field.
+                    "receiver_observed_normalized_ns": _packet_int(
+                        packet.get("observed_at_monotonic_ns"), "receiver observed_at_monotonic_ns"
+                    ),
                     "valid": True,
                     "surface": "RTMP",
                     "consumer": "receiver",

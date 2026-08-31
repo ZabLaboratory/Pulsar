@@ -138,9 +138,14 @@ per-codec/session coverage and never pools samples across traces.
 
 The report is acceptable only when `encoder_input_raw`, `directshow_return`,
 and the distinct `rtmp_first_packet` receiver boundary are present with their
-own counts and p95 values. The limits are raw p95 `<=50 ms`, DirectShow-return
-p95 `<=75 ms`, and RTMP receiver/demux p95 `<=15 ms`. The pre-network
-`encoded_first_packet` callback is auxiliary and can never satisfy AC-12.
+own counts and p95 values. AC-12a is the exact same-packet boundary
+`packet_callback_monotonic_ns -> receiver_observed_normalized_ns`; its
+conservative p95 (including the calibrated clock bound) is `<=15 ms`. AC-12b
+must cover the same packet set from `TakeAccepted -> receiver` and publish
+count/p50/p95/p99/max plus the six stage distributions, but has no second
+threshold in this revision. Missing or partial AC-12b makes AC-12
+`UNPROVEN`. The pre-network `encoded_first_packet` callback is auxiliary and
+cannot satisfy AC-12 by itself.
 RTMP receiver evidence is not wire-level and never substitutes for raw or
 DirectShow; decoded/player/antenna values are diagnostic only.
 
@@ -260,7 +265,7 @@ recreate them from prose.
 | AC-08 | independent DirectShow-return p95 report, count >=100 per codec |
 | AC-09 | #245 common Program audio evidence; no Preview/AFV claim |
 | AC-10 | runtime/alias lease logs and #243/#246/#248 evidence |
-| AC-12 | `rtmp_first_packet` from the real loopback receiver, correlated by exact video-packet index plus one constant rational FLV mux-offset interval; encoded callback remains auxiliary |
+| AC-12 | AC-12a exact callback-to-normalized-receiver p95 `<=15 ms` with clock bound; AC-12b same-packet `TakeAccepted`-to-receiver count and six distributions; exact packet index/frame/PTS identity plus one constant rational FLV mux-offset interval; no codec pooling |
 | AC-13 | NVENC-only reference versus dual-lane resource delta under WGC+CEF+NVENC; x264 is explicitly `NOT_APPLICABLE` |
 | AC-14 | rollback probe output with matching committed frame/PTS and one encoder bind |
 

@@ -205,6 +205,11 @@ def _take_records(
                         "packet_dts": index,
                         "packet_timebase_num": 1,
                         "packet_timebase_den": 60,
+                        "packet_cts_monotonic_ns": observed - 6_000_000,
+                        "packet_fer_monotonic_ns": observed - 5_000_000,
+                        "packet_ferc_monotonic_ns": observed - 2_000_000,
+                        "packet_pir_monotonic_ns": observed,
+                        "packet_callback_monotonic_ns": observed + 100_000,
                     }
                 )
             if boundary == "rtmp_first_packet":
@@ -223,6 +228,7 @@ def _take_records(
                         "clock_source": "perf_counter_ns/qpc",
                         "clock_offset_ns": 0,
                         "clock_bound_ns": 5_000_000,
+                        "receiver_observed_normalized_ns": observed,
                     }
                 )
             return {"record_type": "observation", **item}
@@ -331,6 +337,7 @@ def test_fixture_reports_all_boundaries_separately_and_never_runtime_pass():
     assert report["latency"]["encoder_input_raw"]["p95_ms"] < 50
     assert report["latency"]["directshow_return"]["p95_ms"] < 75
     assert report["latency"]["encoded_first_packet"]["p95_ms"] < 15
+    assert report["criteria"]["AC-12"]["ac12b"]["count"] == 3
     assert report["resources"]["status"] == "MEASURED"
     assert report["resources"]["comparison"]["frame_render_ms"]["within_known_reference"] is True
     assert report["resources"]["comparison"]["resident_bytes"]["within_known_reference"] is True
@@ -580,7 +587,7 @@ def test_encoder_pipeline_timing_is_complete_ordered_and_diagnostic_only():
         and item.get("boundary") == "encoded_first_packet"
     )
     packet["packet_cts_monotonic_ns"] = packet["observed_at_monotonic_ns"] - 1
-    with pytest.raises(probe.EvidenceError, match="timing metadata must be complete"):
+    with pytest.raises(probe.EvidenceError, match="CTS <= FER <= FERC <= PIR <= callback"):
         probe.parse_records(broken)
 
     packet.update(
@@ -668,22 +675,117 @@ def test_rtmp_slo_includes_declared_receiver_clock_bound_conservatively():
         probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
     )
     rtmp = report["criteria"]["AC-12"]
-    assert rtmp["p95_ms"] == pytest.approx(10.0)
+    assert rtmp["p95_ms"] == pytest.approx(1.9)
     assert rtmp["clock_bound_ms"] == pytest.approx(5.0)
-    assert rtmp["p95_conservative_ms"] == pytest.approx(15.0)
+    assert rtmp["p95_conservative_ms"] == pytest.approx(6.9)
     assert rtmp["status"] == "PASS"
+    assert rtmp["ac12a"]["boundary"] == (
+        "packet_callback_monotonic_ns_to_receiver_observed_normalized_ns"
+    )
+    assert rtmp["ac12b"]["status"] == "PASS"
+    assert rtmp["ac12b"]["p95_ms"] == pytest.approx(10.0)
+    assert set(rtmp["ac12b"]["stage_distributions"]) == set(probe.AC12B_STAGE_NAMES)
 
     records = _take_records(3)
     for record in records:
         if record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet":
-            record["observed_at_monotonic_ns"] += 1_000_000
+            record["observed_at_monotonic_ns"] += 10_000_000
+            record["receiver_observed_normalized_ns"] = record["observed_at_monotonic_ns"]
     report = probe.analyze_trace(
         probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
     )
     conservative = report["criteria"]["AC-12"]
-    assert conservative["p95_ms"] == pytest.approx(11.0)
-    assert conservative["p95_conservative_ms"] == pytest.approx(16.0)
+    assert conservative["p95_ms"] == pytest.approx(11.9)
+    assert conservative["p95_conservative_ms"] == pytest.approx(16.9)
     assert conservative["status"] == "FAIL"
+
+
+def test_ac12a_and_ac12b_report_distinct_boundaries_without_pooling():
+    records = _take_records(3, evidence_kind="runtime", include_resources=False)
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    criterion = report["criteria"]["AC-12"]
+    assert criterion["status"] == "PASS"
+    assert criterion["ac12a"]["status"] == "PASS"
+    assert criterion["ac12a"]["count"] == 3
+    assert criterion["ac12b"]["status"] == "PASS"
+    assert criterion["ac12b"]["same_packet_count"] == 3
+    assert criterion["ac12b"]["count"] == criterion["ac12b"]["same_packet_count"]
+    assert criterion["ac12b"]["p95_ms"] > criterion["ac12a"]["p95_ms"]
+    assert report["ac12a"] == criterion["ac12a"]
+    assert report["ac12b"] == criterion["ac12b"]
+
+
+def test_missing_callback_or_normalized_receiver_timestamp_is_unproven():
+    records = _take_records(3, evidence_kind="runtime", include_resources=False)
+    for record in records:
+        if record.get("record_type") == "observation" and record.get("boundary") == "encoded_first_packet":
+            for key in probe.ENCODER_TIMING_FIELDS:
+                record.pop(key, None)
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    assert report["criteria"]["AC-12"]["ac12a"]["status"] == "UNPROVEN"
+    assert report["criteria"]["AC-12"]["ac12b"]["status"] == "UNPROVEN"
+    assert report["status"] == "UNPROVEN"
+
+    records = _take_records(3, evidence_kind="runtime", include_resources=False)
+    for record in records:
+        if record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet":
+            record.pop("receiver_observed_normalized_ns", None)
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    assert report["criteria"]["AC-12"]["status"] == "UNPROVEN"
+    assert report["criteria"]["AC-12"]["ac12b"]["reason"]
+
+
+def test_ac12b_has_no_second_latency_threshold_but_rejects_callback_after_receiver():
+    records = _take_records(3, evidence_kind="runtime", include_resources=False)
+    # Delay only the accepted event.  The exact packet remains correlated and
+    # AC-12a remains low, while AC-12b visibly reports the larger end-to-end
+    # duration without inventing a second threshold.
+    delayed = False
+    for record in records:
+        if (
+            not delayed
+            and record.get("record_type") == "event"
+            and record["event"]["event_type"] == "TakeAccepted"
+            and record["event"]["take_command_id"] == "take-004"
+        ):
+            # Keep server-sequence order while making the first measured Take
+            # start immediately after the preceding commit.
+            record["event"]["observed_at_monotonic_ns"] = 1_205_000_000
+            record["event"]["freeze_until_monotonic_ns"] = 2_205_000_000
+            delayed = True
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    assert report["criteria"]["AC-12"]["ac12a"]["status"] == "PASS"
+    assert report["criteria"]["AC-12"]["ac12b"]["status"] == "PASS"
+    assert report["criteria"]["AC-12"]["ac12b"]["p95_ms"] > 90.0
+
+    records = _take_records(3, evidence_kind="runtime", include_resources=False)
+    for record in records:
+        if record.get("record_type") == "observation" and record.get("boundary") == "encoded_first_packet":
+            record["packet_callback_monotonic_ns"] = record["observed_at_monotonic_ns"] + 20_000_000
+    with pytest.raises(probe.EvidenceError, match="negative rtmp_first_packet latency|AC-12b stages are not ordered"):
+        probe.analyze_trace(
+            probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+        )
+
+
+def test_declared_warmup_does_not_create_observed_warmup_or_measured_takes():
+    records = _take_records(3, evidence_kind="runtime", include_resources=False)
+    records[0]["warmup_takes"] = 100
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=100, minimum_resource_samples=2
+    )
+    assert report["takes"]["warmup_takes_declared"] == 100
+    assert report["takes"]["warmup_takes_observed"] == 6
+    assert report["takes"]["measured_takes_observed"] == 0
+    assert report["status"] == "UNPROVEN"
 
 
 def test_rtmp_receiver_clock_mismatch_and_packet_identity_are_rejected():

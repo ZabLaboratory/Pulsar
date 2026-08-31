@@ -17,11 +17,11 @@ interpolation over the sorted sample values; the rank is `(n - 1) * q`.
 | `encoder_input_raw` | `ProgramView` / `encoder_input` | First valid Program frame received at the encoder/raw input. | AC-07, p95 `<=50 ms` |
 | `directshow_return` | `ProgramReturn` / `DirectShow` | First valid Program frame observed by the DirectShow return consumer. | AC-08, p95 `<=75 ms` |
 | `encoded_first_packet` | `EncoderOutput` / `encoder_callback` | First encoded video packet handed to the encoder-output callback, before any network or RTMP receiver. It is auxiliary only. | Diagnostic; never AC-12 |
-| `rtmp_first_packet` | `RTMP` / `receiver` | First video packet observed by the dedicated FFmpeg loopback receiver/demux after the atomic Take. Its video-packet index must equal the producer index and its rational PTS/DTS must preserve one calibrated FLV mux offset for the whole stream. | AC-12, p95 `<=15 ms` |
+| `rtmp_first_packet` | `RTMP` / `receiver` | First video packet observed by the dedicated FFmpeg loopback receiver/demux. It must be the same packet as the producer callback: packet index, frame/PTS identity and rational PTS/DTS mux offset are checked. | AC-12a/b |
 | `decoded_first_frame` | `RTMP` / `decoder` | First decoded frame, diagnostic only. | No SLO |
 | `antenna_first_frame` | `Antenna` / `antenna` | First antenna/player frame, diagnostic only. | No SLO |
 
-The latency clock starts at
+The AC-12b latency clock starts at
 `TakeAccepted.observed_at_monotonic_ns`. A valid observation is admitted only
 when it is post-commit, has the same `runtime_instance_id`, `command_id`,
 `intent_id`, and post-commit `revisions`, and has frame ID/PTS greater than or
@@ -31,6 +31,17 @@ the commit are retained as diagnostics and excluded from the percentile.
 The DirectShow result is never substituted with the raw result. RTMP and
 decoded/player results are also separate, so a decoder delay cannot be
 misreported as a Cut failure or hidden by a fast first packet.
+
+AC-12 is split into two required views over the same packet set. AC-12a is the
+transport boundary from `packet_callback_monotonic_ns` to the explicit
+`receiver_observed_normalized_ns`, with the declared receiver clock bound
+added to p95; its conservative p95 must remain `<=15 ms`. AC-12b is the full
+`TakeAccepted` to normalized receiver path. It publishes count, p50, p95,
+p99 and max, plus the six distributions
+`TakeAccepted->CTS`, `CTS->FER`, `FER->FERC`, `FERC->PIR`,
+`PIR->callback`, and `callback->receiver`. AC-12b has no additional latency
+threshold in this revision, but it is mandatory: missing, partial or
+ambiguous AC-12b evidence leaves AC-12 `UNPROVEN`.
 
 ## Trace contract
 
@@ -85,7 +96,10 @@ An observation record has the following required fields (plus optional
 `frame_hash`, packet metadata, clock metadata, and `notes`). For
 `rtmp_first_packet`, `packet_index`, `packet_pts`, `packet_dts`,
 `packet_timebase_num`, `packet_timebase_den`, `packet_identity`,
-`clock_source`, `clock_offset_ns`, and `clock_bound_ns` are mandatory.
+`clock_source`, `clock_offset_ns`, and `clock_bound_ns` are mandatory. A
+current acceptance trace additionally carries
+`receiver_observed_normalized_ns`; it is the receiver timestamp after the
+calibrated clock offset and must equal the observation's normalized timestamp.
 
 ```json
 {
@@ -143,8 +157,9 @@ same video packet: `packet_cts_monotonic_ns` (composition),
 `packet_pir_monotonic_ns` (A/V interleave request), plus
 `packet_callback_monotonic_ns` on entry into Pulsar's callback. The analyzer reports the
 three sub-stage distributions separately under `encoder_pipeline`. These
-fields explain where latency accumulates; they do not replace the receiver
-boundary and cannot relax AC-12.
+fields explain where latency accumulates. Together with the normalized
+receiver timestamp they form AC-12a/b only when the packet identity is the
+same; callback-only evidence cannot satisfy AC-12.
 
 Pulsar boots libobs audio with a fixed 20 ms buffer through
 `obs_reset_audio2`. This is the engine's live-production policy: the legacy
@@ -177,15 +192,18 @@ text is emitted only after the bounded DirectShow, RTMP and Pulsar cleanup
 paths have run, so a strict stderr supervisor cannot interrupt child reaping.
 
 The receiver timestamp is the time FFmpeg's demux log is observed by the
-driver in the QPC-compatible monotonic domain. It is a receiver/demux
-measurement, not a wire-level timestamp and not a decoded or antenna/player
-latency guarantee.
+driver, normalized into the QPC-compatible runtime monotonic domain. The
+`receiver_observed_normalized_ns` field makes that conversion explicit. It is
+a receiver/demux measurement, not a wire-level timestamp and not a decoded or
+antenna/player latency guarantee.
 
-The RTMP p95 gate is conservative: the report exposes the raw receiver p95,
-the calibrated clock_bound_ns converted to milliseconds, and
-p95_conservative_ms = p95_ms + clock_bound_ms. AC-12 passes only when the
-conservative value is <=15 ms; the declared clock uncertainty cannot be
-silently ignored.
+The AC-12a p95 gate is conservative: the report exposes the callback-to-
+receiver p95, the calibrated `clock_bound_ns` converted to milliseconds, and
+`p95_conservative_ms = p95_ms + clock_bound_ms`. AC-12a passes only when the
+conservative value is `<=15 ms`; the declared clock uncertainty cannot be
+silently ignored. AC-12b's p95 is reported for diagnosis and has no threshold
+in this revision. The parser never pools packets between codecs, sessions or
+different Take identities.
 
 Resource samples use `sample_mode=reference` and `sample_mode=dual_lane` and
 record `frame_render_ms`, `resident_bytes`, `process_cpu_percent`,
