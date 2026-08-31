@@ -1214,6 +1214,11 @@ class PulsarProcess:
         env["PULSAR_PASSWORD"] = self.password
         env["PULSAR_RECORD_DIR"] = str(self.record_dir)
         env["PULSAR_VIDEO_ENCODER"] = self.encoder
+        # The inherited shutdown-control acknowledgement is keyed by this
+        # identity in traced and non-traced runs alike. Export it before the
+        # trace-only block so a normal smoke cannot wait for an ID the child
+        # was never given.
+        env["PULSAR_RUNTIME_INSTANCE_ID"] = self.runtime_id
         # Make the normal canary opt in explicitly.  This keeps a caller's
         # ambient disable flag from silently changing the intended topology,
         # while the reference phase below deliberately overrides it with the
@@ -1227,7 +1232,6 @@ class PulsarProcess:
                     "40-character lowercase candidate SHA"
                 )
             env["PULSAR_TRACE_PATH"] = str(self.trace_path)
-            env["PULSAR_RUNTIME_INSTANCE_ID"] = self.runtime_id
             env["PULSAR_TRACE_SESSION_ID"] = f"{self.runtime_id}-{self.encoder}"
             env["PULSAR_BUILD_REVISION"] = self.build_revision
             env["PULSAR_TRACE_HOST"] = _valid_hardware_label(self.trace_host, "host")

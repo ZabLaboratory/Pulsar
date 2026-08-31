@@ -863,3 +863,11 @@ def test_teardown_drains_in_flight_swap_before_destroying_views() -> None:
     assert "obs_view_remove(programView)" not in teardown
     assert "obs_view_destroy(programView)" not in teardown
     assert "dualLaneCutPending.store(false);" in teardown
+
+
+def test_non_traced_spawn_exports_shutdown_runtime_identity() -> None:
+    source = (_ROOT / "scripts/probe-dual-lane.py").read_text(encoding="utf-8")
+    spawn_at = source.index("    def spawn(self) -> None:")
+    trace_at = source.index("        if self.trace_path is not None:", spawn_at)
+    export = 'env["PULSAR_RUNTIME_INSTANCE_ID"] = self.runtime_id'
+    assert source.index(export, spawn_at) < trace_at
