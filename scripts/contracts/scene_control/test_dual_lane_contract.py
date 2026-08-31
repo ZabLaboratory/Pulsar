@@ -884,3 +884,13 @@ def test_non_traced_drive_initializes_optional_trace_receiver() -> None:
 def test_probe_websockets_accept_full_resolution_screenshot_payloads() -> None:
     source = (_ROOT / "scripts/probe-dual-lane.py").read_text(encoding="utf-8")
     assert source.count('subprotocols=["obswebsocket.json"], open_timeout=15, max_size=2**24') == 2
+
+
+def test_traced_probe_leases_exact_directshow_module_per_user() -> None:
+    source = (_ROOT / "scripts/probe-dual-lane.py").read_text(encoding="utf-8")
+    lease = source[source.index("class DirectShowUserRegistrationLease:") :]
+    assert "HKEY_CURRENT_USER" in lease
+    assert "HKEY_LOCAL_MACHINE" not in lease
+    assert '"obs-virtualcam-module64.dll"' in lease
+    assert "directshow_lease.install()" in source
+    assert source.index("process.shutdown()") < source.index("directshow_lease.restore()")

@@ -116,6 +116,9 @@ import zlib
 from dataclasses import dataclass, field
 from typing import Any, Mapping, cast
 
+if os.name == "nt":
+    import winreg
+
 try:
     import websockets
 except ImportError:
@@ -141,6 +144,14 @@ WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 INT64_MAX = (1 << 63) - 1
 TAKE_FREEZE_HANDOFF_BUDGET_NS = 2_000_000_000
 WIRE_CLOCK_QPC_MAX_DELTA_NS = 5_000_000
+
+PROGRAM_RETURN_CLSID = "{8C4E159D-3F60-4A42-9A6D-7F3A5B21E490}"
+VIDEO_INPUT_CATEGORY_CLSID = "{860BB310-5D01-11D0-BD3B-00A0C911CE86}"
+PROGRAM_RETURN_FILTER_DATA = bytes.fromhex(
+    "0200000000002000010000000000000030706933080000000000000001000000"
+    "0000000000000000307479330000000038000000480000007669647300001000"
+    "800000AA00389B714E56313200001000800000AA00389B71"
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_EXE = (
@@ -466,6 +477,126 @@ class ProbeFailure(RuntimeError):
 
 class ProbeSkip(RuntimeError):
     """A reproducible environment limitation, not a product pass/fail."""
+
+
+class DirectShowUserRegistrationLease:
+    """Temporarily route ProgramReturn COM activation to this exact artifact."""
+
+    _CLSID_PATH = rf"Software\Classes\CLSID\{PROGRAM_RETURN_CLSID}\InprocServer32"
+    _INSTANCE_PATH = (
+        rf"Software\Classes\CLSID\{VIDEO_INPUT_CATEGORY_CLSID}\Instance\{PROGRAM_RETURN_CLSID}"
+    )
+
+    def __init__(self, exe: pathlib.Path) -> None:
+        if os.name != "nt":
+            raise ProbeSkip("ProgramReturn DirectShow registration lease requires Windows")
+        rundir = exe.resolve().parents[2]
+        self.dll = rundir / "data" / "obs-plugins" / "win-dshow" / "obs-virtualcam-module64.dll"
+        self._snapshots: dict[str, Any] = {}
+        self.installed = False
+
+    @staticmethod
+    def _snapshot(path: str) -> Any:
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, path)
+        except FileNotFoundError:
+            return None
+        try:
+            values = []
+            index = 0
+            while True:
+                try:
+                    values.append(winreg.EnumValue(key, index))
+                    index += 1
+                except OSError:
+                    break
+            children = {}
+            index = 0
+            while True:
+                try:
+                    name = winreg.EnumKey(key, index)
+                    children[name] = DirectShowUserRegistrationLease._snapshot(path + "\\" + name)
+                    index += 1
+                except OSError:
+                    break
+            return values, children
+        finally:
+            winreg.CloseKey(key)
+
+    @staticmethod
+    def _delete(path: str) -> None:
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, path)
+        except FileNotFoundError:
+            return
+        try:
+            children = []
+            index = 0
+            while True:
+                try:
+                    children.append(winreg.EnumKey(key, index))
+                    index += 1
+                except OSError:
+                    break
+        finally:
+            winreg.CloseKey(key)
+        for child in children:
+            DirectShowUserRegistrationLease._delete(path + "\\" + child)
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+
+    @staticmethod
+    def _restore(path: str, snapshot: Any) -> None:
+        if snapshot is None:
+            return
+        values, children = snapshot
+        key = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, path, access=winreg.KEY_WRITE)
+        try:
+            for name, value, kind in values:
+                winreg.SetValueEx(key, name, 0, kind, value)
+        finally:
+            winreg.CloseKey(key)
+        for name, child in children.items():
+            DirectShowUserRegistrationLease._restore(path + "\\" + name, child)
+
+    def install(self) -> None:
+        if not self.dll.is_file():
+            raise ProbeSkip(f"exact ProgramReturn DirectShow module is missing: {self.dll}")
+        for path in (self._CLSID_PATH, self._INSTANCE_PATH):
+            self._snapshots[path] = self._snapshot(path)
+            self._delete(path)
+        self.installed = True
+        try:
+            inproc = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, self._CLSID_PATH, access=winreg.KEY_WRITE)
+            try:
+                winreg.SetValueEx(inproc, "", 0, winreg.REG_SZ, str(self.dll))
+                winreg.SetValueEx(inproc, "ThreadingModel", 0, winreg.REG_SZ, "Both")
+            finally:
+                winreg.CloseKey(inproc)
+            instance = winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, self._INSTANCE_PATH, access=winreg.KEY_WRITE)
+            try:
+                winreg.SetValueEx(instance, "FriendlyName", 0, winreg.REG_SZ, "Pulsar Program Return")
+                winreg.SetValueEx(instance, "CLSID", 0, winreg.REG_SZ, PROGRAM_RETURN_CLSID)
+                winreg.SetValueEx(instance, "FilterData", 0, winreg.REG_BINARY, PROGRAM_RETURN_FILTER_DATA)
+            finally:
+                winreg.CloseKey(instance)
+        except OSError:
+            self.restore()
+            raise
+        print(f"   DirectShow per-user lease: exact_module={self.dll}")
+
+    def restore(self) -> None:
+        if not self.installed:
+            return
+        failures = []
+        for path in (self._INSTANCE_PATH, self._CLSID_PATH):
+            try:
+                self._delete(path)
+                self._restore(path, self._snapshots[path])
+            except OSError as exc:
+                failures.append(f"{path}: {exc}")
+        self.installed = False
+        if failures:
+            raise ProbeFailure("DirectShow per-user registration cleanup failed: " + "; ".join(failures))
 
 
 def redact_log_line(line: str) -> str:
@@ -4056,9 +4187,13 @@ def run(args: argparse.Namespace) -> int:
             process.rtmp_final_trace_path = final_trace_path
         result = EXIT_FAIL
         cleanup_failure: ProbeFailure | None = None
+        directshow_lease: DirectShowUserRegistrationLease | None = None
         failure_message: str | None = None
         skip_message: str | None = None
         try:
+            if trace_path is not None and args.resource_mode != "reference":
+                directshow_lease = DirectShowUserRegistrationLease(args.exe)
+                directshow_lease.install()
             if args.trace_append:
                 if final_trace_path is None or not final_trace_path.is_file():
                     raise ProbeFailure(
@@ -4162,6 +4297,11 @@ def run(args: argparse.Namespace) -> int:
                 process.shutdown()
             except ProbeFailure as exc:
                 cleanup_failure = exc
+            if directshow_lease is not None:
+                try:
+                    directshow_lease.restore()
+                except ProbeFailure as exc:
+                    cleanup_failure = cleanup_failure or exc
             if cef_server is not None:
                 cef_server.close()
         diagnostic_path: pathlib.Path | None = None
