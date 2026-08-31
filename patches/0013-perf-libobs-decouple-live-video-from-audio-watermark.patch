@@ -1,0 +1,71 @@
+From 579f97b17e3eaa9e23120eb8b51351fa0e13a918 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 31 Aug 2026 21:38:38 +0200
+Subject: [PATCH] perf(libobs): decouple live video from audio watermark
+
+In opt-in low-latency interleave mode, admit video once its video peers are ordered while retaining encoded audio and its media timestamps.
+
+Agent-Role: eleven
+Agent-Thread: 01a045e2-996f-7913-99f0-2cd237d3a6f8
+Work-Unit: pulsar-ac12b-build-optimization-20260831
+ADR-Revision: amendment-1-draft-r1-ac12-boundaries-20260831
+Evidence: x264 diagnostic p95 FERC-to-PIR 95.85ms after queue drain
+---
+ libobs/obs-output.c | 18 ++++++++++++++++++
+ libobs/obs.h        |  6 +++---
+ 2 files changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/libobs/obs-output.c b/libobs/obs-output.c
+index 5e2294033..1aefd75ae 100644
+--- a/libobs/obs-output.c
++++ b/libobs/obs-output.c
+@@ -2204,10 +2204,28 @@ static void apply_ept_offsets(struct obs_output *output)
+ static inline size_t count_streamable_frames(struct obs_output *output)
+ {
+ 	size_t eligible = 0;
++	const bool low_latency = os_atomic_load_bool(&output->low_latency_interleave);
+ 
+ 	for (size_t idx = 0; idx < output->interleaved_packets.num; idx++) {
+ 		struct encoder_packet *pkt = &output->interleaved_packets.array[idx];
+ 
++		/* A low-latency live output may release video as soon as every
++		 * other video track has advanced. Audio remains timestamped and
++		 * interleaved, but its capture/encoder delay no longer blocks a
++		 * Program cut whose audio route did not change. */
++		if (low_latency && pkt->type == OBS_ENCODER_VIDEO) {
++			bool higher_video = true;
++			for (size_t i = 0; i < MAX_OUTPUT_VIDEO_ENCODERS; i++) {
++				if (!output->video_encoders[i] || i == pkt->track_idx)
++					continue;
++				higher_video = higher_video && output->highest_video_ts[i] > pkt->dts_usec;
++			}
++			if (!higher_video)
++				break;
++			eligible++;
++			continue;
++		}
++
+ 		/* Only count an interleaved packet as streamable if there are packets of the opposing type and of a
+ 		 * higher timestamp in the interleave buffer. This ensures that the timestamps are monotonic. */
+ 		if (!has_higher_opposing_ts(output, pkt))
+diff --git a/libobs/obs.h b/libobs/obs.h
+index a34d110f2..dea45016c 100644
+--- a/libobs/obs.h
++++ b/libobs/obs.h
+@@ -1978,9 +1978,9 @@ EXPORT void obs_output_set_delay(obs_output_t *output, uint32_t delay_sec, uint3
+  * Enables low-latency packet interleaving for an encoded output.
+  *
+  * The default interleaver deliberately retains a bounded backlog. Low-latency
+- * mode drains every packet whose opposing stream has already advanced beyond
+- * its DTS, preserving monotonic ordering while avoiding that standing queue.
+- * This does not bypass audio, reorder packets, or change encoder settings.
++ * mode drains every timestamp-safe packet and allows each video track to
++ * advance without waiting for the audio watermark. Audio remains encoded and
++ * timestamped on its original media timeline; no encoder setting is changed.
+  */
+ EXPORT void obs_output_set_low_latency_interleave(obs_output_t *output, bool enabled);
+ 
+-- 
+2.54.0.windows.1
+
