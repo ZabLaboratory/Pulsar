@@ -1,4 +1,4 @@
-From d95a6946f2c8a847c35348a3f18602da2b9ebcfc Mon Sep 17 00:00:00 2001
+From af1f881f188797039ba7566d3f6a5e9d314fa844 Mon Sep 17 00:00:00 2001
 From: ClodoCapeo <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Tue, 1 Sep 2026 18:09:46 +0200
 Subject: [PATCH] fix(win-dshow): harden latest-frame return queue
@@ -6,7 +6,7 @@ Subject: [PATCH] fix(win-dshow): harden latest-frame return queue
 Agent-Role: forge
 Agent-Thread: /root/pulsar_queue_safety
 Work-Unit: pulsar-return-queue-safety-20260901
-Evidence: seqlock-return-queue, nv12-stride-validation
+Evidence: seqlock-return-queue, nv12-stride-validation, fixed-width-metadata-abi
 ---
  .../virtualcam-module/virtualcam-filter.cpp   |  22 ++-
  .../virtualcam-module/virtualcam-filter.hpp   |   4 +-
@@ -426,7 +426,7 @@ index 8a1257e3d..bb2a69260 100644
  
  bool video_queue_read(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_t *ts)
 diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.h b/shared/obs-shared-memory-queue/shared-memory-queue.h
-index 029e73084..c734bec8f 100644
+index 029e73084..a48db9f63 100644
 --- a/shared/obs-shared-memory-queue/shared-memory-queue.h
 +++ b/shared/obs-shared-memory-queue/shared-memory-queue.h
 @@ -19,7 +19,8 @@ typedef struct nv12_scale nv12_scale_t;
@@ -435,7 +435,7 @@ index 029e73084..c734bec8f 100644
  #define VIDEO_QUEUE_IDENTIFIER_CAPACITY 129
 -#define VIDEO_QUEUE_METADATA_VERSION 1U
 +#define VIDEO_QUEUE_METADATA_VERSION 2U
-+#define VIDEO_QUEUE_METADATA_ABI_SIZE 584U
++#define VIDEO_QUEUE_METADATA_ABI_SIZE 576U
  struct video_queue_frame_metadata {
  	uint64_t timestamp;
  	uint64_t frame_id;
