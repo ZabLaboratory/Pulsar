@@ -24,6 +24,10 @@ from . import validate_event
 
 ROOT = Path(__file__).resolve().parents[3]
 PATCH = ROOT / "patches" / "0011-feat-runtime-telemetry-producer.patch"
+PIPELINE_PATCH = ROOT / "patches" / "0016-feat-libobs-expose-video-pipeline-stage-telemetry.patch"
+PREVIEW_FASTPATH_PATCH = ROOT / "patches" / "0017-perf-libobs-pipeline-borrowed-preview-publication.patch"
+PIPELINE_ACCOUNTING_PATCH = ROOT / "patches" / "0018-feat-libobs-close-video-mix-stage-accounting.patch"
+PROGRAM_RETURN_FASTPATH_PATCH = ROOT / "patches" / "0019-perf-win-dshow-pipeline-program-return-publication.patch"
 FRONTEND_CMAKE = ROOT / "plugins" / "pulsar-frontend-stub" / "CMakeLists.txt"
 WEBSOCKET_CMAKE = ROOT / "plugins" / "pulsar-websocket" / "CMakeLists.txt"
 FRONTEND_SOURCE = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
@@ -116,7 +120,9 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "streamOutput_ = streamOutput" in frontend
     assert "rtmp_load_active" in frontend
     assert "obs_output_active(streamOutput)" in frontend
-    assert "obs_add_raw_video_callback" in frontend
+    assert "obs_video_add_borrowed_callback" in frontend
+    assert "obs_video_remove_borrowed_callback" in frontend
+    assert "obs_add_raw_video_callback" not in frontend
     assert "obs_output_add_packet_callback" in frontend
     assert 'obs_source_create("browser_source", "PulsarCefWorkload"' in frontend
     assert "PULSAR_CEF_URL" in frontend
@@ -608,3 +614,99 @@ def test_driver_loopback_cef_and_frame_gate_are_executable() -> None:
     metrics = probe.analyse_frame(width, height, channels, pixels)
     assert (width, height, channels) == (3, 3, 3)
     assert probe.frame_is_nonblack(metrics, require_variance=True)
+
+
+def test_video_pipeline_stage_telemetry_is_exported_and_lane_qualified() -> None:
+    patch = PIPELINE_PATCH.read_text(encoding="utf-8")
+    frontend = FRONTEND_SOURCE.read_text(encoding="utf-8")
+    parser = TAKE_LATENCY_PROBE.read_text(encoding="utf-8")
+
+    for token in (
+        "obs_get_graphics_pipeline_stats",
+        "obs_video_get_mix_pipeline_stats",
+        "render_submit_ns",
+        "download_ns",
+        "flush_ns",
+        "output_copy_ns",
+        "tick_sources_ns",
+        "render_displays_ns",
+        "graphics_tasks_ns",
+    ):
+        assert token in patch
+    assert "source_profiler_gpu_enable(true)" in frontend
+    assert r'\"pipeline\"' in frontend
+    assert r'\"program_mix\"' in frontend
+    assert r'\"preview_mix\"' in frontend
+    assert r'\"source_profile\"' in frontend
+    assert "PIPELINE_STAGE_FIELDS" in parser
+    assert "MIX_STAGE_FIELDS" in parser
+    assert "SOURCE_PROFILE_FIELDS" in parser
+
+
+def test_preview_return_fastpath_preserves_format_and_lifetime_barriers() -> None:
+    patch = PREVIEW_FASTPATH_PATCH.read_text(encoding="utf-8")
+
+    for token in (
+        "raw_video_borrowed",
+        "borrowed_video_thread",
+        "start_borrowed_raw_video",
+        "stop_borrowed_raw_video",
+        "obs_video_add_borrowed_callback",
+        "obs_video_remove_borrowed_callback",
+        "borrowed_video_pending || video->borrowed_video_busy",
+        "borrowed_publish_ns",
+        "borrowed_wait_ns",
+        "video_output_active(video->video)",
+        "conversion->format == native->format",
+        "conversion->width == native->width",
+        "conversion->height == native->height",
+    ):
+        assert token in patch
+    assert ".raw_video_borrowed = virtual_video" in patch
+    assert "if (!output->borrowed_video_active)" in patch
+
+    frontend = FRONTEND_SOURCE.read_text(encoding="utf-8")
+    assert "obs_video_add_borrowed_callback(previewVideo, OnSceneSwitchPreviewVideoFrame, this)" in frontend
+    assert "obs_video_remove_borrowed_callback(previewVideo, OnSceneSwitchPreviewVideoFrame, this)" in frontend
+    assert "video_output_connect(previewVideo, nullptr, OnSceneSwitchPreviewVideoFrame, this)" not in frontend
+
+
+def test_program_and_preview_pipeline_accounting_has_leaf_stages_and_residuals() -> None:
+    patch = PIPELINE_ACCOUNTING_PATCH.read_text(encoding="utf-8")
+    frontend = FRONTEND_SOURCE.read_text(encoding="utf-8")
+    parser = TAKE_LATENCY_PROBE.read_text(encoding="utf-8")
+
+    for token in (
+        "render_main_ns",
+        "render_setup_ns",
+        "gpu_flush_ns",
+        "render_teardown_ns",
+        "render_scale_ns",
+        "render_convert_ns",
+        "gpu_encode_submit_ns",
+        "raw_stage_ns",
+        "borrowed_schedule_ns",
+        "obs_output_get_raw_pipeline_stats",
+    ):
+        assert token in patch
+    for token in (
+        "render_unattributed_ms",
+        "frame_unattributed_ms",
+        "return_output_callback_ms",
+        "renderResidualMs",
+        "frameResidualMs",
+    ):
+        assert token in frontend
+    assert "ACCOUNTING_COMPLETE_P95_MS" in parser
+    assert '"accounting_status"' in parser
+
+
+def test_program_return_uses_borrowed_worker_without_changing_other_outputs() -> None:
+    patch = PROGRAM_RETURN_FASTPATH_PATCH.read_text(encoding="utf-8")
+
+    assert "struct obs_output_info program_return_info" in patch
+    assert patch.count("+\t.raw_video_borrowed = virtual_video") == 1
+    assert "@@ -249,6 +249,7 @@ struct obs_output_info program_return_info" in patch
+    assert "VIDEO_FORMAT_NV12 || info->format == VIDEO_FORMAT_P010" in patch
+    assert "borrowed_frame.data[1] = borrowed_frame.data[0]" in patch
+    assert "borrowed_frame.linesize[1] = borrowed_frame.linesize[0]" in patch

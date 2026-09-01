@@ -1,0 +1,50 @@
+From d2cbe1c4d7904fcd3ff6d322f53de351dbee893f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Tue, 1 Sep 2026 15:39:30 +0200
+Subject: [PATCH] perf(win-dshow): pipeline borrowed ProgramReturn publication
+
+---
+ libobs/obs-video.c             | 11 ++++++++++-
+ plugins/win-dshow/virtualcam.c |  1 +
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/libobs/obs-video.c b/libobs/obs-video.c
+index 3e8b7b787..2baa18e12 100644
+--- a/libobs/obs-video.c
++++ b/libobs/obs-video.c
+@@ -827,9 +827,18 @@ static inline void output_borrowed_video_data(struct obs_core_video_mix *video,
+ 	if (!video->borrowed_video_initialized)
+ 		return;
+ 
++	struct video_data borrowed_frame = *input_frame;
++	const struct video_output_info *info = video_output_get_info(video->video);
++	if (info && borrowed_frame.data[0] && !borrowed_frame.data[1] &&
++	    (info->format == VIDEO_FORMAT_NV12 || info->format == VIDEO_FORMAT_P010)) {
++		borrowed_frame.data[1] = borrowed_frame.data[0] +
++					 (size_t)borrowed_frame.linesize[0] * info->height;
++		borrowed_frame.linesize[1] = borrowed_frame.linesize[0];
++	}
++
+ 	pthread_mutex_lock(&video->borrowed_video_mutex);
+ 	if (video->borrowed_video_callbacks.num) {
+-		video->borrowed_video_frame = *input_frame;
++		video->borrowed_video_frame = borrowed_frame;
+ 		video->borrowed_video_pending = true;
+ 		pthread_cond_broadcast(&video->borrowed_video_cond);
+ 	}
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index b25486fc6..62df6d62e 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -249,6 +249,7 @@ struct obs_output_info program_return_info = {
+ 	.start = virtualcam_start,
+ 	.stop = virtualcam_stop,
+ 	.raw_video = virtual_video,
++	.raw_video_borrowed = virtual_video,
+ };
+ 
+ struct obs_output_info preview_return_info = {
+-- 
+2.54.0.windows.1
+
