@@ -1,4 +1,4 @@
-From f44b0fc41f2bd7f23898c3d9b4dd0c40157a132b Mon Sep 17 00:00:00 2001
+From 86043ce91fa40151cb5ae698725a7f0950c51d51 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Tue, 1 Sep 2026 19:14:42 +0200
@@ -834,7 +834,7 @@ index 000000000..65efe46ed
 +}
 +#endif
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
-index d3293efd9..fcd69b746 100644
+index d3293efd9..e582045ec 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 +++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 @@ -54,6 +54,8 @@ VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
@@ -921,7 +921,7 @@ index d3293efd9..fcd69b746 100644
  			<< ",\"observed_at_monotonic_ns\":" << observed_at_monotonic_ns
 -			<< ",\"valid\":true,\"program_frame\":true,\"surface\":\"ProgramReturn\","
 +			<< ",\"valid\":true,\"program_frame\":" << (program_return ? "true" : "false")
-+			<< ",\"surface\":\"" << (program_return ? "ProgramReturn" : "PreviewReturn") << "\"," 
++			<< ",\"surface\":\"" << (program_return ? "ProgramReturn" : "PreviewReturn") << "\","
  			<< "\"consumer\":\"DirectShow\",\"queue_counters\":{"
  			<< "\"gap_count\":" << timing.queue_counters.gap_count
  			<< ",\"duplicate_count\":" << timing.queue_counters.duplicate_count
