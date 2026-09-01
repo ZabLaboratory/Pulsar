@@ -92,7 +92,7 @@ class _ControlAbi(ctypes.Structure):
 
 def test_patch_is_signed_and_scope_is_real_opt_in_transport() -> None:
     text = PATCH.read_text(encoding="utf-8")
-    assert text.startswith("From e1379c55167dca0632e6ac4689b9bc4c2042968b ")
+    assert text.startswith("From 86043ce91fa40151cb5ae698725a7f0950c51d51 ")
     for marker in (
         "Agent-Role: forge",
         "Agent-Thread: /root/pulsar_d3d11_return",
