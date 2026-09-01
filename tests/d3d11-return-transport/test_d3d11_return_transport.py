@@ -92,7 +92,7 @@ class _ControlAbi(ctypes.Structure):
 
 def test_patch_is_signed_and_scope_is_real_opt_in_transport() -> None:
     text = PATCH.read_text(encoding="utf-8")
-    assert text.startswith("From 2cca7d45fa34e7071bf95fd3db3b77f944f45968 ")
+    assert text.startswith("From cec25f31d5e8aaef5756459bb88b4f365e8685a4 ")
     for marker in (
         "Agent-Role: forge",
         "Agent-Thread: /root/pulsar_d3d11_return",
@@ -104,6 +104,8 @@ def test_patch_is_signed_and_scope_is_real_opt_in_transport() -> None:
         "D3D11_RESOURCE_MISC_SHARED_NTHANDLE",
         "#include <d3d11_1.h>",
         "d3d11_transport_requested()",
+        "queue_mapping_live",
+        "VirtualQuery",
         "CreateSharedHandle",
         "DuplicateHandle",
         "AcquireSync(1, kWaitMs)",
