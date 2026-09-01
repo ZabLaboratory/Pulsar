@@ -34,6 +34,26 @@ int main()
     PULSAR_CHECK(fade.metrics().start_frame_id == 10);
     PULSAR_CHECK(fade.metrics().end_frame_id == 25);
 
+    // A two-frame finalization lead makes the public duration end-to-end:
+    // one full FinalQueued tick remains abortable and the following atomic
+    // callback lands on the requested terminal frame.  The animation itself
+    // keeps the original requested duration in libobs.
+    Controller compensated;
+    PULSAR_CHECK(compensated.begin(Kind::Fade, 200, true, 34));
+    PULSAR_CHECK(compensated.metrics().requested_duration_ms == 200);
+    PULSAR_CHECK(compensated.metrics().finalization_lead_ms == 34);
+    PULSAR_CHECK(compensated.started(1, 1'000'000'000));
+    compensated.set_start_monotonic_ns(2'000'000'000);
+    PULSAR_CHECK(!compensated.deadline_reached(2'165'999'999));
+    PULSAR_CHECK(compensated.deadline_reached(2'166'000'000));
+
+    Controller boundedLead;
+    PULSAR_CHECK(boundedLead.begin(Kind::Fade, 50, true, 100));
+    PULSAR_CHECK(boundedLead.metrics().finalization_lead_ms == 50);
+    PULSAR_CHECK(boundedLead.started(1, 1));
+    boundedLead.set_start_monotonic_ns(10);
+    PULSAR_CHECK(boundedLead.deadline_reached(10));
+
     // The runtime campaign reports aggregates from the controller, rather
     // than requiring a post-hoc parser to infer them from one sample. Vary
     // durations and frame counts so each percentile is exercised.

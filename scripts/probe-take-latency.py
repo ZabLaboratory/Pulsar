@@ -125,6 +125,9 @@ RESOURCE_METRICS = (
     "process_cpu_percent",
     "host_gpu_percent",
     "callback_backlog_estimate",
+    "dropped_frames",
+    "missed_frames",
+    "encode_time_ms",
     "encoder_utilization_percent",
 )
 
@@ -216,7 +219,14 @@ RESOURCE_REQUIRED = {
     "producer_count",
     *RESOURCE_METRICS,
 }
-RESOURCE_OPTIONAL = {"encoder_active", "encoder_family", "gpu_memory_bytes", "rtmp_load_active", "notes"}
+RESOURCE_OPTIONAL = {
+    "encoder_active",
+    "encoder_family",
+    "gpu_memory_bytes",
+    "rtmp_load_active",
+    "encode_time_samples",
+    "notes",
+}
 RESOURCE_ALLOWED = RESOURCE_REQUIRED | RESOURCE_OPTIONAL
 
 RTMP_RECEIVER_REQUIRED = {
@@ -779,6 +789,21 @@ def _validate_resource(value: Any, session: Mapping[str, Any], *, line: int | No
             )
     for key in RESOURCE_METRICS:
         _number(obj[key], f"resource.{key}", line=line)
+    for key in ("dropped_frames", "missed_frames"):
+        if not isinstance(obj[key], int) or isinstance(obj[key], bool) or obj[key] < 0:
+            raise EvidenceError("SCHEMA_INVALID", f"resource.{key} must be a non-negative integer", line=line)
+    if obj["encode_time_ms"] < 0:
+        raise EvidenceError("SCHEMA_INVALID", "resource.encode_time_ms must be non-negative", line=line)
+    if "encode_time_samples" in obj:
+        encode_samples = _integer(obj["encode_time_samples"], "resource.encode_time_samples", line=line)
+        if encode_samples < 0:
+            raise EvidenceError("SCHEMA_INVALID", "resource.encode_time_samples must be non-negative", line=line)
+        if encode_samples == 0 and obj["encode_time_ms"] != 0:
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "resource.encode_time_ms must be zero when encode_time_samples is zero",
+                line=line,
+            )
     if "gpu_memory_bytes" in obj:
         _integer(obj["gpu_memory_bytes"], "resource.gpu_memory_bytes", line=line)
     return result

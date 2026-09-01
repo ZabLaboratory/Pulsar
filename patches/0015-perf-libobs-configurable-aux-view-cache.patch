@@ -1,0 +1,126 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Tue, 1 Sep 2026 12:20:00 +0200
+Subject: [PATCH] perf(libobs): make auxiliary view cache configurable
+
+Preserve the historical six-frame cache for every existing caller while
+allowing a latency-sensitive auxiliary view to select a smaller cache.
+
+Agent-Role: eleven
+Agent-Thread: 01a045e2-996f-7913-99f0-2cd237d3a6f8
+Work-Unit: pulsar-dual-lane-capacity-optimization-20260901
+Issue: fastpath-no-issue
+ADR-Revision: draft-r2-dual-lane-20260828
+Evidence: cache=3 reduced measured dual-lane resident delta by 9365504 bytes
+---
+ libobs/obs-internal.h |  1 +
+ libobs/obs-view.c     |  9 +++++++--
+ libobs/obs.c          | 15 ++++++++++-----
+ libobs/obs.h          |  3 +++
+ 4 files changed, 21 insertions(+), 7 deletions(-)
+
+diff --git a/libobs/obs-internal.h b/libobs/obs-internal.h
+index 3f63e86d6..d038b9524 100644
+--- a/libobs/obs-internal.h
++++ b/libobs/obs-internal.h
+@@ -402,6 +402,7 @@ struct obs_core_video_mix {
+ };
+ 
+ extern struct obs_core_video_mix *obs_create_video_mix(struct obs_video_info *ovi);
++extern struct obs_core_video_mix *obs_create_video_mix_with_cache(struct obs_video_info *ovi, size_t cache_size);
+ extern void obs_free_video_mix(struct obs_core_video_mix *video);
+ 
+ struct obs_core_video {
+diff --git a/libobs/obs-view.c b/libobs/obs-view.c
+index b6d8e9588..59742d77f 100644
+--- a/libobs/obs-view.c
++++ b/libobs/obs-view.c
+@@ -314,10 +314,15 @@ video_t *obs_view_add(obs_view_t *view)
+ 
+ video_t *obs_view_add2(obs_view_t *view, struct obs_video_info *ovi)
+ {
+-	if (!view || !ovi)
++	return obs_view_add3(view, ovi, 6);
++}
++
++video_t *obs_view_add3(obs_view_t *view, struct obs_video_info *ovi, size_t cache_size)
++{
++	if (!view || !ovi || cache_size == 0)
+ 		return NULL;
+ 
+-	struct obs_core_video_mix *mix = obs_create_video_mix(ovi);
++	struct obs_core_video_mix *mix = obs_create_video_mix_with_cache(ovi, cache_size);
+ 	if (!mix) {
+ 		return NULL;
+ 	}
+diff --git a/libobs/obs.c b/libobs/obs.c
+index 8c52ec52f..da4d673a3 100644
+--- a/libobs/obs.c
++++ b/libobs/obs.c
+@@ -30,7 +30,7 @@ static THREAD_LOCAL bool is_ui_thread = false;
+ extern void add_default_module_paths(void);
+ extern char *find_libobs_data_file(const char *file);
+ 
+-static inline void make_video_info(struct video_output_info *vi, struct obs_video_info *ovi)
++static inline void make_video_info(struct video_output_info *vi, struct obs_video_info *ovi, size_t cache_size)
+ {
+ 	vi->name = "video";
+ 	vi->format = ovi->output_format;
+@@ -40,7 +40,7 @@ static inline void make_video_info(struct video_output_info *vi, struct obs_vide
+ 	vi->height = ovi->output_height;
+ 	vi->range = ovi->range;
+ 	vi->colorspace = ovi->colorspace;
+-	vi->cache_size = 6;
++	vi->cache_size = cache_size;
+ }
+ 
+ static inline void calc_gpu_conversion_sizes(struct obs_core_video_mix *video)
+@@ -602,13 +602,13 @@ static inline void set_video_matrix(struct obs_core_video_mix *video, struct vid
+ 	memcpy(video->color_matrix, &mat, sizeof(float) * 16);
+ }
+ 
+-static int obs_init_video_mix(struct obs_video_info *ovi, struct obs_core_video_mix *video)
++static int obs_init_video_mix(struct obs_video_info *ovi, struct obs_core_video_mix *video, size_t cache_size)
+ {
+ 	struct video_output_info vi;
+ 
+ 	pthread_mutex_init_value(&video->gpu_encoder_mutex);
+ 
+-	make_video_info(&vi, ovi);
++	make_video_info(&vi, ovi, cache_size);
+ 	video->ovi = *ovi;
+ 
+ 	/* main view graphics thread drives all frame output,
+@@ -656,9 +656,14 @@ static int obs_init_video_mix(struct obs_video_info *ovi, struct obs_core_video_
+ }
+ 
+ struct obs_core_video_mix *obs_create_video_mix(struct obs_video_info *ovi)
++{
++	return obs_create_video_mix_with_cache(ovi, 6);
++}
++
++struct obs_core_video_mix *obs_create_video_mix_with_cache(struct obs_video_info *ovi, size_t cache_size)
+ {
+ 	struct obs_core_video_mix *video = bzalloc(sizeof(struct obs_core_video_mix));
+-	if (obs_init_video_mix(ovi, video) != OBS_VIDEO_SUCCESS) {
++	if (obs_init_video_mix(ovi, video, cache_size) != OBS_VIDEO_SUCCESS) {
+ 		bfree(video);
+ 		video = NULL;
+ 	}
+diff --git a/libobs/obs.h b/libobs/obs.h
+index dea45016c..883727447 100644
+--- a/libobs/obs.h
++++ b/libobs/obs.h
+@@ -1015,6 +1015,9 @@ EXPORT video_t *obs_view_add(obs_view_t *view);
+ /** Adds a view to the main render loop, with custom video settings */
+ EXPORT video_t *obs_view_add2(obs_view_t *view, struct obs_video_info *ovi);
+ 
++/** Adds a view with custom video settings and frame cache depth. */
++EXPORT video_t *obs_view_add3(obs_view_t *view, struct obs_video_info *ovi, size_t cache_size);
++
+ /** Removes a view from the main render loop */
+ EXPORT void obs_view_remove(obs_view_t *view);
+ 
+-- 
+2.54.0.windows.1
