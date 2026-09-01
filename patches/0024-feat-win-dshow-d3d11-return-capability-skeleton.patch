@@ -11,7 +11,7 @@ Evidence: bounded keyed-mutex ring, NT handle duplication, CPU fallback
 ---
  plugins/win-dshow/CMakeLists.txt              |   3 +
  .../virtualcam-module/CMakeLists.txt          |   4 +
- .../d3d11-return-transport.cpp                | 632 ++++++++++++++++++
+ .../d3d11-return-transport.cpp                | 633 ++++++++++++++++++
  .../d3d11-return-transport.hpp                | 126 ++++
  .../virtualcam-module/virtualcam-filter.cpp   |  64 +-
  .../virtualcam-module/virtualcam-filter.hpp   |  16 +
@@ -68,12 +68,13 @@ new file mode 100644
 index 000000000..9038b1a47
 --- /dev/null
 +++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
-@@ -0,0 +1,632 @@
+@@ -0,0 +1,633 @@
 +#include "d3d11-return-transport.hpp"
 +
 +#include "../../../shared/obs-shared-memory-queue/shared-memory-queue.h"
 +
 +#include <d3d11.h>
++#include <d3d11_1.h>
 +#include <dxgi1_2.h>
 +#include <windows.h>
 +#include <wrl/client.h>
@@ -701,6 +702,7 @@ index 000000000..9038b1a47
 +{
 +	return consumer ? consumer->control : nullptr;
 +}
++}
 diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
 new file mode 100644
 index 000000000..65efe46ed
@@ -1063,5 +1065,3 @@ index dfe23b476..31c42f6d4 100644
  struct obs_output_info virtualcam_info = {
 -- 
 2.54.0.windows.1
-
-
