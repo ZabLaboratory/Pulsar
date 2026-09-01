@@ -143,7 +143,7 @@ WAIVERS = {
             ),
             (
                 "plugins/pulsar-frontend-stub/src/pulsar-frontend-stub.cpp",
-                r"obs_frontend_set_transition_duration[\s\S]{0,600}?obs_source_update\(dualLaneStingerTransition",
+                r"obs_frontend_set_transition_duration[\s\S]{0,1200}?obs_source_update\(dualLaneStingerTransition",
             ),
         ],
     },
