@@ -157,6 +157,7 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
     os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = f"transition-boundary-{transition}-{phase}"
     if transition == "Stinger":
         os.environ["PULSAR_STINGER_ASSET"] = str(ROOT / "scripts" / "assets" / "stinger-demo.webm")
+    transition_name = "DualLaneStinger" if transition == "Stinger" else transition
     runtime = probe.PulsarProcess(exe, "x264", record_dir, runtime_id=os.environ["PULSAR_RUNTIME_INSTANCE_ID"])
     runtime.spawn()
     try:
@@ -170,7 +171,7 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
                 ("SetCurrentProgramScene", "boundary-program", {"sceneName": probe.SCENE_A}),
                 ("SetStudioModeEnabled", "boundary-studio", {"studioModeEnabled": True}),
                 ("SetCurrentPreviewScene", "boundary-preview", {"sceneName": probe.SCENE_B}),
-                ("SetCurrentSceneTransition", "boundary-transition", {"transitionName": transition}),
+                ("SetCurrentSceneTransition", "boundary-transition", {"transitionName": transition_name}),
                 ("SetCurrentSceneTransitionDuration", "boundary-duration", {"transitionDuration": 200}),
             ):
                 probe.assert_success(await probe.request(inbox, ws, request_type, request_id, data), request_type)
