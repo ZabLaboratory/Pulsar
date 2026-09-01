@@ -1,4 +1,4 @@
-From 86043ce91fa40151cb5ae698725a7f0950c51d51 Mon Sep 17 00:00:00 2001
+From 65339149df0bfc36a45a14b5ab75cfef4f738684 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Tue, 1 Sep 2026 19:14:42 +0200
@@ -13,10 +13,10 @@ Evidence: bounded keyed-mutex ring, NT handle duplication, CPU fallback
  .../virtualcam-module/CMakeLists.txt          |   4 +
  .../d3d11-return-transport.cpp                | 632 ++++++++++++++++++
  .../d3d11-return-transport.hpp                | 126 ++++
- .../virtualcam-module/virtualcam-filter.cpp   |  64 +-
+ .../virtualcam-module/virtualcam-filter.cpp   |  44 +-
  .../virtualcam-module/virtualcam-filter.hpp   |  16 +
  plugins/win-dshow/virtualcam.c                |  23 +-
- 7 files changed, 859 insertions(+), 9 deletions(-)
+ 7 files changed, 842 insertions(+), 6 deletions(-)
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
 
@@ -834,7 +834,7 @@ index 000000000..65efe46ed
 +}
 +#endif
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
-index d3293efd9..e582045ec 100644
+index d3293efd9..609338fc8 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 +++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 @@ -54,6 +54,8 @@ VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
@@ -855,7 +855,7 @@ index d3293efd9..e582045ec 100644
  	video_queue_close(vq);
  
  	if (placeholder.scaled_data)
-@@ -379,22 +383,54 @@ void VCamFilter::Frame(uint64_t ts)
+@@ -379,16 +383,48 @@ void VCamFilter::Frame(uint64_t ts)
  	struct directshow_stage_timing timing = {};
  	timing.frame_entry_monotonic_ns = frame_entry_monotonic_ns;
  	bool consumed_program_frame = false;
@@ -908,42 +908,6 @@ index d3293efd9..e582045ec 100644
  
  		UnlockSampleData(ts, ts + obs_interval);
  		timing.unlock_sample_data_completed_monotonic_ns = trace_monotonic_ns();
- 	}
- 
--	if (consumed_program_frame && program_return)
-+	if (consumed_program_frame && consumer_gated)
- 		EmitDirectShowObservation(metadata, timing);
- }
- 
-@@ -523,12 +559,26 @@ void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metada
- 			<< metadata.preview_revision << ",\"role_map\":" << metadata.role_map_revision << "},"
- 			<< "\"frame_id\":" << metadata.frame_id << ",\"pts_ns\":" << metadata.pts_ns
- 			<< ",\"observed_at_monotonic_ns\":" << observed_at_monotonic_ns
--			<< ",\"valid\":true,\"program_frame\":true,\"surface\":\"ProgramReturn\","
-+			<< ",\"valid\":true,\"program_frame\":" << (program_return ? "true" : "false")
-+			<< ",\"surface\":\"" << (program_return ? "ProgramReturn" : "PreviewReturn") << "\","
- 			<< "\"consumer\":\"DirectShow\",\"queue_counters\":{"
- 			<< "\"gap_count\":" << timing.queue_counters.gap_count
- 			<< ",\"duplicate_count\":" << timing.queue_counters.duplicate_count
- 			<< ",\"retry_count\":" << timing.queue_counters.retry_count
--			<< ",\"torn_count\":" << timing.queue_counters.torn_count << "}}";
-+			<< ",\"torn_count\":" << timing.queue_counters.torn_count << "},\"transport\":{";
-+	observation << "\"path\":" << timing.transport_path
-+			<< ",\"fallback_reason\":" << timing.transport_fallback
-+			<< ",\"fallback_hresult\":" << timing.transport_hresult
-+			<< ",\"lane\":" << timing.transport_lane
-+			<< ",\"epoch\":" << timing.transport_epoch
-+			<< ",\"produced_sequence\":" << timing.transport_produced_sequence
-+			<< ",\"published_sequence\":" << timing.transport_published_sequence
-+			<< ",\"consumed_sequence\":" << timing.transport_consumed_sequence
-+			<< ",\"mutex_wait_ns\":" << timing.transport_mutex_wait_ns
-+			<< ",\"fence_wait_ns\":" << timing.transport_fence_wait_ns
-+			<< ",\"gpu_copy_ns\":" << timing.transport_gpu_copy_ns
-+			<< ",\"readback_ns\":" << timing.transport_readback_ns
-+			<< ",\"frame_age_ns\":" << timing.transport_frame_age_ns << "}}";
- 	if (timing_complete) {
- 		observation.seekp(-1, std::ios_base::end);
- 		observation << ",\"frame_entry_monotonic_ns\":" << timing.frame_entry_monotonic_ns
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
 index aa2992b0d..c27bf31eb 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
