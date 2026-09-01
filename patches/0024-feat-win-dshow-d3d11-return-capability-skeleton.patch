@@ -1079,7 +1079,7 @@ diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.c b/shared/obs-s
 index bb2a69260..3c14236d0 100644
 --- a/shared/obs-shared-memory-queue/shared-memory-queue.c
 +++ b/shared/obs-shared-memory-queue/shared-memory-queue.c
-@@ -169,6 +169,18 @@ static bool queue_mapping_size(const void *mapping, size_t *mapping_size)
+@@ -169,6 +169,17 @@ static bool queue_mapping_size(const void *mapping, size_t *mapping_size)
  	return true;
  }
  
@@ -1091,8 +1091,7 @@ index bb2a69260..3c14236d0 100644
 +	MEMORY_BASIC_INFORMATION info = {0};
 +	return vq && vq->layout_valid && vq->header && vq->mapping_size &&
 +		VirtualQuery(vq->header, &info, sizeof(info)) == sizeof(info) &&
-+		info.BaseAddress == vq->header && info.State == MEM_COMMIT &&
-+		info.RegionSize >= vq->mapping_size;
++		info.State == MEM_COMMIT && info.RegionSize != 0;
 +}
 +
  static bool queue_layout_valid(const struct queue_header *header, size_t mapping_size,
@@ -1152,4 +1151,3 @@ index bb2a69260..3c14236d0 100644
  	struct queue_header *qh = vq->header;
 -- 
 2.54.0.windows.1
-
