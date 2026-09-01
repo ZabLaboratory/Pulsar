@@ -34,6 +34,7 @@ PREVIEW_CONSUMER_LEASE_PATCH = (
 PROGRAM_CONSUMER_LEASE_PATCH = (
     ROOT / "patches" / "0021-perf-win-dshow-elide-unconsumed-program-return-copies.patch"
 )
+QT_HOST_TOOLS_PATCH = ROOT / "patches" / "0022-fix-cmake-qt-host-tool-argument-parsing.patch"
 FRONTEND_CMAKE = ROOT / "plugins" / "pulsar-frontend-stub" / "CMakeLists.txt"
 WEBSOCKET_CMAKE = ROOT / "plugins" / "pulsar-websocket" / "CMakeLists.txt"
 FRONTEND_SOURCE = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
@@ -759,3 +760,12 @@ def test_program_return_copy_uses_the_same_crash_safe_consumer_gate() -> None:
     assert "-\tvideo_queue_write_ex" not in patch
     assert "obs_encoder" not in patch
     assert "raw_video_borrowed" not in patch
+
+
+def test_pristine_windows_configure_keeps_architecture_out_of_keyword_parsing() -> None:
+    patch = QT_HOST_TOOLS_PATCH.read_text(encoding="utf-8")
+
+    assert "function(_handle_qt_cross_compile architecture)" in patch
+    assert '-  cmake_parse_arguments(PARSE_ARGV 0 _HQCC' in patch
+    assert '+  cmake_parse_arguments(PARSE_ARGV 1 _HQCC' in patch
+    assert "-DIRECTORY" in patch

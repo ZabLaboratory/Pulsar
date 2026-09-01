@@ -1,0 +1,34 @@
+From 6b1a8e8a9dc0229abc90fafdf2c2c6db46c01d19 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Tue, 1 Sep 2026 18:03:13 +0200
+Subject: [PATCH] fix(cmake): parse Qt host tool arguments correctly
+
+Agent-Role: Eleven
+Agent-Thread: /root
+Work-Unit: pulsar-program-preview-transport-v2
+Evidence: pristine x64 configure resolved DIRECTORY as architecture
+---
+ cmake/windows/buildspec.cmake | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/cmake/windows/buildspec.cmake b/cmake/windows/buildspec.cmake
+index f2a58493c..f92ccad0a 100644
+--- a/cmake/windows/buildspec.cmake
++++ b/cmake/windows/buildspec.cmake
+@@ -9,7 +9,11 @@ function(_handle_qt_cross_compile architecture)
+   set(options "")
+   set(oneValueArgs DIRECTORY)
+   set(multiValueArgs "")
+-  cmake_parse_arguments(PARSE_ARGV 0 _HQCC "${options}" "${oneValueArgs}" "${multiValueArgs}")
++  # Argument zero is the named `architecture` parameter.  Parsing from zero
++  # makes its value an unparsed token and shifts DIRECTORY into `architecture`
++  # on a pristine configure, producing a bogus Qt host-tools path ending in
++  # `-DIRECTORY`.  Parse only the keyword arguments that follow it.
++  cmake_parse_arguments(PARSE_ARGV 1 _HQCC "${options}" "${oneValueArgs}" "${multiValueArgs}")
+ 
+   _get_dependency_data(dependency_data)
+ 
+-- 
+2.54.0.windows.1
+
