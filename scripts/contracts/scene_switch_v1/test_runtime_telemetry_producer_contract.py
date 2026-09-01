@@ -35,6 +35,7 @@ PROGRAM_CONSUMER_LEASE_PATCH = (
     ROOT / "patches" / "0021-perf-win-dshow-elide-unconsumed-program-return-copies.patch"
 )
 QT_HOST_TOOLS_PATCH = ROOT / "patches" / "0022-fix-cmake-qt-host-tool-argument-parsing.patch"
+BUILD_SCRIPT = ROOT / "scripts" / "build-win.ps1"
 FRONTEND_CMAKE = ROOT / "plugins" / "pulsar-frontend-stub" / "CMakeLists.txt"
 WEBSOCKET_CMAKE = ROOT / "plugins" / "pulsar-websocket" / "CMakeLists.txt"
 FRONTEND_SOURCE = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
@@ -772,3 +773,26 @@ def test_pristine_windows_configure_keeps_architecture_out_of_keyword_parsing() 
     assert 'set(host_processor "$ENV{PROCESSOR_ARCHITECTURE}")' in patch
     assert "Unable to determine the Windows host processor for Qt host tools" in patch
     assert "-DIRECTORY" in patch
+
+
+def test_local_build_fastpath_is_guarded_complete_and_opt_in() -> None:
+    text = BUILD_SCRIPT.read_text(encoding="utf-8")
+
+    assert "[switch] $Fast" in text
+    assert "$Fast -and ($Full -or $GuiBuild -or $Clean -or $Stage -eq 'configure')" in text
+    assert "-Fast requires an existing compatible headless build_x64 cache" in text
+    for flag in ("ENABLE_FRONTEND", "ENABLE_UI", "ENABLE_BROWSER", "ENABLE_WEBSOCKET"):
+        assert f"^{flag}:BOOL=OFF\\r?$" in text
+    for target in (
+        "libobs",
+        "win-dshow",
+        "obs-virtualcam-module",
+        "obs-nvenc",
+        "obs-x264",
+        "pulsar-headless",
+    ):
+        assert target in text
+
+    # Full builds remain the default and retain the original preset paths.
+    assert "& $cmake --build --preset $preset --config RelWithDebInfo --parallel" in text
+    assert "& $cmake --build $pulsarBuild --config RelWithDebInfo --parallel" in text
