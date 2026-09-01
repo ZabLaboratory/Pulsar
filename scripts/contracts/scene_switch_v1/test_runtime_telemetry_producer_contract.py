@@ -768,4 +768,7 @@ def test_pristine_windows_configure_keeps_architecture_out_of_keyword_parsing() 
     assert "function(_handle_qt_cross_compile architecture)" in patch
     assert '-  cmake_parse_arguments(PARSE_ARGV 0 _HQCC' in patch
     assert '+  cmake_parse_arguments(PARSE_ARGV 1 _HQCC' in patch
+    assert 'set(host_processor "$ENV{PROCESSOR_ARCHITEW6432}")' in patch
+    assert 'set(host_processor "$ENV{PROCESSOR_ARCHITECTURE}")' in patch
+    assert "Unable to determine the Windows host processor for Qt host tools" in patch
     assert "-DIRECTORY" in patch
