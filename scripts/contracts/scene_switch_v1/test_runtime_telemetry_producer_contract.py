@@ -31,6 +31,9 @@ PROGRAM_RETURN_FASTPATH_PATCH = ROOT / "patches" / "0019-perf-win-dshow-pipeline
 PREVIEW_CONSUMER_LEASE_PATCH = (
     ROOT / "patches" / "0020-perf-win-dshow-elide-unconsumed-preview-return-copies.patch"
 )
+PROGRAM_CONSUMER_LEASE_PATCH = (
+    ROOT / "patches" / "0021-perf-win-dshow-elide-unconsumed-program-return-copies.patch"
+)
 FRONTEND_CMAKE = ROOT / "plugins" / "pulsar-frontend-stub" / "CMakeLists.txt"
 WEBSOCKET_CMAKE = ROOT / "plugins" / "pulsar-websocket" / "CMakeLists.txt"
 FRONTEND_SOURCE = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
@@ -222,7 +225,7 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert patch.index("UnlockSampleData") < patch.index("if (consumed_program_frame && program_return)")
     assert '"boundary\\":\\"directshow_return' in patch
     assert "video_queue_read_ex" in patch
-    assert "video_queue_write_ex" in patch
+    assert "-\tvideo_queue_write_ex" not in patch
     assert "copy_telemetry_counter" in patch
     assert "INT64_MAX" in patch
     assert "queue_rejected" in frontend
@@ -736,3 +739,23 @@ def test_preview_return_copy_is_gated_by_an_active_directshow_consumer_lease() -
     # only the optional shared-memory queue write is skipped.
     assert ".raw_video_borrowed = virtual_video" not in patch
     assert "video_queue_write_ex" in patch
+
+
+def test_program_return_copy_uses_the_same_crash_safe_consumer_gate() -> None:
+    patch = PROGRAM_CONSUMER_LEASE_PATCH.read_text(encoding="utf-8")
+
+    for token in (
+        "consumer_gated = program_return || preview_return",
+        "if (consumer_gated && !queue_namespace_rejected)",
+        "if (!vcam->consumer_gated)",
+        "vcam->consumer_gated = vcam->program_return || vcam->preview_return",
+        "if (!return_consumer_is_active(vcam))",
+        'vcam->program_return ? "ProgramReturn" : "PreviewReturn"',
+    ):
+        assert token in patch
+
+    # The gate surrounds only the DirectShow queue publication. Program mixing,
+    # encoding and the borrowed output worker remain untouched.
+    assert "-\tvideo_queue_write_ex" not in patch
+    assert "obs_encoder" not in patch
+    assert "raw_video_borrowed" not in patch
