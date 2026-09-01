@@ -77,8 +77,11 @@ treated as encoded-frame indexes. The FinalQueued oracle counts the observed
 `TakeAborted`/`TakeCommitted` route-map terminal events and checks their revision
 deltas; exactly one terminal winner is required. A queued Abort may either win
 and preserve the role map, or lose to an already committed Take and observe the
-single committed role-map revision; neither result is converted into a second
-synthetic command. The raw recording supplies the settled red-to-green boundary.
+single committed role-map revision; in the latter case the Abort response is
+the typed `CommandRejected`/`TAKE_NOT_PENDING` admission-race result and the
+separate commit event is authoritative. Neither result is converted into a
+second synthetic command. The raw recording supplies the settled red-to-green
+boundary.
 Two visual red/fade/green sequences are therefore valid when the first is an
 interrupted composition and the route-map events show only one winning commit.
 For Stinger, a coherent red-or-green base with a distributed WebM palette is

@@ -419,7 +419,7 @@ def assert_abort_pixels(labels: list[str], boundary_index: int, *, expected: str
 
     if not labels:
         raise probe.ProbeFailure("raw Program recording contains no decoded frames")
-    if boundary_index < 1 or boundary_index >= len(labels) - 1:
+    if boundary_index < 0 or boundary_index + 3 > len(labels):
         raise probe.ProbeFailure(
             f"abort boundary index {boundary_index} is not surrounded by raw frames (count={len(labels)})"
         )
@@ -495,6 +495,31 @@ async def vendor_request(demux: BoundaryDemux, request_id: str, request_type: st
     return ((response.get("responseData") or {}).get("responseData") or {})
 
 
+def vendor_event_payload(event: dict[str, Any]) -> dict[str, Any] | None:
+    """Unwrap the v5 VendorEvent outer eventData and inner vendor eventData."""
+
+    outer_data = event.get("eventData") or {}
+    if outer_data.get("vendorName") != "pulsar-scene-switch":
+        return None
+    return outer_data.get("eventData") or {}
+
+
+def is_vendor_event(event: dict[str, Any], event_type: str, command_id: str) -> bool:
+    payload = vendor_event_payload(event)
+    return payload is not None and payload.get("event_type") == event_type and payload.get("command_id") == command_id
+
+
+def resolve_abort_winner(abort_result: dict[str, Any]) -> str:
+    """Accept only Abort success or the typed commit-race rejection."""
+
+    event_type = abort_result.get("event_type")
+    if event_type == "TakeAborted":
+        return "TakeAborted"
+    if event_type == "CommandRejected" and abort_result.get("error_code") == "TAKE_NOT_PENDING":
+        return "TakeCommitted"
+    raise probe.ProbeFailure(f"Abort did not produce an allowed terminal winner: {abort_result}")
+
+
 async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str, phase: str) -> dict[str, Any]:
     os.environ["PULSAR_DUAL_LANE_TRANSITIONS"] = "1"
     os.environ["PULSAR_RUNTIME_INSTANCE_ID"] = f"transition-boundary-{transition}-{phase}"
@@ -541,7 +566,7 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
             accepted = await vendor_request(demux, f"call-{prepare_id}", "Prepare", prepare)
             if accepted.get("event_type") != "PrepareAccepted":
                 raise probe.ProbeFailure(f"Prepare was not accepted: {accepted}")
-            await demux.wait_event("VendorEvent", lambda data: data.get("vendorName") == "pulsar-scene-switch" and (data.get("eventData") or {}).get("event_type") == "PreviewReady" and (data.get("eventData") or {}).get("command_id") == prepare_id)
+            await demux.wait_event("VendorEvent", lambda data: is_vendor_event(data, "PreviewReady", prepare_id))
             state = await vendor_request(demux, f"state-{phase}", "GetState", {})
             take = {
                 "contract": "pulsar.scene-switch.v1", "schema_version": 1, "message_type": "command",
@@ -574,9 +599,10 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
                     "take_command_id": take_id, "reason": "operator",
                 }
                 abort_result = await vendor_request(demux, f"call-abort-{phase}", "Abort", abort_payload)
-            winner = abort_result.get("event_type")
-            if winner not in {"TakeAborted", "TakeCommitted"}:
-                raise probe.ProbeFailure(f"Abort/Take did not produce one terminal winner for {phase}: {abort_result}")
+            # The frame-boundary commit may win after TakeAccepted. The Abort
+            # response is then a typed rejection; terminal event history and
+            # runtime trace remain the authoritative winner evidence.
+            winner = resolve_abort_winner(abort_result)
             abort_match = None
             commit_prepare_id = None
             commit_take_id = take_id if winner == "TakeCommitted" else None
@@ -608,7 +634,7 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
                 commit_accepted = await vendor_request(demux, f"call-{commit_prepare_id}", "Prepare", commit_prepare)
                 if commit_accepted.get("event_type") != "PrepareAccepted":
                     raise probe.ProbeFailure(f"control Prepare after abort was not accepted: {commit_accepted}")
-                await demux.wait_event("VendorEvent", lambda data: data.get("vendorName") == "pulsar-scene-switch" and (data.get("eventData") or {}).get("event_type") == "PreviewReady" and (data.get("eventData") or {}).get("command_id") == commit_prepare_id)
+                await demux.wait_event("VendorEvent", lambda data: is_vendor_event(data, "PreviewReady", commit_prepare_id))
                 ready_state = await vendor_request(demux, f"state-before-commit-{phase}", "GetState", {})
                 commit_take = {
                     **take,
@@ -667,12 +693,13 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
             state_after = await vendor_request(demux, "boundary-state-after", "GetState", {})
             if state_after.get("role_map") == state.get("role_map"):
                 raise probe.ProbeFailure(f"winning commit did not swap role map: before={state['role_map']} after={state_after.get('role_map')}")
-            vendor_events = [
-                (event.get("eventData") or {})
-                for event in demux.event_history
-                if event.get("eventType") == "VendorEvent"
-                and event.get("vendorName") == "pulsar-scene-switch"
-            ]
+            vendor_events = []
+            for event in demux.event_history:
+                if event.get("eventType") != "VendorEvent":
+                    continue
+                outer_data = event.get("eventData") or {}
+                if outer_data.get("vendorName") == "pulsar-scene-switch":
+                    vendor_events.append(outer_data.get("eventData") or {})
             terminal_events = assert_terminal_event_contract(
                 vendor_events,
                 aborted_command_id=take_id,

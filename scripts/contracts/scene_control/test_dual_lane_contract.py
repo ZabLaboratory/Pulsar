@@ -752,6 +752,7 @@ def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
         "transition_final_queued",
         "TakeAborted",
         "TakeAccepted",
+        "TAKE_NOT_PENDING",
         "role_map",
         "frame_id",
         "pts_ns",
@@ -761,6 +762,8 @@ def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
         "assert_callback_pts_correlated",
         "assert_terminal_event_contract",
         "event_history",
+        "vendor_event_payload",
+        "resolve_abort_winner",
         "assert_transition_timeline",
     ):
         assert required in source
@@ -876,6 +879,35 @@ def test_transition_boundary_demux_retains_event_history_after_queue_consumption
     assert history == [consumed]
 
 
+def test_transition_boundary_unwraps_nested_vendor_event_schema() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_vendor_schema")
+    event = {
+        "eventType": "VendorEvent",
+        "eventData": {
+            "vendorName": "pulsar-scene-switch",
+            "eventData": {
+                "event_type": "TakeCommitted",
+                "command_id": "take-1",
+            },
+        },
+    }
+    assert boundary.vendor_event_payload(event) == {
+        "event_type": "TakeCommitted",
+        "command_id": "take-1",
+    }
+    assert boundary.is_vendor_event(event, "TakeCommitted", "take-1")
+    assert not boundary.is_vendor_event(event, "TakeAborted", "take-1")
+    assert boundary.vendor_event_payload({"eventType": "VendorEvent", "eventData": {"vendorName": "other"}}) is None
+
+
+def test_transition_boundary_accepts_only_typed_commit_race_rejection() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_abort_winner")
+    assert boundary.resolve_abort_winner({"event_type": "TakeAborted"}) == "TakeAborted"
+    assert boundary.resolve_abort_winner({"event_type": "CommandRejected", "error_code": "TAKE_NOT_PENDING"}) == "TakeCommitted"
+    with pytest.raises(boundary.probe.ProbeFailure, match="allowed terminal winner"):
+        boundary.resolve_abort_winner({"event_type": "CommandRejected", "error_code": "REVISION_STALE"})
+
+
 def test_transition_boundary_classifier_accepts_coherent_stinger_palette() -> None:
     boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_palette")
     fade = bytes((172, 79, 0)) * (boundary.WIDTH * boundary.HEIGHT)
@@ -989,9 +1021,10 @@ def test_transition_boundary_raw_classifier_rejects_black_and_mixed_frames() -> 
     mixed = red[: len(red) // 2] + green[len(green) // 2 :]
     with pytest.raises(boundary.probe.ProbeFailure, match="mixed|intermediate"):
         boundary.classify_raw_frame(mixed)
-    boundary.assert_abort_pixels(["red", "red", "red", "red"], 2, expected="red")
+    boundary.assert_abort_pixels(["red", "red", "red", "red", "red"], 2, expected="red")
+    boundary.assert_abort_pixels(["red", "red", "red"], 0, expected="red")
     with pytest.raises(boundary.probe.ProbeFailure, match="stale/mixed"):
-        boundary.assert_abort_pixels(["red", "green", "green", "green"], 2, expected="red")
+        boundary.assert_abort_pixels(["red", "green", "green", "green", "green"], 2, expected="red")
 
 
 def test_transition_boundary_timeline_accepts_fade_blends_and_rejects_regression() -> None:
