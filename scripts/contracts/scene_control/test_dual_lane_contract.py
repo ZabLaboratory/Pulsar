@@ -763,6 +763,8 @@ def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
         "assert_terminal_event_contract",
         "event_history",
         "vendor_event_payload",
+        "vendor_payload_from_outer_data",
+        "is_vendor_event_data",
         "resolve_abort_winner",
         "assert_transition_timeline",
     ):
@@ -895,9 +897,49 @@ def test_transition_boundary_unwraps_nested_vendor_event_schema() -> None:
         "event_type": "TakeCommitted",
         "command_id": "take-1",
     }
-    assert boundary.is_vendor_event(event, "TakeCommitted", "take-1")
-    assert not boundary.is_vendor_event(event, "TakeAborted", "take-1")
+    assert boundary.is_vendor_event_data(event["eventData"], "TakeCommitted", "take-1")
+    assert not boundary.is_vendor_event_data(event["eventData"], "TakeAborted", "take-1")
     assert boundary.vendor_event_payload({"eventType": "VendorEvent", "eventData": {"vendorName": "other"}}) is None
+
+
+def test_transition_boundary_wait_event_matches_nested_vendor_event_and_retains_history() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_wait_event_schema")
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.messages: asyncio.Queue[str] = asyncio.Queue()
+            self.messages.put_nowait(json.dumps({
+                "op": 5,
+                "d": {
+                    "eventType": "VendorEvent",
+                    "eventData": {
+                        "vendorName": "pulsar-scene-switch",
+                        "eventType": "PreviewReady",
+                        "eventData": {"event_type": "PreviewReady", "command_id": "prepare-1"},
+                    },
+                },
+            }))
+
+        async def recv(self) -> str:
+            return await self.messages.get()
+
+    async def exercise() -> tuple[dict[str, object], list[dict[str, object]]]:
+        ws = FakeWebSocket()
+        demux = boundary.BoundaryDemux(ws)
+        await demux.start()
+        event = await demux.wait_event(
+            "VendorEvent",
+            lambda outer_data: boundary.is_vendor_event_data(outer_data, "PreviewReady", "prepare-1"),
+            timeout=0.1,
+        )
+        history = list(demux.event_history)
+        await demux.close()
+        return event, history
+
+    event, history = asyncio.run(exercise())
+    assert event["eventData"]["vendorName"] == "pulsar-scene-switch"
+    assert event["eventData"]["eventData"]["command_id"] == "prepare-1"
+    assert history == [event]
 
 
 def test_transition_boundary_accepts_only_typed_commit_race_rejection() -> None:

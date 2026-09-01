@@ -495,17 +495,24 @@ async def vendor_request(demux: BoundaryDemux, request_id: str, request_type: st
     return ((response.get("responseData") or {}).get("responseData") or {})
 
 
-def vendor_event_payload(event: dict[str, Any]) -> dict[str, Any] | None:
-    """Unwrap the v5 VendorEvent outer eventData and inner vendor eventData."""
+def vendor_payload_from_outer_data(outer_data: dict[str, Any]) -> dict[str, Any] | None:
+    """Unwrap the vendor payload from a VendorEvent's outer ``eventData``."""
 
-    outer_data = event.get("eventData") or {}
     if outer_data.get("vendorName") != "pulsar-scene-switch":
         return None
     return outer_data.get("eventData") or {}
 
 
-def is_vendor_event(event: dict[str, Any], event_type: str, command_id: str) -> bool:
-    payload = vendor_event_payload(event)
+def vendor_event_payload(event: dict[str, Any]) -> dict[str, Any] | None:
+    """Unwrap the v5 VendorEvent wrapper from a complete event object."""
+
+    return vendor_payload_from_outer_data(event.get("eventData") or {})
+
+
+def is_vendor_event_data(outer_data: dict[str, Any], event_type: str, command_id: str) -> bool:
+    """Match a vendor event payload as passed by ``BoundaryDemux.wait_event``."""
+
+    payload = vendor_payload_from_outer_data(outer_data)
     return payload is not None and payload.get("event_type") == event_type and payload.get("command_id") == command_id
 
 
@@ -566,7 +573,7 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
             accepted = await vendor_request(demux, f"call-{prepare_id}", "Prepare", prepare)
             if accepted.get("event_type") != "PrepareAccepted":
                 raise probe.ProbeFailure(f"Prepare was not accepted: {accepted}")
-            await demux.wait_event("VendorEvent", lambda data: is_vendor_event(data, "PreviewReady", prepare_id))
+            await demux.wait_event("VendorEvent", lambda data: is_vendor_event_data(data, "PreviewReady", prepare_id))
             state = await vendor_request(demux, f"state-{phase}", "GetState", {})
             take = {
                 "contract": "pulsar.scene-switch.v1", "schema_version": 1, "message_type": "command",
@@ -634,7 +641,7 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
                 commit_accepted = await vendor_request(demux, f"call-{commit_prepare_id}", "Prepare", commit_prepare)
                 if commit_accepted.get("event_type") != "PrepareAccepted":
                     raise probe.ProbeFailure(f"control Prepare after abort was not accepted: {commit_accepted}")
-                await demux.wait_event("VendorEvent", lambda data: is_vendor_event(data, "PreviewReady", commit_prepare_id))
+                await demux.wait_event("VendorEvent", lambda data: is_vendor_event_data(data, "PreviewReady", commit_prepare_id))
                 ready_state = await vendor_request(demux, f"state-before-commit-{phase}", "GetState", {})
                 commit_take = {
                     **take,
