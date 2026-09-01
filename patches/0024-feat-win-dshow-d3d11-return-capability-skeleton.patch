@@ -1,4 +1,4 @@
-From 0d06e1f903272cb199549f0b0c24f4d2354c4f8e Mon Sep 17 00:00:00 2001
+From a14ee50c707356f4c1abc55fbdfa490a247bbc5b Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Tue, 1 Sep 2026 19:14:42 +0200
@@ -11,12 +11,12 @@ Evidence: bounded keyed-mutex ring, NT handle duplication, CPU fallback
 ---
  plugins/win-dshow/CMakeLists.txt              |   3 +
  .../virtualcam-module/CMakeLists.txt          |   4 +
- .../d3d11-return-transport.cpp                | 632 ++++++++++++++++++
+ .../d3d11-return-transport.cpp                | 633 ++++++++++++++++++
  .../d3d11-return-transport.hpp                | 126 ++++
  .../virtualcam-module/virtualcam-filter.cpp   |  67 +-
  .../virtualcam-module/virtualcam-filter.hpp   |  16 +
  plugins/win-dshow/virtualcam.c                |  23 +-
- 7 files changed, 863 insertions(+), 8 deletions(-)
+ 7 files changed, 864 insertions(+), 8 deletions(-)
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
 
@@ -65,15 +65,16 @@ index 8ac916e17..ec3f43b8e 100644
  if(OBS_PARENT_ARCHITECTURE STREQUAL CMAKE_VS_PLATFORM_NAME)
 diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
 new file mode 100644
-index 000000000..9038b1a47
+index 000000000..9cdb7baf8
 --- /dev/null
 +++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
-@@ -0,0 +1,632 @@
+@@ -0,0 +1,633 @@
 +#include "d3d11-return-transport.hpp"
 +
 +#include "../../../shared/obs-shared-memory-queue/shared-memory-queue.h"
 +
 +#include <d3d11.h>
++#include <d3d11_1.h>
 +#include <dxgi1_2.h>
 +#include <windows.h>
 +#include <wrl/client.h>
