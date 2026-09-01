@@ -4103,14 +4103,17 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
     if (transitionCommitted) {
         blog(LOG_INFO,
              "[pulsar-dual-lane] transition_committed kind=%s requested_duration_ms=%llu "
-             "actual_duration_ms=%llu start_frame_id=%llu end_frame_id=%llu fallback_to_cut=%d "
+             "actual_duration_ms=%llu start_frame_id=%llu start_pts_ns=%llu "
+             "end_frame_id=%llu end_pts_ns=%llu fallback_to_cut=%d "
              "aggregate_count=%llu duration_p50_ms=%llu duration_p95_ms=%llu duration_p99_ms=%llu "
              "frames_p50=%llu frames_p95=%llu frames_p99=%llu",
              pulsar_transition::kind_name(transitionMetrics.kind),
              static_cast<unsigned long long>(transitionMetrics.requested_duration_ms),
              static_cast<unsigned long long>(transitionMetrics.actual_duration_ms),
              static_cast<unsigned long long>(transitionMetrics.start_frame_id),
+             static_cast<unsigned long long>(transitionMetrics.start_pts_ns),
              static_cast<unsigned long long>(transitionMetrics.end_frame_id),
+             static_cast<unsigned long long>(transitionMetrics.end_pts_ns),
              transitionMetrics.fallback_to_cut,
              static_cast<unsigned long long>(transitionAggregate.count),
              static_cast<unsigned long long>(transitionAggregate.duration_p50_ms),

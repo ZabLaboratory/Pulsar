@@ -67,11 +67,13 @@ called directly. Abort logs include observed `role_map_preserved`,
 `surfaces_stable`, `video_t_stable`, and `invariant_valid` postconditions.
 
 The reproducible raw-boundary runbook is
-`python scripts/probe-transition-boundary.py --exe <pulsar.exe> --transition both --phase both`.
+`python scripts/probe-transition-raw-boundary.py --exe <pulsar.exe> --transition both --phase both`
+(the older `probe-transition-boundary.py` entry point remains equivalent).
 It records a Queued abort and a `FinalQueued` abort, then performs a control
 commit. The retained recording is decoded to raw RGB and checked around the
-observed frame IDs: complete red/green lane colors are required, while black,
-stale, mixed, or intermediate frames fail the probe. This pixel evidence is
+`transition_committed` frame/PTS identity: the encoded timeline must contain one
+unique settled red-to-green seam, while black, stale, mixed, or lane-intermediate
+frames fail the probe. This pixel evidence is
 independent of the structured post-abort booleans. The graphics callback only
 logs observed frame/PTS and queues state cleanup; recording decode and all
 filesystem I/O happen after output stop, outside the callback.

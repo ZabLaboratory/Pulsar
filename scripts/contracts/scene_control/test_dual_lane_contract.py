@@ -9,6 +9,7 @@ and a teardown barrier for an extracted (in-flight) swap.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import subprocess
@@ -765,7 +766,103 @@ def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
     assert "assert_commit_pixels(labels, commit_frame_index, before=\"red\", after=\"green\")" in source
     assert "PULSAR_DUAL_LANE_TRANSITIONS" in source
     assert "phase == \"queued\"" in source
-    assert "FINAL_QUEUED_RE" in source
+    assert "FINAL_QUEUED_PATTERN" in source
+    assert "TRANSITION_COMMITTED_PATTERN" in source
+    assert "locate_commit_boundary" in source
+    assert "BoundaryDemux" in source
+    assert "await demux.start()" in source
+    assert "commit_match = runtime.wait_for(TRANSITION_COMMITTED_PATTERN, 15)" in source
+    assert "commit_frame_index = locate_commit_boundary(labels, before=\"red\", after=\"green\")" in source
+    assert "__import__(\"re\")" not in source
+    post_demux = source[source.index("await demux.start()") :]
+    assert "probe.request(" not in post_demux
+    assert "probe.wait_event(" not in post_demux
+    assert source.count("await self.ws.recv()") == 1
+
+
+def test_transition_boundary_compiled_patterns_and_transition_trace_correlation() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_patterns")
+    assert hasattr(boundary, "ABORT_PATTERN")
+    assert hasattr(boundary, "FINAL_QUEUED_PATTERN")
+    assert hasattr(boundary, "TRANSITION_COMMITTED_PATTERN")
+    assert boundary.ABORT_PATTERN.search(
+        "[pulsar-dual-lane] transition_aborted fallback=cut fallback_to_cut=1 "
+        "frame_id=22 pts_ns=330 reason=operator role_map_preserved=1 "
+        "surfaces_stable=1 video_t_stable=1 invariant_valid=1"
+    )
+    committed = boundary.TRANSITION_COMMITTED_PATTERN.search(
+        "[pulsar-dual-lane] transition_committed kind=fade requested_duration_ms=200 "
+        "actual_duration_ms=200 start_frame_id=10 start_pts_ns=100 "
+        "end_frame_id=22 end_pts_ns=300 fallback_to_cut=0 aggregate_count=1"
+    )
+    assert committed is not None
+    assert committed.group(6) == "22"
+    assert committed.group(7) == "300"
+
+
+def test_transition_committed_trace_carries_end_frame_and_pts_identity() -> None:
+    frontend = _read(_FRONTEND)
+    transition_log = _between(frontend, '"[pulsar-dual-lane] transition_committed', '             pulsar_transition::kind_name')
+    assert "start_frame_id=%llu start_pts_ns=%llu" in transition_log
+    assert "end_frame_id=%llu end_pts_ns=%llu" in transition_log
+    assert "transitionMetrics.start_pts_ns" in frontend
+    assert "transitionMetrics.end_pts_ns" in frontend
+
+
+def test_transition_boundary_demux_serializes_concurrent_responses() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_demux")
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.messages: asyncio.Queue[str] = asyncio.Queue()
+            self.active_receivers = 0
+            self.max_active_receivers = 0
+
+        async def send(self, payload: str) -> None:
+            request_id = json.loads(payload)["d"]["requestId"]
+            await self.messages.put(json.dumps({"op": 7, "d": {"requestId": request_id, "requestStatus": {"result": True}}}))
+
+        async def recv(self) -> str:
+            self.active_receivers += 1
+            self.max_active_receivers = max(self.max_active_receivers, self.active_receivers)
+            try:
+                return await self.messages.get()
+            finally:
+                self.active_receivers -= 1
+
+    async def exercise() -> tuple[int, list[str]]:
+        ws = FakeWebSocket()
+        demux = boundary.BoundaryDemux(ws)
+        await demux.start()
+        first, second = await asyncio.gather(
+            demux.request("Take", "take-1", {}),
+            demux.request("Abort", "abort-1", {}),
+        )
+        await demux.close()
+        return ws.max_active_receivers, [first["requestId"], second["requestId"]]
+
+    max_readers, request_ids = asyncio.run(exercise())
+    assert max_readers == 1
+    assert request_ids == ["take-1", "abort-1"]
+
+
+def test_transition_boundary_classifier_accepts_coherent_stinger_palette() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_palette")
+    blue = bytes((24, 80, 220)) * (boundary.WIDTH * boundary.HEIGHT)
+    assert boundary.classify_raw_frame(blue) == "stinger"
+    mixed_palette = blue[: len(blue) // 2] + bytes((220, 220, 24)) * (boundary.WIDTH * boundary.HEIGHT // 2)
+    with pytest.raises(boundary.probe.ProbeFailure, match="mixed|intermediate"):
+        boundary.classify_raw_frame(mixed_palette)
+
+
+def test_transition_boundary_locates_unique_encoded_seam_without_fixed_offset() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_seam")
+    labels = ["red"] * 8 + ["stinger"] * 4 + ["green"] * 8
+    seam = boundary.locate_commit_boundary(labels, before="red", after="green")
+    assert seam == 12
+    boundary.assert_commit_pixels(labels, seam, before="red", after="green")
+    with pytest.raises(boundary.probe.ProbeFailure, match="stale/mixed"):
+        boundary.assert_commit_pixels(labels[:12] + ["red"] + labels[13:], seam, before="red", after="green")
 
 
 def test_transition_boundary_raw_classifier_rejects_black_and_mixed_frames() -> None:
