@@ -1,0 +1,210 @@
+From d9e0c529616955c8e5457cf10843936ec6b23af6 Mon Sep 17 00:00:00 2001
+From: ClodoCapeo <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Tue, 1 Sep 2026 18:28:57 +0200
+Subject: [PATCH] feat(win-dshow): add D3D11 return transport capability
+ skeleton
+
+Agent-Role: forge
+
+Agent-Thread: /root/pulsar_d3d11_return
+
+Work-Unit: pulsar-d3d11-return-transport-20260901
+
+Evidence: capability-only CPU fallback; fixed-width D3D11 ABI contract
+---
+ plugins/win-dshow/CMakeLists.txt              |   1 +
+ .../virtualcam-module/CMakeLists.txt          |   2 +
+ .../d3d11-return-transport.cpp                |  19 +++
+ .../d3d11-return-transport.hpp                | 128 ++++++++++++++++++
+ 4 files changed, 150 insertions(+)
+ create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+ create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
+
+diff --git a/plugins/win-dshow/CMakeLists.txt b/plugins/win-dshow/CMakeLists.txt
+index 078151f69..343a6710e 100644
+--- a/plugins/win-dshow/CMakeLists.txt
++++ b/plugins/win-dshow/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ target_sources(
+   win-dshow
+   PRIVATE dshow-plugin.cpp encode-dstr.hpp ffmpeg-decode.c ffmpeg-decode.h win-dshow-encoder.cpp win-dshow.cpp
++          virtualcam-module/d3d11-return-transport.cpp virtualcam-module/d3d11-return-transport.hpp
+ )
+ 
+ configure_file(cmake/windows/obs-module.rc.in win-dshow.rc)
+diff --git a/plugins/win-dshow/virtualcam-module/CMakeLists.txt b/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+index 8ac916e17..a79b2f696 100644
+--- a/plugins/win-dshow/virtualcam-module/CMakeLists.txt
++++ b/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+@@ -79,6 +79,8 @@ target_sources(
+   obs-virtualcam-module
+   PRIVATE
+     ${CMAKE_CURRENT_BINARY_DIR}/virtualcam-module.rc
++    d3d11-return-transport.cpp
++    d3d11-return-transport.hpp
+     placeholder.cpp
+     sleepto.c
+     sleepto.h
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+new file mode 100644
+index 000000000..7fc05be75
+--- /dev/null
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+@@ -0,0 +1,19 @@
++#include "d3d11-return-transport.hpp"
++
++namespace {
++
++/* Keep the capability contract compile-checked in every virtual-camera build.
++ * There is deliberately no registration or runtime call: this translation unit
++ * cannot alter the existing CPU queue until a complete D3D11 implementation is
++ * reviewed and wired into both ProgramReturn and PreviewReturn. */
++static_assert(pulsar::d3d11_return::select(pulsar::d3d11_return::lane::program_return,
++						 pulsar::d3d11_return::pixel_format::nv12, false)
++				.telemetry.path == pulsar::d3d11_return::selected_path::cpu_seqlock);
++static_assert(pulsar::d3d11_return::select(pulsar::d3d11_return::lane::preview_return,
++						 pulsar::d3d11_return::pixel_format::nv12, true)
++				.telemetry.fallback == pulsar::d3d11_return::fallback_reason::architecture_required);
++static_assert(pulsar::d3d11_return::select(pulsar::d3d11_return::lane::preview_return,
++						 pulsar::d3d11_return::pixel_format::p010, true)
++				.telemetry.fallback == pulsar::d3d11_return::fallback_reason::format_unsupported);
++
++} // namespace
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
+new file mode 100644
+index 000000000..4d8185d48
+--- /dev/null
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
+@@ -0,0 +1,128 @@
++#pragma once
++
++/*
++ * Capability-only contract for the future D3D11 return transport.
++ *
++ * This header deliberately has no device, handle, or DirectShow side effect.
++ * The current return path remains the CPU seqlock queue.  A future implementation
++ * must replace the ArchitectureRequired fallback with a complete producer and
++ * consumer handshake before selecting D3D11.
++ */
++
++#include <cstddef>
++#include <cstdint>
++
++namespace pulsar::d3d11_return {
++
++constexpr std::size_t kSlotCount = 3;
++constexpr uint32_t kReturnWidth = 1920;
++constexpr uint32_t kReturnHeight = 1080;
++
++enum class lane : uint32_t {
++	program_return = 1,
++	preview_return = 2,
++};
++
++enum class pixel_format : uint32_t {
++	nv12 = 1,
++	p010 = 2,
++};
++
++enum class selected_path : uint32_t {
++	cpu_seqlock = 0,
++	d3d11_shared_texture = 1,
++};
++
++enum class fallback_reason : uint32_t {
++	none = 0,
++	architecture_required = 1,
++	format_unsupported = 2,
++	capability_unavailable = 3,
++	adapter_mismatch = 4,
++	device_removed = 5,
++	wait_timeout = 6,
++	invalid_abi = 7,
++};
++
++/* A duplicated handle is intentionally represented as a fixed-width value.
++ * Never store HANDLE, pointers, or size_t in this cross-process ABI. */
++struct shared_handle_abi {
++	uint64_t value;
++};
++
++struct slot_abi {
++	shared_handle_abi texture;
++	uint64_t sequence;
++	uint64_t epoch;
++};
++
++struct adapter_luid_abi {
++	uint32_t low;
++	int32_t high;
++};
++
++/* Fixed-width telemetry is safe to emit from either x86 or x64 builds. */
++struct telemetry_abi {
++	selected_path path;
++	fallback_reason fallback;
++	int32_t fallback_hresult;
++	adapter_luid_abi adapter_luid;
++	uint64_t epoch;
++	uint64_t produced_sequence;
++	uint64_t published_sequence;
++	uint64_t consumed_sequence;
++	uint64_t mutex_wait_ns;
++	uint64_t fence_wait_ns;
++	uint64_t gpu_copy_ns;
++	uint64_t readback_ns;
++	uint64_t gap_count;
++	uint64_t retry_count;
++	uint64_t torn_count;
++	uint64_t frame_age_ns;
++};
++
++struct capability {
++	lane return_lane;
++	pixel_format format;
++	telemetry_abi telemetry;
++};
++
++constexpr int32_t kENotImpl = -2147467263; /* 0x80004001, E_NOTIMPL */
++
++inline bool explicitly_requested(const char *value)
++{
++	return value && value[0] == 'd' && value[1] == '3' && value[2] == 'd' && value[3] == '1' &&
++		value[4] == '1' && value[5] == '\0';
++}
++
++/*
++ * Select only a proven path.  D3D11 is not selected until the producer,
++ * DirectShow consumer, adapter check, bounded synchronization, and readback
++ * proof are implemented together.  This is intentionally a CPU fallback even
++ * when PULSAR_RETURN_TRANSPORT=d3d11 is present.
++ */
++constexpr capability select(lane return_lane, pixel_format format, bool requested)
++{
++	capability result = {};
++	result.return_lane = return_lane;
++	result.format = format;
++	result.telemetry.path = selected_path::cpu_seqlock;
++	result.telemetry.fallback = fallback_reason::none;
++	result.telemetry.fallback_hresult = 0;
++	if (format != pixel_format::nv12) {
++		result.telemetry.fallback = fallback_reason::format_unsupported;
++		result.telemetry.fallback_hresult = kENotImpl;
++	} else if (requested) {
++		result.telemetry.fallback = fallback_reason::architecture_required;
++		result.telemetry.fallback_hresult = kENotImpl;
++	}
++	return result;
++}
++
++static_assert(kSlotCount >= 3, "return transport must expose a three-slot ring");
++static_assert(sizeof(shared_handle_abi) == sizeof(uint64_t), "handle ABI must be uint64");
++static_assert(sizeof(slot_abi) == 24, "slot ABI must be pointer-free and fixed-width");
++static_assert(sizeof(adapter_luid_abi) == 8, "adapter LUID ABI must be fixed-width");
++static_assert(sizeof(telemetry_abi) == 120, "telemetry ABI must be fixed-width");
++
++} // namespace pulsar::d3d11_return
+-- 
+2.54.0.windows.1
+
+
