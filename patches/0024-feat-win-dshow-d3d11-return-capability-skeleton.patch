@@ -1,4 +1,4 @@
-From a14ee50c707356f4c1abc55fbdfa490a247bbc5b Mon Sep 17 00:00:00 2001
+From 2cca7d45fa34e7071bf95fd3db3b77f944f45968 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Tue, 1 Sep 2026 19:14:42 +0200
@@ -11,12 +11,12 @@ Evidence: bounded keyed-mutex ring, NT handle duplication, CPU fallback
 ---
  plugins/win-dshow/CMakeLists.txt              |   3 +
  .../virtualcam-module/CMakeLists.txt          |   4 +
- .../d3d11-return-transport.cpp                | 633 ++++++++++++++++++
+ .../d3d11-return-transport.cpp                | 645 ++++++++++++++++++
  .../d3d11-return-transport.hpp                | 126 ++++
  .../virtualcam-module/virtualcam-filter.cpp   |  67 +-
  .../virtualcam-module/virtualcam-filter.hpp   |  16 +
  plugins/win-dshow/virtualcam.c                |  23 +-
- 7 files changed, 864 insertions(+), 8 deletions(-)
+ 7 files changed, 876 insertions(+), 8 deletions(-)
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
 
@@ -65,10 +65,10 @@ index 8ac916e17..ec3f43b8e 100644
  if(OBS_PARENT_ARCHITECTURE STREQUAL CMAKE_VS_PLATFORM_NAME)
 diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
 new file mode 100644
-index 000000000..9cdb7baf8
+index 000000000..f99a5307d
 --- /dev/null
 +++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
-@@ -0,0 +1,633 @@
+@@ -0,0 +1,645 @@
 +#include "d3d11-return-transport.hpp"
 +
 +#include "../../../shared/obs-shared-memory-queue/shared-memory-queue.h"
@@ -156,6 +156,16 @@ index 000000000..9cdb7baf8
 +static std::wstring control_name(const wchar_t *name)
 +{
 +	return name ? std::wstring(name) + L".D3D11" : std::wstring();
++}
++
++/* Keep the transport opt-in invariant inside the ABI boundary as well as at
++ * the OBS call sites. This makes a stale module/object pointer fail closed if
++ * the process is running the default CPU transport (or the environment was
++ * changed between construction and teardown). */
++static bool d3d11_transport_requested()
++{
++	const char *transport = getenv("PULSAR_RETURN_TRANSPORT");
++	return transport && strcmp(transport, "d3d11") == 0;
 +}
 +
 +static HRESULT create_device_for_luid(const pulsar_d3d11_return_luid *wanted, ComPtr<ID3D11Device> &device,
@@ -282,7 +292,8 @@ index 000000000..9cdb7baf8
 +extern "C" pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
 +	const wchar_t *name, enum pulsar_d3d11_return_lane lane, uint32_t width, uint32_t height)
 +{
-+	if (!name || !*name || (lane != PULSAR_D3D11_PROGRAM_RETURN && lane != PULSAR_D3D11_PREVIEW_RETURN) ||
++	if (!d3d11_transport_requested() || !name || !*name ||
++		(lane != PULSAR_D3D11_PROGRAM_RETURN && lane != PULSAR_D3D11_PREVIEW_RETURN) ||
 +		width != PULSAR_D3D11_RETURN_WIDTH || height != PULSAR_D3D11_RETURN_HEIGHT)
 +		return nullptr;
 +	const std::wstring map_name = control_name(name);
@@ -560,7 +571,8 @@ index 000000000..9cdb7baf8
 +extern "C" pulsar_d3d11_return_consumer_t *pulsar_d3d11_return_consumer_open(
 +	const wchar_t *name, enum pulsar_d3d11_return_lane lane, uint32_t width, uint32_t height)
 +{
-+	if (!name || !*name || width != PULSAR_D3D11_RETURN_WIDTH || height != PULSAR_D3D11_RETURN_HEIGHT)
++	if (!d3d11_transport_requested() || !name || !*name ||
++		width != PULSAR_D3D11_RETURN_WIDTH || height != PULSAR_D3D11_RETURN_HEIGHT)
 +		return nullptr;
 +	const std::wstring map_name = control_name(name);
 +	HANDLE mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, map_name.c_str());
@@ -609,7 +621,7 @@ index 000000000..9cdb7baf8
 +								 uint64_t *timestamp,
 +								 struct video_queue_frame_metadata *metadata)
 +{
-+	if (!consumer || !dst || !consumer->control)
++	if (!d3d11_transport_requested() || !consumer || !dst || !consumer->control)
 +		return false;
 +	if (!consumer->active && !consumer_open_ring(consumer))
 +		return false;
