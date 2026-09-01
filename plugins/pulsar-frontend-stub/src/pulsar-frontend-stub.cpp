@@ -3794,10 +3794,24 @@ void PulsarFrontendAPI::OnDualLaneTransitionAbortCommitted(void *param, uint64_t
 void PulsarFrontendAPI::dualLaneTransitionTick()
 {
     std::lock_guard<std::mutex> lock(dualLaneMutex);
-    if (!dualLaneTransition.active() || dualLaneTransition.phase() != pulsar_transition::Phase::Running ||
-        dualLaneTransitionFinalPending || !dualLaneTransition.deadline_reached(os_gettime_ns()))
+    if (!dualLaneTransition.active() || dualLaneTransitionFinalPending)
         return;
-    if (!dualLaneTransition.final_queued())
+
+    // Publish FinalQueued for one complete tick before admitting the terminal
+    // atomic swap.  The vendor's Abort path can therefore cancel the pending
+    // transition deterministically after observing transition_final_queued;
+    // the final callback remains the only place that publishes TakeCommitted.
+    // This is a control-plane grace window, not a second video lane or a
+    // callback-side wait.
+    if (dualLaneTransition.phase() == pulsar_transition::Phase::Running) {
+        if (!dualLaneTransition.deadline_reached(os_gettime_ns()) ||
+            !dualLaneTransition.final_queued())
+            return;
+        blog(LOG_INFO, "[pulsar-dual-lane] transition_final_queued kind=%s",
+             pulsar_transition::kind_name(dualLaneTransition.metrics().kind));
+        return;
+    }
+    if (dualLaneTransition.phase() != pulsar_transition::Phase::FinalQueued)
         return;
 
     // The final operation is the same two-view atomic Cut used by the core:
@@ -3809,7 +3823,7 @@ void PulsarFrontendAPI::dualLaneTransitionTick()
         dualLaneTransitionStartNs, OnDualLaneCutCommitted, this);
     if (queued) {
         dualLaneTransitionFinalPending = true;
-        blog(LOG_INFO, "[pulsar-dual-lane] transition_final_queued kind=%s",
+        blog(LOG_INFO, "[pulsar-dual-lane] transition_final_commit_queued kind=%s",
              pulsar_transition::kind_name(dualLaneTransition.metrics().kind));
     } else {
         dualLaneTransition.final_queue_failed();

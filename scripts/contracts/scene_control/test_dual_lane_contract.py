@@ -756,8 +756,10 @@ def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
         "pts_ns",
         "intermediate/mixed",
         "black/empty",
+        "assert_transition_timeline",
     ):
         assert required in source
+    assert "transition_final_commit_queued" in _read(_FRONTEND)
     # Pixel evidence must come from decoded recording bytes, not from a
     # structured success flag or a hardcoded abort boolean.
     assert "subprocess.check_output(command" in source
@@ -848,11 +850,22 @@ def test_transition_boundary_demux_serializes_concurrent_responses() -> None:
 
 def test_transition_boundary_classifier_accepts_coherent_stinger_palette() -> None:
     boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_palette")
+    fade = bytes((172, 79, 0)) * (boundary.WIDTH * boundary.HEIGHT)
+    assert boundary.classify_raw_frame(fade) == "fade"
     blue = bytes((24, 80, 220)) * (boundary.WIDTH * boundary.HEIGHT)
     assert boundary.classify_raw_frame(blue) == "stinger"
+    # Quantized Stinger bins may be distributed without a single dominant
+    # colour. Interleaving bins is coherent; a contiguous palette seam is not.
+    pixel_count = boundary.WIDTH * boundary.HEIGHT
+    palette_pattern = b"".join(bytes(colour) for colour in ((0, 64, 192), (16, 80, 208), (32, 64, 192)))
+    palette = palette_pattern * (pixel_count // 3)
+    assert boundary.classify_raw_frame(palette) == "stinger"
     mixed_palette = blue[: len(blue) // 2] + bytes((220, 220, 24)) * (boundary.WIDTH * boundary.HEIGHT // 2)
-    with pytest.raises(boundary.probe.ProbeFailure, match="mixed|intermediate"):
+    with pytest.raises(boundary.probe.ProbeFailure, match="torn|mixed|intermediate"):
         boundary.classify_raw_frame(mixed_palette)
+    lane_palette = bytes((220, 40, 40)) * (boundary.WIDTH * boundary.HEIGHT // 2) + blue[: len(blue) // 2]
+    with pytest.raises(boundary.probe.ProbeFailure, match="torn|mixed|intermediate"):
+        boundary.classify_raw_frame(lane_palette)
 
 
 def test_transition_boundary_locates_unique_encoded_seam_without_fixed_offset() -> None:
@@ -880,6 +893,18 @@ def test_transition_boundary_raw_classifier_rejects_black_and_mixed_frames() -> 
     boundary.assert_abort_pixels(["red", "red", "red", "red"], 2, expected="red")
     with pytest.raises(boundary.probe.ProbeFailure, match="stale/mixed"):
         boundary.assert_abort_pixels(["red", "green", "green", "green"], 2, expected="red")
+
+
+def test_transition_boundary_timeline_accepts_fade_blends_and_rejects_regression() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_timeline")
+    boundary.assert_transition_timeline(
+        ["red", "red", "fade", "fade", "green", "green"], composition="fade"
+    )
+    boundary.assert_transition_timeline(
+        ["red", "stinger", "stinger", "green"], composition="stinger"
+    )
+    with pytest.raises(boundary.probe.ProbeFailure, match="non-monotone"):
+        boundary.assert_transition_timeline(["red", "green", "fade"], composition="fade")
 
 
 def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:

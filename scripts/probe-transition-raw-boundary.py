@@ -54,7 +54,8 @@ WIDTH = probe.CANVAS_W
 HEIGHT = probe.CANVAS_H
 FRAME_BYTES = WIDTH * HEIGHT * 3
 COLOURS = {"red": (220, 40, 40), "green": (40, 220, 40)}
-LANE_DISTANCE_SQ = 18_000
+LANE_DISTANCE_SQ = 45 * 45
+FADE_DISTANCE_SQ = 80 * 80
 PALETTE_BIN_SIZE = 16
 
 
@@ -148,51 +149,102 @@ def classify_raw_frame(frame: bytes) -> str:
 
     if len(frame) != FRAME_BYTES:
         raise probe.ProbeFailure(f"raw Program frame has {len(frame)} bytes, expected {FRAME_BYTES}")
-    samples = range(0, len(frame), max(3, len(frame) // 12000 // 3 * 3))
-    votes = {name: 0 for name in COLOURS}
-    palette: dict[tuple[int, int, int], int] = {}
+    sample_step = max(3, ((len(frame) // 3) // 12000) * 3)
+    samples = list(range(0, len(frame) - 2, sample_step))
+    categories: list[str] = []
+    palette_bins: list[tuple[int, int, int]] = []
     black = 0
     for offset in samples:
         red, green, blue = frame[offset : offset + 3]
         if max(red, green, blue) <= 8:
             black += 1
             continue
-        if red > 60 and green > 60 and blue < 100 and abs(red - green) < 100 and red + green > 180:
-            raise probe.ProbeFailure(
-                f"raw Program frame contains an intermediate/mixed colour at byte {offset}: {(red, green, blue)}"
-            )
+        pixel = (red, green, blue)
+        # First classify against the line segment joining the observed lane
+        # colours.  A Fade frame is a coherent global blend, so (172,79,0)
+        # and its neighbouring quantized values are valid composition samples,
+        # not torn frames.  Endpoint projections remain lane colours.
+        start = COLOURS["red"]
+        end = COLOURS["green"]
+        direction = tuple(float(b - a) for a, b in zip(start, end))
+        relative = tuple(float(value - a) for value, a in zip(pixel, start))
+        denominator = sum(component * component for component in direction)
+        projection = sum(value * component for value, component in zip(relative, direction)) / denominator
+        t = max(0.0, min(1.0, projection))
+        projected = tuple(start[index] + t * direction[index] for index in range(3))
+        segment_distance = sum((value - projected[index]) ** 2 for index, value in enumerate(pixel))
+        if segment_distance <= FADE_DISTANCE_SQ:
+            if t <= 0.08:
+                categories.append("red")
+            elif t >= 0.92:
+                categories.append("green")
+            else:
+                categories.append("fade")
+            continue
         nearest = min(
             COLOURS,
-            key=lambda name: sum((channel - expected) ** 2 for channel, expected in zip((red, green, blue), COLOURS[name])),
+            key=lambda name: sum((channel - expected) ** 2 for channel, expected in zip(pixel, COLOURS[name])),
         )
         expected = COLOURS[nearest]
-        distance = sum((channel - target) ** 2 for channel, target in zip((red, green, blue), expected))
+        distance = sum((channel - target) ** 2 for channel, target in zip(pixel, expected))
         if distance <= LANE_DISTANCE_SQ:
-            votes[nearest] += 1
+            categories.append(nearest)
             continue
-        # A colour that is inside the red/green lane envelope is an
-        # intermediate blend, never a valid opaque Stinger palette sample.
-        if red > 45 and green > 45 and blue < min(red, green) * 0.75 and abs(red - green) < 150:
-            raise probe.ProbeFailure(
-                f"raw Program frame contains an intermediate/mixed colour at byte {offset}: {(red, green, blue)}"
-            )
-        quantized = tuple(channel // PALETTE_BIN_SIZE for channel in (red, green, blue))
-        palette[quantized] = palette.get(quantized, 0) + 1
-    total = sum(votes.values()) + sum(palette.values()) + black
+        categories.append("stinger")
+        palette_bins.append(tuple(channel // PALETTE_BIN_SIZE for channel in pixel))
+
+    total = len(samples)
     if total == 0 or black > total // 100:
-        raise probe.ProbeFailure(f"raw Program frame is black/empty: black={black} votes={votes} palette={palette}")
-    visible = total - black
-    if votes["red"] * 20 > visible and votes["green"] * 20 > visible:
-        raise probe.ProbeFailure(f"raw Program frame is mixed red/green: black={black} votes={votes}")
-    lane, lane_count = max(votes.items(), key=lambda item: item[1])
-    palette_count = sum(palette.values())
-    if lane_count * 100 >= visible * 80 and palette_count <= visible * 20:
-        return lane
-    if palette:
-        _, dominant_palette_count = max(palette.items(), key=lambda item: item[1])
-        if dominant_palette_count * 100 >= max(1, palette_count) * 55 and palette_count + lane_count == visible:
-            return "stinger"
-    raise probe.ProbeFailure(f"raw Program frame is mixed: black={black} votes={votes} palette={palette}")
+        raise probe.ProbeFailure(f"raw Program frame is black/empty: black={black} categories={categories}")
+    present = set(categories)
+    lane_categories = present.intersection({"red", "green"})
+    composition_categories = present.intersection({"fade", "stinger"})
+    if len(lane_categories) > 1 or (lane_categories and composition_categories):
+        raise probe.ProbeFailure(
+            f"raw Program frame contains a torn spatial lane/composition intermediate/mixed: "
+            f"black={black} categories={sorted(present)}"
+        )
+    if not categories:
+        raise probe.ProbeFailure(f"raw Program frame is black/empty: black={black} categories={categories}")
+    if present == {"red"} or present == {"green"} or present == {"fade"}:
+        return next(iter(present))
+    if present == {"stinger"}:
+        # A real WebM Stinger can distribute many quantized colours.  Do not
+        # require one dominant bin: only reject a spatially torn two-palette
+        # seam, where the scanline contains one contiguous palette followed by
+        # another.  This catches the adversarial half-blue/half-yellow fixture
+        # while accepting interleaved and naturally distributed video palettes.
+        runs = 0
+        previous: tuple[int, int, int] | None = None
+        for palette_bin in palette_bins:
+            if palette_bin != previous:
+                runs += 1
+                previous = palette_bin
+        distinct = set(palette_bins)
+        if len(distinct) == 2 and runs == 2 and all(palette_bins.count(item) > len(palette_bins) // 10 for item in distinct):
+            raise probe.ProbeFailure(
+                f"raw Program frame contains a torn spatial Stinger palette seam: bins={sorted(distinct)}"
+            )
+        return "stinger"
+    raise probe.ProbeFailure(f"raw Program frame is mixed: black={black} categories={sorted(present)}")
+
+
+def assert_transition_timeline(labels: list[str], *, composition: str) -> None:
+    """Require a monotone red -> composition -> green raw Program timeline."""
+
+    if composition not in {"fade", "stinger"}:
+        raise probe.ProbeFailure(f"unsupported transition composition {composition!r}")
+    phases = {"red": 0, composition: 1, "green": 2}
+    last_phase = 0
+    for index, label in enumerate(labels):
+        if label not in phases:
+            raise probe.ProbeFailure(f"raw Program timeline has an unknown label at {index}: {label}")
+        phase = phases[label]
+        if phase < last_phase:
+            raise probe.ProbeFailure(
+                f"raw Program timeline is non-monotone at {index}: {labels[max(0, index - 3): index + 3]}"
+            )
+        last_phase = phase
 
 
 def decode_raw_recording(ffmpeg: str, recording: pathlib.Path) -> list[str]:
@@ -436,6 +488,10 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
             labels = decode_raw_recording(ffmpeg, owned)
             abort_frame_index = int(abort_match.group(1)) - record_start_frames
             commit_frame_index = locate_commit_boundary(labels, before="red", after="green")
+            assert_transition_timeline(
+                labels,
+                composition="stinger" if transition == "Stinger" else "fade",
+            )
             assert_abort_pixels(labels, abort_frame_index, expected="red")
             assert_commit_pixels(labels, commit_frame_index, before="red", after="green")
             state_after = await vendor_request(demux, "boundary-state-after", "GetState", {})
