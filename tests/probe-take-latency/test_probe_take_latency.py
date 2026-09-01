@@ -330,6 +330,74 @@ def _take_records(
                         "encode_time_ms": 1.5 + sample_index * 0.1,
                         "encode_time_samples": 100 + sample_index,
                         "encoder_utilization_percent": 4.0,
+                        "pipeline": {
+                            "tick_sources_ms": 0.20 + sample_index * 0.01,
+                            "output_frames_ms": render + sample_index * 0.001,
+                            "render_displays_ms": 0.02,
+                            "graphics_tasks_ms": 0.01,
+                            "frame_total_ms": render + 0.25 + sample_index * 0.001,
+                        },
+                        "program_mix": {
+                            "width": 1920,
+                            "height": 1080,
+                            "fps_num": 60,
+                            "fps_den": 1,
+                            "render_submit_ms": 0.50 + sample_index * 0.01,
+                            "render_setup_ms": 0.0,
+                            "render_main_ms": 0.20 + sample_index * 0.005,
+                            "render_scale_ms": 0.02,
+                            "render_convert_ms": 0.15,
+                            "gpu_flush_ms": 0.0,
+                            "gpu_encode_submit_ms": 0.05,
+                            "raw_stage_ms": 0.06,
+                            "render_teardown_ms": 0.0,
+                            "render_unattributed_ms": 0.02 + sample_index * 0.005,
+                            "download_ms": 0.20,
+                            "flush_ms": 0.05,
+                            "output_copy_ms": 0.10,
+                            "borrowed_schedule_ms": 0.0,
+                            "borrowed_publish_ms": 0.0,
+                            "borrowed_wait_ms": 0.0,
+                            "return_output_callback_ms": 0.08,
+                            "frame_unattributed_ms": 0.05,
+                            "frame_total_ms": 0.90 + sample_index * 0.01,
+                        },
+                        "preview_mix": {
+                            "active": mode == "dual_lane",
+                            "width": 1920,
+                            "height": 1080,
+                            "fps_num": 60,
+                            "fps_den": 1,
+                            "render_submit_ms": 0.35 if mode == "dual_lane" else 0.0,
+                            "render_setup_ms": 0.0,
+                            "render_main_ms": 0.15 if mode == "dual_lane" else 0.0,
+                            "render_scale_ms": 0.02 if mode == "dual_lane" else 0.0,
+                            "render_convert_ms": 0.10 if mode == "dual_lane" else 0.0,
+                            "gpu_flush_ms": 0.0,
+                            "gpu_encode_submit_ms": 0.0,
+                            "raw_stage_ms": 0.06 if mode == "dual_lane" else 0.0,
+                            "render_teardown_ms": 0.0,
+                            "render_unattributed_ms": 0.02 if mode == "dual_lane" else 0.0,
+                            "download_ms": 0.18 if mode == "dual_lane" else 0.0,
+                            "flush_ms": 0.04 if mode == "dual_lane" else 0.0,
+                            "output_copy_ms": 0.09 if mode == "dual_lane" else 0.0,
+                            "borrowed_schedule_ms": 0.001 if mode == "dual_lane" else 0.0,
+                            "borrowed_publish_ms": 0.45 if mode == "dual_lane" else 0.0,
+                            "borrowed_wait_ms": 0.01 if mode == "dual_lane" else 0.0,
+                            "return_output_callback_ms": 0.43 if mode == "dual_lane" else 0.0,
+                            "frame_unattributed_ms": 0.039 if mode == "dual_lane" else 0.0,
+                            "frame_total_ms": 0.70 if mode == "dual_lane" else 0.0,
+                        },
+                        "source_profile": {
+                            "program_valid": True,
+                            "program_tick_cpu_ms": 0.08,
+                            "program_render_cpu_ms": 0.40,
+                            "program_render_gpu_ms": 0.55,
+                            "preview_valid": mode == "dual_lane",
+                            "preview_tick_cpu_ms": 0.06 if mode == "dual_lane" else 0.0,
+                            "preview_render_cpu_ms": 0.30 if mode == "dual_lane" else 0.0,
+                            "preview_render_gpu_ms": 0.45 if mode == "dual_lane" else 0.0,
+                        },
                     }
                 )
     return records
@@ -355,11 +423,23 @@ def test_fixture_reports_all_boundaries_separately_and_never_runtime_pass():
     assert report["latency"]["encoded_first_packet"]["p95_ms"] < 15
     assert report["criteria"]["AC-12"]["ac12b"]["count"] == 3
     assert report["resources"]["status"] == "MEASURED"
+    assert report["resources"]["accounting_status"] == "COMPLETE"
+    assert report["resources"]["accounting"]["dual_lane"]["program_mix"]["status"] == "COMPLETE"
+    assert report["resources"]["accounting"]["dual_lane"]["preview_mix"]["status"] == "COMPLETE"
     assert report["resources"]["comparison"]["frame_render_ms"]["within_known_reference"] is True
     assert report["resources"]["comparison"]["resident_bytes"]["within_known_reference"] is True
     assert report["resources"]["metrics"]["dual_lane"]["dropped_frames"]["p50"] == pytest.approx(0.5)
     assert report["resources"]["metrics"]["dual_lane"]["missed_frames"]["p95"] == pytest.approx(0.95)
     assert report["resources"]["metrics"]["dual_lane"]["encode_time_ms"]["p95"] == pytest.approx(1.595)
+    assert report["resources"]["stage_metrics"]["dual_lane"]["preview_mix"]["frame_total_ms"]["p50"] == pytest.approx(0.7)
+    assert report["resources"]["comparison"]["stages"]["preview_mix"]["render_submit_ms"]["dual_lane_p50"] == pytest.approx(0.35)
+    assert report["resources"]["mix_formats"]["dual_lane"]["preview"] == {
+        "active": True,
+        "width": 1920,
+        "height": 1080,
+        "fps_num": 60,
+        "fps_den": 1,
+    }
     assert report["ignored_valid_samples_before_commit"]["encoder_input_raw"] == 3
 
 
@@ -372,6 +452,18 @@ def test_runtime_report_can_pass_only_with_explicit_complete_evidence():
     assert report["takes"]["total_committed_takes"] == 6
     assert report["latency"]["encoder_input_raw"]["count"] == 3
     assert all(report["criteria"][criterion]["status"] in ("PASS", "MEASURED") for criterion in ("AC-07", "AC-08", "AC-11", "AC-12", "AC-13"))
+
+
+def test_stage_accounting_surfaces_large_positive_residual_as_incomplete():
+    trace = _trace(3, evidence_kind="runtime")
+    for sample in trace.resources:
+        if sample["sample_mode"] == "dual_lane":
+            sample["preview_mix"]["frame_unattributed_ms"] = 0.5
+
+    report = probe.analyze_trace(trace, minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
+    assert report["resources"]["status"] == "MEASURED"
+    assert report["resources"]["accounting_status"] == "INCOMPLETE"
+    assert report["resources"]["accounting"]["dual_lane"]["preview_mix"]["status"] == "INCOMPLETE"
 
 
 def test_runtime_x264_without_resources_passes_and_marks_ac13_not_applicable():

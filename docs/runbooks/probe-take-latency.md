@@ -237,6 +237,40 @@ known `+0.091 ms/frame` and `+3.13 MB` references. It never declares runtime
 capacity from the reference alone. Samples with `encoder_active=false` remain
 diagnostic and cannot satisfy the AC-13 minimum.
 
+Stage telemetry keeps Preview at the session's declared 1920x1080/60 and
+decomposes the cost without changing cadence or resolution. `pipeline`
+contains interval averages for source ticking, all video mixes, display
+rendering, graphics tasks and the full graphics frame. `program_mix` and
+`preview_mix` separately expose CPU time for render submission, GPU-to-CPU
+download, graphics flush, output-frame copy/publication and total mix work.
+The borrowed PreviewReturn fastpath additionally reports
+`borrowed_publish_ms` for the shared-memory copy on its worker and
+`borrowed_wait_ms` for any graphics-thread wait before the mapped staging
+surface can be reused. This keeps the copy cost visible even when it no longer
+blocks the frame that scheduled it.
+The detailed Program/Preview ledger also separates render setup, main
+composition, output scaling, color conversion, GPU flush/synchronization,
+GPU-encoder submission, raw staging, render teardown, borrowed scheduling,
+and the corresponding ProgramReturn/PreviewReturn raw callback.
+`render_unattributed_ms` and `frame_unattributed_ms` close the two
+accounting levels. The analyzer reports `accounting_status=COMPLETE` only when
+the p95 absolute residual for both lanes and both levels stays at or below
+0.1 ms; a larger residual remains visible as `INCOMPLETE` instead of being
+silently assigned to another stage. Worker publication and encoder execution
+remain asynchronous side ledgers and are therefore not added to the graphics
+frame total.
+ProgramReturn and PreviewReturn use the same bounded borrowed-frame worker:
+NVENC submission and the Program commit remain on the graphics/encoder path,
+while the DirectShow shared-memory callback runs off the graphics thread. The
+worker may borrow only a native-format frame, may not retain its pointers, and
+must finish before libobs reuses the mapped staging surface. This changes no
+encoder, resolution, pixel format, PTS, or frame identity.
+`source_profile` adds per-role source tick/render CPU time and asynchronous GPU
+timer results. The parser reports p50/p95/p99 for every stage and a
+reference-to-dual delta; Preview-only stages are reported as absolute dual-lane
+costs. Host GPU utilization is not a substitute for the per-source GPU timer,
+and CPU render submission is never described as GPU execution time.
+
 The `encoder_active` and `encoder_family` fields are optional for backward
 parsing of older traces; when either is absent or the family is not `nvenc`,
 the sample is treated as ineligible for acceptance. This

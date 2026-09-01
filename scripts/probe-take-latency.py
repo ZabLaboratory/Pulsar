@@ -130,6 +130,45 @@ RESOURCE_METRICS = (
     "encode_time_ms",
     "encoder_utilization_percent",
 )
+PIPELINE_STAGE_FIELDS = (
+    "tick_sources_ms",
+    "output_frames_ms",
+    "render_displays_ms",
+    "graphics_tasks_ms",
+    "frame_total_ms",
+)
+MIX_STAGE_FIELDS = (
+    "render_submit_ms",
+    "render_setup_ms",
+    "render_main_ms",
+    "render_scale_ms",
+    "render_convert_ms",
+    "gpu_flush_ms",
+    "gpu_encode_submit_ms",
+    "raw_stage_ms",
+    "render_teardown_ms",
+    "render_unattributed_ms",
+    "download_ms",
+    "flush_ms",
+    "output_copy_ms",
+    "borrowed_schedule_ms",
+    "borrowed_publish_ms",
+    "borrowed_wait_ms",
+    "return_output_callback_ms",
+    "frame_unattributed_ms",
+    "frame_total_ms",
+)
+ACCOUNTING_RESIDUAL_FIELDS = ("render_unattributed_ms", "frame_unattributed_ms")
+ACCOUNTING_COMPLETE_P95_MS = 0.1
+MIX_FORMAT_FIELDS = ("width", "height", "fps_num", "fps_den")
+SOURCE_PROFILE_FIELDS = (
+    "program_tick_cpu_ms",
+    "program_render_cpu_ms",
+    "program_render_gpu_ms",
+    "preview_tick_cpu_ms",
+    "preview_render_cpu_ms",
+    "preview_render_gpu_ms",
+)
 
 SESSION_REQUIRED = {
     "record_type",
@@ -225,6 +264,10 @@ RESOURCE_OPTIONAL = {
     "gpu_memory_bytes",
     "rtmp_load_active",
     "encode_time_samples",
+    "pipeline",
+    "program_mix",
+    "preview_mix",
+    "source_profile",
     "notes",
 }
 RESOURCE_ALLOWED = RESOURCE_REQUIRED | RESOURCE_OPTIONAL
@@ -806,6 +849,53 @@ def _validate_resource(value: Any, session: Mapping[str, Any], *, line: int | No
             )
     if "gpu_memory_bytes" in obj:
         _integer(obj["gpu_memory_bytes"], "resource.gpu_memory_bytes", line=line)
+    if "pipeline" in obj:
+        pipeline = _object(obj["pipeline"], "resource.pipeline", line=line)
+        _exact_keys(pipeline, set(PIPELINE_STAGE_FIELDS), set(PIPELINE_STAGE_FIELDS), "resource.pipeline", line=line)
+        for key in PIPELINE_STAGE_FIELDS:
+            if _number(pipeline[key], f"resource.pipeline.{key}", line=line) < 0:
+                raise EvidenceError("SCHEMA_INVALID", f"resource.pipeline.{key} must be non-negative", line=line)
+    for mix_name in ("program_mix", "preview_mix"):
+        if mix_name not in obj:
+            continue
+        mix = _object(obj[mix_name], f"resource.{mix_name}", line=line)
+        required = set(MIX_STAGE_FIELDS) | set(MIX_FORMAT_FIELDS) | ({"active"} if mix_name == "preview_mix" else set())
+        _exact_keys(mix, required, required, f"resource.{mix_name}", line=line)
+        if mix_name == "preview_mix":
+            _boolean(mix["active"], "resource.preview_mix.active", line=line)
+            if mix["active"] != (producer_count == 2):
+                raise EvidenceError("CORRELATION_INVALID", "preview_mix.active must match producer_count", line=line)
+        for key in MIX_STAGE_FIELDS:
+            value = _number(mix[key], f"resource.{mix_name}.{key}", line=line)
+            if key in ACCOUNTING_RESIDUAL_FIELDS:
+                if value < -ACCOUNTING_COMPLETE_P95_MS:
+                    raise EvidenceError(
+                        "ACCOUNTING_INVALID",
+                        f"resource.{mix_name}.{key} is negative beyond timer tolerance",
+                        line=line,
+                    )
+            elif value < 0:
+                raise EvidenceError("SCHEMA_INVALID", f"resource.{mix_name}.{key} must be non-negative", line=line)
+        for key in MIX_FORMAT_FIELDS:
+            if _integer(mix[key], f"resource.{mix_name}.{key}", line=line) <= 0:
+                raise EvidenceError("SCHEMA_INVALID", f"resource.{mix_name}.{key} must be positive", line=line)
+            if mix[key] != session["video"][key]:
+                raise EvidenceError(
+                    "CORRELATION_INVALID",
+                    f"resource.{mix_name}.{key} differs from the declared session video",
+                    line=line,
+                )
+    if "source_profile" in obj:
+        profile = _object(obj["source_profile"], "resource.source_profile", line=line)
+        required = set(SOURCE_PROFILE_FIELDS) | {"program_valid", "preview_valid"}
+        _exact_keys(profile, required, required, "resource.source_profile", line=line)
+        _boolean(profile["program_valid"], "resource.source_profile.program_valid", line=line)
+        _boolean(profile["preview_valid"], "resource.source_profile.preview_valid", line=line)
+        if profile["preview_valid"] and producer_count != 2:
+            raise EvidenceError("CORRELATION_INVALID", "preview source profile requires dual_lane topology", line=line)
+        for key in SOURCE_PROFILE_FIELDS:
+            if _number(profile[key], f"resource.source_profile.{key}", line=line) < 0:
+                raise EvidenceError("SCHEMA_INVALID", f"resource.source_profile.{key} must be non-negative", line=line)
     return result
 
 
@@ -1547,6 +1637,9 @@ def analyze_trace(
         "rtmp_load_active_sample_counts": {},
         "rtmp_eligible_sample_counts": {},
         "metrics": {},
+        "stage_metrics": {},
+        "accounting": {},
+        "mix_formats": {},
         "comparison": {},
     }
     for mode in RESOURCE_MODES:
@@ -1570,6 +1663,52 @@ def analyze_trace(
         resource_report["metrics"][mode] = {
             metric: _resource_stats([sample[metric] for sample in admitted_samples]) for metric in RESOURCE_METRICS
         }
+        stage_metrics: dict[str, Any] = {}
+        for group, fields in (
+            ("pipeline", PIPELINE_STAGE_FIELDS),
+            ("program_mix", MIX_STAGE_FIELDS),
+            ("preview_mix", MIX_STAGE_FIELDS),
+            ("source_profile", SOURCE_PROFILE_FIELDS),
+        ):
+            values = [sample[group] for sample in admitted_samples if group in sample]
+            if values:
+                stage_metrics[group] = {
+                    field: _resource_stats([value[field] for value in values]) for field in fields
+                }
+                stage_metrics[group]["sample_count"] = len(values)
+        resource_report["stage_metrics"][mode] = stage_metrics
+        accounting: dict[str, Any] = {}
+        for mix_name in ("program_mix", "preview_mix"):
+            mixes = [sample[mix_name] for sample in admitted_samples if mix_name in sample]
+            residuals = [
+                abs(float(mix[field]))
+                for mix in mixes
+                for field in ACCOUNTING_RESIDUAL_FIELDS
+            ]
+            p95 = quantile(residuals, 0.95) if residuals else None
+            accounting[mix_name] = {
+                "sample_count": len(mixes),
+                "max_absolute_residual_ms": round(max(residuals), 6) if residuals else None,
+                "p95_absolute_residual_ms": round(p95, 6) if p95 is not None else None,
+                "tolerance_ms": ACCOUNTING_COMPLETE_P95_MS,
+                "status": (
+                    "COMPLETE"
+                    if p95 is not None and p95 <= ACCOUNTING_COMPLETE_P95_MS
+                    else "INCOMPLETE"
+                ),
+            }
+        resource_report["accounting"][mode] = accounting
+        format_samples = [sample for sample in admitted_samples if "program_mix" in sample and "preview_mix" in sample]
+        if format_samples:
+            first = format_samples[0]
+            resource_report["mix_formats"][mode] = {
+                "program": {field: first["program_mix"][field] for field in MIX_FORMAT_FIELDS},
+                "preview": {
+                    "active": first["preview_mix"]["active"],
+                    **{field: first["preview_mix"][field] for field in MIX_FORMAT_FIELDS},
+                },
+                "sample_count": len(format_samples),
+            }
     if session["codec"] == "x264":
         # AC-13 is a resource delta for the NVENC workload specifically.  An
         # x264 trace may carry diagnostic resource samples, but they must not
@@ -1610,7 +1749,41 @@ def analyze_trace(
                     "known_reference_delta": expected,
                     "within_known_reference": delta <= expected,
                 }
+            stage_comparison: dict[str, Any] = {}
+            for group, fields in (
+                ("pipeline", PIPELINE_STAGE_FIELDS),
+                ("program_mix", MIX_STAGE_FIELDS),
+                ("source_profile", SOURCE_PROFILE_FIELDS[:3]),
+            ):
+                reference_group = resource_report["stage_metrics"]["reference"].get(group)
+                dual_group = resource_report["stage_metrics"]["dual_lane"].get(group)
+                if not reference_group or not dual_group:
+                    continue
+                stage_comparison[group] = {}
+                for field in fields:
+                    reference_p50 = reference_group[field]["p50"]
+                    dual_p50 = dual_group[field]["p50"]
+                    stage_comparison[group][field] = {
+                        "reference_p50": reference_p50,
+                        "dual_lane_p50": dual_p50,
+                        "delta": round(float(dual_p50) - float(reference_p50), 6),
+                    }
+            preview_group = resource_report["stage_metrics"]["dual_lane"].get("preview_mix")
+            if preview_group:
+                stage_comparison["preview_mix"] = {
+                    field: {"dual_lane_p50": preview_group[field]["p50"]} for field in MIX_STAGE_FIELDS
+                }
+            resource_report["comparison"]["stages"] = stage_comparison
             resource_report["status"] = "MEASURED"
+            accounting_states = [
+                entry["status"]
+                for mode_accounting in resource_report["accounting"].values()
+                for entry in mode_accounting.values()
+            ]
+            resource_report["accounting_status"] = (
+                "COMPLETE" if accounting_states and all(state == "COMPLETE" for state in accounting_states)
+                else "INCOMPLETE"
+            )
         else:
             resource_report["status"] = "UNPROVEN"
             resource_report["reason"] = (

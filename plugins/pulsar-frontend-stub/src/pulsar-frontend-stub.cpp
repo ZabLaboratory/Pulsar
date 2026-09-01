@@ -56,6 +56,7 @@
 #include <obs-frontend-internal.hpp>
 #include <util/config-file.h>
 #include <util/darray.h>
+#include <util/source-profiler.h>
 #include <util/util.hpp>
 
 #include <algorithm>
@@ -383,7 +384,9 @@ public:
 
     void initialize(const char *encoderFamily, const obs_video_info &video, bool wgcWorkload,
                     bool cefWorkload, bool wgcSourceBound, obs_encoder_t *videoEncoder,
-                    obs_output_t *streamOutput)
+                    obs_output_t *streamOutput, obs_output_t *programReturnOutput,
+                    obs_output_t *previewReturnOutput, video_t *programVideo, video_t *previewVideo,
+                    obs_source_t *programRoot, obs_source_t *previewRoot)
     {
         stopResourceSampler();
         stopTraceWriter();
@@ -419,6 +422,16 @@ public:
             encoderFamily_.clear();
             videoEncoder_ = nullptr;
             streamOutput_ = nullptr;
+            programReturnOutput_ = nullptr;
+            previewReturnOutput_ = nullptr;
+            programVideo_ = nullptr;
+            previewVideo_ = nullptr;
+            programRoot_ = nullptr;
+            previewRoot_ = nullptr;
+            videoWidth_ = 0;
+            videoHeight_ = 0;
+            videoFpsNum_ = 0;
+            videoFpsDen_ = 0;
         }
 
         const char *tracePath = std::getenv("PULSAR_TRACE_PATH");
@@ -480,6 +493,16 @@ public:
             // Non-owning: setup owns streamOutput and teardown joins this
             // sampler before stopping/releasing the output.
             streamOutput_ = streamOutput;
+            programReturnOutput_ = programReturnOutput;
+            previewReturnOutput_ = previewReturnOutput;
+            programVideo_ = programVideo;
+            previewVideo_ = previewVideo;
+            programRoot_ = programRoot;
+            previewRoot_ = previewRoot;
+            videoWidth_ = video.output_width;
+            videoHeight_ = video.output_height;
+            videoFpsNum_ = video.fps_num;
+            videoFpsDen_ = video.fps_den;
             session = sessionJson(encoderFamily, video, wgcWorkload, cefWorkload, wgcSourceBound);
         }
 
@@ -531,6 +554,10 @@ public:
             hasResourceMode = !resourceMode_.empty();
         }
         if (hasResourceMode)
+            source_profiler_enable(true);
+        if (hasResourceMode)
+            source_profiler_gpu_enable(true);
+        if (hasResourceMode)
             startResourceSampler();
     }
 
@@ -550,12 +577,25 @@ public:
         encoderFamily_.clear();
         videoEncoder_ = nullptr;
         streamOutput_ = nullptr;
+        programReturnOutput_ = nullptr;
+        previewReturnOutput_ = nullptr;
+        programVideo_ = nullptr;
+        previewVideo_ = nullptr;
+        programRoot_ = nullptr;
+        previewRoot_ = nullptr;
     }
 
     bool enabled()
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         return enabled_;
+    }
+
+    void updateMixRoots(obs_source_t *programRoot, obs_source_t *previewRoot)
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        programRoot_ = programRoot;
+        previewRoot_ = previewRoot;
     }
 
     // This is the runtime identity accepted by the trace initializer.  The
@@ -1115,6 +1155,59 @@ private:
         return interval;
     }
 
+    static double intervalAverageMs(uint64_t currentTotal, uint64_t previousTotal,
+                                    uint64_t currentSamples, uint64_t previousSamples)
+    {
+        if (currentTotal < previousTotal || currentSamples <= previousSamples)
+            return 0.0;
+        return static_cast<double>(currentTotal - previousTotal) /
+               static_cast<double>(currentSamples - previousSamples) / 1000000.0;
+    }
+
+    static double renderResidualMs(const obs_video_mix_pipeline_stats &current,
+                                   const obs_video_mix_pipeline_stats &previous)
+    {
+        const double render = intervalAverageMs(current.render_submit_ns, previous.render_submit_ns,
+                                                current.sample_count, previous.sample_count);
+        const double attributed =
+            intervalAverageMs(current.render_setup_ns, previous.render_setup_ns, current.sample_count,
+                              previous.sample_count) +
+            intervalAverageMs(current.render_main_ns, previous.render_main_ns, current.sample_count,
+                              previous.sample_count) +
+            intervalAverageMs(current.render_scale_ns, previous.render_scale_ns, current.sample_count,
+                              previous.sample_count) +
+            intervalAverageMs(current.render_convert_ns, previous.render_convert_ns,
+                              current.sample_count, previous.sample_count) +
+            intervalAverageMs(current.gpu_flush_ns, previous.gpu_flush_ns, current.sample_count,
+                              previous.sample_count) +
+            intervalAverageMs(current.gpu_encode_submit_ns, previous.gpu_encode_submit_ns,
+                              current.sample_count, previous.sample_count) +
+            intervalAverageMs(current.raw_stage_ns, previous.raw_stage_ns, current.sample_count,
+                              previous.sample_count) +
+            intervalAverageMs(current.render_teardown_ns, previous.render_teardown_ns,
+                              current.sample_count, previous.sample_count);
+        return render - attributed;
+    }
+
+    static double frameResidualMs(const obs_video_mix_pipeline_stats &current,
+                                  const obs_video_mix_pipeline_stats &previous)
+    {
+        const double frame = intervalAverageMs(current.frame_total_ns, previous.frame_total_ns,
+                                               current.sample_count, previous.sample_count);
+        const double attributed =
+            intervalAverageMs(current.render_submit_ns, previous.render_submit_ns,
+                              current.sample_count, previous.sample_count) +
+            intervalAverageMs(current.download_ns, previous.download_ns, current.sample_count,
+                              previous.sample_count) +
+            intervalAverageMs(current.flush_ns, previous.flush_ns, current.sample_count,
+                              previous.sample_count) +
+            intervalAverageMs(current.borrowed_schedule_ns, previous.borrowed_schedule_ns,
+                              current.sample_count, previous.sample_count) +
+            intervalAverageMs(current.output_copy_ns, previous.output_copy_ns, current.sample_count,
+                              previous.sample_count);
+        return frame - attributed;
+    }
+
     void startResourceSampler()
     {
         resourceStop_.store(false, std::memory_order_release);
@@ -1135,6 +1228,12 @@ private:
     void resourceLoop()
     {
         const uint32_t interval = resourceIntervalMs();
+        obs_graphics_pipeline_stats previousGraphics = {};
+        obs_video_mix_pipeline_stats previousProgram = {};
+        obs_video_mix_pipeline_stats previousPreview = {};
+        obs_raw_output_pipeline_stats previousProgramReturn = {};
+        obs_raw_output_pipeline_stats previousPreviewReturn = {};
+        bool havePipelineBaseline = false;
         resourceCpuInfo_ = os_cpu_usage_info_start();
         if (!resourceCpuInfo_)
             blog(LOG_WARNING, "[pulsar-runtime-telemetry] process CPU sampler unavailable");
@@ -1175,6 +1274,12 @@ private:
             uint64_t producerCount = 0;
             obs_encoder_t *videoEncoder = nullptr;
             obs_output_t *streamOutput = nullptr;
+            obs_output_t *programReturnOutput = nullptr;
+            obs_output_t *previewReturnOutput = nullptr;
+            video_t *programVideo = nullptr;
+            video_t *previewVideo = nullptr;
+            obs_source_t *programRoot = nullptr;
+            obs_source_t *previewRoot = nullptr;
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
                 if (!enabled_ || resourceMode_.empty())
@@ -1189,7 +1294,43 @@ private:
                 producerCount = producerCount_;
                 videoEncoder = videoEncoder_;
                 streamOutput = streamOutput_;
+                programReturnOutput = programReturnOutput_;
+                previewReturnOutput = previewReturnOutput_;
+                programVideo = programVideo_;
+                previewVideo = previewVideo_;
+                programRoot = programRoot_;
+                previewRoot = previewRoot_;
             }
+
+            obs_graphics_pipeline_stats graphics = {};
+            obs_video_mix_pipeline_stats program = {};
+            obs_video_mix_pipeline_stats preview = {};
+            obs_raw_output_pipeline_stats programReturn = {};
+            obs_raw_output_pipeline_stats previewReturn = {};
+            if (!obs_get_graphics_pipeline_stats(&graphics) ||
+                !obs_video_get_mix_pipeline_stats(programVideo, &program) ||
+                (producerCount == 2 && !obs_video_get_mix_pipeline_stats(previewVideo, &preview)) ||
+                (programReturnOutput &&
+                 !obs_output_get_raw_pipeline_stats(programReturnOutput, &programReturn)) ||
+                (producerCount == 2 && previewReturnOutput &&
+                 !obs_output_get_raw_pipeline_stats(previewReturnOutput, &previewReturn)))
+                continue;
+            if (!havePipelineBaseline) {
+                previousGraphics = graphics;
+                previousProgram = program;
+                previousPreview = preview;
+                previousProgramReturn = programReturn;
+                previousPreviewReturn = previewReturn;
+                havePipelineBaseline = true;
+                continue;
+            }
+
+            profiler_result_t programProfile = {};
+            profiler_result_t previewProfile = {};
+            const bool programProfileValid = programRoot &&
+                                             source_profiler_fill_result(programRoot, &programProfile);
+            const bool previewProfileValid = producerCount == 2 && previewRoot &&
+                                             source_profiler_fill_result(previewRoot, &previewProfile);
             const bool encoderActive = videoEncoder && obs_encoder_active(videoEncoder);
             const bool rtmpLoadActive = streamOutput && obs_output_active(streamOutput);
             const int outputDropped = rtmpLoadActive ? obs_output_get_frames_dropped(streamOutput) : 0;
@@ -1217,6 +1358,68 @@ private:
                    << ",\"missed_frames\":" << missedFrames
                    << ",\"encode_time_ms\":" << std::setprecision(9) << encodeTimeMs
                    << ",\"encode_time_samples\":" << encodeSamples
+                   << ",\"pipeline\":{"
+                   << "\"tick_sources_ms\":" << intervalAverageMs(graphics.tick_sources_ns, previousGraphics.tick_sources_ns, graphics.sample_count, previousGraphics.sample_count)
+                   << ",\"output_frames_ms\":" << intervalAverageMs(graphics.output_frames_ns, previousGraphics.output_frames_ns, graphics.sample_count, previousGraphics.sample_count)
+                   << ",\"render_displays_ms\":" << intervalAverageMs(graphics.render_displays_ns, previousGraphics.render_displays_ns, graphics.sample_count, previousGraphics.sample_count)
+                   << ",\"graphics_tasks_ms\":" << intervalAverageMs(graphics.graphics_tasks_ns, previousGraphics.graphics_tasks_ns, graphics.sample_count, previousGraphics.sample_count)
+                   << ",\"frame_total_ms\":" << intervalAverageMs(graphics.frame_total_ns, previousGraphics.frame_total_ns, graphics.sample_count, previousGraphics.sample_count)
+                   << "},\"program_mix\":{"
+                   << "\"width\":" << videoWidth_ << ",\"height\":" << videoHeight_
+                   << ",\"fps_num\":" << videoFpsNum_ << ",\"fps_den\":" << videoFpsDen_
+                   << ","
+                   << "\"render_submit_ms\":" << intervalAverageMs(program.render_submit_ns, previousProgram.render_submit_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"render_setup_ms\":" << intervalAverageMs(program.render_setup_ns, previousProgram.render_setup_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"render_main_ms\":" << intervalAverageMs(program.render_main_ns, previousProgram.render_main_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"render_scale_ms\":" << intervalAverageMs(program.render_scale_ns, previousProgram.render_scale_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"render_convert_ms\":" << intervalAverageMs(program.render_convert_ns, previousProgram.render_convert_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"gpu_flush_ms\":" << intervalAverageMs(program.gpu_flush_ns, previousProgram.gpu_flush_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"gpu_encode_submit_ms\":" << intervalAverageMs(program.gpu_encode_submit_ns, previousProgram.gpu_encode_submit_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"raw_stage_ms\":" << intervalAverageMs(program.raw_stage_ns, previousProgram.raw_stage_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"render_teardown_ms\":" << intervalAverageMs(program.render_teardown_ns, previousProgram.render_teardown_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"render_unattributed_ms\":" << renderResidualMs(program, previousProgram)
+                   << ",\"download_ms\":" << intervalAverageMs(program.download_ns, previousProgram.download_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"flush_ms\":" << intervalAverageMs(program.flush_ns, previousProgram.flush_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"output_copy_ms\":" << intervalAverageMs(program.output_copy_ns, previousProgram.output_copy_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"borrowed_schedule_ms\":" << intervalAverageMs(program.borrowed_schedule_ns, previousProgram.borrowed_schedule_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"borrowed_publish_ms\":" << intervalAverageMs(program.borrowed_publish_ns, previousProgram.borrowed_publish_ns, program.borrowed_publish_sample_count, previousProgram.borrowed_publish_sample_count)
+                   << ",\"borrowed_wait_ms\":" << intervalAverageMs(program.borrowed_wait_ns, previousProgram.borrowed_wait_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"return_output_callback_ms\":" << intervalAverageMs(programReturn.callback_ns, previousProgramReturn.callback_ns, programReturn.sample_count, previousProgramReturn.sample_count)
+                   << ",\"frame_unattributed_ms\":" << frameResidualMs(program, previousProgram)
+                   << ",\"frame_total_ms\":" << intervalAverageMs(program.frame_total_ns, previousProgram.frame_total_ns, program.sample_count, previousProgram.sample_count)
+                   << "},\"preview_mix\":{"
+                   << "\"active\":" << (producerCount == 2 ? "true" : "false")
+                   << ",\"width\":" << videoWidth_ << ",\"height\":" << videoHeight_
+                   << ",\"fps_num\":" << videoFpsNum_ << ",\"fps_den\":" << videoFpsDen_
+                   << ",\"render_submit_ms\":" << intervalAverageMs(preview.render_submit_ns, previousPreview.render_submit_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"render_setup_ms\":" << intervalAverageMs(preview.render_setup_ns, previousPreview.render_setup_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"render_main_ms\":" << intervalAverageMs(preview.render_main_ns, previousPreview.render_main_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"render_scale_ms\":" << intervalAverageMs(preview.render_scale_ns, previousPreview.render_scale_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"render_convert_ms\":" << intervalAverageMs(preview.render_convert_ns, previousPreview.render_convert_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"gpu_flush_ms\":" << intervalAverageMs(preview.gpu_flush_ns, previousPreview.gpu_flush_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"gpu_encode_submit_ms\":" << intervalAverageMs(preview.gpu_encode_submit_ns, previousPreview.gpu_encode_submit_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"raw_stage_ms\":" << intervalAverageMs(preview.raw_stage_ns, previousPreview.raw_stage_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"render_teardown_ms\":" << intervalAverageMs(preview.render_teardown_ns, previousPreview.render_teardown_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"render_unattributed_ms\":" << renderResidualMs(preview, previousPreview)
+                   << ",\"download_ms\":" << intervalAverageMs(preview.download_ns, previousPreview.download_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"flush_ms\":" << intervalAverageMs(preview.flush_ns, previousPreview.flush_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"output_copy_ms\":" << intervalAverageMs(preview.output_copy_ns, previousPreview.output_copy_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"borrowed_schedule_ms\":" << intervalAverageMs(preview.borrowed_schedule_ns, previousPreview.borrowed_schedule_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"borrowed_publish_ms\":" << intervalAverageMs(preview.borrowed_publish_ns, previousPreview.borrowed_publish_ns, preview.borrowed_publish_sample_count, previousPreview.borrowed_publish_sample_count)
+                   << ",\"borrowed_wait_ms\":" << intervalAverageMs(preview.borrowed_wait_ns, previousPreview.borrowed_wait_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"return_output_callback_ms\":" << intervalAverageMs(previewReturn.callback_ns, previousPreviewReturn.callback_ns, previewReturn.sample_count, previousPreviewReturn.sample_count)
+                   << ",\"frame_unattributed_ms\":" << frameResidualMs(preview, previousPreview)
+                   << ",\"frame_total_ms\":" << intervalAverageMs(preview.frame_total_ns, previousPreview.frame_total_ns, preview.sample_count, previousPreview.sample_count)
+                   << "},\"source_profile\":{"
+                   << "\"program_valid\":" << (programProfileValid ? "true" : "false")
+                   << ",\"program_tick_cpu_ms\":" << static_cast<double>(programProfile.tick_avg) / 1000000.0
+                   << ",\"program_render_cpu_ms\":" << static_cast<double>(programProfile.render_sum) / 1000000.0
+                   << ",\"program_render_gpu_ms\":" << static_cast<double>(programProfile.render_gpu_sum) / 1000000.0
+                   << ",\"preview_valid\":" << (previewProfileValid ? "true" : "false")
+                   << ",\"preview_tick_cpu_ms\":" << static_cast<double>(previewProfile.tick_avg) / 1000000.0
+                   << ",\"preview_render_cpu_ms\":" << static_cast<double>(previewProfile.render_sum) / 1000000.0
+                   << ",\"preview_render_gpu_ms\":" << static_cast<double>(previewProfile.render_gpu_sum) / 1000000.0
+                   << "}"
                    << ",\"encoder_utilization_percent\":" << gpu.encoderUtilization
                    << ",\"encoder_active\":" << (encoderActive ? "true" : "false")
                    << ",\"encoder_family\":\"" << escape(encoderFamily) << "\""
@@ -1230,6 +1433,11 @@ private:
                    << "\",\"producer_count\":" << producerCount
                    << ",\"notes\":\"frame time is OBS average; dropped_frames is the active RTMP output counter; missed_frames is OBS render lag; encode_time_ms is cumulative mean FERC-FER and is qualified by encode_time_samples; process CPU is this runtime; host GPU and encoder utilization are nvidia-smi device counters; callback backlog is a producer/packet counter estimate\"}";
             writeLine(sample.str());
+            previousGraphics = graphics;
+            previousProgram = program;
+            previousPreview = preview;
+            previousProgramReturn = programReturn;
+            previousPreviewReturn = previewReturn;
         }
     }
 
@@ -1615,6 +1823,20 @@ private:
     obs_encoder_t *videoEncoder_ = nullptr;
     // Non-owning; resourceLoop is joined before setup releases streamOutput.
     obs_output_t *streamOutput_ = nullptr;
+    // Non-owning stable raw return outputs; sampled before teardown joins the
+    // resource thread and stops/releases either output.
+    obs_output_t *programReturnOutput_ = nullptr;
+    obs_output_t *previewReturnOutput_ = nullptr;
+    // Non-owning stable media/root handles. The sampler is joined before
+    // frontend teardown releases any of them.
+    video_t *programVideo_ = nullptr;
+    video_t *previewVideo_ = nullptr;
+    obs_source_t *programRoot_ = nullptr;
+    obs_source_t *previewRoot_ = nullptr;
+    uint32_t videoWidth_ = 0;
+    uint32_t videoHeight_ = 0;
+    uint32_t videoFpsNum_ = 0;
+    uint32_t videoFpsDen_ = 0;
     bool wgcWorkload_ = false;
     bool cefWorkload_ = false;
     uint64_t serverSeq_ = 0;
@@ -2617,6 +2839,8 @@ private:
     video_t *programVideo = nullptr;
     obs_view_t *previewView = nullptr;
     video_t *previewVideo = nullptr;
+    video_t *runtimeTelemetryVideo = nullptr;
+    bool runtimeTelemetryRawConnected = false;
 
     // The r2 audio graph is deliberately independent of the two video lanes.
     // Keep the process' libobs audio_t captured once at setup and reuse this
@@ -3543,7 +3767,7 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
     // `previewVideo` is the dedicated PreviewView video_t.  Connecting here
     // observes an output frame produced by that mix, unlike a main-render
     // callback which only proves Program rendering.
-    if (!video_output_connect(previewVideo, nullptr, OnSceneSwitchPreviewVideoFrame, this)) {
+    if (!obs_video_add_borrowed_callback(previewVideo, OnSceneSwitchPreviewVideoFrame, this)) {
         blog(LOG_ERROR, "[pulsar-scene-switch] failed to observe PreviewView frames");
         return false;
     }
@@ -4151,6 +4375,7 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
             g_dualLaneControlBridge.set_pending(false);
     }
 
+    g_runtimeTelemetry.updateMixRoots(self->currentScene, self->previewScene);
     g_runtimeTelemetry.commit(frameId, ptsNs, committedOnAirLane, committedPreviewLane);
     if (rollbackNow) {
         self->writeDualLaneRollbackStatus(frameId, ptsNs, committedOnAirLane, committedPreviewLane,
@@ -4967,12 +5192,19 @@ bool PulsarFrontendAPI::setup()
         const bool wgcSourceBound = externalLaneWorkload ? captureWindowRequested :
                                     captureItem != nullptr;
         g_runtimeTelemetry.initialize(encoderFamily.c_str(), telemetryVideo, wgcWorkload, cefWorkload,
-                                      wgcSourceBound, videoEncoder, streamOutput);
+                                      wgcSourceBound, videoEncoder, streamOutput, programReturnOutput,
+                                      previewReturnOutput,
+                                      programVideo ? programVideo : obs_get_video(),
+                                      previewVideo, currentScene, previewScene);
         if (g_runtimeTelemetry.enabled()) {
-            obs_add_raw_video_callback(nullptr, pulsar_runtime_raw_video_callback, nullptr);
+            runtimeTelemetryVideo = programVideo ? programVideo : obs_get_video();
+            runtimeTelemetryRawConnected = obs_video_add_borrowed_callback(
+                runtimeTelemetryVideo, pulsar_runtime_raw_video_callback, nullptr);
+            if (!runtimeTelemetryRawConnected)
+                blog(LOG_ERROR, "[pulsar-runtime-telemetry] failed to install borrowed ProgramView/raw callback");
             if (streamOutput)
                 obs_output_add_packet_callback(streamOutput, pulsar_runtime_packet_callback, nullptr);
-            blog(LOG_INFO, "[pulsar-runtime-telemetry] ProgramView/raw and encoded-output callbacks installed");
+            blog(LOG_INFO, "[pulsar-runtime-telemetry] borrowed ProgramView/raw and encoded-output callbacks installed");
 
             // A trace campaign may opt into the real ProgramReturn producer;
             // ordinary headless starts keep this output dormant.  The
@@ -5117,13 +5349,17 @@ void PulsarFrontendAPI::teardown()
             dualLaneTransition.abort("shutdown");
     }
     if (previewVideo)
-        video_output_disconnect(previewVideo, OnSceneSwitchPreviewVideoFrame, this);
+        obs_video_remove_borrowed_callback(previewVideo, OnSceneSwitchPreviewVideoFrame, this);
 
     // Stop callbacks before releasing their output/video owners.  The global
     // telemetry proc remains installed but is disabled, so a late module call
     // is harmless and does not retain this frontend object.
     if (g_runtimeTelemetry.enabled()) {
-        obs_remove_raw_video_callback(pulsar_runtime_raw_video_callback, nullptr);
+        if (runtimeTelemetryRawConnected && runtimeTelemetryVideo)
+            obs_video_remove_borrowed_callback(runtimeTelemetryVideo,
+                                               pulsar_runtime_raw_video_callback, nullptr);
+        runtimeTelemetryRawConnected = false;
+        runtimeTelemetryVideo = nullptr;
         if (streamOutput)
             obs_output_remove_packet_callback(streamOutput, pulsar_runtime_packet_callback, nullptr);
     }
@@ -5478,6 +5714,11 @@ void PulsarFrontendAPI::obs_frontend_set_current_scene(obs_source_t *scene)
 
     obs_source_t *prev = currentScene;
     currentScene = obs_source_get_ref(scene);
+    // The single-lane reference binds public scenes directly, unlike the
+    // dual-lane path whose physical roots remain stable. Keep the profiler's
+    // Program role aligned with the actual bound source after every legacy
+    // scene change.
+    g_runtimeTelemetry.updateMixRoots(currentScene, nullptr);
 
     if (!nativeStingerEnabled) {
         // ---- DEFAULT PATH (flag OFF, ADR 003 §A4.3 / §A4.7 #69) ----
