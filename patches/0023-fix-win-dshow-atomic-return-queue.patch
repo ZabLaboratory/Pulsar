@@ -92,15 +92,19 @@ diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
 index 028563c10..dfe23b476 100644
 --- a/plugins/win-dshow/virtualcam.c
 +++ b/plugins/win-dshow/virtualcam.c
-@@ -104,6 +104,18 @@ static void snapshot_runtime_frame(struct video_queue_frame_metadata *metadata)
+@@ -104,6 +104,22 @@ static void snapshot_runtime_frame(struct video_queue_frame_metadata *metadata)
  	calldata_free(&cd);
  }
  
 +static enum video_queue_pixel_format queue_pixel_format(obs_output_t *output)
 +{
 +	const struct video_scale_info *conversion = obs_output_get_video_conversion(output);
++	/* Some obs_output implementations expose the conversion only after the
++	 * first data-capture callback.  The return outputs are created with the
++	 * canonical NV12 conversion, so keep the producer live during that short
++	 * initialization window instead of dropping every frame as INVALID. */
 +	if (!conversion)
-+		return VIDEO_QUEUE_PIXEL_FORMAT_INVALID;
++		return VIDEO_QUEUE_PIXEL_FORMAT_NV12;
 +	if (conversion->format == VIDEO_FORMAT_NV12)
 +		return VIDEO_QUEUE_PIXEL_FORMAT_NV12;
 +	if (conversion->format == VIDEO_FORMAT_P010)
