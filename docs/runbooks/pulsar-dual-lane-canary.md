@@ -169,7 +169,10 @@ The probe uses one WebSocket demultiplexer, waits for `TakeAccepted` before a
 Queued abort, and treats an earlier `TAKE_NOT_PENDING` as an admission race.
 It correlates callback start/end PTS to an encoded-video PTS span and never
 maps callback frame IDs onto recording indexes. FinalQueued proof is based on
-the observed route-map terminal events and revision deltas; raw RGB is used to
+the observed route-map terminal events and revision deltas; exactly one terminal
+winner is required. A queued Abort may win and preserve the role map, or lose to
+an already committed Take and observe one role-map revision; the probe never
+manufactures a second command to force a preferred result. Raw RGB is used to
 reject black, stale, or simultaneous red+green spatial tears. A coherent
 single-lane Stinger base with its distributed WebM palette, and a legitimate
 interrupted red/fade/green sequence, remain valid observations.

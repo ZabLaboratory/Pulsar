@@ -75,7 +75,10 @@ The probe correlates the transition callback's `start_pts_ns`/`end_pts_ns` span
 with an observed encoded-video PTS span; callback `frame_id` values are never
 treated as encoded-frame indexes. The FinalQueued oracle counts the observed
 `TakeAborted`/`TakeCommitted` route-map terminal events and checks their revision
-deltas, while the raw recording supplies the settled red-to-green boundary.
+deltas; exactly one terminal winner is required. A queued Abort may either win
+and preserve the role map, or lose to an already committed Take and observe the
+single committed role-map revision; neither result is converted into a second
+synthetic command. The raw recording supplies the settled red-to-green boundary.
 Two visual red/fade/green sequences are therefore valid when the first is an
 interrupted composition and the route-map events show only one winning commit.
 For Stinger, a coherent red-or-green base with a distributed WebM palette is

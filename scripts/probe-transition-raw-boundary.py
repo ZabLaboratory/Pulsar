@@ -69,6 +69,7 @@ class BoundaryDemux:
         self.responses: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self.buffered_responses: dict[str, dict[str, Any]] = {}
         self.events: list[dict[str, Any]] = []
+        self.event_history: list[dict[str, Any]] = []
         self.events_changed = asyncio.Event()
         self.reader: asyncio.Task[None] | None = None
 
@@ -96,7 +97,9 @@ class BoundaryDemux:
                     elif not future.done():
                         future.set_result(data)
                 elif message.get("op") == 5:
-                    self.events.append(message.get("d", {}))
+                    event = message.get("d", {})
+                    self.events.append(event)
+                    self.event_history.append(event)
                     self.events_changed.set()
         except asyncio.CancelledError:
             raise
@@ -207,6 +210,13 @@ def classify_raw_frame(frame: bytes) -> str:
         )
     if not categories:
         raise probe.ProbeFailure(f"raw Program frame is black/empty: black={black} categories={categories}")
+    if "stinger" in present:
+        # A WebM sweep may expose palette pixels which quantize onto the Fade
+        # envelope or the settled base lane.  Stinger presence is the stronger
+        # composition oracle as long as both base lanes are not present.
+        return "stinger"
+    if "fade" in present and lane_categories:
+        return "fade"
     if present == {"red"} or present == {"green"} or present == {"fade"}:
         return next(iter(present))
     if present in ({"red", "stinger"}, {"green", "stinger"}):
@@ -341,8 +351,9 @@ def assert_terminal_event_contract(
     aborted_command_id: str,
     committed_command_id: str,
     expected_revisions: dict[str, int],
+    winner: str = "aborted",
 ) -> dict[str, int]:
-    """Prove route-map terminal winners and revision deltas from observed events."""
+    """Prove one terminal winner and its route-map revision delta."""
 
     aborted = [
         event
@@ -351,22 +362,40 @@ def assert_terminal_event_contract(
         and event.get("command_id") == aborted_command_id
     ]
     commits = [event for event in events if event.get("event_type") == "TakeCommitted"]
-    control = [event for event in commits if event.get("command_id") == committed_command_id]
-    if len(aborted) != 1 or any(event.get("command_id") == aborted_command_id for event in commits):
-        raise probe.ProbeFailure(
-            f"route-map terminal events are not unique: aborted={aborted} committed={commits}"
-        )
-    if len(control) != 1:
-        raise probe.ProbeFailure(f"control Take did not produce one committed event: {commits}")
-    previous = control[0].get("previous_revisions") or {}
-    current = control[0].get("revisions") or {}
+    control = [
+        event
+        for event in commits
+        if committed_command_id != aborted_command_id and event.get("command_id") == committed_command_id
+    ]
+    original_commits = [event for event in commits if event.get("command_id") == aborted_command_id]
+    if winner == "aborted":
+        if len(aborted) != 1 or original_commits or len(control) != 1:
+            raise probe.ProbeFailure(
+                f"route-map terminal events are not unique: aborted={aborted} committed={commits}"
+            )
+        terminal = control[0]
+    elif winner == "committed":
+        if aborted or len(original_commits) != 1 or control:
+            raise probe.ProbeFailure(
+                f"commit winner has conflicting terminal events: aborted={aborted} committed={commits}"
+            )
+        terminal = original_commits[0]
+    else:
+        raise probe.ProbeFailure(f"unsupported terminal winner {winner!r}")
+    previous = terminal.get("previous_revisions") or {}
+    current = terminal.get("revisions") or {}
     for key in ("program", "preview", "role_map"):
         if not isinstance(previous.get(key), int) or not isinstance(current.get(key), int):
-            raise probe.ProbeFailure(f"control Take event has invalid {key} revisions: {control[0]}")
+            raise probe.ProbeFailure(f"Take event has invalid {key} revisions: {terminal}")
         expected_delta = 1 if key in {"program", "role_map"} else 0
         if previous[key] != expected_revisions[key] or current[key] != previous[key] + expected_delta:
-            raise probe.ProbeFailure(f"control Take revision delta is invalid: event={control[0]}")
-    return {"aborted": len(aborted), "committed": len(commits), "control_committed": len(control)}
+            raise probe.ProbeFailure(f"Take revision delta is invalid: event={terminal}")
+    return {
+        "aborted": len(aborted),
+        "committed": len(commits),
+        "control_committed": len(control),
+        "winner_committed": len(original_commits),
+    }
 
 
 def locate_abort_settled_red(labels: list[str], commit_index: int) -> int:
@@ -420,13 +449,19 @@ def locate_commit_boundary(labels: list[str], *, before: str, after: str) -> int
         and all(label == after for label in labels[index : index + 5])
         and all(label != after for label in labels[index - 3 : index])
     ]
-    if len(candidates) != 1:
+    if not candidates:
         raise probe.ProbeFailure(
-            f"raw Program commit seam was not uniquely observed: candidates={candidates}"
+            f"raw Program commit seam was not observed: candidates={candidates}"
         )
-    boundary_index = candidates[0]
+    # An aborted composition can expose an earlier settled green segment in
+    # the same recording.  The control/terminal winner is the last settled
+    # green seam; use the raw tail as the encoded settlement bound instead of
+    # pretending visual seam count is route-map commit count.
+    boundary_index = candidates[-1]
     if not any(label == before for label in labels[:boundary_index]):
         raise probe.ProbeFailure(f"raw Program commit seam has no settled {before} prelude")
+    if any(label == before for label in labels[boundary_index:]):
+        raise probe.ProbeFailure(f"raw Program commit seam is followed by stale {before} frames")
     return boundary_index
 
 
@@ -539,49 +574,65 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
                     "take_command_id": take_id, "reason": "operator",
                 }
                 abort_result = await vendor_request(demux, f"call-abort-{phase}", "Abort", abort_payload)
-            if abort_result.get("event_type") != "TakeAborted":
-                raise probe.ProbeFailure(f"Abort did not win {phase}: {abort_result}")
-            abort_match = runtime.wait_for(ABORT_PATTERN, 15)
-            fields = [int(abort_match.group(index)) for index in range(4, 8)]
-            if fields != [1, 1, 1, 1]:
-                raise probe.ProbeFailure(f"abort postconditions were not observed: {abort_match.group(0)}")
+            winner = abort_result.get("event_type")
+            if winner not in {"TakeAborted", "TakeCommitted"}:
+                raise probe.ProbeFailure(f"Abort/Take did not produce one terminal winner for {phase}: {abort_result}")
+            abort_match = None
+            commit_prepare_id = None
+            commit_take_id = take_id if winner == "TakeCommitted" else None
+            ready_state = state
+            if winner == "TakeAborted":
+                abort_match = runtime.wait_for(ABORT_PATTERN, 15)
+                fields = [int(abort_match.group(index)) for index in range(4, 8)]
+                if fields != [1, 1, 1, 1]:
+                    raise probe.ProbeFailure(f"abort postconditions were not observed: {abort_match.group(0)}")
 
-            # Keep both the observed abort boundary and the later control
-            # commit in the recording. The longer dwell is outside callbacks;
-            # it gives the encoder enough settled frames for PTS correlation.
-            await asyncio.sleep(0.5)
-            after_abort = await vendor_request(demux, f"state-after-abort-{phase}", "GetState", {})
-            if after_abort.get("role_map") != state.get("role_map"):
-                raise probe.ProbeFailure(f"abort mutated role map: before={state['role_map']} after={after_abort.get('role_map')}")
-            commit_prepare_id = f"boundary-commit-prepare-{phase}"
-            commit_take_id = f"boundary-commit-take-{phase}"
-            commit_intent = f"boundary-commit-intent-{phase}"
-            commit_prepare = {
-                **prepare,
-                "command_type": "Prepare",
-                "command_id": commit_prepare_id,
-                "intent_id": commit_intent,
-                "expected_revisions": after_abort["revisions"],
-                "expected_server_seq": after_abort["server_seq"],
-            }
-            commit_accepted = await vendor_request(demux, f"call-{commit_prepare_id}", "Prepare", commit_prepare)
-            if commit_accepted.get("event_type") != "PrepareAccepted":
-                raise probe.ProbeFailure(f"control Prepare after abort was not accepted: {commit_accepted}")
-            await demux.wait_event("VendorEvent", lambda data: data.get("vendorName") == "pulsar-scene-switch" and (data.get("eventData") or {}).get("event_type") == "PreviewReady" and (data.get("eventData") or {}).get("command_id") == commit_prepare_id)
-            ready_state = await vendor_request(demux, f"state-before-commit-{phase}", "GetState", {})
-            commit_take = {
-                **take,
-                "command_type": "Take",
-                "command_id": commit_take_id,
-                "intent_id": commit_intent,
-                "expected_revisions": ready_state["revisions"],
-                "expected_server_seq": ready_state["server_seq"],
-                "prepared_command_id": commit_prepare_id,
-            }
-            committed = await vendor_request(demux, f"call-{commit_take_id}", "Take", commit_take)
-            if committed.get("event_type") != "TakeAccepted":
-                raise probe.ProbeFailure(f"control Take after abort was not accepted: {committed}")
-            commit_match = runtime.wait_for(TRANSITION_COMMITTED_PATTERN, 15)
+                # Keep both the observed abort boundary and the later control
+                # commit in the recording. The longer dwell is outside callbacks;
+                # it gives the encoder enough settled frames for PTS correlation.
+                await asyncio.sleep(0.5)
+                after_abort = await vendor_request(demux, f"state-after-abort-{phase}", "GetState", {})
+                if after_abort.get("role_map") != state.get("role_map"):
+                    raise probe.ProbeFailure(f"abort mutated role map: before={state['role_map']} after={after_abort.get('role_map')}")
+                commit_prepare_id = f"boundary-commit-prepare-{phase}"
+                commit_take_id = f"boundary-commit-take-{phase}"
+                commit_intent = f"boundary-commit-intent-{phase}"
+                commit_prepare = {
+                    **prepare,
+                    "command_type": "Prepare",
+                    "command_id": commit_prepare_id,
+                    "intent_id": commit_intent,
+                    "expected_revisions": after_abort["revisions"],
+                    "expected_server_seq": after_abort["server_seq"],
+                }
+                commit_accepted = await vendor_request(demux, f"call-{commit_prepare_id}", "Prepare", commit_prepare)
+                if commit_accepted.get("event_type") != "PrepareAccepted":
+                    raise probe.ProbeFailure(f"control Prepare after abort was not accepted: {commit_accepted}")
+                await demux.wait_event("VendorEvent", lambda data: data.get("vendorName") == "pulsar-scene-switch" and (data.get("eventData") or {}).get("event_type") == "PreviewReady" and (data.get("eventData") or {}).get("command_id") == commit_prepare_id)
+                ready_state = await vendor_request(demux, f"state-before-commit-{phase}", "GetState", {})
+                commit_take = {
+                    **take,
+                    "command_type": "Take",
+                    "command_id": commit_take_id,
+                    "intent_id": commit_intent,
+                    "expected_revisions": ready_state["revisions"],
+                    "expected_server_seq": ready_state["server_seq"],
+                    "prepared_command_id": commit_prepare_id,
+                }
+                committed = await vendor_request(demux, f"call-{commit_take_id}", "Take", commit_take)
+                if committed.get("event_type") != "TakeAccepted":
+                    raise probe.ProbeFailure(f"control Take after abort was not accepted: {committed}")
+            else:
+                # Abort can lose the race after TakeAccepted.  That is still a
+                # valid deterministic terminal winner; do not manufacture a
+                # second control Take or an abort assertion in this branch.
+                commit_match = runtime.wait_for(TRANSITION_COMMITTED_PATTERN, 15)
+                if commit_match.group(1).lower() != transition.lower() and not (transition == "Stinger" and commit_match.group(1).lower() == "stinger"):
+                    raise probe.ProbeFailure(f"transition commit kind was not {transition}: {commit_match.group(0)}")
+                if int(commit_match.group(8)) != 0:
+                    raise probe.ProbeFailure(f"accepted Take unexpectedly fell back to Cut: {commit_match.group(0)}")
+            if winner == "TakeAborted":
+                commit_match = runtime.wait_for(TRANSITION_COMMITTED_PATTERN, 15)
             if commit_match.group(1).lower() != transition.lower() and not (transition == "Stinger" and commit_match.group(1).lower() == "stinger"):
                 raise probe.ProbeFailure(f"transition commit kind was not {transition}: {commit_match.group(0)}")
             if int(commit_match.group(8)) != 0:
@@ -608,25 +659,28 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
                 transition_end_pts_ns,
             )
             commit_frame_index = locate_commit_boundary(labels, before="red", after="green")
-            abort_frame_index = locate_abort_settled_red(labels, commit_frame_index)
-            assert_abort_pixels(labels, abort_frame_index, expected="red")
+            abort_frame_index = None
+            if winner == "TakeAborted":
+                abort_frame_index = locate_abort_settled_red(labels, commit_frame_index)
+                assert_abort_pixels(labels, abort_frame_index, expected="red")
             assert_commit_pixels(labels, commit_frame_index, before="red", after="green")
             state_after = await vendor_request(demux, "boundary-state-after", "GetState", {})
             if state_after.get("role_map") == state.get("role_map"):
-                raise probe.ProbeFailure(f"control commit did not swap role map: before={state['role_map']} after={state_after.get('role_map')}")
+                raise probe.ProbeFailure(f"winning commit did not swap role map: before={state['role_map']} after={state_after.get('role_map')}")
             vendor_events = [
                 (event.get("eventData") or {})
-                for event in demux.events
+                for event in demux.event_history
                 if event.get("eventType") == "VendorEvent"
                 and event.get("vendorName") == "pulsar-scene-switch"
             ]
             terminal_events = assert_terminal_event_contract(
                 vendor_events,
                 aborted_command_id=take_id,
-                committed_command_id=commit_take_id,
+                committed_command_id=commit_take_id or take_id,
                 expected_revisions=ready_state["revisions"],
+                winner="aborted" if winner == "TakeAborted" else "committed",
             )
-            return {"transition": transition, "phase": phase, "frames": len(labels), "abort_pts_ns": int(abort_match.group(2)), "abort_recording_index": abort_frame_index, "commit_pts_ns": transition_end_pts_ns, "commit_recording_index": commit_frame_index, "callback_pts_correlation": pts_correlation, "abort_role_map": state["role_map"], "commit_role_map": state_after["role_map"], "terminal_events": terminal_events, "raw_labels": {"abort": "red", "commit_before": "red", "commit_after": "green"}}
+            return {"transition": transition, "phase": phase, "terminal_winner": "abort" if winner == "TakeAborted" else "commit", "frames": len(labels), "abort_pts_ns": int(abort_match.group(2)) if abort_match else None, "abort_recording_index": abort_frame_index, "commit_pts_ns": transition_end_pts_ns, "commit_recording_index": commit_frame_index, "callback_pts_correlation": pts_correlation, "abort_role_map": state["role_map"] if winner == "TakeAborted" else None, "commit_role_map": state_after["role_map"], "terminal_events": terminal_events, "raw_labels": {"abort": "red" if winner == "TakeAborted" else None, "commit_before": "red", "commit_after": "green"}}
     finally:
         if demux is not None:
             await demux.close()

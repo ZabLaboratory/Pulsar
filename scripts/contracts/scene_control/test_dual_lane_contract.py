@@ -760,6 +760,7 @@ def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
         "read_encoded_video_pts",
         "assert_callback_pts_correlated",
         "assert_terminal_event_contract",
+        "event_history",
         "assert_transition_timeline",
     ):
         assert required in source
@@ -778,12 +779,14 @@ def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
     assert "locate_commit_boundary" in source
     assert "locate_abort_settled_red" in source
     assert "BoundaryDemux" in source
+    assert "for event in demux.event_history" in source
     assert "await demux.start()" in source
     assert "commit_match = runtime.wait_for(TRANSITION_COMMITTED_PATTERN, 15)" in source
     assert "commit_frame_index = locate_commit_boundary(labels, before=\"red\", after=\"green\")" in source
     assert "__import__(\"re\")" not in source
     assert "record_start_frames" not in source
     assert "abort_frame_id" not in source
+    assert "winner=\"aborted\" if winner == \"TakeAborted\" else \"committed\"" in source
     post_demux = source[source.index("await demux.start()") :]
     assert "probe.request(" not in post_demux
     assert "probe.wait_event(" not in post_demux
@@ -856,6 +859,23 @@ def test_transition_boundary_demux_serializes_concurrent_responses() -> None:
     assert request_ids == ["take-1", "abort-1"]
 
 
+def test_transition_boundary_demux_retains_event_history_after_queue_consumption() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_event_history")
+
+    async def exercise() -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
+        demux = boundary.BoundaryDemux(object())
+        event = {"eventType": "VendorEvent", "eventData": {"event_type": "TakeAborted"}}
+        demux.events.append(event)
+        demux.event_history.append(event)
+        consumed = await demux.wait_event("VendorEvent", None, timeout=0.01)
+        return consumed, demux.events, demux.event_history
+
+    consumed, queue, history = asyncio.run(exercise())
+    assert consumed["eventData"]["event_type"] == "TakeAborted"
+    assert queue == []
+    assert history == [consumed]
+
+
 def test_transition_boundary_classifier_accepts_coherent_stinger_palette() -> None:
     boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_palette")
     fade = bytes((172, 79, 0)) * (boundary.WIDTH * boundary.HEIGHT)
@@ -872,6 +892,12 @@ def test_transition_boundary_classifier_accepts_coherent_stinger_palette() -> No
     assert boundary.classify_raw_frame(mixed_palette) == "stinger"
     lane_overlay = bytes((220, 40, 40)) * (boundary.WIDTH * boundary.HEIGHT // 2) + blue[: len(blue) // 2]
     assert boundary.classify_raw_frame(lane_overlay) == "stinger"
+    fade_lane_stinger = (
+        bytes((172, 79, 0)) * (boundary.WIDTH * boundary.HEIGHT // 3)
+        + bytes((220, 40, 40)) * (boundary.WIDTH * boundary.HEIGHT // 3)
+        + blue[: len(blue) // 3]
+    )
+    assert boundary.classify_raw_frame(fade_lane_stinger) == "stinger"
 
 
 def test_transition_boundary_pts_and_route_map_oracles_are_frame_index_independent() -> None:
@@ -900,7 +926,22 @@ def test_transition_boundary_pts_and_route_map_oracles_are_frame_index_independe
         committed_command_id="commit-me",
         expected_revisions={"program": 2, "preview": 4, "role_map": 8},
     )
-    assert terminal == {"aborted": 1, "committed": 1, "control_committed": 1}
+    assert terminal == {"aborted": 1, "committed": 1, "control_committed": 1, "winner_committed": 0}
+    committed = boundary.assert_terminal_event_contract(
+        [
+            {
+                "event_type": "TakeCommitted",
+                "command_id": "take-me",
+                "previous_revisions": {"program": 2, "preview": 4, "role_map": 8},
+                "revisions": {"program": 3, "preview": 4, "role_map": 9},
+            },
+        ],
+        aborted_command_id="take-me",
+        committed_command_id="take-me",
+        expected_revisions={"program": 2, "preview": 4, "role_map": 8},
+        winner="committed",
+    )
+    assert committed == {"aborted": 0, "committed": 1, "control_committed": 0, "winner_committed": 1}
 
 
 def test_transition_boundary_locates_unique_encoded_seam_without_fixed_offset() -> None:
@@ -911,6 +952,29 @@ def test_transition_boundary_locates_unique_encoded_seam_without_fixed_offset() 
     boundary.assert_commit_pixels(labels, seam, before="red", after="green")
     with pytest.raises(boundary.probe.ProbeFailure, match="stale/mixed"):
         boundary.assert_commit_pixels(labels[:12] + ["red"] + labels[13:], seam, before="red", after="green")
+
+
+def test_transition_boundary_selects_latest_settled_control_seam() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_latest_seam")
+    labels = ["red"] * 8 + ["fade"] * 3 + ["green"] * 8 + ["red"] * 3 + ["stinger"] * 4 + ["green"] * 8
+    seam = boundary.locate_commit_boundary(labels, before="red", after="green")
+    assert seam == 26
+    boundary.assert_commit_pixels(labels, seam, before="red", after="green")
+    with pytest.raises(boundary.probe.ProbeFailure, match="stale red"):
+        boundary.locate_commit_boundary(labels + ["red"], before="red", after="green")
+
+
+def test_transition_boundary_accepts_stinger_fade_lane_overlap_but_rejects_two_base_lanes() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_overlap")
+    pixel_count = boundary.WIDTH * boundary.HEIGHT
+    red = bytes((220, 40, 40)) * pixel_count
+    green = bytes((40, 220, 40)) * pixel_count
+    blue = bytes((24, 80, 220)) * pixel_count
+    overlap = bytes((172, 79, 0)) * (pixel_count // 3) + red[: 3 * (pixel_count // 3)] + blue[: 3 * (pixel_count // 3)]
+    assert boundary.classify_raw_frame(overlap) == "stinger"
+    torn = red[: len(red) // 2] + green[len(green) // 2 :]
+    with pytest.raises(boundary.probe.ProbeFailure, match="torn|mixed"):
+        boundary.classify_raw_frame(torn)
 
 
 def test_transition_boundary_raw_classifier_rejects_black_and_mixed_frames() -> None:
