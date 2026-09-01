@@ -9,6 +9,7 @@ and a teardown barrier for an extracted (in-flight) swap.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import subprocess
@@ -27,6 +28,7 @@ _DUAL_LANE_PATCH = _ROOT / "patches/0009-feat-libobs-add-frame-boundary-dual-lan
 _DIRECTSHOW_NAMESPACE_PATCH = _ROOT / "patches/0010-fix-win-dshow-reject-ambiguous-queue-namespaces.patch"
 _RUNTIME_PROBE = _ROOT / "scripts/probe-dual-lane.py"
 _ROLLBACK_PROBE = _ROOT / "scripts/probe-dual-lane-rollback.py"
+_TRANSITION_BOUNDARY_PROBE = _ROOT / "scripts/probe-transition-raw-boundary.py"
 _OUTPUT_EFFECT_PROBE = _ROOT / "scripts/probe-output-effect.py"
 _DUAL_LANE_CONFIG = _ROOT / "plugins/pulsar-frontend-stub/include/pulsar-dual-lane-config.h"
 _DUAL_LANE_CONFIG_TEST = _ROOT / "tests/dual-lane-config/dual-lane-config-probe.cpp"
@@ -666,7 +668,7 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "IsControlledSceneSwitchPendingBypass" in handler
     assert 'request.RequestType != "CallVendorRequest"' in handler
     assert 'vendor->get<std::string>() != "pulsar-scene-switch"' in handler
-    assert 'return nested == "Abort" || nested == "GetState"' in handler
+    assert 'return nested == "Abort" || nested == "GetState" || nested == "Take"' in handler
     assert "vendor->is_string() || !nestedRequest->is_string()" in handler
     assert "json::value() here" in handler
     assert "const bool controlledSceneSwitchBypass" in handler
@@ -682,12 +684,12 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "PREVIEW_FROZEN" in handler
     assert "after the dual-lane rollback freeze" in handler
     # The gate is central and acquired before handler lookup. The only scene
-    # switch pending bypass is the exact vendor Abort/GetState pair; the
+    # switch pending bypass is the exact vendor Abort/GetState/Take trio; the
     # finite output-stop allowlist is unrelated to Preview mutations.
-    # Prepare/Take/Dispatch, malformed CallVendorRequest data, and every other
-    # vendor remain gated.
+    # Prepare/Dispatch, malformed CallVendorRequest data, and every other
+    # vendor remain gated. Take is admitted only for vendor idempotence replay.
     assert 'nested == "Prepare"' not in handler
-    assert 'nested == "Take"' not in handler
+    assert 'nested == "Take"' in handler
     assert 'nested == "Dispatch"' not in handler
     assert handler.index("const bool controlledSceneSwitchBypass") < handler.index("_handlerMap.at")
 
@@ -735,6 +737,370 @@ def test_runtime_probe_exercises_serial_frame_preview_freeze() -> None:
     assert "post-commit Preview after 30 frames" in probe
 
 
+def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
+    source = _read(_TRANSITION_BOUNDARY_PROBE)
+
+    for required in (
+        "decode_raw_recording",
+        "classify_raw_frame",
+        "assert_abort_pixels",
+        "assert_commit_pixels",
+        "SetCurrentSceneTransition",
+        "SetCurrentSceneTransitionDuration",
+        '"Take"',
+        '"Abort"',
+        "transition_final_queued",
+        "TakeAborted",
+        "TakeAccepted",
+        "TAKE_NOT_PENDING",
+        "role_map",
+        "frame_id",
+        "pts_ns",
+        "intermediate/mixed",
+        "black/empty",
+        "read_encoded_video_pts",
+        "assert_callback_pts_correlated",
+        "assert_terminal_event_contract",
+        "aborted_take_command_id",
+        "event_history",
+        "vendor_event_payload",
+        "vendor_payload_from_outer_data",
+        "is_vendor_event_data",
+        "resolve_abort_winner",
+        "assert_transition_timeline",
+    ):
+        assert required in source
+    assert "transition_final_commit_queued" in _read(_FRONTEND)
+    # Pixel evidence must come from decoded recording bytes, not from a
+    # structured success flag or a hardcoded abort boolean.
+    assert "subprocess.check_output(command" in source
+    assert "classify_raw_frame(raw[offset : offset + FRAME_BYTES])" in source
+    assert "assert_abort_pixels(labels, abort_frame_index, expected=\"red\")" in source
+    assert "assert_commit_pixels(labels, commit_frame_index, before=\"red\", after=\"green\")" in source
+    assert "PULSAR_DUAL_LANE_TRANSITIONS" in source
+    assert "phase == \"queued\"" in source
+    assert "FINAL_QUEUED_PATTERN" in source
+    assert "TRANSITION_COMMITTED_PATTERN" in source
+    assert "encoded_start_index" in source
+    assert "locate_commit_boundary" in source
+    assert "locate_abort_settled_red" in source
+    assert "BoundaryDemux" in source
+    assert "for event in demux.event_history" in source
+    assert "await demux.start()" in source
+    assert "commit_match = runtime.wait_for(TRANSITION_COMMITTED_PATTERN, 15)" in source
+    assert "commit_frame_index = locate_commit_boundary(labels, before=\"red\", after=\"green\")" in source
+    assert "__import__(\"re\")" not in source
+    assert "record_start_frames" not in source
+    assert "abort_frame_id" not in source
+    assert "winner=\"aborted\" if winner == \"TakeAborted\" else \"committed\"" in source
+    post_demux = source[source.index("await demux.start()") :]
+    assert "probe.request(" not in post_demux
+    assert "probe.wait_event(" not in post_demux
+    assert source.count("await self.ws.recv()") == 1
+
+
+def test_transition_boundary_compiled_patterns_and_transition_trace_correlation() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_patterns")
+    assert hasattr(boundary, "ABORT_PATTERN")
+    assert hasattr(boundary, "FINAL_QUEUED_PATTERN")
+    assert hasattr(boundary, "TRANSITION_COMMITTED_PATTERN")
+    assert boundary.ABORT_PATTERN.search(
+        "[pulsar-dual-lane] transition_aborted fallback=cut fallback_to_cut=1 "
+        "frame_id=22 pts_ns=330 reason=operator role_map_preserved=1 "
+        "surfaces_stable=1 video_t_stable=1 invariant_valid=1"
+    )
+    committed = boundary.TRANSITION_COMMITTED_PATTERN.search(
+        "[pulsar-dual-lane] transition_committed kind=fade requested_duration_ms=200 "
+        "actual_duration_ms=200 start_frame_id=10 start_pts_ns=100 "
+        "end_frame_id=22 end_pts_ns=300 fallback_to_cut=0 aggregate_count=1"
+    )
+    assert committed is not None
+    assert committed.group(6) == "22"
+    assert committed.group(7) == "300"
+
+
+def test_transition_committed_trace_carries_end_frame_and_pts_identity() -> None:
+    frontend = _read(_FRONTEND)
+    transition_log = _between(frontend, '"[pulsar-dual-lane] transition_committed', '             pulsar_transition::kind_name')
+    assert "start_frame_id=%llu start_pts_ns=%llu" in transition_log
+    assert "end_frame_id=%llu end_pts_ns=%llu" in transition_log
+    assert "transitionMetrics.start_pts_ns" in frontend
+    assert "transitionMetrics.end_pts_ns" in frontend
+
+
+def test_transition_boundary_demux_serializes_concurrent_responses() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_demux")
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.messages: asyncio.Queue[str] = asyncio.Queue()
+            self.active_receivers = 0
+            self.max_active_receivers = 0
+
+        async def send(self, payload: str) -> None:
+            request_id = json.loads(payload)["d"]["requestId"]
+            await self.messages.put(json.dumps({"op": 7, "d": {"requestId": request_id, "requestStatus": {"result": True}}}))
+
+        async def recv(self) -> str:
+            self.active_receivers += 1
+            self.max_active_receivers = max(self.max_active_receivers, self.active_receivers)
+            try:
+                return await self.messages.get()
+            finally:
+                self.active_receivers -= 1
+
+    async def exercise() -> tuple[int, list[str]]:
+        ws = FakeWebSocket()
+        demux = boundary.BoundaryDemux(ws)
+        await demux.start()
+        first, second = await asyncio.gather(
+            demux.request("Take", "take-1", {}),
+            demux.request("Abort", "abort-1", {}),
+        )
+        await demux.close()
+        return ws.max_active_receivers, [first["requestId"], second["requestId"]]
+
+    max_readers, request_ids = asyncio.run(exercise())
+    assert max_readers == 1
+    assert request_ids == ["take-1", "abort-1"]
+
+
+def test_transition_boundary_demux_retains_event_history_after_queue_consumption() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_event_history")
+
+    async def exercise() -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
+        demux = boundary.BoundaryDemux(object())
+        event = {"eventType": "VendorEvent", "eventData": {"event_type": "TakeAborted"}}
+        demux.events.append(event)
+        demux.event_history.append(event)
+        consumed = await demux.wait_event("VendorEvent", None, timeout=0.01)
+        return consumed, demux.events, demux.event_history
+
+    consumed, queue, history = asyncio.run(exercise())
+    assert consumed["eventData"]["event_type"] == "TakeAborted"
+    assert queue == []
+    assert history == [consumed]
+
+
+def test_transition_boundary_unwraps_nested_vendor_event_schema() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_vendor_schema")
+    event = {
+        "eventType": "VendorEvent",
+        "eventData": {
+            "vendorName": "pulsar-scene-switch",
+            "eventData": {
+                "event_type": "TakeCommitted",
+                "command_id": "take-1",
+            },
+        },
+    }
+    assert boundary.vendor_event_payload(event) == {
+        "event_type": "TakeCommitted",
+        "command_id": "take-1",
+    }
+    assert boundary.is_vendor_event_data(event["eventData"], "TakeCommitted", "take-1")
+    assert not boundary.is_vendor_event_data(event["eventData"], "TakeAborted", "take-1")
+    assert boundary.vendor_event_payload({"eventType": "VendorEvent", "eventData": {"vendorName": "other"}}) is None
+
+
+def test_transition_boundary_wait_event_matches_nested_vendor_event_and_retains_history() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_wait_event_schema")
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.messages: asyncio.Queue[str] = asyncio.Queue()
+            self.messages.put_nowait(json.dumps({
+                "op": 5,
+                "d": {
+                    "eventType": "VendorEvent",
+                    "eventData": {
+                        "vendorName": "pulsar-scene-switch",
+                        "eventType": "PreviewReady",
+                        "eventData": {"event_type": "PreviewReady", "command_id": "prepare-1"},
+                    },
+                },
+            }))
+
+        async def recv(self) -> str:
+            return await self.messages.get()
+
+    async def exercise() -> tuple[dict[str, object], list[dict[str, object]]]:
+        ws = FakeWebSocket()
+        demux = boundary.BoundaryDemux(ws)
+        await demux.start()
+        event = await demux.wait_event(
+            "VendorEvent",
+            lambda outer_data: boundary.is_vendor_event_data(outer_data, "PreviewReady", "prepare-1"),
+            timeout=0.1,
+        )
+        history = list(demux.event_history)
+        await demux.close()
+        return event, history
+
+    event, history = asyncio.run(exercise())
+    assert event["eventData"]["vendorName"] == "pulsar-scene-switch"
+    assert event["eventData"]["eventData"]["command_id"] == "prepare-1"
+    assert history == [event]
+
+
+def test_transition_boundary_accepts_only_typed_commit_race_rejection() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_abort_winner")
+    assert boundary.resolve_abort_winner({"event_type": "TakeAborted"}) == "TakeAborted"
+    assert boundary.resolve_abort_winner({"event_type": "CommandRejected", "error_code": "TAKE_NOT_PENDING"}) == "TakeCommitted"
+    with pytest.raises(boundary.probe.ProbeFailure, match="allowed terminal winner"):
+        boundary.resolve_abort_winner({"event_type": "CommandRejected", "error_code": "REVISION_STALE"})
+
+
+def test_transition_boundary_classifier_accepts_coherent_stinger_palette() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_palette")
+    fade = bytes((172, 79, 0)) * (boundary.WIDTH * boundary.HEIGHT)
+    assert boundary.classify_raw_frame(fade) == "fade"
+    blue = bytes((24, 80, 220)) * (boundary.WIDTH * boundary.HEIGHT)
+    assert boundary.classify_raw_frame(blue) == "stinger"
+    # Quantized Stinger bins may be distributed without a single dominant
+    # colour. Both interleaved and contiguous palette sweeps are valid.
+    pixel_count = boundary.WIDTH * boundary.HEIGHT
+    palette_pattern = b"".join(bytes(colour) for colour in ((0, 64, 192), (16, 80, 208), (32, 64, 192)))
+    palette = palette_pattern * (pixel_count // 3)
+    assert boundary.classify_raw_frame(palette) == "stinger"
+    mixed_palette = blue[: len(blue) // 2] + bytes((220, 220, 24)) * (boundary.WIDTH * boundary.HEIGHT // 2)
+    assert boundary.classify_raw_frame(mixed_palette) == "stinger"
+    lane_overlay = bytes((220, 40, 40)) * (boundary.WIDTH * boundary.HEIGHT // 2) + blue[: len(blue) // 2]
+    assert boundary.classify_raw_frame(lane_overlay) == "stinger"
+    fade_lane_stinger = (
+        bytes((172, 79, 0)) * (boundary.WIDTH * boundary.HEIGHT // 3)
+        + bytes((220, 40, 40)) * (boundary.WIDTH * boundary.HEIGHT // 3)
+        + blue[: len(blue) // 3]
+    )
+    assert boundary.classify_raw_frame(fade_lane_stinger) == "stinger"
+
+
+def test_transition_boundary_pts_and_route_map_oracles_are_frame_index_independent() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_oracles")
+    correlation = boundary.assert_callback_pts_correlated(
+        [0, 16_666_667, 33_333_334, 50_000_001, 66_666_668],
+        1_000_000_000,
+        1_050_000_001,
+    )
+    assert correlation["encoded_delta_ns"] == 50_000_001
+    assert correlation["encoded_start_index"] == 0
+    assert correlation["encoded_end_index"] == 3
+    labels = ["red"] * 8 + ["fade"] * 4 + ["red"] * 4 + ["green"] * 8
+    assert boundary.locate_abort_settled_red(labels, 16) == 5
+    terminal = boundary.assert_terminal_event_contract(
+        [
+            {"event_type": "TakeAborted", "command_id": "abort-me", "take_command_id": "take-me"},
+            {
+                "event_type": "TakeCommitted",
+                "command_id": "commit-me",
+                "previous_revisions": {"program": 2, "preview": 4, "role_map": 8},
+                "revisions": {"program": 3, "preview": 4, "role_map": 9},
+            },
+        ],
+        aborted_command_id="abort-me",
+        aborted_take_command_id="take-me",
+        committed_command_id="commit-me",
+        expected_revisions={"program": 2, "preview": 4, "role_map": 8},
+    )
+    assert terminal == {"aborted": 1, "committed": 1, "control_committed": 1, "winner_committed": 0}
+    for wrong_abort_id, wrong_take_id in (("wrong-abort", "take-me"), ("abort-me", "wrong-take")):
+        with pytest.raises(boundary.probe.ProbeFailure, match="terminal events are not unique"):
+            boundary.assert_terminal_event_contract(
+                [
+                    {"event_type": "TakeAborted", "command_id": "abort-me", "take_command_id": "take-me"},
+                    {
+                        "event_type": "TakeCommitted",
+                        "command_id": "commit-me",
+                        "previous_revisions": {"program": 2, "preview": 4, "role_map": 8},
+                        "revisions": {"program": 3, "preview": 4, "role_map": 9},
+                    },
+                ],
+                aborted_command_id=wrong_abort_id,
+                aborted_take_command_id=wrong_take_id,
+                committed_command_id="commit-me",
+                expected_revisions={"program": 2, "preview": 4, "role_map": 8},
+            )
+    committed = boundary.assert_terminal_event_contract(
+        [
+            {
+                "event_type": "TakeCommitted",
+                "command_id": "take-me",
+                "previous_revisions": {"program": 2, "preview": 4, "role_map": 8},
+                "revisions": {"program": 3, "preview": 4, "role_map": 9},
+            },
+        ],
+        aborted_command_id="abort-me",
+        aborted_take_command_id="take-me",
+        committed_command_id="take-me",
+        expected_revisions={"program": 2, "preview": 4, "role_map": 8},
+        winner="committed",
+    )
+    assert committed == {"aborted": 0, "committed": 1, "control_committed": 0, "winner_committed": 1}
+
+
+def test_transition_boundary_locates_unique_encoded_seam_without_fixed_offset() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_seam")
+    labels = ["red"] * 8 + ["stinger"] * 4 + ["green"] * 8
+    seam = boundary.locate_commit_boundary(labels, before="red", after="green")
+    assert seam == 12
+    boundary.assert_commit_pixels(labels, seam, before="red", after="green")
+    with pytest.raises(boundary.probe.ProbeFailure, match="stale/mixed"):
+        boundary.assert_commit_pixels(labels[:12] + ["red"] + labels[13:], seam, before="red", after="green")
+
+
+def test_transition_boundary_selects_latest_settled_control_seam() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_latest_seam")
+    labels = ["red"] * 8 + ["fade"] * 3 + ["green"] * 8 + ["red"] * 3 + ["stinger"] * 4 + ["green"] * 8
+    seam = boundary.locate_commit_boundary(labels, before="red", after="green")
+    assert seam == 26
+    boundary.assert_commit_pixels(labels, seam, before="red", after="green")
+    with pytest.raises(boundary.probe.ProbeFailure, match="stale red"):
+        boundary.locate_commit_boundary(labels + ["red"], before="red", after="green")
+
+
+def test_transition_boundary_accepts_stinger_fade_lane_overlap_but_rejects_two_base_lanes() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_overlap")
+    pixel_count = boundary.WIDTH * boundary.HEIGHT
+    red = bytes((220, 40, 40)) * pixel_count
+    green = bytes((40, 220, 40)) * pixel_count
+    blue = bytes((24, 80, 220)) * pixel_count
+    overlap = bytes((172, 79, 0)) * (pixel_count // 3) + red[: 3 * (pixel_count // 3)] + blue[: 3 * (pixel_count // 3)]
+    assert boundary.classify_raw_frame(overlap) == "stinger"
+    torn = red[: len(red) // 2] + green[len(green) // 2 :]
+    with pytest.raises(boundary.probe.ProbeFailure, match="torn|mixed"):
+        boundary.classify_raw_frame(torn)
+
+
+def test_transition_boundary_raw_classifier_rejects_black_and_mixed_frames() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_probe")
+    red = bytes((220, 40, 40)) * (boundary.WIDTH * boundary.HEIGHT)
+    green = bytes((40, 220, 40)) * (boundary.WIDTH * boundary.HEIGHT)
+    black = bytes((0, 0, 0)) * (boundary.WIDTH * boundary.HEIGHT)
+    assert boundary.classify_raw_frame(red) == "red"
+    assert boundary.classify_raw_frame(green) == "green"
+    with pytest.raises(boundary.probe.ProbeFailure, match="black/empty"):
+        boundary.classify_raw_frame(black)
+    mixed = red[: len(red) // 2] + green[len(green) // 2 :]
+    with pytest.raises(boundary.probe.ProbeFailure, match="mixed|intermediate"):
+        boundary.classify_raw_frame(mixed)
+    boundary.assert_abort_pixels(["red", "red", "red", "red", "red"], 2, expected="red")
+    boundary.assert_abort_pixels(["red", "red", "red"], 0, expected="red")
+    with pytest.raises(boundary.probe.ProbeFailure, match="stale/mixed"):
+        boundary.assert_abort_pixels(["red", "green", "green", "green", "green"], 2, expected="red")
+
+
+def test_transition_boundary_timeline_accepts_fade_blends_and_rejects_regression() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_timeline")
+    boundary.assert_transition_timeline(
+        ["red", "red", "fade", "fade", "green", "green"], composition="fade"
+    )
+    boundary.assert_transition_timeline(
+        ["red", "stinger", "stinger", "green"], composition="stinger"
+    )
+    with pytest.raises(boundary.probe.ProbeFailure, match="non-monotone"):
+        boundary.assert_transition_timeline(["red", "green", "fade"], composition="fade")
+
+
 def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:
     probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_for_contract")
     fields = (
@@ -774,6 +1140,34 @@ def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:
     source = _read(_RUNTIME_PROBE)
     assert "ENCODER_BIND_RE.search(line)" in source
     assert '"[pulsar-dual-lane] encoder video_t bound once to ProgramView"' not in source
+
+
+def test_transition_abort_queued_waits_for_observed_graphics_boundary() -> None:
+    source = _read(_FRONTEND)
+    queued = _between(
+        source,
+        'if (dualLaneTransition.phase() == pulsar_transition::Phase::Queued)',
+        'if (dualLaneTransition.phase() == pulsar_transition::Phase::Running',
+    )
+    assert "dualLaneTransitionAbortPending = true" in queued
+    assert "obs_view_queue_atomic_swap_with_floor" in queued
+    assert "OnDualLaneTransitionAbortCommitted" in queued
+    assert queued.index("obs_view_queue_atomic_swap_with_floor") < queued.index("dualLaneTransition.abort(\"operator\")")
+    # A failed queue is the only path allowed to clear state immediately; the
+    # success path returns and waits for the callback's observed frame/PTS.
+    assert "sceneSwitchPendingTakeId.clear();\n            return true;" in queued
+    assert "g_runtimeTelemetry.cancelPending();" in queued
+    callback = _between(
+        source,
+        "void PulsarFrontendAPI::OnDualLaneTransitionAbortCommitted",
+        "void PulsarFrontendAPI::dualLaneTransitionTick",
+    )
+    assert "frame_id=%llu pts_ns=%llu" in callback
+    for field in ("role_map_preserved", "surfaces_stable", "video_t_stable", "invariant_valid"):
+        assert field in callback
+    assert "obs_view_queue_atomic_swap_with_floor" not in callback
+    assert "writeDualLaneRollbackStatus" not in callback
+    assert "std::filesystem" not in callback
 
 
 def test_runtime_probe_redacts_ready_credentials_from_failure_tails() -> None:

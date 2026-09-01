@@ -40,6 +40,58 @@ existing libobs atomic frame-boundary swap for Take. Abort and timeout cancel
 only a still-pending swap; a callback already at the frame boundary wins and
 is reported as `TakeCommitted` with the real frame ID and PTS.
 
+### Optional dual-lane transitions (v1 core unchanged)
+
+The scene-switch command envelope remains `pulsar.scene-switch.v1`; transition
+composition is a process boot capability, not a new wire command. Set
+`PULSAR_DUAL_LANE_TRANSITIONS=1` to enable the selected OBS `Fade` or
+`Stinger` source for dual-lane Takes. The unset/default mode is the validated
+atomic Cut. A transition is installed on the stable `ProgramView` at one frame
+boundary and the final role exchange is committed at a later frame boundary;
+the active encoder `video_t`, audio route, outputs and `PreviewView` identity
+are not rebound. If the source is unavailable, duration is outside 50..20000 ms,
+the transition start/queue fails, or an operator interrupts it, Pulsar records a
+stable fallback reason and returns to Cut at a frame boundary while preserving
+the current Program/Preview role map. Logs expose `transition_started`,
+`transition_final_queued`, `transition_committed` (requested/actual duration,
+frame IDs and PTS) and `transition_aborted`. Commit logs also carry bounded
+runtime aggregates (`aggregate_count`, duration/frame `p50`, `p95`, `p99`) for
+each transition kind. A Stinger asset is admitted only when its local file is
+readable and has a recognized container header; missing, unreadable, or
+invalid assets are rejected before the transition source is used or started
+and record `fallback_to_cut=1` (the descriptor may remain listed so the Take
+can fail closed to Cut). A duration below 50 ms (for example 49 ms) is rejected
+by the scene-switch API with no mutation (request status 402); the internal
+controller independently remains fail-closed and records `duration_invalid` if
+called directly. Abort logs include observed `role_map_preserved`,
+`surfaces_stable`, `video_t_stable`, and `invariant_valid` postconditions.
+
+The reproducible raw-boundary runbook is
+`python scripts/probe-transition-raw-boundary.py --exe <pulsar.exe> --transition both --phase both`
+(the older `probe-transition-boundary.py` entry point remains equivalent).
+It records a Queued abort and a `FinalQueued` abort, then performs a control
+commit. The retained recording is decoded to raw RGB after a post-commit dwell.
+The probe correlates the transition callback's `start_pts_ns`/`end_pts_ns` span
+with an observed encoded-video PTS span; callback `frame_id` values are never
+treated as encoded-frame indexes. The FinalQueued oracle counts the observed
+`TakeAborted`/`TakeCommitted` route-map terminal events and checks their revision
+deltas; exactly one terminal winner is required. A queued Abort may either win
+and preserve the role map, or lose to an already committed Take and observe the
+single committed role-map revision; in the latter case the Abort response is
+the typed `CommandRejected`/`TAKE_NOT_PENDING` admission-race result and the
+separate commit event is authoritative. Neither result is converted into a
+second synthetic command. The raw recording supplies the settled red-to-green
+boundary.
+Two visual red/fade/green sequences are therefore valid when the first is an
+interrupted composition and the route-map events show only one winning commit.
+For Stinger, a coherent red-or-green base with a distributed WebM palette is
+valid; only simultaneous red+green base-lane samples in one frame/tiles, black,
+stale post-settlement frames, or a second route-map/revision commit fail the
+probe. This pixel/event evidence is independent of structured post-abort
+booleans. The graphics callback only logs observed frame/PTS and queues state
+cleanup; recording decode and all filesystem I/O happen after output stop,
+outside the callback.
+
 ## Connection
 
 | | |
@@ -1143,6 +1195,7 @@ Use `-RefreshPatches` after explicitly requesting a patch-stack replay, and
 | `PULSAR_REPLAY_MAX_SIZE_MB` | `pulsar-frontend-stub` | `512` | Replay buffer RAM cap in MB, `16..8192`. Out of range ⇒ warning + default. Boot-fixed. |
 | `PULSAR_STINGER_ASSET` | `pulsar-frontend-stub` | `<cwd>/../../data/pulsar/stinger-demo.webm` | Local path to the stinger media asset (never leaf/network-derived, ADR 003 Amendment 2 §A2.1). |
 | `PULSAR_NATIVE_STINGER` | `pulsar-frontend-stub` | off | Truthy set `1`/`true`/`on`/`yes` (case-insensitive) enables the dormant OBS-native stinger compositing path (#67); default off means the M10 transition renders via Solar/CEF overlay and OBS only hard-cuts. Security invariant: env-only, never leaf-reachable (Bastion #76, ADR 003 §A4.5 R1′·R7). |
+| `PULSAR_DUAL_LANE_TRANSITIONS` | `pulsar-frontend-stub` | off | Truthy set `1`/`true`/`on`/`yes` enables the #250 Fade/Stinger composition above the stable dual-lane Cut. This is independent of `PULSAR_NATIVE_STINGER`; unset or malformed values preserve Cut and never rebind an active `video_t`. |
 | `PULSAR_ADAPTIVE_BITRATE` | `pulsar-multi-stream` | enabled | Set to `off`/`0`/`false` to disable the adaptive bitrate worker at start. |
 | `PULSAR_OUTPUT_VERIFY_MS` | `pulsar-websocket` | `250` (ms) | Upper bound of the post-action state poll behind the start/stop verification above (`0..2000`; out-of-range ⇒ default with a warning). Only the non-nominal paths ever reach it — an output that activates inside `obs_output_start` settles on the first read. |
 

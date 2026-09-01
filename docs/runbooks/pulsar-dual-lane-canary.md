@@ -155,6 +155,29 @@ capacity claim. The resource reference/dual-lane method and the no-blank WGC
 gate are described in `docs/runbooks/probe-take-latency.md` and were first
 exercised by issues #246 and #247.
 
+## Fade/Stinger raw boundary probe
+
+The #250 boundary evidence is collected only after the accepted Take and a
+post-commit capture dwell:
+
+```powershell
+python scripts/probe-transition-raw-boundary.py `
+  --exe <exact-artifact> --transition both --phase both
+```
+
+The probe uses one WebSocket demultiplexer, waits for `TakeAccepted` before a
+Queued abort, and treats an earlier `TAKE_NOT_PENDING` as an admission race.
+It correlates callback start/end PTS to an encoded-video PTS span and never
+maps callback frame IDs onto recording indexes. FinalQueued proof is based on
+the observed route-map terminal events and revision deltas; exactly one terminal
+winner is required. A queued Abort may win and preserve the role map, or return
+the typed `CommandRejected`/`TAKE_NOT_PENDING` race result after an already
+committed Take; the later commit event proves one role-map revision. The probe
+never manufactures a second command to force a preferred result. Raw RGB is used to
+reject black, stale, or simultaneous red+green spatial tears. A coherent
+single-lane Stinger base with its distributed WebM palette, and a legitimate
+interrupted red/fade/green sequence, remain valid observations.
+
 ## Frame-boundary rollback drill
 
 The rollback drill is intentionally separate from the long canary. It arms a

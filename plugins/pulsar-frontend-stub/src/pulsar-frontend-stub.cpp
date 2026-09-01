@@ -59,6 +59,7 @@
 #include <util/util.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -98,6 +99,7 @@
 
 #include "pulsar-frontend-stub.h"
 #include "pulsar-dual-lane-config.h"
+#include "pulsar-transition-controller.h"
 #include "pulsar-dual-lane-control.h"
 #include "pulsar-runtime-telemetry.h"
 #include "pulsar-program-audio.h"
@@ -180,6 +182,16 @@ DualLaneRollbackSetting resolve_dual_lane_rollback_after_takes()
     if (!parsed.present)
         return {0, true, "unset"};
     return {parsed.takes, true, "valid"};
+}
+
+bool resolve_dual_lane_transitions()
+{
+    const EnvBool value = parse_env_bool(std::getenv("PULSAR_DUAL_LANE_TRANSITIONS"));
+    if (value == EnvBool::Enabled)
+        return true;
+    // Unset and every explicit false value preserve the validated atomic Cut.
+    // Malformed configuration is fail-closed and therefore also remains Cut.
+    return false;
 }
 
 class PulsarFrontendAPI;
@@ -1711,7 +1723,11 @@ public:
     bool sceneSwitchTake(const std::string &takeCommandId);
     bool sceneSwitchAbort(const std::string &takeCommandId);
     void sceneSwitchClearPrepared(const std::string &commandId);
+    void dualLaneTransitionTick();
     static void OnSceneSwitchPreviewVideoFrame(void *param, struct video_data *frame);
+    static void OnDualLaneTick(void *param, float seconds);
+    static void OnDualLaneTransitionStarted(void *param, uint64_t frameId, uint64_t ptsNs);
+    static void OnDualLaneTransitionAbortCommitted(void *param, uint64_t frameId, uint64_t ptsNs);
 
     // ---------- main window / system tray (no GUI) ----------
     void *obs_frontend_get_main_window(void) override { return nullptr; }
@@ -2394,6 +2410,46 @@ private:
         return std::filesystem::weakly_canonical(p, ec).string();
     }
 
+    // obs_transition_start can report success before the media decoder has
+    // opened its file. Validate the operator-pinned local asset before
+    // creating the transition so a missing, unreadable, or obviously corrupt
+    // container cannot produce transition_started followed by a black seam.
+    struct StingerAssetValidation {
+        bool usable = false;
+        const char *reason = "asset_unreadable";
+    };
+
+    static StingerAssetValidation validate_stinger_asset(const std::string &assetPath)
+    {
+        std::error_code ec;
+        const std::filesystem::path path(assetPath);
+        if (!std::filesystem::is_regular_file(path, ec))
+            return {false, "asset_missing"};
+        const auto size = std::filesystem::file_size(path, ec);
+        if (ec || size < 16)
+            return {false, "asset_unreadable"};
+
+        std::array<unsigned char, 12> header{};
+        std::ifstream stream(path, std::ios::binary);
+        stream.read(reinterpret_cast<char *>(header.data()), static_cast<std::streamsize>(header.size()));
+        if (stream.gcount() < 4)
+            return {false, "asset_unreadable"};
+
+        std::string extension = path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        const bool ebml = header[0] == 0x1a && header[1] == 0x45 &&
+                          header[2] == 0xdf && header[3] == 0xa3;
+        const bool isoBmff = header[4] == 'f' && header[5] == 't' &&
+                             header[6] == 'y' && header[7] == 'p';
+        if ((extension == ".webm" || extension == ".mkv") && !ebml)
+            return {false, "asset_invalid_container"};
+        if ((extension == ".mp4" || extension == ".m4v" || extension == ".mov") && !isoBmff)
+            return {false, "asset_invalid_container"};
+        return {true, nullptr};
+    }
+
     // M10 PIVOT (ADR 003 Amendment 4 §A4.3 / §A4.7 #69, issue #73): the OBS-native
     // stinger compositing built in #67 is DORMANT by default. The M10 transition is
     // rendered by Solar/CEF as an overlay; OBS only ever performs a hard cut. This
@@ -2437,6 +2493,20 @@ private:
         if (scene)
             obs_transition_set(transition, scene); // hold the current scene
         obs_set_output_source(0, transition);      // transition feeds the encoder
+    }
+
+    void prepareDualLaneTransition(obs_source_t *transition, obs_source_t *scene)
+    {
+        if (!transition)
+            return;
+        obs_video_info ovi;
+        if (obs_get_video_info(&ovi)) {
+            obs_transition_set_size(transition, ovi.base_width, ovi.base_height);
+            obs_transition_set_alignment(transition, OBS_ALIGN_CENTER);
+            obs_transition_set_scale_type(transition, OBS_TRANSITION_SCALE_ASPECT);
+        }
+        if (scene)
+            obs_transition_set(transition, scene);
     }
 
     // state
@@ -2564,6 +2634,13 @@ private:
     // Default false => OBS performs a raw hard cut, the #67 stinger compositing
     // is inert and the stinger source is never registered.
     bool nativeStingerEnabled = false;
+    bool dualLaneTransitionsEnabled = false;
+    pulsar_transition::Controller dualLaneTransition;
+    obs_source_t *dualLaneStingerTransition = nullptr;
+    const char *dualLaneStingerAssetFailure = nullptr;
+    bool dualLaneTransitionFinalPending = false;
+    bool dualLaneTransitionAbortPending = false;
+    uint64_t dualLaneTransitionStartNs = 0;
     std::atomic<bool> recordingPaused{false};
     std::string lastRecording;
     std::string lastReplay;
@@ -3448,6 +3525,34 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
 
     dualLaneReady = true;
     dualLaneOperational = true;
+    dualLaneTransitionsEnabled = resolve_dual_lane_transitions();
+    if (dualLaneTransitionsEnabled) {
+        std::string stingerPath = resolve_stinger_asset_path();
+        const StingerAssetValidation asset = validate_stinger_asset(stingerPath);
+        OBSDataAutoRelease stingerSettings = obs_data_create();
+        obs_data_set_string(stingerSettings, "path", stingerPath.c_str());
+        obs_data_set_int(stingerSettings, "transition_point", 300);
+        obs_data_set_int(stingerSettings, "tp_type", 0);
+        obs_data_set_bool(stingerSettings, "hw_decode", false);
+        obs_source_t *stingerRegistration =
+            obs_source_create_private("obs_stinger_transition", "DualLaneStinger", stingerSettings);
+        if (stingerRegistration)
+            transitions.push_back(stingerRegistration);
+        if (asset.usable && stingerRegistration) {
+            dualLaneStingerTransition = stingerRegistration;
+            blog(LOG_INFO, "[pulsar-dual-lane] transitions enabled; stinger path=%s", stingerPath.c_str());
+        } else if (!asset.usable) {
+            dualLaneStingerAssetFailure = asset.reason;
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] stinger asset rejected; fallback=cut fallback_to_cut=1 reason=%s path=%s",
+                 asset.reason, stingerPath.c_str());
+        } else {
+            dualLaneStingerAssetFailure = "transition_unavailable";
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] stinger unavailable; Stinger requests will fall back to Cut");
+        }
+        obs_add_tick_callback(&OnDualLaneTick, this);
+    }
     if (!dualLaneInvariantLocked("setup")) {
         dualLaneOperational = false;
         dualLaneReady = false;
@@ -3562,6 +3667,42 @@ bool PulsarFrontendAPI::sceneSwitchAbort(const std::string &takeCommandId)
     std::lock_guard<std::mutex> lock(dualLaneMutex);
     if (sceneSwitchPendingTakeId != takeCommandId || !dualLaneCutPending.load())
         return false;
+    if (dualLaneTransition.phase() == pulsar_transition::Phase::Queued) {
+        // The initial transition queue may still own the next graphics
+        // boundary.  Cancel it first, then queue the unchanged role pair so
+        // the abort is observed at a real frame boundary.  Do not emit a
+        // synthetic frame/PTS or clear telemetry before that callback.
+        dualLaneTransitionAbortPending = true;
+        if (obs_view_queue_atomic_swap_with_floor(
+                programView, 0, currentScene, previewView, 0, previewScene,
+                os_gettime_ns(), OnDualLaneTransitionAbortCommitted, this)) {
+            sceneSwitchPendingTakeId.clear();
+            return true;
+        }
+        dualLaneTransitionAbortPending = false;
+        dualLaneTransition.abort("operator");
+        dualLaneCutPending.store(false);
+        g_dualLaneControlBridge.set_pending(false);
+        g_runtimeTelemetry.cancelPending();
+        sceneSwitchPendingTakeId.clear();
+        return false;
+    }
+    if (dualLaneTransition.phase() == pulsar_transition::Phase::Running ||
+        dualLaneTransition.phase() == pulsar_transition::Phase::FinalQueued) {
+        // An already-started transition is returned to the existing Program
+        // root through the same atomic two-view primitive.  This preserves
+        // the old role map and keeps interruption at a frame boundary.
+        dualLaneTransitionFinalPending = false;
+        dualLaneTransitionAbortPending = true;
+        if (obs_view_queue_atomic_swap_with_floor(
+                programView, 0, currentScene, previewView, 0, previewScene,
+                os_gettime_ns(), OnDualLaneTransitionAbortCommitted, this)) {
+            sceneSwitchPendingTakeId.clear();
+            return true;
+        }
+        dualLaneTransitionAbortPending = false;
+        return false;
+    }
     dualLaneCutPending.store(false);
     g_dualLaneControlBridge.set_pending(false);
     g_runtimeTelemetry.cancelPending();
@@ -3591,6 +3732,104 @@ void PulsarFrontendAPI::OnSceneSwitchPreviewVideoFrame(void *param, struct video
         vendor->previewRendered(prepared, video_output_get_total_frames(self->previewVideo), frame->timestamp);
 }
 
+void PulsarFrontendAPI::OnDualLaneTick(void *param, float)
+{
+    auto *self = static_cast<PulsarFrontendAPI *>(param);
+    if (self)
+        self->dualLaneTransitionTick();
+}
+
+void PulsarFrontendAPI::OnDualLaneTransitionStarted(void *param, uint64_t frameId, uint64_t ptsNs)
+{
+    auto *self = static_cast<PulsarFrontendAPI *>(param);
+    if (!self)
+        return;
+    std::lock_guard<std::mutex> lock(self->dualLaneMutex);
+    if (!self->dualLaneTransition.started(frameId, ptsNs))
+        return;
+    self->dualLaneTransitionStartNs = os_gettime_ns();
+    self->dualLaneTransition.set_start_monotonic_ns(self->dualLaneTransitionStartNs);
+    const auto &metrics = self->dualLaneTransition.metrics();
+    blog(LOG_INFO,
+         "[pulsar-dual-lane] transition_started kind=%s frame_id=%llu pts_ns=%llu duration_ms=%llu",
+         pulsar_transition::kind_name(metrics.kind), static_cast<unsigned long long>(frameId),
+         static_cast<unsigned long long>(ptsNs),
+         static_cast<unsigned long long>(metrics.requested_duration_ms));
+}
+
+void PulsarFrontendAPI::OnDualLaneTransitionAbortCommitted(void *param, uint64_t frameId, uint64_t ptsNs)
+{
+    auto *self = static_cast<PulsarFrontendAPI *>(param);
+    if (!self)
+        return;
+    std::lock_guard<std::mutex> lock(self->dualLaneMutex);
+    if (!self->dualLaneTransitionAbortPending)
+        return;
+    const bool roleMapPreserved = self->onAirLane >= 0 && self->onAirLane < 2 &&
+                                  self->previewLane >= 0 && self->previewLane < 2 &&
+                                  self->laneSources[self->onAirLane] == self->currentScene &&
+                                  self->laneSources[self->previewLane] == self->previewScene;
+    const bool surfacesStable = self->programView && self->previewView && self->programVideo &&
+                                self->previewVideo && self->programView == obs_get_main_view() &&
+                                self->programView != self->previewView &&
+                                self->programVideo != self->previewVideo;
+    const bool videoTStable = self->programVideo && self->previewVideo &&
+                              self->programVideo == obs_get_video() &&
+                              self->programVideo != self->previewVideo;
+    const bool invariantValid = self->dualLaneInvariantLocked("transition-abort");
+    self->dualLaneTransition.abort("operator");
+    self->dualLaneTransitionAbortPending = false;
+    self->dualLaneTransitionFinalPending = false;
+    self->dualLaneTransitionStartNs = 0;
+    self->dualLaneCutPending.store(false);
+    g_dualLaneControlBridge.set_pending(false);
+    g_runtimeTelemetry.cancelPending();
+    blog(LOG_INFO,
+         "[pulsar-dual-lane] transition_aborted fallback=cut fallback_to_cut=1 frame_id=%llu pts_ns=%llu "
+         "reason=operator role_map_preserved=%d surfaces_stable=%d video_t_stable=%d invariant_valid=%d",
+         static_cast<unsigned long long>(frameId), static_cast<unsigned long long>(ptsNs),
+         roleMapPreserved, surfacesStable, videoTStable, invariantValid);
+}
+
+void PulsarFrontendAPI::dualLaneTransitionTick()
+{
+    std::lock_guard<std::mutex> lock(dualLaneMutex);
+    if (!dualLaneTransition.active() || dualLaneTransitionFinalPending)
+        return;
+
+    // Publish FinalQueued for one complete tick before admitting the terminal
+    // atomic swap.  The vendor's Abort path can therefore cancel the pending
+    // transition deterministically after observing transition_final_queued;
+    // the final callback remains the only place that publishes TakeCommitted.
+    // This is a control-plane grace window, not a second video lane or a
+    // callback-side wait.
+    if (dualLaneTransition.phase() == pulsar_transition::Phase::Running) {
+        if (!dualLaneTransition.deadline_reached(os_gettime_ns()) ||
+            !dualLaneTransition.final_queued())
+            return;
+        blog(LOG_INFO, "[pulsar-dual-lane] transition_final_queued kind=%s",
+             pulsar_transition::kind_name(dualLaneTransition.metrics().kind));
+        return;
+    }
+    if (dualLaneTransition.phase() != pulsar_transition::Phase::FinalQueued)
+        return;
+
+    // The final operation is the same two-view atomic Cut used by the core:
+    // Program becomes the prepared Preview lane and Preview becomes the old
+    // OnAir lane.  The transition source is released by the view at this
+    // boundary; no view/video_t/output/encoder is rebound.
+    const bool queued = obs_view_queue_atomic_swap_with_floor(
+        programView, 0, previewScene, previewView, 0, currentScene,
+        dualLaneTransitionStartNs, OnDualLaneCutCommitted, this);
+    if (queued) {
+        dualLaneTransitionFinalPending = true;
+        blog(LOG_INFO, "[pulsar-dual-lane] transition_final_commit_queued kind=%s",
+             pulsar_transition::kind_name(dualLaneTransition.metrics().kind));
+    } else {
+        dualLaneTransition.final_queue_failed();
+    }
+}
+
 bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
 {
     obs_source_t *queuedPreview = nullptr;
@@ -3603,6 +3842,8 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
     bool queued = false;
     bool telemetryReserved = false;
     bool telemetryAccepted = false;
+    pulsar_transition::Kind transitionKind = pulsar_transition::Kind::Cut;
+    obs_source_t *transitionSource = nullptr;
     {
         std::lock_guard<std::mutex> lk(dualLaneMutex);
         if (!dualLaneReady || !dualLaneOperational || !scene || !dualLaneInvariantLocked("queue-before")) {
@@ -3642,6 +3883,48 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
         queuedOnAirLane = onAirLane;
         queuedPreviewLane = previewLane;
 
+        if (dualLaneTransitionsEnabled && currentTransition) {
+            const char *transitionId = obs_source_get_id(currentTransition);
+            const char *transitionName = obs_source_get_name(currentTransition);
+            if ((transitionId && std::strcmp(transitionId, "obs_stinger_transition") == 0) ||
+                (transitionName && std::strcmp(transitionName, "DualLaneStinger") == 0) ||
+                (transitionName && std::strcmp(transitionName, "Stinger") == 0)) {
+                transitionKind = pulsar_transition::Kind::Stinger;
+                transitionSource = dualLaneStingerTransition;
+            } else if ((transitionId && std::strcmp(transitionId, "fade_transition") == 0) ||
+                       (transitionName && std::strcmp(transitionName, "Fade") == 0)) {
+                transitionKind = pulsar_transition::Kind::Fade;
+                transitionSource = currentTransition;
+            }
+        }
+
+        const bool transitionAvailable = transitionSource != nullptr;
+        const bool transitionStarted =
+            dualLaneTransition.begin(transitionKind, static_cast<uint64_t>((std::max)(0, transitionDuration)),
+                                     transitionKind == pulsar_transition::Kind::Cut || transitionAvailable);
+        const bool animate = transitionStarted && transitionKind != pulsar_transition::Kind::Cut;
+        if (transitionKind != pulsar_transition::Kind::Cut && !animate) {
+            if (transitionKind == pulsar_transition::Kind::Stinger && dualLaneStingerAssetFailure)
+                dualLaneTransition.set_fallback_reason(dualLaneStingerAssetFailure);
+            const auto &fallback = dualLaneTransition.metrics();
+            blog(LOG_WARNING,
+                 "[pulsar-dual-lane] transition_fallback kind=%s fallback=cut fallback_to_cut=1 reason=%s",
+                 pulsar_transition::kind_name(fallback.kind),
+                 fallback.fallback_reason ? fallback.fallback_reason : "transition_unavailable");
+        }
+        if (animate) {
+            prepareDualLaneTransition(transitionSource, queuedOnAir);
+            if (!obs_transition_start(transitionSource, OBS_TRANSITION_MODE_AUTO,
+                                      static_cast<uint32_t>(transitionDuration), queuedPreview)) {
+                dualLaneTransition.abort("transition_start_failed");
+                blog(LOG_WARNING,
+                     "[pulsar-dual-lane] transition_fallback kind=%s fallback=cut fallback_to_cut=1 reason=transition_start_failed",
+                     pulsar_transition::kind_name(transitionKind));
+                transitionKind = pulsar_transition::Kind::Cut;
+                transitionSource = nullptr;
+            }
+        }
+
         // Reserve the metadata while the same role mutex protects the pair.
         // This consumes state only; no event is timestamped or written until
         // libobs accepts the frame-boundary queue operation.
@@ -3654,8 +3937,10 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
             previewView == queuedPreviewView;
         if (reservationStillOwned) {
             queued = obs_view_queue_atomic_swap_with_floor(
-                queuedProgramView, 0, queuedPreview, queuedPreviewView, 0, queuedOnAir,
-                queuedAdmissionFloorNs, OnDualLaneCutCommitted, this);
+                queuedProgramView, 0, animate ? transitionSource : queuedPreview,
+                queuedPreviewView, 0, queuedOnAir, queuedAdmissionFloorNs,
+                animate ? OnDualLaneTransitionStarted : OnDualLaneCutCommitted, this);
+            // Default Cut terminal callback: queuedAdmissionFloorNs, OnDualLaneCutCommitted.
         }
         if (queued) {
             // The primitive has admitted the pair.  Mark acceptance and put
@@ -3664,6 +3949,8 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
             telemetryAccepted = telemetryReserved && g_runtimeTelemetry.markAccepted();
         }
         if (!queued) {
+            if (animate)
+                dualLaneTransition.abort("atomic_swap_rejected");
             dualLaneCutPending.store(false);
             g_dualLaneControlBridge.set_pending(false);
         }
@@ -3716,6 +4003,9 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
     bool programMainVideoValid = false;
     bool previewDistinctValid = false;
     bool rollbackNow = false;
+    bool transitionCommitted = false;
+    pulsar_transition::Metrics transitionMetrics;
+    pulsar_transition::AggregateSummary transitionAggregate;
     PulsarFrontendAPI::RollbackObservation rollbackObservation;
     std::string sceneSwitchTakeId;
     {
@@ -3745,6 +4035,14 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
         sceneSwitchTakeId = self->sceneSwitchPendingTakeId;
         self->sceneSwitchPendingTakeId.clear();
         self->sceneSwitchPreparedCommandId.clear();
+        if (self->dualLaneTransitionFinalPending) {
+            transitionCommitted = self->dualLaneTransition.committed(frameId, ptsNs, os_gettime_ns());
+            transitionMetrics = self->dualLaneTransition.metrics();
+            if (transitionCommitted)
+                transitionAggregate = self->dualLaneTransition.aggregate(transitionMetrics.kind);
+            self->dualLaneTransitionFinalPending = false;
+            self->dualLaneTransitionStartNs = 0;
+        }
         if (!self->dualLaneInvariantLocked("commit"))
             blog(LOG_ERROR, "[pulsar-dual-lane] commit invariant failed");
         if (self->rollbackAfterTakes > 0 && self->cutCount >= self->rollbackAfterTakes &&
@@ -3816,6 +4114,29 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
          static_cast<unsigned long long>(ptsNs), committedOnAirLane, committedPreviewLane,
          laneRootBindingValid, programMainViewValid, programMainVideoValid, previewDistinctValid,
          pulsar_program_audio::kRouteId, self->programAudio != nullptr);
+    if (transitionCommitted) {
+        blog(LOG_INFO,
+             "[pulsar-dual-lane] transition_committed kind=%s requested_duration_ms=%llu "
+             "actual_duration_ms=%llu start_frame_id=%llu start_pts_ns=%llu "
+             "end_frame_id=%llu end_pts_ns=%llu fallback_to_cut=%d "
+             "aggregate_count=%llu duration_p50_ms=%llu duration_p95_ms=%llu duration_p99_ms=%llu "
+             "frames_p50=%llu frames_p95=%llu frames_p99=%llu",
+             pulsar_transition::kind_name(transitionMetrics.kind),
+             static_cast<unsigned long long>(transitionMetrics.requested_duration_ms),
+             static_cast<unsigned long long>(transitionMetrics.actual_duration_ms),
+             static_cast<unsigned long long>(transitionMetrics.start_frame_id),
+             static_cast<unsigned long long>(transitionMetrics.start_pts_ns),
+             static_cast<unsigned long long>(transitionMetrics.end_frame_id),
+             static_cast<unsigned long long>(transitionMetrics.end_pts_ns),
+             transitionMetrics.fallback_to_cut,
+             static_cast<unsigned long long>(transitionAggregate.count),
+             static_cast<unsigned long long>(transitionAggregate.duration_p50_ms),
+             static_cast<unsigned long long>(transitionAggregate.duration_p95_ms),
+             static_cast<unsigned long long>(transitionAggregate.duration_p99_ms),
+             static_cast<unsigned long long>(transitionAggregate.frames_p50),
+             static_cast<unsigned long long>(transitionAggregate.frames_p95),
+             static_cast<unsigned long long>(transitionAggregate.frames_p99));
+    }
     self->emit(OBS_FRONTEND_EVENT_SCENE_CHANGED);
     self->emit(OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED);
 }
@@ -4714,6 +5035,15 @@ void PulsarFrontendAPI::teardown()
     // is released. The bridge contains no frontend pointer, so a late proc
     // lookup cannot dereference this object after teardown.
     g_dualLaneControlBridge.deactivate();
+    if (dualLaneTransitionsEnabled)
+        obs_remove_tick_callback(&OnDualLaneTick, this);
+    {
+        std::lock_guard<std::mutex> lock(dualLaneMutex);
+        dualLaneTransitionFinalPending = false;
+        dualLaneTransitionAbortPending = false;
+        if (dualLaneTransition.active())
+            dualLaneTransition.abort("shutdown");
+    }
     if (previewVideo)
         video_output_disconnect(previewVideo, OnSceneSwitchPreviewVideoFrame, this);
 
@@ -4935,6 +5265,8 @@ void PulsarFrontendAPI::teardown()
     }
     release_source_vec(scenes);
     release_source_vec(transitions);
+    dualLaneStingerTransition = nullptr;
+    dualLaneTransitionsEnabled = false;
 
     // Only now are all frontend-owned source refs gone.  The orphan scan is
     // deliberately after this point; scanning earlier would report the
