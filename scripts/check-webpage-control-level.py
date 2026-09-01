@@ -129,6 +129,24 @@ WAIVERS = {
             ),
         ],
     },
+    "obs_frontend_set_transition_duration": {
+        "call": "obs_source_update",
+        "reason": (
+            "updates the private OBS Stinger transition created from the "
+            "literal obs_stinger_transition kind. A transition source is not "
+            "an input, so it can never be browser_source."
+        ),
+        "evidence": [
+            (
+                "plugins/pulsar-frontend-stub/src/pulsar-frontend-stub.cpp",
+                r"stingerRegistration\s*=\s*obs_source_create_private\(\s*\"obs_stinger_transition\"[\s\S]{0,300}?dualLaneStingerTransition\s*=\s*stingerRegistration",
+            ),
+            (
+                "plugins/pulsar-frontend-stub/src/pulsar-frontend-stub.cpp",
+                r"obs_frontend_set_transition_duration[\s\S]{0,1200}?obs_source_update\(dualLaneStingerTransition",
+            ),
+        ],
+    },
 }
 
 # Lines that open a block but are NOT a function definition.

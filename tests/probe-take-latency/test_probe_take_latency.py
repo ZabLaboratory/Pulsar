@@ -325,6 +325,10 @@ def _take_records(
                         "process_cpu_percent": 15.0 + sample_index,
                         "host_gpu_percent": 25.0 + sample_index,
                         "callback_backlog_estimate": sample_index,
+                        "dropped_frames": sample_index,
+                        "missed_frames": sample_index,
+                        "encode_time_ms": 1.5 + sample_index * 0.1,
+                        "encode_time_samples": 100 + sample_index,
                         "encoder_utilization_percent": 4.0,
                     }
                 )
@@ -353,6 +357,9 @@ def test_fixture_reports_all_boundaries_separately_and_never_runtime_pass():
     assert report["resources"]["status"] == "MEASURED"
     assert report["resources"]["comparison"]["frame_render_ms"]["within_known_reference"] is True
     assert report["resources"]["comparison"]["resident_bytes"]["within_known_reference"] is True
+    assert report["resources"]["metrics"]["dual_lane"]["dropped_frames"]["p50"] == pytest.approx(0.5)
+    assert report["resources"]["metrics"]["dual_lane"]["missed_frames"]["p95"] == pytest.approx(0.95)
+    assert report["resources"]["metrics"]["dual_lane"]["encode_time_ms"]["p95"] == pytest.approx(1.595)
     assert report["ignored_valid_samples_before_commit"]["encoder_input_raw"] == 3
 
 

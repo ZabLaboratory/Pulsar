@@ -25,6 +25,7 @@ OBS_HEADER = ROOT / "plugins" / "pulsar-websocket" / "src" / "utils" / "Obs.h"
 RECORD_PROBE = ROOT / "scripts" / "probe-record.py"
 RECORD_M2_PROBE = ROOT / "scripts" / "probe-record-m2.py"
 RECORD_SPLIT_PROBE = ROOT / "scripts" / "probe-record-split.py"
+CAPABILITY_PROBE = ROOT / "scripts" / "probe-capability-contract.py"
 
 
 class _StopVerdict(Enum):
@@ -158,6 +159,14 @@ def test_record_probes_drain_pending_before_shared_process_reuse() -> None:
     assert "wait_record_stop(inbox, ws, resp)" in record_probe
     assert '"stop-recovery"' in split_probe
     assert "if not await wait_record_stop" in split_probe
+
+
+def test_capability_probe_accepts_either_authoritative_stop_observation() -> None:
+    capability_probe = CAPABILITY_PROBE.read_text(encoding="utf-8")
+
+    assert "if not landed and stopped is not False:" in capability_probe
+    assert "if not landed or stopped is not False:" not in capability_probe
+    assert "event_stopped={landed} or outputActive={stopped!r}" in capability_probe
 
 
 def _load_probe(path: Path, module_name: str):

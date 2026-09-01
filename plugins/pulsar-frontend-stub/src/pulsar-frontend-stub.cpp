@@ -406,6 +406,8 @@ public:
             roleMapRevision_ = 0;
             rawFrameCount_.store(0, std::memory_order_relaxed);
             packetFrameCount_.store(0, std::memory_order_relaxed);
+            encodeTimeNsTotal_.store(0, std::memory_order_relaxed);
+            encodeTimeSampleCount_.store(0, std::memory_order_relaxed);
             resourceMode_.clear();
             wgcWorkload_ = false;
             cefWorkload_ = false;
@@ -953,6 +955,11 @@ public:
     {
         if (!packet || packet->type != OBS_ENCODER_VIDEO)
             return;
+        if (packetTime && packetTime->fer > 0 && packetTime->ferc >= packetTime->fer) {
+            encodeTimeNsTotal_.fetch_add(packetTime->ferc - packetTime->fer,
+                                        std::memory_order_relaxed);
+            encodeTimeSampleCount_.fetch_add(1, std::memory_order_relaxed);
+        }
         // Monotone video-packet sequence on the native streamOutput callback.
         // The external RTMP receiver has its own sequence and is correlated
         // by rational PTS/timebase, never by log order alone.
@@ -1185,6 +1192,17 @@ private:
             }
             const bool encoderActive = videoEncoder && obs_encoder_active(videoEncoder);
             const bool rtmpLoadActive = streamOutput && obs_output_active(streamOutput);
+            const int outputDropped = rtmpLoadActive ? obs_output_get_frames_dropped(streamOutput) : 0;
+            const uint64_t droppedFrames =
+                outputDropped > 0 ? static_cast<uint64_t>(outputDropped) : 0;
+            const uint64_t missedFrames = static_cast<uint64_t>(obs_get_lagged_frames());
+            const uint64_t encodeSamples =
+                encodeTimeSampleCount_.load(std::memory_order_relaxed);
+            const uint64_t encodeTimeNs = encodeTimeNsTotal_.load(std::memory_order_relaxed);
+            const double encodeTimeMs = encodeSamples > 0
+                ? static_cast<double>(encodeTimeNs) /
+                      static_cast<double>(encodeSamples) / 1000000.0
+                : 0.0;
 
             std::ostringstream sample;
             sample << "{\"record_type\":\"resource_sample\",\"sample_mode\":\"" << mode
@@ -1195,6 +1213,10 @@ private:
                    << ",\"process_cpu_percent\":" << std::setprecision(6) << cpu
                    << ",\"host_gpu_percent\":" << gpu.utilization
                    << ",\"callback_backlog_estimate\":" << queueDepth
+                   << ",\"dropped_frames\":" << droppedFrames
+                   << ",\"missed_frames\":" << missedFrames
+                   << ",\"encode_time_ms\":" << std::setprecision(9) << encodeTimeMs
+                   << ",\"encode_time_samples\":" << encodeSamples
                    << ",\"encoder_utilization_percent\":" << gpu.encoderUtilization
                    << ",\"encoder_active\":" << (encoderActive ? "true" : "false")
                    << ",\"encoder_family\":\"" << escape(encoderFamily) << "\""
@@ -1206,7 +1228,7 @@ private:
                    << "\",\"gpu\":\"" << escape(gpuName)
                    << "\"},\"producer_topology\":\"" << escape(producerTopology)
                    << "\",\"producer_count\":" << producerCount
-                   << ",\"notes\":\"frame time is OBS average; process CPU is this runtime; host GPU and encoder utilization are nvidia-smi device counters; callback backlog is a producer/packet counter estimate\"}";
+                   << ",\"notes\":\"frame time is OBS average; dropped_frames is the active RTMP output counter; missed_frames is OBS render lag; encode_time_ms is cumulative mean FERC-FER and is qualified by encode_time_samples; process CPU is this runtime; host GPU and encoder utilization are nvidia-smi device counters; callback backlog is a producer/packet counter estimate\"}";
             writeLine(sample.str());
         }
     }
@@ -1607,6 +1629,8 @@ private:
     std::string lastPacketTake_;
     std::atomic<uint64_t> rawFrameCount_{0};
     std::atomic<uint64_t> packetFrameCount_{0};
+    std::atomic<uint64_t> encodeTimeNsTotal_{0};
+    std::atomic<uint64_t> encodeTimeSampleCount_{0};
     std::atomic<bool> resourceStop_{true};
     std::thread resourceThread_;
     os_cpu_usage_info_t *resourceCpuInfo_ = nullptr;
@@ -1747,6 +1771,20 @@ public:
     void obs_frontend_set_transition_duration(int duration) override
     {
         transitionDuration = duration;
+        // Updating a Stinger recreates its private media source. Do this when
+        // Solar configures the transition, never in the on-air Take path, so
+        // the decoder can become hot before the transition is admitted.
+        if (dualLaneStingerTransition) {
+            OBSDataAutoRelease settings = obs_source_get_settings(dualLaneStingerTransition);
+            const uint64_t transitionPointMs = stinger_transition_point_ms(duration);
+            obs_data_set_int(settings, "transition_point",
+                             static_cast<long long>(transitionPointMs));
+            obs_data_set_int(settings, "tp_type", 0);
+            obs_source_update(dualLaneStingerTransition, settings);
+            blog(LOG_INFO,
+                 "[pulsar-dual-lane] stinger timing duration_ms=%d transition_point_ms=%llu",
+                 duration, static_cast<unsigned long long>(transitionPointMs));
+        }
         emit(OBS_FRONTEND_EVENT_TRANSITION_DURATION_CHANGED);
     }
     void obs_frontend_release_tbar(void) override { emit(OBS_FRONTEND_EVENT_TBAR_VALUE_CHANGED); }
@@ -2448,6 +2486,27 @@ private:
         if ((extension == ".mp4" || extension == ".m4v" || extension == ".mov") && !isoBmff)
             return {false, "asset_invalid_container"};
         return {true, nullptr};
+    }
+
+    // FinalQueued intentionally remains visible for one complete graphics
+    // tick and the atomic swap callback is observed on a following frame.
+    // Start that control-plane tail before the requested deadline so
+    // transitionDuration remains an end-to-end Program contract rather than
+    // animation time plus hidden finalization frames.
+    static uint64_t transition_finalization_lead_ms(uint64_t frameCount)
+    {
+        struct obs_video_info video = {};
+        if (!obs_get_video_info(&video) || video.fps_num == 0 || video.fps_den == 0)
+            return frameCount * 17; // conservative 60 fps fallback
+        const uint64_t numerator = frameCount * 1000ULL * static_cast<uint64_t>(video.fps_den);
+        return (numerator + static_cast<uint64_t>(video.fps_num) - 1) /
+               static_cast<uint64_t>(video.fps_num);
+    }
+
+    static uint64_t stinger_transition_point_ms(int durationMs)
+    {
+        const uint64_t duration = static_cast<uint64_t>((std::max)(1, durationMs));
+        return (std::min)(uint64_t{300}, (std::max)(uint64_t{1}, duration / 2));
     }
 
     // M10 PIVOT (ADR 003 Amendment 4 §A4.3 / §A4.7 #69, issue #73): the OBS-native
@@ -3438,7 +3497,12 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
     }
 
     programVideo = obs_get_video();
-    previewVideo = obs_view_add(previewView);
+    struct obs_video_info previewVideoInfo = {};
+    if (!obs_get_video_info(&previewVideoInfo)) {
+        blog(LOG_ERROR, "[pulsar-dual-lane] failed to read Program video settings for PreviewView");
+    } else {
+        previewVideo = obs_view_add3(previewView, &previewVideoInfo, 3);
+    }
     if (!programVideo || !previewVideo) {
         blog(LOG_ERROR, "[pulsar-dual-lane] failed to add stable view mixes");
         if (previewView) {
@@ -3899,9 +3963,17 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
         }
 
         const bool transitionAvailable = transitionSource != nullptr;
+        // Both transition sources are hot before Take and reach the atomic
+        // boundary on the tick following FinalQueued.
+        const uint64_t finalizationFrames =
+            transitionKind == pulsar_transition::Kind::Stinger ||
+            transitionKind == pulsar_transition::Kind::Fade ? 1 : 0;
+        const uint64_t finalizationLeadMs =
+            transition_finalization_lead_ms(finalizationFrames);
         const bool transitionStarted =
             dualLaneTransition.begin(transitionKind, static_cast<uint64_t>((std::max)(0, transitionDuration)),
-                                     transitionKind == pulsar_transition::Kind::Cut || transitionAvailable);
+                                     transitionKind == pulsar_transition::Kind::Cut || transitionAvailable,
+                                     finalizationLeadMs);
         const bool animate = transitionStarted && transitionKind != pulsar_transition::Kind::Cut;
         if (transitionKind != pulsar_transition::Kind::Cut && !animate) {
             if (transitionKind == pulsar_transition::Kind::Stinger && dualLaneStingerAssetFailure)

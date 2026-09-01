@@ -19,6 +19,7 @@ struct Metrics {
     Kind kind = Kind::Cut;
     Phase phase = Phase::Idle;
     uint64_t requested_duration_ms = 0;
+    uint64_t finalization_lead_ms = 0;
     uint64_t actual_duration_ms = 0;
     uint64_t actual_duration_frames = 0;
     uint64_t start_frame_id = 0;
@@ -93,13 +94,15 @@ private:
 
 class Controller {
 public:
-    bool begin(Kind kind, uint64_t duration_ms, bool available)
+    bool begin(Kind kind, uint64_t duration_ms, bool available,
+               uint64_t finalization_lead_ms = 0)
     {
         if (phase_ != Phase::Idle && phase_ != Phase::Committed && phase_ != Phase::Aborted)
             return false;
         metrics_ = {};
         metrics_.kind = kind;
         metrics_.requested_duration_ms = duration_ms;
+        metrics_.finalization_lead_ms = (std::min)(duration_ms, finalization_lead_ms);
         if (kind == Kind::Cut) {
             phase_ = Phase::Committed;
             metrics_.phase = phase_;
@@ -132,8 +135,10 @@ public:
 
     bool deadline_reached(uint64_t monotonic_ns) const
     {
+        const uint64_t running_budget_ms =
+            metrics_.requested_duration_ms - metrics_.finalization_lead_ms;
         return phase_ == Phase::Running && start_monotonic_ns_ != 0 &&
-               monotonic_ns >= start_monotonic_ns_ + metrics_.requested_duration_ms * 1000000ULL;
+               monotonic_ns >= start_monotonic_ns_ + running_budget_ms * 1000000ULL;
     }
 
     void set_start_monotonic_ns(uint64_t value) { start_monotonic_ns_ = value; }

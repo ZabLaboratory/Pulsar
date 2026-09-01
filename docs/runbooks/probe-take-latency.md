@@ -223,8 +223,10 @@ different Take identities.
 
 Resource samples use `sample_mode=reference` and `sample_mode=dual_lane` and
 record `frame_render_ms`, `resident_bytes`, `process_cpu_percent`,
-`host_gpu_percent`, `callback_backlog_estimate`, and
-`encoder_utilization_percent`, plus strict `encoder_active` and
+`host_gpu_percent`, `callback_backlog_estimate`, cumulative
+`dropped_frames` from the active RTMP output, cumulative `missed_frames` from
+OBS render lag, cumulative-average `encode_time_ms` (`FERC - FER`) qualified
+by `encode_time_samples`, and `encoder_utilization_percent`, plus strict `encoder_active` and
 `encoder_family` and `rtmp_load_active` fields read from the actual bound
 encoder and native `streamOutput` at sample time. Reference and dual-lane
 resource phases must each collect their minimum samples while
