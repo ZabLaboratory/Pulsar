@@ -27,6 +27,7 @@ _DUAL_LANE_PATCH = _ROOT / "patches/0009-feat-libobs-add-frame-boundary-dual-lan
 _DIRECTSHOW_NAMESPACE_PATCH = _ROOT / "patches/0010-fix-win-dshow-reject-ambiguous-queue-namespaces.patch"
 _RUNTIME_PROBE = _ROOT / "scripts/probe-dual-lane.py"
 _ROLLBACK_PROBE = _ROOT / "scripts/probe-dual-lane-rollback.py"
+_TRANSITION_BOUNDARY_PROBE = _ROOT / "scripts/probe-transition-boundary.py"
 _OUTPUT_EFFECT_PROBE = _ROOT / "scripts/probe-output-effect.py"
 _DUAL_LANE_CONFIG = _ROOT / "plugins/pulsar-frontend-stub/include/pulsar-dual-lane-config.h"
 _DUAL_LANE_CONFIG_TEST = _ROOT / "tests/dual-lane-config/dual-lane-config-probe.cpp"
@@ -666,7 +667,7 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "IsControlledSceneSwitchPendingBypass" in handler
     assert 'request.RequestType != "CallVendorRequest"' in handler
     assert 'vendor->get<std::string>() != "pulsar-scene-switch"' in handler
-    assert 'return nested == "Abort" || nested == "GetState"' in handler
+    assert 'return nested == "Abort" || nested == "GetState" || nested == "Take"' in handler
     assert "vendor->is_string() || !nestedRequest->is_string()" in handler
     assert "json::value() here" in handler
     assert "const bool controlledSceneSwitchBypass" in handler
@@ -682,12 +683,12 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "PREVIEW_FROZEN" in handler
     assert "after the dual-lane rollback freeze" in handler
     # The gate is central and acquired before handler lookup. The only scene
-    # switch pending bypass is the exact vendor Abort/GetState pair; the
+    # switch pending bypass is the exact vendor Abort/GetState/Take trio; the
     # finite output-stop allowlist is unrelated to Preview mutations.
-    # Prepare/Take/Dispatch, malformed CallVendorRequest data, and every other
-    # vendor remain gated.
+    # Prepare/Dispatch, malformed CallVendorRequest data, and every other
+    # vendor remain gated. Take is admitted only for vendor idempotence replay.
     assert 'nested == "Prepare"' not in handler
-    assert 'nested == "Take"' not in handler
+    assert 'nested == "Take"' in handler
     assert 'nested == "Dispatch"' not in handler
     assert handler.index("const bool controlledSceneSwitchBypass") < handler.index("_handlerMap.at")
 
@@ -735,6 +736,55 @@ def test_runtime_probe_exercises_serial_frame_preview_freeze() -> None:
     assert "post-commit Preview after 30 frames" in probe
 
 
+def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
+    source = _read(_TRANSITION_BOUNDARY_PROBE)
+
+    for required in (
+        "decode_raw_recording",
+        "classify_raw_frame",
+        "assert_abort_pixels",
+        "assert_commit_pixels",
+        "SetCurrentSceneTransition",
+        "SetCurrentSceneTransitionDuration",
+        '"Take"',
+        '"Abort"',
+        "transition_final_queued",
+        "TakeAborted",
+        "role_map",
+        "frame_id",
+        "pts_ns",
+        "intermediate/mixed",
+        "black/empty",
+    ):
+        assert required in source
+    # Pixel evidence must come from decoded recording bytes, not from a
+    # structured success flag or a hardcoded abort boolean.
+    assert "subprocess.check_output(command" in source
+    assert "classify_raw_frame(raw[offset : offset + FRAME_BYTES])" in source
+    assert "assert_abort_pixels(labels, abort_frame_index, expected=\"red\")" in source
+    assert "assert_commit_pixels(labels, commit_frame_index, before=\"red\", after=\"green\")" in source
+    assert "PULSAR_DUAL_LANE_TRANSITIONS" in source
+    assert "phase == \"queued\"" in source
+    assert "FINAL_QUEUED_RE" in source
+
+
+def test_transition_boundary_raw_classifier_rejects_black_and_mixed_frames() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_probe")
+    red = bytes((220, 40, 40)) * (boundary.WIDTH * boundary.HEIGHT)
+    green = bytes((40, 220, 40)) * (boundary.WIDTH * boundary.HEIGHT)
+    black = bytes((0, 0, 0)) * (boundary.WIDTH * boundary.HEIGHT)
+    assert boundary.classify_raw_frame(red) == "red"
+    assert boundary.classify_raw_frame(green) == "green"
+    with pytest.raises(boundary.probe.ProbeFailure, match="black/empty"):
+        boundary.classify_raw_frame(black)
+    mixed = red[: len(red) // 2] + green[len(green) // 2 :]
+    with pytest.raises(boundary.probe.ProbeFailure, match="mixed|intermediate"):
+        boundary.classify_raw_frame(mixed)
+    boundary.assert_abort_pixels(["red", "red", "red", "red"], 2, expected="red")
+    with pytest.raises(boundary.probe.ProbeFailure, match="stale/mixed"):
+        boundary.assert_abort_pixels(["red", "green", "green", "green"], 2, expected="red")
+
+
 def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:
     probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_for_contract")
     fields = (
@@ -774,6 +824,34 @@ def test_runtime_probe_parses_bracket_and_separator_dual_lane_logs() -> None:
     source = _read(_RUNTIME_PROBE)
     assert "ENCODER_BIND_RE.search(line)" in source
     assert '"[pulsar-dual-lane] encoder video_t bound once to ProgramView"' not in source
+
+
+def test_transition_abort_queued_waits_for_observed_graphics_boundary() -> None:
+    source = _read(_FRONTEND)
+    queued = _between(
+        source,
+        'if (dualLaneTransition.phase() == pulsar_transition::Phase::Queued)',
+        'if (dualLaneTransition.phase() == pulsar_transition::Phase::Running',
+    )
+    assert "dualLaneTransitionAbortPending = true" in queued
+    assert "obs_view_queue_atomic_swap_with_floor" in queued
+    assert "OnDualLaneTransitionAbortCommitted" in queued
+    assert queued.index("obs_view_queue_atomic_swap_with_floor") < queued.index("dualLaneTransition.abort(\"operator\")")
+    # A failed queue is the only path allowed to clear state immediately; the
+    # success path returns and waits for the callback's observed frame/PTS.
+    assert "sceneSwitchPendingTakeId.clear();\n            return true;" in queued
+    assert "g_runtimeTelemetry.cancelPending();" in queued
+    callback = _between(
+        source,
+        "void PulsarFrontendAPI::OnDualLaneTransitionAbortCommitted",
+        "void PulsarFrontendAPI::dualLaneTransitionTick",
+    )
+    assert "frame_id=%llu pts_ns=%llu" in callback
+    for field in ("role_map_preserved", "surfaces_stable", "video_t_stable", "invariant_valid"):
+        assert field in callback
+    assert "obs_view_queue_atomic_swap_with_floor" not in callback
+    assert "writeDualLaneRollbackStatus" not in callback
+    assert "std::filesystem" not in callback
 
 
 def test_runtime_probe_redacts_ready_credentials_from_failure_tails() -> None:
