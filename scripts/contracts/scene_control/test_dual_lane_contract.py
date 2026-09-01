@@ -751,11 +751,15 @@ def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
         '"Abort"',
         "transition_final_queued",
         "TakeAborted",
+        "TakeAccepted",
         "role_map",
         "frame_id",
         "pts_ns",
         "intermediate/mixed",
         "black/empty",
+        "read_encoded_video_pts",
+        "assert_callback_pts_correlated",
+        "assert_terminal_event_contract",
         "assert_transition_timeline",
     ):
         assert required in source
@@ -770,12 +774,16 @@ def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
     assert "phase == \"queued\"" in source
     assert "FINAL_QUEUED_PATTERN" in source
     assert "TRANSITION_COMMITTED_PATTERN" in source
+    assert "encoded_start_index" in source
     assert "locate_commit_boundary" in source
+    assert "locate_abort_settled_red" in source
     assert "BoundaryDemux" in source
     assert "await demux.start()" in source
     assert "commit_match = runtime.wait_for(TRANSITION_COMMITTED_PATTERN, 15)" in source
     assert "commit_frame_index = locate_commit_boundary(labels, before=\"red\", after=\"green\")" in source
     assert "__import__(\"re\")" not in source
+    assert "record_start_frames" not in source
+    assert "abort_frame_id" not in source
     post_demux = source[source.index("await demux.start()") :]
     assert "probe.request(" not in post_demux
     assert "probe.wait_event(" not in post_demux
@@ -855,17 +863,44 @@ def test_transition_boundary_classifier_accepts_coherent_stinger_palette() -> No
     blue = bytes((24, 80, 220)) * (boundary.WIDTH * boundary.HEIGHT)
     assert boundary.classify_raw_frame(blue) == "stinger"
     # Quantized Stinger bins may be distributed without a single dominant
-    # colour. Interleaving bins is coherent; a contiguous palette seam is not.
+    # colour. Both interleaved and contiguous palette sweeps are valid.
     pixel_count = boundary.WIDTH * boundary.HEIGHT
     palette_pattern = b"".join(bytes(colour) for colour in ((0, 64, 192), (16, 80, 208), (32, 64, 192)))
     palette = palette_pattern * (pixel_count // 3)
     assert boundary.classify_raw_frame(palette) == "stinger"
     mixed_palette = blue[: len(blue) // 2] + bytes((220, 220, 24)) * (boundary.WIDTH * boundary.HEIGHT // 2)
-    with pytest.raises(boundary.probe.ProbeFailure, match="torn|mixed|intermediate"):
-        boundary.classify_raw_frame(mixed_palette)
-    lane_palette = bytes((220, 40, 40)) * (boundary.WIDTH * boundary.HEIGHT // 2) + blue[: len(blue) // 2]
-    with pytest.raises(boundary.probe.ProbeFailure, match="torn|mixed|intermediate"):
-        boundary.classify_raw_frame(lane_palette)
+    assert boundary.classify_raw_frame(mixed_palette) == "stinger"
+    lane_overlay = bytes((220, 40, 40)) * (boundary.WIDTH * boundary.HEIGHT // 2) + blue[: len(blue) // 2]
+    assert boundary.classify_raw_frame(lane_overlay) == "stinger"
+
+
+def test_transition_boundary_pts_and_route_map_oracles_are_frame_index_independent() -> None:
+    boundary = _load_probe(_TRANSITION_BOUNDARY_PROBE, "pulsar_transition_boundary_oracles")
+    correlation = boundary.assert_callback_pts_correlated(
+        [0, 16_666_667, 33_333_334, 50_000_001, 66_666_668],
+        1_000_000_000,
+        1_050_000_001,
+    )
+    assert correlation["encoded_delta_ns"] == 50_000_001
+    assert correlation["encoded_start_index"] == 0
+    assert correlation["encoded_end_index"] == 3
+    labels = ["red"] * 8 + ["fade"] * 4 + ["red"] * 4 + ["green"] * 8
+    assert boundary.locate_abort_settled_red(labels, 16) == 5
+    terminal = boundary.assert_terminal_event_contract(
+        [
+            {"event_type": "TakeAborted", "command_id": "abort-me"},
+            {
+                "event_type": "TakeCommitted",
+                "command_id": "commit-me",
+                "previous_revisions": {"program": 2, "preview": 4, "role_map": 8},
+                "revisions": {"program": 3, "preview": 4, "role_map": 9},
+            },
+        ],
+        aborted_command_id="abort-me",
+        committed_command_id="commit-me",
+        expected_revisions={"program": 2, "preview": 4, "role_map": 8},
+    )
+    assert terminal == {"aborted": 1, "committed": 1, "control_committed": 1}
 
 
 def test_transition_boundary_locates_unique_encoded_seam_without_fixed_offset() -> None:

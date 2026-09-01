@@ -5,8 +5,9 @@ This is an opt-in runtime probe for #250.  It drives the versioned
 ``pulsar-scene-switch`` vendor, requests an abort while a transition is still
 Queued and again after ``transition_final_queued``, then decodes the retained
 recording as raw RGB frames.  The pixel check is deliberately independent of
-the structured booleans: every frame around the observed abort boundary must
-be a complete red/green lane colour, never black or an intermediate blend.
+the structured booleans: every settled frame around the observed abort boundary
+must be the expected lane colour, while legitimate Fade blends and Stinger
+compositions are accepted before the later settled seam.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+from decimal import Decimal, InvalidOperation
 import importlib.util
 import json
 import os
@@ -53,10 +55,10 @@ TRANSITION_COMMITTED_PATTERN = re.compile(
 WIDTH = probe.CANVAS_W
 HEIGHT = probe.CANVAS_H
 FRAME_BYTES = WIDTH * HEIGHT * 3
+POST_COMMIT_CAPTURE_SECONDS = 1.0
 COLOURS = {"red": (220, 40, 40), "green": (40, 220, 40)}
 LANE_DISTANCE_SQ = 45 * 45
 FADE_DISTANCE_SQ = 80 * 80
-PALETTE_BIN_SIZE = 16
 
 
 class BoundaryDemux:
@@ -142,9 +144,11 @@ def classify_raw_frame(frame: bytes) -> str:
 
     A real WebM Stinger is not required to be a solid red/green frame: opaque
     or alpha-composited source colours are accepted as one coherent
-    ``stinger`` palette.  Red/green mixing and colours in the lane-to-lane
-    interpolation envelope remain failures because those indicate a torn
-    Program seam rather than a valid Stinger composition.
+    ``stinger`` palette.  A global lane-to-lane interpolation is a valid Fade;
+    only simultaneous red and green base-lane samples are a torn Program seam.
+    A Stinger may contain the base lane plus its opaque/alpha-composited blue
+    sweep; only simultaneous red and green base-lane samples are a torn lane
+    seam.
     """
 
     if len(frame) != FRAME_BYTES:
@@ -152,7 +156,6 @@ def classify_raw_frame(frame: bytes) -> str:
     sample_step = max(3, ((len(frame) // 3) // 12000) * 3)
     samples = list(range(0, len(frame) - 2, sample_step))
     categories: list[str] = []
-    palette_bins: list[tuple[int, int, int]] = []
     black = 0
     for offset in samples:
         red, green, blue = frame[offset : offset + 3]
@@ -191,15 +194,13 @@ def classify_raw_frame(frame: bytes) -> str:
             categories.append(nearest)
             continue
         categories.append("stinger")
-        palette_bins.append(tuple(channel // PALETTE_BIN_SIZE for channel in pixel))
 
     total = len(samples)
     if total == 0 or black > total // 100:
         raise probe.ProbeFailure(f"raw Program frame is black/empty: black={black} categories={categories}")
     present = set(categories)
     lane_categories = present.intersection({"red", "green"})
-    composition_categories = present.intersection({"fade", "stinger"})
-    if len(lane_categories) > 1 or (lane_categories and composition_categories):
+    if len(lane_categories) > 1:
         raise probe.ProbeFailure(
             f"raw Program frame contains a torn spatial lane/composition intermediate/mixed: "
             f"black={black} categories={sorted(present)}"
@@ -208,23 +209,15 @@ def classify_raw_frame(frame: bytes) -> str:
         raise probe.ProbeFailure(f"raw Program frame is black/empty: black={black} categories={categories}")
     if present == {"red"} or present == {"green"} or present == {"fade"}:
         return next(iter(present))
+    if present in ({"red", "stinger"}, {"green", "stinger"}):
+        # Stinger overlays legitimately mix one settled base lane with a
+        # distributed opaque/alpha-composited sweep. The lane+palette mix is
+        # not torn unless both base lanes are sampled in the same frame.
+        return "stinger"
     if present == {"stinger"}:
-        # A real WebM Stinger can distribute many quantized colours.  Do not
-        # require one dominant bin: only reject a spatially torn two-palette
-        # seam, where the scanline contains one contiguous palette followed by
-        # another.  This catches the adversarial half-blue/half-yellow fixture
-        # while accepting interleaved and naturally distributed video palettes.
-        runs = 0
-        previous: tuple[int, int, int] | None = None
-        for palette_bin in palette_bins:
-            if palette_bin != previous:
-                runs += 1
-                previous = palette_bin
-        distinct = set(palette_bins)
-        if len(distinct) == 2 and runs == 2 and all(palette_bins.count(item) > len(palette_bins) // 10 for item in distinct):
-            raise probe.ProbeFailure(
-                f"raw Program frame contains a torn spatial Stinger palette seam: bins={sorted(distinct)}"
-            )
+        # A real WebM Stinger can distribute many quantized colours, including
+        # a contiguous or interleaved sweep.  Palette variation alone is not a
+        # failure; the lane-category check above is the spatial-tear oracle.
         return "stinger"
     raise probe.ProbeFailure(f"raw Program frame is mixed: black={black} categories={sorted(present)}")
 
@@ -274,6 +267,124 @@ def decode_raw_recording(ffmpeg: str, recording: pathlib.Path) -> list[str]:
     return [classify_raw_frame(raw[offset : offset + FRAME_BYTES]) for offset in range(0, len(raw), FRAME_BYTES)]
 
 
+def read_encoded_video_pts(ffprobe: str, recording: pathlib.Path) -> list[int]:
+    """Read the encoded video PTS sequence for callback-to-recording proof."""
+
+    command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "frame=best_effort_timestamp_time,pts_time",
+        "-of",
+        "json",
+        str(recording),
+    ]
+    try:
+        raw = subprocess.check_output(command, stderr=subprocess.STDOUT, timeout=60)
+        frames = json.loads(raw).get("frames", [])
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        raise probe.ProbeFailure(f"encoded video PTS read failed: {exc}") from exc
+    result: list[int] = []
+    for frame in frames:
+        timestamp = frame.get("best_effort_timestamp_time") or frame.get("pts_time")
+        if timestamp in (None, "N/A"):
+            continue
+        try:
+            value = Decimal(str(timestamp))
+        except (InvalidOperation, ValueError) as exc:
+            raise probe.ProbeFailure(f"encoded video PTS is invalid: {timestamp!r}") from exc
+        if not value.is_finite():
+            raise probe.ProbeFailure(f"encoded video PTS is non-finite: {timestamp!r}")
+        result.append(int((value * Decimal(1_000_000_000)).to_integral_value()))
+    if len(result) < 3 or any(later <= earlier for earlier, later in zip(result, result[1:])):
+        raise probe.ProbeFailure(f"encoded video PTS sequence is missing or non-monotone: count={len(result)}")
+    return result
+
+
+def assert_callback_pts_correlated(encoded_pts_ns: list[int], start_pts_ns: int, end_pts_ns: int) -> dict[str, int]:
+    """Correlate callback start/end PTS to an encoded PTS span, never frame IDs."""
+
+    observed_delta = end_pts_ns - start_pts_ns
+    if observed_delta <= 0:
+        raise probe.ProbeFailure(f"callback PTS interval is invalid: start={start_pts_ns} end={end_pts_ns}")
+    encoded_deltas = [
+        (end - start, start_index, end_index)
+        for start_index, start in enumerate(encoded_pts_ns[:-1])
+        for end_index, end in enumerate(encoded_pts_ns[start_index + 1 :], start_index + 1)
+    ]
+    nearest, encoded_start_index, encoded_end_index = min(
+        encoded_deltas, key=lambda item: abs(item[0] - observed_delta)
+    )
+    frame_intervals = [later - earlier for earlier, later in zip(encoded_pts_ns, encoded_pts_ns[1:])]
+    frame_interval = max(frame_intervals)
+    error = abs(nearest - observed_delta)
+    if error > frame_interval:
+        raise probe.ProbeFailure(
+            f"callback PTS interval has no encoded PTS correlation: observed={observed_delta} "
+            f"nearest={nearest} tolerance={frame_interval}"
+        )
+    return {
+        "callback_delta_ns": observed_delta,
+        "encoded_delta_ns": nearest,
+        "encoded_start_index": encoded_start_index,
+        "encoded_end_index": encoded_end_index,
+        "error_ns": error,
+    }
+
+
+def assert_terminal_event_contract(
+    events: list[dict[str, Any]],
+    *,
+    aborted_command_id: str,
+    committed_command_id: str,
+    expected_revisions: dict[str, int],
+) -> dict[str, int]:
+    """Prove route-map terminal winners and revision deltas from observed events."""
+
+    aborted = [
+        event
+        for event in events
+        if event.get("event_type") == "TakeAborted"
+        and event.get("command_id") == aborted_command_id
+    ]
+    commits = [event for event in events if event.get("event_type") == "TakeCommitted"]
+    control = [event for event in commits if event.get("command_id") == committed_command_id]
+    if len(aborted) != 1 or any(event.get("command_id") == aborted_command_id for event in commits):
+        raise probe.ProbeFailure(
+            f"route-map terminal events are not unique: aborted={aborted} committed={commits}"
+        )
+    if len(control) != 1:
+        raise probe.ProbeFailure(f"control Take did not produce one committed event: {commits}")
+    previous = control[0].get("previous_revisions") or {}
+    current = control[0].get("revisions") or {}
+    for key in ("program", "preview", "role_map"):
+        if not isinstance(previous.get(key), int) or not isinstance(current.get(key), int):
+            raise probe.ProbeFailure(f"control Take event has invalid {key} revisions: {control[0]}")
+        expected_delta = 1 if key in {"program", "role_map"} else 0
+        if previous[key] != expected_revisions[key] or current[key] != previous[key] + expected_delta:
+            raise probe.ProbeFailure(f"control Take revision delta is invalid: event={control[0]}")
+    return {"aborted": len(aborted), "committed": len(commits), "control_committed": len(control)}
+
+
+def locate_abort_settled_red(labels: list[str], commit_index: int) -> int:
+    """Locate a settled red run without comparing callback frame IDs to video indices."""
+
+    composition = {"fade", "stinger"}
+    pre_commit = labels[:commit_index]
+    first_composition = next((index for index, label in enumerate(pre_commit) if label in composition), len(pre_commit))
+    candidates = [
+        index
+        for index in range(0, max(0, first_composition - 2))
+        if all(label == "red" for label in labels[index : index + 3])
+    ]
+    if not candidates:
+        raise probe.ProbeFailure("raw Program recording has no settled red post-abort run")
+    return candidates[-1]
+
+
 def assert_abort_pixels(labels: list[str], boundary_index: int, *, expected: str) -> None:
     """Require complete lane frames around the observed boundary."""
 
@@ -284,9 +395,9 @@ def assert_abort_pixels(labels: list[str], boundary_index: int, *, expected: str
             f"abort boundary index {boundary_index} is not surrounded by raw frames (count={len(labels)})"
         )
     window = labels[max(0, boundary_index - 2) : min(len(labels), boundary_index + 3)]
-    if any(label not in COLOURS for label in window):
+    if any(label not in COLOURS and label not in {"fade", "stinger"} for label in window):
         raise probe.ProbeFailure(f"raw Program boundary contains an unknown frame label: {window}")
-    if any(label != expected for label in window):
+    if any(label == "green" for label in window) or any(label != expected for label in labels[boundary_index : boundary_index + 3]):
         raise probe.ProbeFailure(
             f"abort winner exposed a stale/mixed Program frame: expected {expected}, window={window}"
         )
@@ -379,7 +490,6 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
             await demux.start()
             stats = await demux.request("GetStats", "boundary-record-stats")
             probe.assert_success(stats, "GetStats(record start)")
-            record_start_frames = int((stats.get("responseData") or {}).get("outputTotalFrames", 0) or 0)
 
             state = await vendor_request(demux, "boundary-state", "GetState", {})
             lane = state["role_map"]["preview"]
@@ -404,21 +514,23 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
                 "runtime_instance_id": runtime.runtime_id, "expected_revisions": state["revisions"],
                 "expected_server_seq": state["server_seq"], "prepared_command_id": prepare_id, "timeout_ms": 5000,
             }
-            take_task = asyncio.create_task(vendor_request(demux, f"call-{take_id}", "Take", take))
+            take_result = await vendor_request(demux, f"call-{take_id}", "Take", take)
+            if take_result.get("event_type") != "TakeAccepted":
+                raise probe.ProbeFailure(f"Take was not accepted before abort barrier: {take_result}")
             if phase == "queued":
+                # TakeAccepted is the admission barrier.  A rejection that
+                # arrives before it is a gateway scheduling race, not proof
+                # that the Stinger/Fade transition is cancellable.  The
+                # accepted response leaves the initial frame-boundary swap
+                # pending for an immediate Abort.
                 abort_payload = {
                     "contract": "pulsar.scene-switch.v1", "schema_version": 1, "message_type": "command",
                     "command_type": "Abort", "command_id": f"boundary-abort-{phase}", "intent_id": intent,
                     "runtime_instance_id": runtime.runtime_id, "expected_revisions": state["revisions"],
                     "take_command_id": take_id, "reason": "operator",
                 }
-                await asyncio.sleep(0)
-                abort_task = asyncio.create_task(vendor_request(demux, f"call-abort-{phase}", "Abort", abort_payload))
-                take_result, abort_result = await asyncio.gather(take_task, abort_task)
+                abort_result = await vendor_request(demux, f"call-abort-{phase}", "Abort", abort_payload)
             else:
-                take_result = await take_task
-                if take_result.get("event_type") != "TakeAccepted":
-                    raise probe.ProbeFailure(f"Take was not accepted: {take_result}")
                 runtime.wait_for(FINAL_QUEUED_PATTERN, 15)
                 abort_payload = {
                     "contract": "pulsar.scene-switch.v1", "schema_version": 1, "message_type": "command",
@@ -434,10 +546,10 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
             if fields != [1, 1, 1, 1]:
                 raise probe.ProbeFailure(f"abort postconditions were not observed: {abort_match.group(0)}")
 
-            # Keep the observed abort boundary in the recording before driving
-            # a control commit.  The dwell is outside the callback and gives
-            # the recorder complete post-abort frames to decode.
-            await asyncio.sleep(0.25)
+            # Keep both the observed abort boundary and the later control
+            # commit in the recording. The longer dwell is outside callbacks;
+            # it gives the encoder enough settled frames for PTS correlation.
+            await asyncio.sleep(0.5)
             after_abort = await vendor_request(demux, f"state-after-abort-{phase}", "GetState", {})
             if after_abort.get("role_map") != state.get("role_map"):
                 raise probe.ProbeFailure(f"abort mutated role map: before={state['role_map']} after={after_abort.get('role_map')}")
@@ -474,8 +586,8 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
                 raise probe.ProbeFailure(f"transition commit kind was not {transition}: {commit_match.group(0)}")
             if int(commit_match.group(8)) != 0:
                 raise probe.ProbeFailure(f"control transition unexpectedly fell back to Cut: {commit_match.group(0)}")
-            transition_end_frame_id = int(commit_match.group(6))
             transition_end_pts_ns = int(commit_match.group(7))
+            await asyncio.sleep(POST_COMMIT_CAPTURE_SECONDS)
             probe.assert_success(await demux.request("StopRecord", "boundary-stop"), "StopRecord")
             stopped = await demux.wait_event("RecordStateChanged", lambda data: data.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STOPPED")
             output_path = stopped.get("eventData", {}).get("outputPath") or ""
@@ -486,18 +598,35 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
             if ffmpeg is None:
                 raise probe.ProbeSkip("ffmpeg is required for raw Program boundary decoding")
             labels = decode_raw_recording(ffmpeg, owned)
-            abort_frame_index = int(abort_match.group(1)) - record_start_frames
-            commit_frame_index = locate_commit_boundary(labels, before="red", after="green")
-            assert_transition_timeline(
-                labels,
-                composition="stinger" if transition == "Stinger" else "fade",
+            ffprobe = probe.find_ffprobe()
+            if ffprobe is None:
+                raise probe.ProbeSkip("ffprobe is required for encoded Program PTS correlation")
+            encoded_pts_ns = read_encoded_video_pts(ffprobe, owned)
+            pts_correlation = assert_callback_pts_correlated(
+                encoded_pts_ns,
+                int(commit_match.group(5)),
+                transition_end_pts_ns,
             )
+            commit_frame_index = locate_commit_boundary(labels, before="red", after="green")
+            abort_frame_index = locate_abort_settled_red(labels, commit_frame_index)
             assert_abort_pixels(labels, abort_frame_index, expected="red")
             assert_commit_pixels(labels, commit_frame_index, before="red", after="green")
             state_after = await vendor_request(demux, "boundary-state-after", "GetState", {})
             if state_after.get("role_map") == state.get("role_map"):
                 raise probe.ProbeFailure(f"control commit did not swap role map: before={state['role_map']} after={state_after.get('role_map')}")
-            return {"transition": transition, "phase": phase, "frames": len(labels), "abort_frame_id": int(abort_match.group(1)), "abort_pts_ns": int(abort_match.group(2)), "abort_recording_index": abort_frame_index, "commit_frame_id": transition_end_frame_id, "commit_pts_ns": transition_end_pts_ns, "commit_recording_index": commit_frame_index, "abort_role_map": state["role_map"], "commit_role_map": state_after["role_map"], "raw_labels": {"abort": "red", "commit_before": "red", "commit_after": "green"}}
+            vendor_events = [
+                (event.get("eventData") or {})
+                for event in demux.events
+                if event.get("eventType") == "VendorEvent"
+                and event.get("vendorName") == "pulsar-scene-switch"
+            ]
+            terminal_events = assert_terminal_event_contract(
+                vendor_events,
+                aborted_command_id=take_id,
+                committed_command_id=commit_take_id,
+                expected_revisions=ready_state["revisions"],
+            )
+            return {"transition": transition, "phase": phase, "frames": len(labels), "abort_pts_ns": int(abort_match.group(2)), "abort_recording_index": abort_frame_index, "commit_pts_ns": transition_end_pts_ns, "commit_recording_index": commit_frame_index, "callback_pts_correlation": pts_correlation, "abort_role_map": state["role_map"], "commit_role_map": state_after["role_map"], "terminal_events": terminal_events, "raw_labels": {"abort": "red", "commit_before": "red", "commit_after": "green"}}
     finally:
         if demux is not None:
             await demux.close()

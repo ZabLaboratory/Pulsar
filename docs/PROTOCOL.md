@@ -70,13 +70,21 @@ The reproducible raw-boundary runbook is
 `python scripts/probe-transition-raw-boundary.py --exe <pulsar.exe> --transition both --phase both`
 (the older `probe-transition-boundary.py` entry point remains equivalent).
 It records a Queued abort and a `FinalQueued` abort, then performs a control
-commit. The retained recording is decoded to raw RGB and checked around the
-`transition_committed` frame/PTS identity: the encoded timeline must contain one
-unique settled red-to-green seam, while black, stale, mixed, or lane-intermediate
-frames fail the probe. This pixel evidence is
-independent of the structured post-abort booleans. The graphics callback only
-logs observed frame/PTS and queues state cleanup; recording decode and all
-filesystem I/O happen after output stop, outside the callback.
+commit. The retained recording is decoded to raw RGB after a post-commit dwell.
+The probe correlates the transition callback's `start_pts_ns`/`end_pts_ns` span
+with an observed encoded-video PTS span; callback `frame_id` values are never
+treated as encoded-frame indexes. The FinalQueued oracle counts the observed
+`TakeAborted`/`TakeCommitted` route-map terminal events and checks their revision
+deltas, while the raw recording supplies the settled red-to-green boundary.
+Two visual red/fade/green sequences are therefore valid when the first is an
+interrupted composition and the route-map events show only one winning commit.
+For Stinger, a coherent red-or-green base with a distributed WebM palette is
+valid; only simultaneous red+green base-lane samples in one frame/tiles, black,
+stale post-settlement frames, or a second route-map/revision commit fail the
+probe. This pixel/event evidence is independent of structured post-abort
+booleans. The graphics callback only logs observed frame/PTS and queues state
+cleanup; recording decode and all filesystem I/O happen after output stop,
+outside the callback.
 
 ## Connection
 
