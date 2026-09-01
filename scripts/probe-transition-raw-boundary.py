@@ -349,6 +349,7 @@ def assert_terminal_event_contract(
     events: list[dict[str, Any]],
     *,
     aborted_command_id: str,
+    aborted_take_command_id: str,
     committed_command_id: str,
     expected_revisions: dict[str, int],
     winner: str = "aborted",
@@ -360,14 +361,15 @@ def assert_terminal_event_contract(
         for event in events
         if event.get("event_type") == "TakeAborted"
         and event.get("command_id") == aborted_command_id
+        and event.get("take_command_id") == aborted_take_command_id
     ]
     commits = [event for event in events if event.get("event_type") == "TakeCommitted"]
     control = [
         event
         for event in commits
-        if committed_command_id != aborted_command_id and event.get("command_id") == committed_command_id
+        if committed_command_id != aborted_take_command_id and event.get("command_id") == committed_command_id
     ]
-    original_commits = [event for event in commits if event.get("command_id") == aborted_command_id]
+    original_commits = [event for event in commits if event.get("command_id") == aborted_take_command_id]
     if winner == "aborted":
         if len(aborted) != 1 or original_commits or len(control) != 1:
             raise probe.ProbeFailure(
@@ -709,7 +711,8 @@ async def run_case(exe: pathlib.Path, record_dir: pathlib.Path, transition: str,
                     vendor_events.append(outer_data.get("eventData") or {})
             terminal_events = assert_terminal_event_contract(
                 vendor_events,
-                aborted_command_id=take_id,
+                aborted_command_id=f"boundary-abort-{phase}",
+                aborted_take_command_id=take_id,
                 committed_command_id=commit_take_id or take_id,
                 expected_revisions=ready_state["revisions"],
                 winner="aborted" if winner == "TakeAborted" else "committed",

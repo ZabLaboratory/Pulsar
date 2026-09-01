@@ -761,6 +761,7 @@ def test_transition_boundary_probe_requires_observed_raw_abort_frames() -> None:
         "read_encoded_video_pts",
         "assert_callback_pts_correlated",
         "assert_terminal_event_contract",
+        "aborted_take_command_id",
         "event_history",
         "vendor_event_payload",
         "vendor_payload_from_outer_data",
@@ -988,7 +989,7 @@ def test_transition_boundary_pts_and_route_map_oracles_are_frame_index_independe
     assert boundary.locate_abort_settled_red(labels, 16) == 5
     terminal = boundary.assert_terminal_event_contract(
         [
-            {"event_type": "TakeAborted", "command_id": "abort-me"},
+            {"event_type": "TakeAborted", "command_id": "abort-me", "take_command_id": "take-me"},
             {
                 "event_type": "TakeCommitted",
                 "command_id": "commit-me",
@@ -997,10 +998,28 @@ def test_transition_boundary_pts_and_route_map_oracles_are_frame_index_independe
             },
         ],
         aborted_command_id="abort-me",
+        aborted_take_command_id="take-me",
         committed_command_id="commit-me",
         expected_revisions={"program": 2, "preview": 4, "role_map": 8},
     )
     assert terminal == {"aborted": 1, "committed": 1, "control_committed": 1, "winner_committed": 0}
+    for wrong_abort_id, wrong_take_id in (("wrong-abort", "take-me"), ("abort-me", "wrong-take")):
+        with pytest.raises(boundary.probe.ProbeFailure, match="terminal events are not unique"):
+            boundary.assert_terminal_event_contract(
+                [
+                    {"event_type": "TakeAborted", "command_id": "abort-me", "take_command_id": "take-me"},
+                    {
+                        "event_type": "TakeCommitted",
+                        "command_id": "commit-me",
+                        "previous_revisions": {"program": 2, "preview": 4, "role_map": 8},
+                        "revisions": {"program": 3, "preview": 4, "role_map": 9},
+                    },
+                ],
+                aborted_command_id=wrong_abort_id,
+                aborted_take_command_id=wrong_take_id,
+                committed_command_id="commit-me",
+                expected_revisions={"program": 2, "preview": 4, "role_map": 8},
+            )
     committed = boundary.assert_terminal_event_contract(
         [
             {
@@ -1010,7 +1029,8 @@ def test_transition_boundary_pts_and_route_map_oracles_are_frame_index_independe
                 "revisions": {"program": 3, "preview": 4, "role_map": 9},
             },
         ],
-        aborted_command_id="take-me",
+        aborted_command_id="abort-me",
+        aborted_take_command_id="take-me",
         committed_command_id="take-me",
         expected_revisions={"program": 2, "preview": 4, "role_map": 8},
         winner="committed",
