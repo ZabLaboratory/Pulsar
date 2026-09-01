@@ -28,6 +28,9 @@ PIPELINE_PATCH = ROOT / "patches" / "0016-feat-libobs-expose-video-pipeline-stag
 PREVIEW_FASTPATH_PATCH = ROOT / "patches" / "0017-perf-libobs-pipeline-borrowed-preview-publication.patch"
 PIPELINE_ACCOUNTING_PATCH = ROOT / "patches" / "0018-feat-libobs-close-video-mix-stage-accounting.patch"
 PROGRAM_RETURN_FASTPATH_PATCH = ROOT / "patches" / "0019-perf-win-dshow-pipeline-program-return-publication.patch"
+PREVIEW_CONSUMER_LEASE_PATCH = (
+    ROOT / "patches" / "0020-perf-win-dshow-elide-unconsumed-preview-return-copies.patch"
+)
 FRONTEND_CMAKE = ROOT / "plugins" / "pulsar-frontend-stub" / "CMakeLists.txt"
 WEBSOCKET_CMAKE = ROOT / "plugins" / "pulsar-websocket" / "CMakeLists.txt"
 FRONTEND_SOURCE = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
@@ -710,3 +713,26 @@ def test_program_return_uses_borrowed_worker_without_changing_other_outputs() ->
     assert "VIDEO_FORMAT_NV12 || info->format == VIDEO_FORMAT_P010" in patch
     assert "borrowed_frame.data[1] = borrowed_frame.data[0]" in patch
     assert "borrowed_frame.linesize[1] = borrowed_frame.linesize[0]" in patch
+
+
+def test_preview_return_copy_is_gated_by_an_active_directshow_consumer_lease() -> None:
+    patch = PREVIEW_CONSUMER_LEASE_PATCH.read_text(encoding="utf-8")
+
+    for token in (
+        'consumer_lease_name = queue_name + L".ConsumerActive"',
+        "CreateEventW(nullptr, TRUE, FALSE, consumer_lease_name.c_str())",
+        "OpenEventW(SYNCHRONIZE, FALSE, vcam->consumer_lease_name)",
+        "CloseHandle(lease)",
+        "ReleaseConsumerLease();",
+        "if (!preview_consumer_is_active(vcam))",
+    ):
+        assert token in patch
+
+    # ProgramReturn and the generic OBS virtual camera must keep publishing.
+    assert "if (!vcam->preview_return)" in patch
+    assert "return true;" in patch
+
+    # Preview composition/readiness remains on the existing hot borrowed path;
+    # only the optional shared-memory queue write is skipped.
+    assert ".raw_video_borrowed = virtual_video" not in patch
+    assert "video_queue_write_ex" in patch

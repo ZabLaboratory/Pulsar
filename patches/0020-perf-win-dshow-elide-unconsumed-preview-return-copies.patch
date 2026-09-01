@@ -1,0 +1,185 @@
+From 14cfd296dbfcb459923d10668e8fa44195c9e7d0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Tue, 1 Sep 2026 16:57:35 +0200
+Subject: [PATCH] perf(win-dshow): elide unconsumed PreviewReturn copies
+
+Keep Preview composition and readiness hot while avoiding the NV12 shared-memory publication when no active Pulsar Preview Return DirectShow graph holds the crash-safe consumer lease.
+---
+ .../virtualcam-module/virtualcam-filter.cpp   | 30 +++++++++++++++++
+ .../virtualcam-module/virtualcam-filter.hpp   |  5 +++
+ plugins/win-dshow/virtualcam.c                | 32 +++++++++++++++++++
+ 3 files changed, 67 insertions(+)
+
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index 2ca4f9c9f..6bde4ba90 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -52,9 +52,12 @@ VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
+ 	: OutputFilter()
+ {
+ 	program_return = filter_kind == DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN;
++	preview_return = filter_kind == DIRECTSHOW_CONSUMER_FILTER_PREVIEW_RETURN;
+ 	const enum directshow_queue_namespace queue_namespace = directshow_queue_namespace_for_consumer(filter_kind);
+ 	queue_namespace_rejected = queue_namespace == DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
+ 	queue_name = queue_name_for_filter(queue_namespace, filter_kind);
++	if (preview_return && !queue_namespace_rejected)
++		consumer_lease_name = queue_name + L".ConsumerActive";
+ 	if (queue_namespace_rejected) {
+ 		OutputDebugStringW(L"[pulsar-directshow] queue namespace rejected; consumer is disabled\n");
+ 	}
+@@ -144,6 +147,7 @@ VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
+ 
+ VCamFilter::~VCamFilter()
+ {
++	ReleaseConsumerLease();
+ 	SetEvent(thread_stop);
+ 	if (th.joinable())
+ 		th.join();
+@@ -155,6 +159,25 @@ VCamFilter::~VCamFilter()
+ 	os_atomic_dec_long(&locks);
+ }
+ 
++HRESULT VCamFilter::AcquireConsumerLease()
++{
++	if (!preview_return || consumer_lease.Valid())
++		return S_OK;
++
++	consumer_lease = CreateEventW(nullptr, TRUE, FALSE, consumer_lease_name.c_str());
++	if (!consumer_lease.Valid()) {
++		const DWORD error = GetLastError();
++		OutputDebugStringW(L"[pulsar-directshow] failed to acquire PreviewReturn consumer lease\n");
++		return HRESULT_FROM_WIN32(error ? error : ERROR_OPEN_FAILED);
++	}
++	return S_OK;
++}
++
++void VCamFilter::ReleaseConsumerLease()
++{
++	consumer_lease = nullptr;
++}
++
+ const wchar_t *VCamFilter::FilterName() const
+ {
+ 	return L"VCamFilter";
+@@ -168,6 +191,9 @@ STDMETHODIMP VCamFilter::Pause()
+ 	if (FAILED(hr)) {
+ 		return hr;
+ 	}
++	hr = AcquireConsumerLease();
++	if (FAILED(hr))
++		return hr;
+ 
+ 	os_atomic_set_bool(&active, true);
+ 	SetEvent(thread_start);
+@@ -176,6 +202,9 @@ STDMETHODIMP VCamFilter::Pause()
+ 
+ STDMETHODIMP VCamFilter::Run(REFERENCE_TIME tStart)
+ {
++	HRESULT hr = AcquireConsumerLease();
++	if (FAILED(hr))
++		return hr;
+ 	os_atomic_set_bool(&active, true);
+ 	return OutputFilter::Run(tStart);
+ }
+@@ -183,6 +212,7 @@ STDMETHODIMP VCamFilter::Run(REFERENCE_TIME tStart)
+ STDMETHODIMP VCamFilter::Stop()
+ {
+ 	os_atomic_set_bool(&active, false);
++	ReleaseConsumerLease();
+ 	return OutputFilter::Stop();
+ }
+ 
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+index 192703f81..91ca29e20 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+@@ -44,8 +44,11 @@ class VCamFilter : public DShow::OutputFilter {
+ 
+ 	video_queue_t *vq = nullptr;
+ 	std::wstring queue_name;
++	std::wstring consumer_lease_name;
+ 	bool queue_namespace_rejected = false;
+ 	bool program_return = false;
++	bool preview_return = false;
++	WinHandle consumer_lease;
+ 	int queue_mode = 0;
+ 	bool in_obs = false;
+ 	enum queue_state prev_state = SHARED_QUEUE_STATE_INVALID;
+@@ -73,6 +76,8 @@ class VCamFilter : public DShow::OutputFilter {
+ 	void ShowDefaultFrame(uint8_t *ptr);
+ 	void EmitDirectShowObservation(const struct video_queue_frame_metadata &metadata,
+ 					      const struct directshow_stage_timing &timing);
++	HRESULT AcquireConsumerLease();
++	void ReleaseConsumerLease();
+ 	void UpdatePlaceholder(void);
+ 	const int GetOutputBufferSize(void);
+ 
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index 62df6d62e..8baadee9b 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -14,12 +14,32 @@ struct virtualcam_data {
+ 	obs_output_t *output;
+ 	video_queue_t *vq;
+ 	wchar_t queue_name[256];
++	wchar_t consumer_lease_name[288];
+ 	bool queue_namespace_rejected;
+ 	bool program_return;
++	bool preview_return;
++	volatile long preview_consumer_active;
+ 	volatile bool active;
+ 	volatile bool stopping;
+ };
+ 
++static bool preview_consumer_is_active(struct virtualcam_data *vcam)
++{
++	if (!vcam->preview_return)
++		return true;
++
++	HANDLE lease = OpenEventW(SYNCHRONIZE, FALSE, vcam->consumer_lease_name);
++	const bool active = lease != NULL;
++	if (lease)
++		CloseHandle(lease);
++
++	const long previous = InterlockedExchange(&vcam->preview_consumer_active, active ? 1L : 0L);
++	if (previous != (active ? 1L : 0L))
++		blog(LOG_INFO, "[pulsar-directshow] PreviewReturn consumer %s (lease=%ls)",
++		     active ? "attached" : "detached", vcam->consumer_lease_name);
++	return active;
++}
++
+ static void copy_telemetry_identifier(char *destination, const char *value)
+ {
+ 	if (!value)
+@@ -134,8 +154,14 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+ 	vcam->output = output;
+ 	vcam->program_return = obs_output_get_id(output) &&
+ 				       strcmp(obs_output_get_id(output), "program_return_output") == 0;
++	vcam->preview_return = obs_output_get_id(output) &&
++				       strcmp(obs_output_get_id(output), "preview_return_output") == 0;
+ 	vcam->queue_namespace_rejected = !queue_name_for_output(
+ 		output, vcam->queue_name, sizeof(vcam->queue_name) / sizeof(vcam->queue_name[0]));
++	if (vcam->preview_return && !vcam->queue_namespace_rejected)
++		_snwprintf_s(vcam->consumer_lease_name,
++			     sizeof(vcam->consumer_lease_name) / sizeof(vcam->consumer_lease_name[0]), _TRUNCATE,
++			     L"%ls.ConsumerActive", vcam->queue_name);
+ 	if (vcam->queue_namespace_rejected)
+ 		blog(LOG_ERROR, "[pulsar-directshow] queue namespace rejected; producer is disabled");
+ 
+@@ -224,6 +250,12 @@ static void virtual_video(void *param, struct video_data *frame)
+ 		return;
+ 	}
+ 
++	/* Preview stays hot through the borrowed readiness callback.  Only the
++	 * optional shared-memory publication is elided while no DirectShow graph
++	 * actively consumes PreviewReturn. */
++	if (!preview_consumer_is_active(vcam))
++		return;
++
+ 	struct video_queue_frame_metadata metadata;
+ 	snapshot_runtime_frame(&metadata);
+ 	video_queue_write_ex(vcam->vq, frame->data, frame->linesize, frame->timestamp, &metadata);
+-- 
+2.54.0.windows.1
+
