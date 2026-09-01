@@ -176,18 +176,32 @@ index 8a1257e3d..bb2a69260 100644
  		return false;
  
  	const size_t pixels = width * height;
-@@ -66,6 +86,39 @@ static bool queue_frame_size(uint32_t cx, uint32_t cy, size_t *frame_size)
+@@ -66,6 +86,53 @@ static bool queue_frame_size(uint32_t cx, uint32_t cy, size_t *frame_size)
  	return true;
  }
  
++/* The DirectShow mapping is opened FILE_MAP_READ.  Interlocked* compare-
++ * exchange operations are read-modify-write instructions even when the
++ * value/comparand are both zero, so using them here faults on a read-only
++ * view.  Aligned volatile loads are atomic for the 32/64-bit fields; the
++ * acquire barrier after the load keeps the published frame payload and
++ * metadata after the index/sequence observation. */
 +static uint32_t queue_load_index(const volatile uint32_t *value)
 +{
-+	return (uint32_t)InterlockedCompareExchange((volatile LONG *)value, 0, 0);
++	if (!value)
++		return 0;
++	const uint32_t loaded = *value;
++	MemoryBarrier();
++	return loaded;
 +}
 +
 +static uint64_t queue_load_sequence(const struct video_queue_slot_header *slot)
 +{
-+	return (uint64_t)InterlockedCompareExchange64((volatile LONG64 *)&slot->sequence, 0, 0);
++	if (!slot)
++		return 0;
++	const uint64_t loaded = slot->sequence;
++	MemoryBarrier();
++	return loaded;
 +}
 +
 +static void queue_store_sequence(struct video_queue_slot_header *slot, uint64_t sequence)
