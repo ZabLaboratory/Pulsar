@@ -92,7 +92,7 @@ class _ControlAbi(ctypes.Structure):
 
 def test_patch_is_signed_and_scope_is_real_opt_in_transport() -> None:
     text = PATCH.read_text(encoding="utf-8")
-    assert text.startswith("From 65339149df0bfc36a45a14b5ab75cfef4f738684 ")
+    assert text.startswith("From 0d06e1f903272cb199549f0b0c24f4d2354c4f8e ")
     for marker in (
         "Agent-Role: forge",
         "Agent-Thread: /root/pulsar_d3d11_return",
@@ -114,6 +114,8 @@ def test_patch_is_signed_and_scope_is_real_opt_in_transport() -> None:
         assert marker in text
     assert "virtualcam.c" in text
     assert "virtualcam-filter.cpp" in text
+    assert text.count("d3d11_requested && d3d11") >= 5
+    assert "if (d3d11)\n+\t\t\tconsumed_d3d11_frame" not in text
 
 
 def test_handle_ring_and_control_abis_are_pointer_free_on_x86_and_x64() -> None:
