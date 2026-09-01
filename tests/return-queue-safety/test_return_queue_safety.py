@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import ctypes
 from pathlib import Path
 
 
@@ -18,6 +19,7 @@ def test_patch_contains_atomic_seqlock_and_telemetry_contract() -> None:
         "publication - 1U",
         "before != after",
         "VIDEO_QUEUE_METADATA_VERSION 2U",
+        "VIDEO_QUEUE_METADATA_ABI_SIZE 576U",
         "gap_count",
         "duplicate_count",
         "retry_count",
@@ -27,6 +29,32 @@ def test_patch_contains_atomic_seqlock_and_telemetry_contract() -> None:
     assert "VIDEO_FORMAT_P010" in text
     assert "VIDEO_QUEUE_PIXEL_FORMAT_INVALID" in text
     assert "D3D11" not in text
+
+
+class _FrameMetadata(ctypes.Structure):
+    _fields_ = [
+        ("timestamp", ctypes.c_uint64),
+        ("frame_id", ctypes.c_uint64),
+        ("pts_ns", ctypes.c_uint64),
+        ("server_seq", ctypes.c_uint64),
+        ("program_revision", ctypes.c_uint64),
+        ("preview_revision", ctypes.c_uint64),
+        ("role_map_revision", ctypes.c_uint64),
+        ("valid", ctypes.c_uint32),
+        ("runtime_instance_id", ctypes.c_char * 129),
+        ("command_id", ctypes.c_char * 129),
+        ("intent_id", ctypes.c_char * 129),
+        ("take_command_id", ctypes.c_char * 129),
+    ]
+
+
+def test_metadata_abi_is_pointer_free_and_fixed_on_x86_and_x64() -> None:
+    assert ctypes.sizeof(_FrameMetadata) == 576
+    assert _FrameMetadata.frame_id.offset == 8
+    assert _FrameMetadata.pts_ns.offset == 16
+    assert _FrameMetadata.valid.offset == 56
+    assert _FrameMetadata.runtime_instance_id.offset == 60
+    assert _FrameMetadata.take_command_id.offset == 447
 
 
 def test_nv12_stride_and_format_contract_fails_closed() -> None:
