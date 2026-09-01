@@ -843,7 +843,13 @@ async def finish_record(ws: PulsarWs) -> None:
             timeout=15.0,
         )
         stopped = await ws.poll("GetRecordStatus", "outputActive", False, attempts=STOP_ATTEMPTS)
-        if not landed or stopped is not False:
+        # Either observation is authoritative.  The STOPPED event can race the
+        # request response and therefore already be consumed before this wait
+        # begins, while GetRecordStatus remains a stable independent readback.
+        # Conversely, a landed STOPPED event is sufficient if a congested
+        # status request has not returned yet.  Fail only when neither boundary
+        # proves completion.
+        if not landed and stopped is not False:
             record(
                 "Record",
                 "StopRecord",
@@ -855,7 +861,8 @@ async def finish_record(ws: PulsarWs) -> None:
             "Record",
             "StopRecord",
             Verdict.ERROR_EXPLICIT,
-            "bounded Pending 702 was truthful; RecordStateChanged STOPPED and outputActive=false arrived later",
+            "bounded Pending 702 was truthful; completion was proven by "
+            f"event_stopped={landed} or outputActive={stopped!r}",
         )
         return
     stopped = await ws.poll("GetRecordStatus", "outputActive", False, attempts=STOP_ATTEMPTS)
