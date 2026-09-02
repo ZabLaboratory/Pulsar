@@ -913,8 +913,8 @@ index d3293efd9..1606e2e3e 100644
 +		if ((!consumed_program_frame && !consumed_d3d11_frame) ||
 +		    (state != SHARED_QUEUE_STATE_READY && !consumed_d3d11_frame))
  			ShowDefaultFrame(ptr);
-+		if (consumed_d3d11_frame && d3d11_requested && d3d11) {
-+			consumed_program_frame = true;
++		if (d3d11_requested && d3d11) {
++			consumed_program_frame = consumed_program_frame || consumed_d3d11_frame;
 +			const struct pulsar_d3d11_return_control *control =
 +				pulsar_d3d11_return_consumer_control(d3d11);
 +			if (control) {

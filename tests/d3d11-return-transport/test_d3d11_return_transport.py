@@ -150,3 +150,12 @@ def test_default_cpu_and_forced_d3d11_fallback_preserve_both_return_lanes() -> N
         assert _select("NV12", requested=False) == ("CPU", "none", 0)
         assert _select("NV12", requested=True) == ("CPU", "capability", -2147483638)
         assert _select("P010", requested=True) == ("CPU", "format", -2147024809)
+
+
+def test_transport_telemetry_is_sampled_when_read_is_empty_or_fails() -> None:
+    text = PATCH.read_text(encoding="utf-8")
+    assert "if (consumed_d3d11_frame && d3d11_requested && d3d11)" not in text
+    assert (
+        "if (d3d11_requested && d3d11) {\n"
+        "+\t\t\tconsumed_program_frame = consumed_program_frame || consumed_d3d11_frame;"
+    ) in text
