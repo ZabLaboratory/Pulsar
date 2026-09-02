@@ -1,0 +1,348 @@
+From e524dd3da04386efd6eece5208a370f0667b2ae7 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Wed, 2 Sep 2026 16:20:30 +0200
+Subject: [PATCH] fix(libobs): publish borrowed video through a safe mailbox
+
+Keep graphics teardown independent from borrowed callback latency by copying mapped frames into preallocated generation slots. The worker releases the mailbox lock before callbacks and teardown joins after pending writes and callbacks finish.
+
+Agent-Role: Forge
+Agent-Thread: /root/forge_253_libobs_core
+Work-Unit: ZabLaboratory/Pulsar#253
+Issue: 253
+ADR-Revision: draft-r2-dual-lane-20260828
+Evidence: borrowed-mailbox-static-tests; telemetry-selector-table; sequential-patch-stack
+---
+ libobs/obs-internal.h |  20 ++++++-
+ libobs/obs-video.c    |  28 +--------
+ libobs/obs.c          | 135 +++++++++++++++++++++++++++++++++++++++---
+ libobs/obs.h          |   4 ++
+ 4 files changed, 148 insertions(+), 39 deletions(-)
+
+diff --git a/libobs/obs-internal.h b/libobs/obs-internal.h
+index ab6f6f873..5848beb25 100644
+--- a/libobs/obs-internal.h
++++ b/libobs/obs-internal.h
+@@ -35,6 +35,7 @@
+ 
+ #include "media-io/audio-resampler.h"
+ #include "media-io/video-io.h"
++#include "media-io/video-frame.h"
+ #include "media-io/audio-io.h"
+ 
+ #include "obs.h"
+@@ -352,6 +353,16 @@ struct obs_borrowed_video_callback {
+ 	void *param;
+ };
+ 
++#define OBS_BORROWED_VIDEO_SLOTS 2
++
++struct obs_borrowed_video_slot {
++	struct video_frame storage;
++	struct video_data data;
++	uint64_t generation;
++	bool writing;
++	bool busy;
++};
++
+ struct obs_core_video_mix {
+ 	struct obs_view *view;
+ 
+@@ -379,10 +390,12 @@ struct obs_core_video_mix {
+ 	pthread_cond_t borrowed_video_cond;
+ 	pthread_t borrowed_video_thread;
+ 	DARRAY(struct obs_borrowed_video_callback) borrowed_video_callbacks;
+-	struct video_data borrowed_video_frame;
++	struct obs_borrowed_video_slot borrowed_video_slots[OBS_BORROWED_VIDEO_SLOTS];
++	int borrowed_video_pending_slot;
++	int borrowed_video_busy_slot;
++	uint64_t borrowed_video_generation;
++	bool borrowed_video_supported;
+ 	bool borrowed_video_initialized;
+-	bool borrowed_video_pending;
+-	bool borrowed_video_busy;
+ 	bool borrowed_video_stop;
+ 	volatile long gpu_encoder_active;
+ 	bool gpu_was_active;
+@@ -655,6 +668,7 @@ extern bool start_borrowed_raw_video(video_t *video, void (*callback)(void *para
+ 				     void *param);
+ extern void stop_borrowed_raw_video(video_t *video, void (*callback)(void *param, struct video_data *frame),
+ 				    void *param);
++extern void obs_borrowed_video_publish(struct obs_core_video_mix *video, struct video_data *frame);
+ 
+ /* ------------------------------------------------------------------------- */
+ /* obs shared context data */
+diff --git a/libobs/obs-video.c b/libobs/obs-video.c
+index 2baa18e12..2f8f4980c 100644
+--- a/libobs/obs-video.c
++++ b/libobs/obs-video.c
+@@ -125,14 +125,6 @@ static inline void set_render_size(uint32_t width, uint32_t height)
+ 
+ static inline void unmap_last_surface(struct obs_core_video_mix *video)
+ {
+-	if (video->borrowed_video_initialized) {
+-		const uint64_t wait_start = os_gettime_ns();
+-		pthread_mutex_lock(&video->borrowed_video_mutex);
+-		while (video->borrowed_video_pending || video->borrowed_video_busy)
+-			pthread_cond_wait(&video->borrowed_video_cond, &video->borrowed_video_mutex);
+-		video->pipeline_stats.borrowed_wait_ns += os_gettime_ns() - wait_start;
+-		pthread_mutex_unlock(&video->borrowed_video_mutex);
+-	}
+ 	for (int c = 0; c < NUM_CHANNELS; ++c) {
+ 		if (video->mapped_surfaces[c]) {
+ 			gs_stagesurface_unmap(video->mapped_surfaces[c]);
+@@ -824,25 +816,7 @@ static inline void output_video_data(struct obs_core_video_mix *video, struct vi
+ 
+ static inline void output_borrowed_video_data(struct obs_core_video_mix *video, struct video_data *input_frame)
+ {
+-	if (!video->borrowed_video_initialized)
+-		return;
+-
+-	struct video_data borrowed_frame = *input_frame;
+-	const struct video_output_info *info = video_output_get_info(video->video);
+-	if (info && borrowed_frame.data[0] && !borrowed_frame.data[1] &&
+-	    (info->format == VIDEO_FORMAT_NV12 || info->format == VIDEO_FORMAT_P010)) {
+-		borrowed_frame.data[1] = borrowed_frame.data[0] +
+-					 (size_t)borrowed_frame.linesize[0] * info->height;
+-		borrowed_frame.linesize[1] = borrowed_frame.linesize[0];
+-	}
+-
+-	pthread_mutex_lock(&video->borrowed_video_mutex);
+-	if (video->borrowed_video_callbacks.num) {
+-		video->borrowed_video_frame = borrowed_frame;
+-		video->borrowed_video_pending = true;
+-		pthread_cond_broadcast(&video->borrowed_video_cond);
+-	}
+-	pthread_mutex_unlock(&video->borrowed_video_mutex);
++	obs_borrowed_video_publish(video, input_frame);
+ }
+ 
+ void add_ready_encoder_group(obs_encoder_t *encoder)
+diff --git a/libobs/obs.c b/libobs/obs.c
+index 9805a6e1a..dd49df549 100644
+--- a/libobs/obs.c
++++ b/libobs/obs.c
+@@ -607,8 +607,10 @@ static void *borrowed_video_thread(void *data)
+ 	struct obs_core_video_mix *video = data;
+ 
+ 	for (;;) {
++		DARRAY(struct obs_borrowed_video_callback) callbacks = {0};
++		int slot_index = -1;
+ 		pthread_mutex_lock(&video->borrowed_video_mutex);
+-		while (!video->borrowed_video_pending && !video->borrowed_video_stop)
++		while (video->borrowed_video_pending_slot < 0 && !video->borrowed_video_stop)
+ 			pthread_cond_wait(&video->borrowed_video_cond, &video->borrowed_video_mutex);
+ 
+ 		if (video->borrowed_video_stop) {
+@@ -616,16 +618,25 @@ static void *borrowed_video_thread(void *data)
+ 			break;
+ 		}
+ 
+-		video->borrowed_video_pending = false;
+-		video->borrowed_video_busy = true;
++		slot_index = video->borrowed_video_pending_slot;
++		video->borrowed_video_pending_slot = -1;
++		video->borrowed_video_busy_slot = slot_index;
++		video->borrowed_video_slots[slot_index].busy = true;
++		da_copy(callbacks, video->borrowed_video_callbacks);
++		pthread_mutex_unlock(&video->borrowed_video_mutex);
++
+ 		const uint64_t publish_start = os_gettime_ns();
+-		for (size_t i = 0; i < video->borrowed_video_callbacks.num; i++) {
+-			struct obs_borrowed_video_callback *cb = &video->borrowed_video_callbacks.array[i];
+-			cb->callback(cb->param, &video->borrowed_video_frame);
++		for (size_t i = 0; i < callbacks.num; i++) {
++			struct obs_borrowed_video_callback *cb = &callbacks.array[i];
++			cb->callback(cb->param, &video->borrowed_video_slots[slot_index].data);
+ 		}
++		da_free(callbacks);
++
++		pthread_mutex_lock(&video->borrowed_video_mutex);
+ 		video->pipeline_stats.borrowed_publish_ns += os_gettime_ns() - publish_start;
+ 		video->pipeline_stats.borrowed_publish_sample_count++;
+-		video->borrowed_video_busy = false;
++		video->borrowed_video_slots[slot_index].busy = false;
++		video->borrowed_video_busy_slot = -1;
+ 		pthread_cond_broadcast(&video->borrowed_video_cond);
+ 		pthread_mutex_unlock(&video->borrowed_video_mutex);
+ 	}
+@@ -635,6 +646,10 @@ static void *borrowed_video_thread(void *data)
+ 
+ static bool init_borrowed_video(struct obs_core_video_mix *video)
+ {
++	const struct video_output_info *info = video_output_get_info(video->video);
++	if (!info)
++		return false;
++
+ 	pthread_mutex_init_value(&video->borrowed_video_mutex);
+ 	if (pthread_mutex_init(&video->borrowed_video_mutex, NULL) != 0)
+ 		return false;
+@@ -643,12 +658,35 @@ static bool init_borrowed_video(struct obs_core_video_mix *video)
+ 		pthread_mutex_init_value(&video->borrowed_video_mutex);
+ 		return false;
+ 	}
++	video->borrowed_video_pending_slot = -1;
++	video->borrowed_video_busy_slot = -1;
++	video->borrowed_video_generation = 0;
++	video->borrowed_video_stop = false;
++	for (size_t i = 0; i < OBS_BORROWED_VIDEO_SLOTS; ++i) {
++		video_frame_init(&video->borrowed_video_slots[i].storage, info->format, info->width, info->height);
++		if (!video->borrowed_video_slots[i].storage.data[0]) {
++			for (size_t j = 0; j <= i; ++j)
++				video_frame_free(&video->borrowed_video_slots[j].storage);
++			pthread_cond_destroy(&video->borrowed_video_cond);
++			pthread_mutex_destroy(&video->borrowed_video_mutex);
++			pthread_mutex_init_value(&video->borrowed_video_mutex);
++			return false;
++		}
++		video->borrowed_video_slots[i].data = (struct video_data){0};
++		memcpy(video->borrowed_video_slots[i].data.data, video->borrowed_video_slots[i].storage.data,
++		       sizeof(video->borrowed_video_slots[i].data.data));
++		memcpy(video->borrowed_video_slots[i].data.linesize, video->borrowed_video_slots[i].storage.linesize,
++		       sizeof(video->borrowed_video_slots[i].data.linesize));
++	}
+ 	if (pthread_create(&video->borrowed_video_thread, NULL, borrowed_video_thread, video) != 0) {
++		for (size_t i = 0; i < OBS_BORROWED_VIDEO_SLOTS; ++i)
++			video_frame_free(&video->borrowed_video_slots[i].storage);
+ 		pthread_cond_destroy(&video->borrowed_video_cond);
+ 		pthread_mutex_destroy(&video->borrowed_video_mutex);
+ 		pthread_mutex_init_value(&video->borrowed_video_mutex);
+ 		return false;
+ 	}
++	video->borrowed_video_supported = true;
+ 	video->borrowed_video_initialized = true;
+ 	return true;
+ }
+@@ -659,7 +697,8 @@ static void free_borrowed_video(struct obs_core_video_mix *video)
+ 		return;
+ 
+ 	pthread_mutex_lock(&video->borrowed_video_mutex);
+-	while (video->borrowed_video_pending || video->borrowed_video_busy)
++	while (video->borrowed_video_pending_slot >= 0 || video->borrowed_video_busy_slot >= 0 ||
++	       video->borrowed_video_slots[0].writing || video->borrowed_video_slots[1].writing)
+ 		pthread_cond_wait(&video->borrowed_video_cond, &video->borrowed_video_mutex);
+ 	video->borrowed_video_stop = true;
+ 	pthread_cond_broadcast(&video->borrowed_video_cond);
+@@ -667,10 +706,82 @@ static void free_borrowed_video(struct obs_core_video_mix *video)
+ 	pthread_join(video->borrowed_video_thread, NULL);
+ 
+ 	da_free(video->borrowed_video_callbacks);
++	for (size_t i = 0; i < OBS_BORROWED_VIDEO_SLOTS; ++i)
++		video_frame_free(&video->borrowed_video_slots[i].storage);
+ 	pthread_cond_destroy(&video->borrowed_video_cond);
+ 	pthread_mutex_destroy(&video->borrowed_video_mutex);
+ 	pthread_mutex_init_value(&video->borrowed_video_mutex);
+ 	video->borrowed_video_initialized = false;
++	video->borrowed_video_supported = false;
++}
++
++void obs_borrowed_video_publish(struct obs_core_video_mix *video, struct video_data *frame)
++{
++	if (!video || !frame || !video->borrowed_video_initialized || !video->borrowed_video_supported)
++		return;
++
++	pthread_mutex_lock(&video->borrowed_video_mutex);
++	if (!video->borrowed_video_callbacks.num || video->borrowed_video_stop) {
++		pthread_mutex_unlock(&video->borrowed_video_mutex);
++		return;
++	}
++
++	if (video->borrowed_video_pending_slot >= 0 || video->borrowed_video_busy_slot >= 0)
++		video->pipeline_stats.borrowed_wait_count++;
++
++	int slot_index = video->borrowed_video_pending_slot;
++	if (slot_index < 0) {
++		for (size_t i = 0; i < OBS_BORROWED_VIDEO_SLOTS; ++i) {
++			if (!video->borrowed_video_slots[i].busy && !video->borrowed_video_slots[i].writing) {
++				slot_index = (int)i;
++				break;
++			}
++		}
++	}
++	if (slot_index < 0 || video->borrowed_video_slots[slot_index].busy ||
++	    video->borrowed_video_slots[slot_index].writing) {
++		video->pipeline_stats.borrowed_dropped_count++;
++		pthread_mutex_unlock(&video->borrowed_video_mutex);
++		return;
++	}
++
++	const bool replacing_pending = video->borrowed_video_pending_slot >= 0;
++	const uint64_t generation = ++video->borrowed_video_generation;
++	if (replacing_pending)
++		video->borrowed_video_pending_slot = -1;
++	video->borrowed_video_slots[slot_index].writing = true;
++	pthread_mutex_unlock(&video->borrowed_video_mutex);
++
++	struct video_frame source = {0};
++	memcpy(source.data, frame->data, sizeof(source.data));
++	memcpy(source.linesize, frame->linesize, sizeof(source.linesize));
++	const struct video_output_info *info = video_output_get_info(video->video);
++	if (info && source.data[0] && !source.data[1] &&
++	    (info->format == VIDEO_FORMAT_NV12 || info->format == VIDEO_FORMAT_P010)) {
++		source.data[1] = source.data[0] + (size_t)source.linesize[0] * info->height;
++		source.linesize[1] = source.linesize[0];
++	}
++	if (info)
++		video_frame_copy(&video->borrowed_video_slots[slot_index].storage, &source, info->format, info->height);
++
++	pthread_mutex_lock(&video->borrowed_video_mutex);
++	video->borrowed_video_slots[slot_index].writing = false;
++	if (video->borrowed_video_stop || !info || !source.data[0]) {
++		video->pipeline_stats.borrowed_dropped_count++;
++		pthread_cond_broadcast(&video->borrowed_video_cond);
++		pthread_mutex_unlock(&video->borrowed_video_mutex);
++		return;
++	}
++	video->borrowed_video_slots[slot_index].data.timestamp = frame->timestamp;
++	video->borrowed_video_slots[slot_index].generation = generation;
++	if (replacing_pending)
++		video->pipeline_stats.borrowed_overwritten_count++;
++	else if (video->borrowed_video_pending_slot >= 0 && video->borrowed_video_pending_slot != slot_index)
++		video->pipeline_stats.borrowed_overwritten_count++;
++	video->borrowed_video_pending_slot = slot_index;
++	pthread_cond_signal(&video->borrowed_video_cond);
++	pthread_cond_broadcast(&video->borrowed_video_cond);
++	pthread_mutex_unlock(&video->borrowed_video_mutex);
+ }
+ 
+ static int obs_init_video_mix(struct obs_video_info *ovi, struct obs_core_video_mix *video, size_t cache_size)
+@@ -3264,6 +3375,11 @@ bool start_borrowed_raw_video(video_t *v, void (*callback)(void *param, struct v
+ 
+ 	struct obs_borrowed_video_callback cb = {callback, param};
+ 	pthread_mutex_lock(&video->borrowed_video_mutex);
++	if (!video->borrowed_video_supported) {
++		video->pipeline_stats.borrowed_fallback_count++;
++		pthread_mutex_unlock(&video->borrowed_video_mutex);
++		return false;
++	}
+ 	for (size_t i = 0; i < video->borrowed_video_callbacks.num; i++) {
+ 		struct obs_borrowed_video_callback *existing = &video->borrowed_video_callbacks.array[i];
+ 		if (existing->callback == callback && existing->param == param) {
+@@ -3285,7 +3401,8 @@ void stop_borrowed_raw_video(video_t *v, void (*callback)(void *param, struct vi
+ 
+ 	bool removed = false;
+ 	pthread_mutex_lock(&video->borrowed_video_mutex);
+-	while (video->borrowed_video_pending || video->borrowed_video_busy)
++	while (video->borrowed_video_pending_slot >= 0 || video->borrowed_video_busy_slot >= 0 ||
++	       video->borrowed_video_slots[0].writing || video->borrowed_video_slots[1].writing)
+ 		pthread_cond_wait(&video->borrowed_video_cond, &video->borrowed_video_mutex);
+ 	for (size_t i = 0; i < video->borrowed_video_callbacks.num; i++) {
+ 		struct obs_borrowed_video_callback *existing = &video->borrowed_video_callbacks.array[i];
+diff --git a/libobs/obs.h b/libobs/obs.h
+index 2cb13a593..ddba4e552 100644
+--- a/libobs/obs.h
++++ b/libobs/obs.h
+@@ -950,6 +950,10 @@ struct obs_video_mix_pipeline_stats {
+ 	uint64_t borrowed_publish_sample_count;
+ 	uint64_t borrowed_publish_ns;
+ 	uint64_t borrowed_wait_ns;
++	uint64_t borrowed_dropped_count;
++	uint64_t borrowed_overwritten_count;
++	uint64_t borrowed_wait_count;
++	uint64_t borrowed_fallback_count;
+ 	uint64_t frame_total_ns;
+ };
+ 
+-- 
+2.54.0.windows.1
+

@@ -95,5 +95,22 @@ Channels 4-5 are unused; Phase 12+ may grow them for guest mics or VST chains.
 
 ## Validation
 
+### Runtime telemetry selector (#253)
+
+The optional `PULSAR_TRACE_SIGNALS` environment variable is read exactly once
+when the frontend telemetry producer is initialized. Unset means `all` (the
+backwards-compatible diagnostic set). `none` disables optional observations and
+resource samples. A CSV selects signals one-to-one: `program`, `preview`,
+`raw`, `borrowed`, `gpu`, and `queues`; `all` and `none` cannot be combined with
+other tokens. Empty, unknown, duplicate, or malformed values disable the
+telemetry producer and log the exact rejection reason (fail-closed).
+
+`program` selects ProgramView/encoder observations, `preview` selects the
+Preview mix, `raw` selects raw pipeline stages, `borrowed` selects the borrowed
+mailbox metrics, `gpu` selects GPU/encoder metrics, and `queues` selects queue
+and drop counters. TakeAccepted, TakeCommitted, frame identity/PTS, and
+integrity or lifecycle failures remain mandatory even with `none`; this keeps
+the safety/audit trail distinct from optional performance signals.
+
 - `scripts/probe-events.py` — `SetStudioModeEnabled` round-trip → `StudioModeStateChanged` event end-to-end.
 - `scripts/probe-record.py` — `StartRecord` → 3 s capture → `StopRecord` → file ≥ 100 KB on disk.

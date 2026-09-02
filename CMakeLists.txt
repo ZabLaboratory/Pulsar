@@ -156,6 +156,7 @@ if(WIN32)
     # silently arm or disarm a drill. This native truth table needs no OBS,
     # GPU, or running Pulsar process.
     add_subdirectory(tests/dual-lane-config)
+    add_subdirectory(tests/telemetry-selector)
     add_subdirectory(tests/pulsar-transition-controller)
 
     # #249 -- admission, in-flight callback accounting, and CEF close

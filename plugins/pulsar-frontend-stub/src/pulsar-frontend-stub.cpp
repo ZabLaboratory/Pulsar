@@ -104,6 +104,7 @@
 #include "pulsar-transition-controller.h"
 #include "pulsar-dual-lane-control.h"
 #include "pulsar-runtime-telemetry.h"
+#include "pulsar-runtime-telemetry-signals.h"
 #include "pulsar-program-audio.h"
 #include "pulsar-stream-egress.h"
 #include "obs-websocket-api.h"
@@ -413,6 +414,8 @@ public:
             encodeTimeNsTotal_.store(0, std::memory_order_relaxed);
             encodeTimeSampleCount_.store(0, std::memory_order_relaxed);
             resourceMode_.clear();
+            signalSelection_ = pulsar_runtime_telemetry::parse_signal_selection(nullptr);
+            signalMask_.store(0, std::memory_order_release);
             wgcWorkload_ = false;
             cefWorkload_ = false;
             buildRevision_.clear();
@@ -442,6 +445,12 @@ public:
         const char *traceGpu = std::getenv("PULSAR_TRACE_GPU");
         const char *producerTopology = std::getenv("PULSAR_TRACE_PRODUCER_TOPOLOGY");
         const char *producerCount = std::getenv("PULSAR_TRACE_PRODUCER_COUNT");
+        const auto signalSelection = pulsar_runtime_telemetry::parse_signal_selection(
+            std::getenv("PULSAR_TRACE_SIGNALS"));
+        if (!signalSelection.valid) {
+            blog(LOG_WARNING, "[pulsar-runtime-telemetry] trace disabled: %s", signalSelection.error.c_str());
+            return;
+        }
         {
             // Even non-traced rollback runs use the same validated process
             // identity in their operational marker.  Do not fall back to a
@@ -487,6 +496,8 @@ public:
                                  std::strcmp(resourceMode, "dual_lane") == 0)) {
                 resourceMode_ = resourceMode;
             }
+            signalSelection_ = signalSelection;
+            signalMask_.store(signalSelection.mask, std::memory_order_release);
             wgcWorkload_ = wgcWorkload;
             cefWorkload_ = cefWorkload;
             encoderFamily_ = encoderFamily && *encoderFamily ? encoderFamily : "unknown";
@@ -558,7 +569,7 @@ public:
             source_profiler_enable(true);
         if (hasResourceMode)
             source_profiler_gpu_enable(true);
-        if (hasResourceMode)
+        if (hasResourceMode && signalMask_.load(std::memory_order_acquire) != 0)
             startResourceSampler();
     }
 
@@ -619,6 +630,12 @@ public:
     }
 
     bool environmentTruthy(const char *value) const { return truthy(value); }
+
+    bool signalEnabled(pulsar_runtime_telemetry::Signal signal) const
+    {
+        return (signalMask_.load(std::memory_order_acquire) &
+                pulsar_runtime_telemetry::signal_bit(signal)) != 0;
+    }
 
     static bool resourceReferenceRequested()
     {
@@ -967,6 +984,8 @@ public:
         if (!frame)
             return;
         rawFrameCount_.fetch_add(1, std::memory_order_relaxed);
+        if (!signalEnabled(pulsar_runtime_telemetry::Signal::Program))
+            return;
         TakeContext context;
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
@@ -995,6 +1014,8 @@ public:
     void packet(obs_output_t *, struct encoder_packet *packet, struct encoder_packet_time *packetTime)
     {
         if (!packet || packet->type != OBS_ENCODER_VIDEO)
+            return;
+        if (!signalEnabled(pulsar_runtime_telemetry::Signal::Program))
             return;
         if (packetTime && packetTime->fer > 0 && packetTime->ferc >= packetTime->fer) {
             encodeTimeNsTotal_.fetch_add(packetTime->ferc - packetTime->fer,
@@ -1245,8 +1266,12 @@ private:
             if (resourceStop_.load(std::memory_order_acquire))
                 break;
 
+            const uint32_t selectedSignals = signalMask_.load(std::memory_order_acquire);
+            if (selectedSignals == 0)
+                continue;
             GpuMetrics gpu;
-            if (!queryGpuMetrics(gpu)) {
+            if ((selectedSignals & pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Gpu)) != 0 &&
+                !queryGpuMetrics(gpu)) {
                 if (!gpuWarningLogged) {
                     blog(LOG_WARNING,
                          "[pulsar-runtime-telemetry] resource sample skipped: nvidia-smi GPU counters unavailable");
@@ -1350,6 +1375,7 @@ private:
             sample << "{\"record_type\":\"resource_sample\",\"sample_mode\":\"" << mode
                    << "\",\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
                    << escape(runtime) << "\",\"observed_at_monotonic_ns\":" << nowNs()
+                   << ",\"telemetry_signals_mask\":" << selectedSignals
                    << ",\"frame_render_ms\":" << std::setprecision(9) << frameRenderMs
                    << ",\"resident_bytes\":" << os_get_proc_resident_size()
                    << ",\"process_cpu_percent\":" << std::setprecision(6) << cpu
@@ -1385,6 +1411,10 @@ private:
                    << ",\"borrowed_schedule_ms\":" << intervalAverageMs(program.borrowed_schedule_ns, previousProgram.borrowed_schedule_ns, program.sample_count, previousProgram.sample_count)
                    << ",\"borrowed_publish_ms\":" << intervalAverageMs(program.borrowed_publish_ns, previousProgram.borrowed_publish_ns, program.borrowed_publish_sample_count, previousProgram.borrowed_publish_sample_count)
                    << ",\"borrowed_wait_ms\":" << intervalAverageMs(program.borrowed_wait_ns, previousProgram.borrowed_wait_ns, program.sample_count, previousProgram.sample_count)
+                   << ",\"borrowed_dropped_count\":" << program.borrowed_dropped_count
+                   << ",\"borrowed_overwritten_count\":" << program.borrowed_overwritten_count
+                   << ",\"borrowed_wait_count\":" << program.borrowed_wait_count
+                   << ",\"borrowed_fallback_count\":" << program.borrowed_fallback_count
                    << ",\"return_output_callback_ms\":" << intervalAverageMs(programReturn.callback_ns, previousProgramReturn.callback_ns, programReturn.sample_count, previousProgramReturn.sample_count)
                    << ",\"frame_unattributed_ms\":" << frameResidualMs(program, previousProgram)
                    << ",\"frame_total_ms\":" << intervalAverageMs(program.frame_total_ns, previousProgram.frame_total_ns, program.sample_count, previousProgram.sample_count)
@@ -1408,6 +1438,10 @@ private:
                    << ",\"borrowed_schedule_ms\":" << intervalAverageMs(preview.borrowed_schedule_ns, previousPreview.borrowed_schedule_ns, preview.sample_count, previousPreview.sample_count)
                    << ",\"borrowed_publish_ms\":" << intervalAverageMs(preview.borrowed_publish_ns, previousPreview.borrowed_publish_ns, preview.borrowed_publish_sample_count, previousPreview.borrowed_publish_sample_count)
                    << ",\"borrowed_wait_ms\":" << intervalAverageMs(preview.borrowed_wait_ns, previousPreview.borrowed_wait_ns, preview.sample_count, previousPreview.sample_count)
+                   << ",\"borrowed_dropped_count\":" << preview.borrowed_dropped_count
+                   << ",\"borrowed_overwritten_count\":" << preview.borrowed_overwritten_count
+                   << ",\"borrowed_wait_count\":" << preview.borrowed_wait_count
+                   << ",\"borrowed_fallback_count\":" << preview.borrowed_fallback_count
                    << ",\"return_output_callback_ms\":" << intervalAverageMs(previewReturn.callback_ns, previousPreviewReturn.callback_ns, previewReturn.sample_count, previousPreviewReturn.sample_count)
                    << ",\"frame_unattributed_ms\":" << frameResidualMs(preview, previousPreview)
                    << ",\"frame_total_ms\":" << intervalAverageMs(preview.frame_total_ns, previousPreview.frame_total_ns, preview.sample_count, previousPreview.sample_count)
@@ -1613,8 +1647,43 @@ private:
             << "\"workload\":{"
             << "\"wgc\":" << (wgcWorkload ? "true" : "false") << ",\"cef\":" << (cefWorkload ? "true" : "false")
             << ",\"nvenc\":" << (nvenc ? "true" : "false") << "},"
-            << "\"capture_paths\":[\"encoder_input_raw\",\"directshow_return\",\"encoded_first_packet\","
-            << "\"decoded_first_frame\",\"antenna_first_frame\"],"
+        const uint32_t selectedSignals = signalMask_.load(std::memory_order_acquire);
+        out << "\"capture_paths\":[";
+        bool firstCapturePath = true;
+        const auto capturePath = [&out, &firstCapturePath](const char *name) {
+            if (!firstCapturePath)
+                out << ",";
+            out << quoted(name);
+            firstCapturePath = false;
+        };
+        if ((selectedSignals & pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Program)) != 0) {
+            capturePath("encoder_input_raw");
+            capturePath("encoded_first_packet");
+        }
+        if ((selectedSignals & pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Raw)) != 0)
+            capturePath("directshow_return");
+        if (selectedSignals == pulsar_runtime_telemetry::all_signal_mask()) {
+            capturePath("decoded_first_frame");
+            capturePath("antenna_first_frame");
+        }
+        out << "],\"telemetry_signals\":[";
+        bool firstSignal = true;
+        const auto signalName = [&out, &firstSignal](uint32_t mask, pulsar_runtime_telemetry::Signal signal,
+                                                      const char *name) {
+            if ((mask & pulsar_runtime_telemetry::signal_bit(signal)) == 0)
+                return;
+            if (!firstSignal)
+                out << ",";
+            out << quoted(name);
+            firstSignal = false;
+        };
+        signalName(selectedSignals, pulsar_runtime_telemetry::Signal::Program, "program");
+        signalName(selectedSignals, pulsar_runtime_telemetry::Signal::Preview, "preview");
+        signalName(selectedSignals, pulsar_runtime_telemetry::Signal::Raw, "raw");
+        signalName(selectedSignals, pulsar_runtime_telemetry::Signal::Borrowed, "borrowed");
+        signalName(selectedSignals, pulsar_runtime_telemetry::Signal::Gpu, "gpu");
+        signalName(selectedSignals, pulsar_runtime_telemetry::Signal::Queues, "queues");
+        out << "],"
             << "\"source_types\":[";
         bool firstSourceType = true;
         if (wgcSourceBound) {
@@ -1854,6 +1923,8 @@ private:
     std::atomic<uint64_t> packetFrameCount_{0};
     std::atomic<uint64_t> encodeTimeNsTotal_{0};
     std::atomic<uint64_t> encodeTimeSampleCount_{0};
+    pulsar_runtime_telemetry::SignalSelection signalSelection_;
+    std::atomic<uint32_t> signalMask_{0};
     std::atomic<bool> resourceStop_{true};
     std::thread resourceThread_;
     os_cpu_usage_info_t *resourceCpuInfo_ = nullptr;
