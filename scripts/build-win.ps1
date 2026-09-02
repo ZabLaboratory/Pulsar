@@ -8,7 +8,7 @@
 # proves the toolchain integration end-to-end. Patches/plugins land
 # in Phase 2+.
 #
-# Output: upstream/build_x64/RelWithDebInfo/obs64.exe (full GUI obs-studio).
+# Output: selected upstream build directory/rundir/RelWithDebInfo/bin/64bit/pulsar.exe.
 
 param(
     [ValidateSet('configure', 'build', 'all')]
@@ -28,7 +28,7 @@ param(
     # contains both light and full plugin sets, then package-win.ps1
     # carves out the two distribution variants.
     [switch] $Full,
-    # -Clean wipes upstream/build_x64 before configure so stale
+    # -Clean wipes the selected upstream build directory before configure so stale
     # artifacts from a previous run (e.g. the obs64.exe + Qt DLLs left
     # behind by a GUI build) do not pollute a subsequent headless run.
     # The downloaded dependency caches under upstream/.deps/ are kept,
@@ -43,7 +43,11 @@ param(
     # Normally the script reuses an exact, clean, fingerprinted patched
     # checkout so incremental CMake builds keep their object cache and source
     # mtimes across every Pulsar test loop.
-    [switch] $RefreshPatches
+    [switch] $RefreshPatches,
+    # Override the upstream CMake binary directory. Relative paths are
+    # resolved from the Pulsar repository root; the default remains the
+    # historical upstream/build_x64 directory.
+    [string] $UpstreamBuildDir = ''
 )
 
 if ($Fast -and ($Full -or $GuiBuild -or $Clean -or $Stage -eq 'configure')) {
@@ -59,6 +63,19 @@ $ErrorActionPreference = 'Continue'
 
 $root = Resolve-Path "$PSScriptRoot\.."
 $upstream = Join-Path $root 'upstream'
+$defaultUpstreamBuildDir = Join-Path $upstream 'build_x64'
+$requestedUpstreamBuildDir = $UpstreamBuildDir
+if ([string]::IsNullOrWhiteSpace($requestedUpstreamBuildDir)) {
+    $requestedUpstreamBuildDir = $env:PULSAR_UPSTREAM_BUILD_DIR
+}
+if ([string]::IsNullOrWhiteSpace($requestedUpstreamBuildDir)) {
+    $requestedUpstreamBuildDir = $defaultUpstreamBuildDir
+}
+if ([IO.Path]::IsPathRooted($requestedUpstreamBuildDir)) {
+    $upstreamBuildDir = [IO.Path]::GetFullPath($requestedUpstreamBuildDir)
+} else {
+    $upstreamBuildDir = [IO.Path]::GetFullPath((Join-Path $root $requestedUpstreamBuildDir))
+}
 $preset = if ($CI) { 'windows-ci-x64' } else { 'windows-x64' }
 
 function Get-PatchSetFingerprint {
@@ -394,7 +411,7 @@ if ($obsBrowserPatches.Count -gt 0) {
 }
 
 if ($Clean) {
-    $buildDir = Join-Path $upstream 'build_x64'
+    $buildDir = $upstreamBuildDir
     if (Test-Path $buildDir) {
         Write-Host ""
         Write-Host "--- Wiping $buildDir (-Clean) ---"
@@ -402,7 +419,7 @@ if ($Clean) {
     }
 }
 
-$upstreamCache = Join-Path $upstream 'build_x64\CMakeCache.txt'
+$upstreamCache = Join-Path $upstreamBuildDir 'CMakeCache.txt'
 $reuseFastUpstreamConfigure = $false
 if ($Fast -and (Test-Path $upstreamCache)) {
     $cacheText = Get-Content -Raw $upstreamCache
@@ -413,7 +430,7 @@ if ($Fast -and (Test-Path $upstreamCache)) {
         $cacheText -match '(?m)^ENABLE_WEBSOCKET:BOOL=OFF\r?$'
 }
 if ($Fast -and -not $reuseFastUpstreamConfigure) {
-    throw '-Fast requires an existing compatible headless build_x64 cache; run scripts/build-win.ps1 once first'
+    throw "-Fast requires an existing compatible headless build_x64 cache at $upstreamBuildDir; run scripts/build-win.ps1 once first"
 }
 
 if ($Stage -in @('configure', 'all') -and -not $reuseFastUpstreamConfigure) {
@@ -476,7 +493,10 @@ if ($Stage -in @('configure', 'all') -and -not $reuseFastUpstreamConfigure) {
     # literal DIRECTORY keyword for the host architecture. Point Qt at the
     # target x64 host tools explicitly in that environment. Normal developer
     # shells and CI keep OBS's native host/cross-compile detection unchanged.
-    if (-not $env:PROCESSOR_ARCHITECTURE -and ($Full -or $GuiBuild)) {
+    # The old GUI-only guard was: -not $env:PROCESSOR_ARCHITECTURE -and ($Full -or $GuiBuild).
+    # Headless external builds need the same host-tool correction when the
+    # runner strips the architecture environment variable.
+    if (-not $env:PROCESSOR_ARCHITECTURE) {
         $presetDocument = Get-Content -Raw (Join-Path $upstream 'CMakePresets.json') | ConvertFrom-Json
         $dependencyPreset = $presetDocument.configurePresets | Where-Object { $_.name -eq 'dependencies' }
         $qtVersion = $dependencyPreset.vendor.'obsproject.com/obs-studio'.dependencies.qt6.version
@@ -487,7 +507,7 @@ if ($Stage -in @('configure', 'all') -and -not $reuseFastUpstreamConfigure) {
     }
     Push-Location $upstream
     try {
-        & $cmake --preset $preset @extraArgs
+        & $cmake --preset $preset -B $upstreamBuildDir @extraArgs
         if ($LASTEXITCODE -ne 0) { throw "Configure failed" }
     } finally {
         Pop-Location
@@ -503,17 +523,18 @@ if ($Stage -in @('build', 'all')) {
     try {
         if ($Fast) {
             Write-Host 'Fastpath targets: libobs, win-dshow, DirectShow filter, NVENC and x264'
-            & $cmake --build build_x64 --config RelWithDebInfo --parallel --target `
+            & $cmake --build $upstreamBuildDir --config RelWithDebInfo --parallel --target `
                 libobs win-dshow obs-virtualcam-module obs-nvenc obs-x264
         } else {
-            & $cmake --build --preset $preset --config RelWithDebInfo --parallel
+            # Legacy default form: & $cmake --build --preset $preset --config RelWithDebInfo --parallel
+            & $cmake --build $upstreamBuildDir --config RelWithDebInfo --parallel
         }
         if ($LASTEXITCODE -ne 0) { throw "Build failed" }
     } finally {
         Pop-Location
     }
 
-    $obsExe = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo\bin\64bit\obs64.exe'
+    $obsExe = Join-Path $upstreamBuildDir 'rundir\RelWithDebInfo\bin\64bit\obs64.exe'
     if (Test-Path $obsExe) {
         Write-Host ""
         Write-Host "Built: $obsExe (GUI build, stale if -GuiBuild was not passed)"
@@ -526,7 +547,7 @@ if ($Stage -in @('build', 'all')) {
 # so the loader resolves the runtime DLLs without PATH changes.
 
 if ($Stage -in @('build', 'all')) {
-    $libobsLib = Join-Path $upstream 'build_x64\libobs\RelWithDebInfo\obs.lib'
+    $libobsLib = Join-Path $upstreamBuildDir 'libobs\RelWithDebInfo\obs.lib'
     if (-not (Test-Path $libobsLib)) {
         Write-Host ""
         Write-Host "Skipping Pulsar plugin build: libobs.lib not present at $libobsLib"
@@ -537,7 +558,7 @@ if ($Stage -in @('build', 'all')) {
         # obs_load_all_modules time. Both DLLs would register the
         # `browser_source` source kind if both were present.
         if ($Full) {
-            $rundirRoot     = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo'
+            $rundirRoot     = Join-Path $upstreamBuildDir 'rundir\RelWithDebInfo'
             $upstreamBrowser = Join-Path $rundirRoot 'obs-plugins\64bit\obs-browser.dll'
             $upstreamHelper  = Join-Path $rundirRoot 'bin\64bit\obs-browser-page.exe'
             $upstreamData    = Join-Path $rundirRoot 'data\obs-plugins\obs-browser'
@@ -558,6 +579,7 @@ if ($Stage -in @('build', 'all')) {
         $pulsarConfigFingerprint = Get-TextFingerprint @(
             "root=$root",
             "upstream=$upstream",
+            "upstream_build=$upstreamBuildDir",
             'generator=Visual Studio 17 2022',
             'architecture=x64',
             'headless=ON',
@@ -590,6 +612,7 @@ if ($Stage -in @('build', 'all')) {
                      -DPULSAR_BUILD_WEBSOCKET=ON `
                      -DPULSAR_BUILD_MULTISTREAM=ON `
                      -DPULSAR_BUILD_SCENE_SOURCE=ON `
+                     "-DPULSAR_UPSTREAM_BUILD_DIR=$upstreamBuildDir" `
                      "-DPULSAR_BUILD_BROWSER=$(if ($Full) { 'ON' } else { 'OFF' })"
             if ($LASTEXITCODE -ne 0) { throw "Pulsar configure failed" }
             $configState = [ordered]@{ fingerprint = $pulsarConfigFingerprint } | ConvertTo-Json
@@ -609,7 +632,7 @@ if ($Stage -in @('build', 'all')) {
         }
         if ($LASTEXITCODE -ne 0) { throw "Pulsar build failed" }
 
-        $pulsarExe = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo\bin\64bit\pulsar.exe'
+        $pulsarExe = Join-Path $upstreamBuildDir 'rundir\RelWithDebInfo\bin\64bit\pulsar.exe'
         if (Test-Path $pulsarExe) {
             Write-Host ""
             Write-Host "Built: $pulsarExe"
@@ -634,7 +657,7 @@ if ($Stage -in @('build', 'all')) {
                   Select-Object -First 1
         if ($qt6Bin) {
             $qt6BinDir = Join-Path $qt6Bin.FullName 'bin'
-            $rundirBin = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo\bin\64bit'
+            $rundirBin = Join-Path $upstreamBuildDir 'rundir\RelWithDebInfo\bin\64bit'
             if ((Test-Path $qt6BinDir) -and (Test-Path $rundirBin)) {
                 $qt6Copied = 0
                 foreach ($name in @('Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','Qt6Network.dll','Qt6Svg.dll','Qt6Xml.dll')) {
@@ -692,7 +715,7 @@ if ($Stage -in @('build', 'all')) {
                    Select-Object -First 1
         if ($depsBin) {
             $depsBinDir = Join-Path $depsBin.FullName 'bin'
-            $rundirBin  = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo\bin\64bit'
+            $rundirBin  = Join-Path $upstreamBuildDir 'rundir\RelWithDebInfo\bin\64bit'
             if ((Test-Path $depsBinDir) -and (Test-Path $rundirBin)) {
                 $copied = 0
                 Get-ChildItem $depsBinDir -Filter '*.dll' -File | ForEach-Object {

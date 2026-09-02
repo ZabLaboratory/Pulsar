@@ -17,13 +17,17 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(PULSAR_UPSTREAM_DIR "${PROJECT_SOURCE_DIR}/../../upstream")
 get_filename_component(PULSAR_UPSTREAM_DIR "${PULSAR_UPSTREAM_DIR}" ABSOLUTE)
+if(NOT DEFINED PULSAR_UPSTREAM_BUILD_DIR)
+    set(PULSAR_UPSTREAM_BUILD_DIR "${PULSAR_UPSTREAM_DIR}/build_x64")
+    get_filename_component(PULSAR_UPSTREAM_BUILD_DIR "${PULSAR_UPSTREAM_BUILD_DIR}" ABSOLUTE)
+endif()
 
 set(PULSAR_LIBOBS_HEADERS         "${PULSAR_UPSTREAM_DIR}/libobs")
-set(PULSAR_LIBOBS_BUILD           "${PULSAR_UPSTREAM_DIR}/build_x64/libobs")
-set(PULSAR_LIBOBS_CONFIG          "${PULSAR_UPSTREAM_DIR}/build_x64/config")
+set(PULSAR_LIBOBS_BUILD           "${PULSAR_UPSTREAM_BUILD_DIR}/libobs")
+set(PULSAR_LIBOBS_CONFIG          "${PULSAR_UPSTREAM_BUILD_DIR}/config")
 set(PULSAR_LIBOBS_LIB             "${PULSAR_LIBOBS_BUILD}/RelWithDebInfo/obs.lib")
 set(PULSAR_FRONTEND_API_HEADERS   "${PULSAR_UPSTREAM_DIR}/frontend/api")
-set(PULSAR_FRONTEND_API_LIB       "${PULSAR_UPSTREAM_DIR}/build_x64/frontend/api/RelWithDebInfo/obs-frontend-api.lib")
+set(PULSAR_FRONTEND_API_LIB       "${PULSAR_UPSTREAM_BUILD_DIR}/frontend/api/RelWithDebInfo/obs-frontend-api.lib")
 
 # obs-websocket-api.h is header-only, vendored inside our pulsar-websocket
 # fork. Same dep pattern as pulsar-multi-stream.
@@ -31,7 +35,7 @@ set(PULSAR_WEBSOCKET_API_HEADERS "${PROJECT_SOURCE_DIR}/../pulsar-websocket/lib"
 
 # DLL lands in upstream/build_x64/rundir/.../obs-plugins/64bit/ so libobs's
 # add_default_module_paths picks it up at obs_load_all_modules time.
-set(PULSAR_OBS_PLUGINS_DIR "${PULSAR_UPSTREAM_DIR}/build_x64/rundir/RelWithDebInfo/obs-plugins/64bit")
+set(PULSAR_OBS_PLUGINS_DIR "${PULSAR_UPSTREAM_BUILD_DIR}/rundir/RelWithDebInfo/obs-plugins/64bit")
 
 if(NOT EXISTS "${PULSAR_LIBOBS_LIB}")
     message(FATAL_ERROR

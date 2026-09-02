@@ -23,14 +23,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(PULSAR_UPSTREAM_DIR "${PROJECT_SOURCE_DIR}/../../upstream")
 get_filename_component(PULSAR_UPSTREAM_DIR "${PULSAR_UPSTREAM_DIR}" ABSOLUTE)
+if(NOT DEFINED PULSAR_UPSTREAM_BUILD_DIR)
+    set(PULSAR_UPSTREAM_BUILD_DIR "${PULSAR_UPSTREAM_DIR}/build_x64")
+    get_filename_component(PULSAR_UPSTREAM_BUILD_DIR "${PULSAR_UPSTREAM_BUILD_DIR}" ABSOLUTE)
+endif()
 
 set(PULSAR_LIBOBS_HEADERS  "${PULSAR_UPSTREAM_DIR}/libobs")
-set(PULSAR_LIBOBS_BUILD    "${PULSAR_UPSTREAM_DIR}/build_x64/libobs")
-set(PULSAR_LIBOBS_CONFIG   "${PULSAR_UPSTREAM_DIR}/build_x64/config")
+set(PULSAR_LIBOBS_BUILD    "${PULSAR_UPSTREAM_BUILD_DIR}/libobs")
+set(PULSAR_LIBOBS_CONFIG   "${PULSAR_UPSTREAM_BUILD_DIR}/config")
 set(PULSAR_LIBOBS_LIB      "${PULSAR_LIBOBS_BUILD}/RelWithDebInfo/obs.lib")
 
 set(PULSAR_FRONTEND_HEADERS "${PULSAR_UPSTREAM_DIR}/frontend/api")
-set(PULSAR_FRONTEND_BUILD   "${PULSAR_UPSTREAM_DIR}/build_x64/frontend/api")
+set(PULSAR_FRONTEND_BUILD   "${PULSAR_UPSTREAM_BUILD_DIR}/frontend/api")
 set(PULSAR_FRONTEND_LIB     "${PULSAR_FRONTEND_BUILD}/RelWithDebInfo/obs-frontend-api.lib")
 
 if(NOT EXISTS "${PULSAR_LIBOBS_LIB}")
@@ -152,7 +156,7 @@ target_link_libraries(pulsar-websocket PRIVATE
 # picks it up. obs-plugins/64bit/ relative to bin/64bit/ is what
 # add_default_module_paths() searches.
 set(_rundir_plugins
-    "${PULSAR_UPSTREAM_DIR}/build_x64/rundir/RelWithDebInfo/obs-plugins/64bit")
+    "${PULSAR_UPSTREAM_BUILD_DIR}/rundir/RelWithDebInfo/obs-plugins/64bit")
 
 set_target_properties(pulsar-websocket PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY                "${_rundir_plugins}"
@@ -163,7 +167,7 @@ set_target_properties(pulsar-websocket PROPERTIES
 
 # Stage the locale data so obs_module_text() resolves at runtime.
 set(_rundir_data
-    "${PULSAR_UPSTREAM_DIR}/build_x64/rundir/RelWithDebInfo/data/obs-plugins/obs-websocket")
+    "${PULSAR_UPSTREAM_BUILD_DIR}/rundir/RelWithDebInfo/data/obs-plugins/obs-websocket")
 add_custom_command(TARGET pulsar-websocket POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${_rundir_data}/locale"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different

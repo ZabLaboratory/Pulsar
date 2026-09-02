@@ -15,8 +15,16 @@ project(Pulsar
 # Pulsar's top-level project. This file does NOT build upstream/
 # itself; that happens via upstream's own CMakePresets.json driven
 # by scripts/build-win.ps1. This file is invoked AFTER upstream's
-# build_x64/ exists and links Pulsar-owned plugins against the
+# upstream build directory exists and links Pulsar-owned plugins against the
 # libobs that upstream produced.
+
+set(PULSAR_UPSTREAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/upstream")
+get_filename_component(PULSAR_UPSTREAM_DIR "${PULSAR_UPSTREAM_DIR}" ABSOLUTE)
+set(PULSAR_UPSTREAM_BUILD_DIR "${PULSAR_UPSTREAM_DIR}/build_x64" CACHE PATH
+    "External upstream OBS CMake build directory")
+get_filename_component(PULSAR_UPSTREAM_BUILD_DIR "${PULSAR_UPSTREAM_BUILD_DIR}" ABSOLUTE
+    BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+message(STATUS "Pulsar upstream build directory: ${PULSAR_UPSTREAM_BUILD_DIR}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

@@ -14,13 +14,17 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(PULSAR_UPSTREAM_DIR "${PROJECT_SOURCE_DIR}/../../upstream")
 get_filename_component(PULSAR_UPSTREAM_DIR "${PULSAR_UPSTREAM_DIR}" ABSOLUTE)
+if(NOT DEFINED PULSAR_UPSTREAM_BUILD_DIR)
+    set(PULSAR_UPSTREAM_BUILD_DIR "${PULSAR_UPSTREAM_DIR}/build_x64")
+    get_filename_component(PULSAR_UPSTREAM_BUILD_DIR "${PULSAR_UPSTREAM_BUILD_DIR}" ABSOLUTE)
+endif()
 
 set(PULSAR_LIBOBS_HEADERS         "${PULSAR_UPSTREAM_DIR}/libobs")
-set(PULSAR_LIBOBS_BUILD           "${PULSAR_UPSTREAM_DIR}/build_x64/libobs")
-set(PULSAR_LIBOBS_CONFIG          "${PULSAR_UPSTREAM_DIR}/build_x64/config")
+set(PULSAR_LIBOBS_BUILD           "${PULSAR_UPSTREAM_BUILD_DIR}/libobs")
+set(PULSAR_LIBOBS_CONFIG          "${PULSAR_UPSTREAM_BUILD_DIR}/config")
 set(PULSAR_LIBOBS_LIB             "${PULSAR_LIBOBS_BUILD}/RelWithDebInfo/obs.lib")
 set(PULSAR_FRONTEND_API_HEADERS   "${PULSAR_UPSTREAM_DIR}/frontend/api")
-set(PULSAR_FRONTEND_API_LIB       "${PULSAR_UPSTREAM_DIR}/build_x64/frontend/api/RelWithDebInfo/obs-frontend-api.lib")
+set(PULSAR_FRONTEND_API_LIB       "${PULSAR_UPSTREAM_BUILD_DIR}/frontend/api/RelWithDebInfo/obs-frontend-api.lib")
 
 # The frontend runtime owns the scene-switch vendor adapter and includes
 # nlohmann/json directly. Resolve the dependency locally instead of relying on
