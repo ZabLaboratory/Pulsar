@@ -100,3 +100,18 @@ def test_selector_contract_keeps_legacy_names_and_canonical_session_field():
         assert f'"{name}"' in header
     assert "telemetry_signals" in source
     assert "trace_signals" not in source
+
+
+def test_runtime_callback_registration_is_selector_gated():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    install = source[source.index("if (g_runtimeTelemetry.enabled())") : source.index("return true;", source.index("if (g_runtimeTelemetry.enabled())"))]
+    assert "const bool rawCallbackRequired = g_runtimeTelemetry.rawCallbackRequired();" in install
+    assert "const bool packetCallbackRequired = g_runtimeTelemetry.packetCallbackRequired();" in install
+    assert "if (rawCallbackRequired)" in install
+    assert "if (packetCallbackRequired && streamOutput)" in install
+    assert "if (streamOutput)\n                obs_output_add_packet_callback" not in install
+    assert "signalMask_.store(0, std::memory_order_release);" in source
+    assert "Signal::EncoderFrameReady" in source
+    assert "Signal::OutputMuxEnqueue" in source

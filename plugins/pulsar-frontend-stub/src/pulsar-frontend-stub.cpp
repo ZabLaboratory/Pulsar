@@ -668,6 +668,25 @@ public:
         return enabled_;
     }
 
+    // Callback registration is decided once from the boot-fixed selector.
+    // Program owns the historical raw/packet observations; stage-only traces
+    // need only the packet callback to derive encoder boundaries.
+    bool rawCallbackRequired() const
+    {
+        return (signalMask_.load(std::memory_order_acquire) &
+                pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Program)) != 0;
+    }
+
+    bool packetCallbackRequired() const
+    {
+        constexpr uint32_t stageMask =
+            pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Program) |
+            pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::EncoderFrameReady) |
+            pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::EncodeCallbackEnqueue) |
+            pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::OutputMuxEnqueue);
+        return (signalMask_.load(std::memory_order_acquire) & stageMask) != 0;
+    }
+
     void updateMixRoots(obs_source_t *programRoot, obs_source_t *previewRoot)
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
@@ -5498,14 +5517,20 @@ bool PulsarFrontendAPI::setup()
                                       programVideo ? programVideo : obs_get_video(),
                                       previewVideo, currentScene, previewScene);
         if (g_runtimeTelemetry.enabled()) {
-            runtimeTelemetryVideo = programVideo ? programVideo : obs_get_video();
-            runtimeTelemetryRawConnected = obs_video_add_borrowed_callback(
-                runtimeTelemetryVideo, pulsar_runtime_raw_video_callback, nullptr);
-            if (!runtimeTelemetryRawConnected)
-                blog(LOG_ERROR, "[pulsar-runtime-telemetry] failed to install borrowed ProgramView/raw callback");
-            if (streamOutput)
+            const bool rawCallbackRequired = g_runtimeTelemetry.rawCallbackRequired();
+            const bool packetCallbackRequired = g_runtimeTelemetry.packetCallbackRequired();
+            if (rawCallbackRequired) {
+                runtimeTelemetryVideo = programVideo ? programVideo : obs_get_video();
+                runtimeTelemetryRawConnected = obs_video_add_borrowed_callback(
+                    runtimeTelemetryVideo, pulsar_runtime_raw_video_callback, nullptr);
+                if (!runtimeTelemetryRawConnected)
+                    blog(LOG_ERROR, "[pulsar-runtime-telemetry] failed to install borrowed ProgramView/raw callback");
+            }
+            if (packetCallbackRequired && streamOutput)
                 obs_output_add_packet_callback(streamOutput, pulsar_runtime_packet_callback, nullptr);
-            blog(LOG_INFO, "[pulsar-runtime-telemetry] borrowed ProgramView/raw and encoded-output callbacks installed");
+            blog(LOG_INFO, "[pulsar-runtime-telemetry] telemetry callbacks: raw=%s packet=%s",
+                 rawCallbackRequired ? "enabled" : "disabled",
+                 packetCallbackRequired && streamOutput ? "enabled" : "disabled");
 
             // A trace campaign may opt into the real ProgramReturn producer;
             // ordinary headless starts keep this output dormant.  The
