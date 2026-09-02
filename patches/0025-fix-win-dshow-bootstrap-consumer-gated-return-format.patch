@@ -1,0 +1,44 @@
+From 6a7b3ed0b8a204dce8b6dd59ef16cd41659d0d46 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Wed, 2 Sep 2026 03:49:58 +0200
+Subject: [PATCH] fix(win-dshow): bootstrap consumer-gated return formats
+
+Provide the fixed 1920x1080/60 NV12 media type while a consumer-gated ProgramReturn or PreviewReturn queue is still starting. This prevents the DirectShow producer/consumer bootstrap deadlock; the first READY frame still replaces the provisional format.
+
+Agent-Role: Eleven
+
+Agent-Thread: local-campaign-20260902
+
+Work-Unit: pulsar-return-telemetry-persist
+
+Issue: none
+
+Evidence: full x264/NVENC DirectShow and RTMP bank
+---
+ .../virtualcam-module/virtualcam-filter.cpp          | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index 1606e2e3e..086fbf8dd 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -133,6 +133,18 @@ VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
+ 			CloseHandle(file);
+ 		}
+ 	}
++	/* ProgramReturn/PreviewReturn outputs are consumer-gated: before a
++	 * DirectShow graph attaches, their producer intentionally does not publish
++	 * a frame, so the queue remains STARTING.  Do not leave the OutputPin with
++	 * a zero-sized media type in that bootstrap window; that creates a producer
++	 * / consumer deadlock because FFmpeg cannot attach to acquire the consumer
++	 * lease.  Pulsar's return contract is fixed at 1920x1080/60, and the queue
++	 * will replace these defaults on the first READY frame. */
++	if (consumer_gated && (!new_obs_cx || !new_obs_cy || !new_obs_interval)) {
++		new_obs_cx = PULSAR_D3D11_RETURN_WIDTH;
++		new_obs_cy = PULSAR_D3D11_RETURN_HEIGHT;
++		new_obs_interval = 10000000ULL / 60ULL;
++	}
+ 
+ 	if (new_obs_cx != obs_cx || new_obs_cy != obs_cy || new_obs_interval != obs_interval) {
+ 		AddVideoFormat(VideoFormat::NV12, new_obs_cx, new_obs_cy, new_obs_interval);
