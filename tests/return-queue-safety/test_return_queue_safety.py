@@ -15,7 +15,8 @@ def test_patch_contains_atomic_seqlock_and_telemetry_contract() -> None:
     text = PATCH.read_text(encoding="utf-8")
     for marker in (
         "InterlockedExchange64",
-        "InterlockedCompareExchange64",
+        "queue_load_sequence",
+        "MemoryBarrier()",
         "publication - 1U",
         "before != after",
         "VIDEO_QUEUE_METADATA_VERSION 2U",
@@ -26,6 +27,10 @@ def test_patch_contains_atomic_seqlock_and_telemetry_contract() -> None:
         "torn_count",
     ):
         assert marker in text
+    # DirectShow opens the shared mapping read-only.  The reader must therefore
+    # use an atomic load plus acquire barrier, never a read-modify-write
+    # compare-exchange that would fault on the mapping.
+    assert "InterlockedCompareExchange64" not in text
     assert "VIDEO_FORMAT_P010" in text
     assert "VIDEO_QUEUE_PIXEL_FORMAT_INVALID" in text
     assert "D3D11" not in text
