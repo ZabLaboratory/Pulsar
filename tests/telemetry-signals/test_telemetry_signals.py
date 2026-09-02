@@ -115,3 +115,30 @@ def test_runtime_callback_registration_is_selector_gated():
     assert "signalMask_.store(0, std::memory_order_release);" in source
     assert "Signal::EncoderFrameReady" in source
     assert "Signal::OutputMuxEnqueue" in source
+
+
+def test_callback_selector_cases_are_fail_closed_and_stage_specific():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    header = (ROOT / "plugins" / "pulsar-frontend-stub" / "include" / "pulsar-runtime-telemetry-signals.h").read_text(
+        encoding="utf-8"
+    )
+    raw_method = source[source.index("bool rawCallbackRequired") : source.index("bool packetCallbackRequired")]
+    packet_method = source[source.index("bool packetCallbackRequired") : source.index("void updateMixRoots")]
+    # none: initialization clears the atomic mask, so both registration
+    # predicates are false before the enabled() installation block.
+    assert "signalMask_.store(0, std::memory_order_release);" in source
+    assert "result.mask = 0;" in header
+    # stage-only: packet registration includes each encoder stage, while raw
+    # registration is owned exclusively by the established Program selector.
+    assert "Signal::EncoderFrameReady" in packet_method
+    assert "Signal::EncodeCallbackEnqueue" in packet_method
+    assert "Signal::OutputMuxEnqueue" in packet_method
+    assert "Signal::Program" in raw_method
+    assert "Signal::Program" in packet_method
+    # all: the selector header expands all bits, and installation is guarded
+    # only by the two required predicates.
+    assert "result.mask = all_signal_mask();" in header
+    assert "if (rawCallbackRequired)" in source
+    assert "if (packetCallbackRequired && streamOutput)" in source
