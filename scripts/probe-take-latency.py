@@ -205,6 +205,27 @@ DIRECTSHOW_TIMING_FIELDS = (
     "unlock_sample_data_completed_monotonic_ns",
     "emission_monotonic_ns",
 )
+DIRECTSHOW_QUEUE_COUNTER_FIELDS = (
+    "gap_count",
+    "duplicate_count",
+    "retry_count",
+    "torn_count",
+)
+DIRECTSHOW_TRANSPORT_FIELDS = (
+    "path",
+    "fallback_reason",
+    "fallback_hresult",
+    "lane",
+    "epoch",
+    "produced_sequence",
+    "published_sequence",
+    "consumed_sequence",
+    "mutex_wait_ns",
+    "fence_wait_ns",
+    "gpu_copy_ns",
+    "readback_ns",
+    "frame_age_ns",
+)
 
 OBSERVATION_REQUIRED = {
     "record_type",
@@ -242,6 +263,11 @@ OBSERVATION_OPTIONAL = {
     "receiver_observed_normalized_ns",
     "frame_hash",
     "notes",
+    # DirectShow-return diagnostics are nested so the base observation
+    # contract remains stable while queue/transport costs are retained for
+    # the complete ProgramReturn timing ledger.
+    "queue_counters",
+    "transport",
 }
 OBSERVATION_ALLOWED = OBSERVATION_REQUIRED | OBSERVATION_OPTIONAL
 
@@ -652,6 +678,28 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
         if obj["valid"] and not obj["program_frame"]:
             raise EvidenceError("BOUNDARY_INVALID", "a valid raw/DirectShow sample must be a Program frame", line=line)
     if obj["boundary"] == "directshow_return":
+        if "queue_counters" in obj:
+            queue_counters = _object(obj["queue_counters"], "observation.queue_counters", line=line)
+            _exact_keys(
+                queue_counters,
+                set(DIRECTSHOW_QUEUE_COUNTER_FIELDS),
+                set(DIRECTSHOW_QUEUE_COUNTER_FIELDS),
+                "observation.queue_counters",
+                line=line,
+            )
+            for key in DIRECTSHOW_QUEUE_COUNTER_FIELDS:
+                _integer(queue_counters[key], f"observation.queue_counters.{key}", line=line)
+        if "transport" in obj:
+            transport = _object(obj["transport"], "observation.transport", line=line)
+            _exact_keys(
+                transport,
+                set(DIRECTSHOW_TRANSPORT_FIELDS),
+                set(DIRECTSHOW_TRANSPORT_FIELDS),
+                "observation.transport",
+                line=line,
+            )
+            for key in DIRECTSHOW_TRANSPORT_FIELDS:
+                _integer(transport[key], f"observation.transport.{key}", line=line, non_negative=key != "fallback_hresult")
         present_timing = [key in obj for key in DIRECTSHOW_TIMING_FIELDS]
         if any(present_timing) and not all(present_timing):
             raise EvidenceError(
