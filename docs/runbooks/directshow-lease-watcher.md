@@ -32,7 +32,7 @@ object is recreated.
 
 ## Rollback
 
-Remove `0026-fix-win-dshow-lease-watcher.patch` from the lexical patch set and
+Remove `0029-fix-win-dshow-lease-watcher.patch` from the lexical patch set and
 replay the pinned OBS submodule from `bd73b922891e56839b0bc86bdc519802802f9d68`.
 The prior `0025` bootstrap behavior remains intact. Do not restore per-frame
 `OpenEventW` polling without re-establishing the bounded-lifecycle and

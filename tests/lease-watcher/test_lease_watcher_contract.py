@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PATCH = ROOT / "patches" / "0026-fix-win-dshow-lease-watcher.patch"
+PATCH = ROOT / "patches" / "0029-fix-win-dshow-lease-watcher.patch"
 
 
 def _producer_patch() -> str:
@@ -19,13 +19,13 @@ def _producer_patch() -> str:
 def test_lease_patch_stays_after_bootstrap_in_the_lexical_stack() -> None:
     patch_names = sorted(path.name for path in (ROOT / "patches").glob("*.patch"))
     assert "0025-fix-win-dshow-bootstrap-consumer-gated-return-format.patch" in patch_names
-    assert "0026-fix-win-dshow-lease-watcher.patch" in patch_names
+    assert "0029-fix-win-dshow-lease-watcher.patch" in patch_names
     assert patch_names.index("0025-fix-win-dshow-bootstrap-consumer-gated-return-format.patch") < patch_names.index(
-        "0026-fix-win-dshow-lease-watcher.patch"
+        "0029-fix-win-dshow-lease-watcher.patch"
     )
-    if any(path.startswith("0027-") for path in patch_names):
-        assert patch_names.index("0026-fix-win-dshow-lease-watcher.patch") < next(
-            index for index, path in enumerate(patch_names) if path.startswith("0027-")
+    if any(path.startswith("0028-") for path in patch_names):
+        assert patch_names.index("0029-fix-win-dshow-lease-watcher.patch") > next(
+            index for index, path in enumerate(patch_names) if path.startswith("0028-")
         )
 
 
