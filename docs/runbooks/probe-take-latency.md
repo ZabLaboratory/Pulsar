@@ -177,6 +177,34 @@ fields explain where latency accumulates. Together with the normalized
 receiver timestamp they form AC-12a/b only when the packet identity is the
 same; callback-only evidence cannot satisfy AC-12.
 
+## Bounded encoder signal ledger
+
+Set `PULSAR_TRACE_SIGNALS` to a comma-separated subset of the established
+`program`, `preview`, `raw`, `borrowed`, `gpu`, and `queues` selectors plus
+`encoder_frame_ready`, `program_return_readback`, `encode_callback_enqueue`,
+`output_mux_enqueue`, and `socket_send`; unset means all signals and `none`
+selects no optional producer. Signal
+records carry the runtime, Take identifiers, post-commit revisions, frame ID,
+PTS, monotonic start/end and observation timestamps. The callback only copies
+fixed-size data into a bounded lock-free queue; the trace worker performs JSON
+formatting and file I/O. A full queue or exhausted context snapshot fails
+closed and is counted, never blocking the graphics or encoder callback.
+
+`encoder_frame_ready` measures FER to FERC, `output_mux_enqueue` measures FERC
+to the output interleave insertion timestamp, and `encode_callback_enqueue`
+measures output insertion to callback entry. `program_return_readback` is
+derived from the validated DirectShow frame-entry/readback sequence. No safe
+socket boundary is currently available, so `socket_send` is reported as
+`NOT_AVAILABLE`; it is never inferred from RTMP receiver arrival. Analyze a
+validated trace with:
+
+```text
+python scripts/analyze-telemetry-signals.py --trace <trace.jsonl> --output <signals.json>
+```
+
+The report gives count and p50/p95/p99 per selected stage, while
+`NOT_SELECTED` and `NOT_AVAILABLE` remain explicit.
+
 Pulsar boots libobs audio with a fixed 20 ms buffer through
 `obs_reset_audio2`. This is the engine's live-production policy: the legacy
 dynamically growing audio buffer can retain an encoded Program video packet in

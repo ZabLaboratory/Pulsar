@@ -104,6 +104,7 @@
 #include "pulsar-transition-controller.h"
 #include "pulsar-dual-lane-control.h"
 #include "pulsar-runtime-telemetry.h"
+#include "pulsar-runtime-telemetry-signals.h"
 #include "pulsar-program-audio.h"
 #include "pulsar-stream-egress.h"
 #include "obs-websocket-api.h"
@@ -356,9 +357,69 @@ class PulsarRuntimeTelemetry {
         uint64_t ptsNs = 0;
     };
 
+    enum class SignalKind : uint8_t {
+        RawObservation,
+        EncodedObservation,
+        EncoderFrameReady,
+        EncodeCallbackEnqueue,
+        OutputMuxEnqueue,
+    };
+
+    struct TraceContextSnapshot {
+        uint64_t frameId = 0;
+        uint64_t ptsNs = 0;
+        uint64_t programRevision = 0;
+        uint64_t previewRevision = 0;
+        uint64_t roleMapRevision = 0;
+        char runtimeInstanceId[129] = {};
+        char commandId[129] = {};
+        char intentId[129] = {};
+        char takeCommandId[129] = {};
+        std::atomic<bool> rawCaptured{false};
+        std::atomic<bool> packetCaptured{false};
+    };
+
+    // A bounded, non-blocking MPMC queue. Encoder and raw-video callbacks only
+    // copy fixed-size data and publish an atomic slot; JSON formatting and all
+    // file/writer mutexes remain on traceWriterLoop().
+    struct SignalEvent {
+        SignalKind kind = SignalKind::RawObservation;
+        uint64_t observedNs = 0;
+        uint64_t startNs = 0;
+        uint64_t endNs = 0;
+        uint64_t frameId = 0;
+        uint64_t ptsNs = 0;
+        uint64_t programRevision = 0;
+        uint64_t previewRevision = 0;
+        uint64_t roleMapRevision = 0;
+        uint64_t packetIndex = 0;
+        int64_t packetPts = 0;
+        int64_t packetDts = 0;
+        int64_t packetTimebaseNum = 0;
+        int64_t packetTimebaseDen = 0;
+        uint64_t packetCtsNs = 0;
+        uint64_t packetFerNs = 0;
+        uint64_t packetFercNs = 0;
+        uint64_t packetPirNs = 0;
+        uint64_t packetCallbackNs = 0;
+        uint64_t packetOutputEnqueueNs = 0;
+        char runtimeInstanceId[129] = {};
+        char commandId[129] = {};
+        char intentId[129] = {};
+        char takeCommandId[129] = {};
+    };
+
+    static constexpr size_t kSignalQueueCapacity = 1024;
+    struct SignalQueueSlot {
+        std::atomic<uint64_t> sequence{0};
+        SignalEvent event;
+    };
+
 public:
     ~PulsarRuntimeTelemetry()
     {
+        activeContext_.store(nullptr, std::memory_order_release);
+        signalMask_.store(0, std::memory_order_release);
         stopResourceSampler();
         stopTraceWriter();
     }
@@ -389,8 +450,21 @@ public:
                     obs_output_t *previewReturnOutput, video_t *programVideo, video_t *previewVideo,
                     obs_source_t *programRoot, obs_source_t *previewRoot)
     {
+        activeContext_.store(nullptr, std::memory_order_release);
+        signalMask_.store(0, std::memory_order_release);
         stopResourceSampler();
         stopTraceWriter();
+
+        contextWriteIndex_.store(0, std::memory_order_relaxed);
+        resetSignalQueue();
+        const auto signalSelection = pulsar_runtime_telemetry::parse_signal_selection(
+            std::getenv("PULSAR_TRACE_SIGNALS"));
+        if (!signalSelection.valid) {
+            blog(LOG_WARNING, "[pulsar-runtime-telemetry] trace disabled: %s", signalSelection.error.c_str());
+            return;
+        }
+        traceSignals_ = pulsar_runtime_telemetry::selected_signal_names(signalSelection.mask);
+        signalMask_.store(signalSelection.mask, std::memory_order_release);
 
         // Retire any previous runtime before validating the next trace
         // configuration.  This keeps a failed reinitialization fail-closed.
@@ -558,12 +632,14 @@ public:
             source_profiler_enable(true);
         if (hasResourceMode)
             source_profiler_gpu_enable(true);
-        if (hasResourceMode)
+        if (hasResourceMode && signalMask_.load(std::memory_order_acquire) != 0)
             startResourceSampler();
     }
 
     void shutdown()
     {
+        activeContext_.store(nullptr, std::memory_order_release);
+        signalMask_.store(0, std::memory_order_release);
         stopResourceSampler();
         stopTraceWriter();
         std::lock_guard<std::mutex> lock(stateMutex_);
@@ -907,6 +983,10 @@ public:
             }
         }
 
+        // Publish an immutable, fixed-size snapshot for the producer
+        // callbacks. They must never take stateMutex_ or format JSON.
+        publishContext(context);
+
         const uint64_t seq = nextServerSeq();
         const std::string revisions = revisionJson(context.programRevision, context.previewRevision,
                                                     context.roleMapRevision);
@@ -967,34 +1047,28 @@ public:
         if (!frame)
             return;
         rawFrameCount_.fetch_add(1, std::memory_order_relaxed);
-        TakeContext context;
-        {
-            std::lock_guard<std::mutex> lock(stateMutex_);
-            if (!enabled_ || !committed_.valid || frame->timestamp < committed_.ptsNs ||
-                lastRawTake_ == committed_.takeCommandId)
-                return;
-            context = committed_;
-            lastRawTake_ = committed_.takeCommandId;
-        }
+        if (!signalEnabled("program") && !signalEnabled("encoder_frame_ready") &&
+            !signalEnabled("output_mux_enqueue") && !signalEnabled("encode_callback_enqueue"))
+            return;
+        const TraceContextSnapshot *context = activeContext_.load(std::memory_order_acquire);
+        if (!context || frame->timestamp < context->ptsNs ||
+            context->rawCaptured.exchange(true, std::memory_order_acq_rel))
+            return;
 
-        std::ostringstream observation;
-        observation << "{\"record_type\":\"observation\",\"boundary\":\"encoder_input_raw\","
-                    << "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
-                    << escape(context.runtimeInstanceId) << "\",\"command_id\":\""
-                    << escape(context.commandId) << "\",\"intent_id\":\"" << escape(context.intentId)
-                    << "\",\"take_command_id\":\"" << escape(context.takeCommandId)
-                    << "\",\"revisions\":"
-                    << revisionJson(context.programRevision, context.previewRevision, context.roleMapRevision)
-                    << ",\"frame_id\":" << context.frameId << ",\"pts_ns\":" << frame->timestamp
-                    << ",\"observed_at_monotonic_ns\":" << nowNs()
-                    << ",\"valid\":true,\"program_frame\":true,\"surface\":\"ProgramView\","
-                    << "\"consumer\":\"encoder_input\"}";
-        writeLine(observation.str());
+        SignalEvent event;
+        event.kind = SignalKind::RawObservation;
+        event.observedNs = nowNs();
+        copyContextToEvent(event, *context);
+        event.ptsNs = frame->timestamp;
+        enqueueSignal(event);
     }
 
     void packet(obs_output_t *, struct encoder_packet *packet, struct encoder_packet_time *packetTime)
     {
         if (!packet || packet->type != OBS_ENCODER_VIDEO)
+            return;
+        if (!signalEnabled("program") && !signalEnabled("encoder_frame_ready") &&
+            !signalEnabled("output_mux_enqueue") && !signalEnabled("encode_callback_enqueue"))
             return;
         if (packetTime && packetTime->fer > 0 && packetTime->ferc >= packetTime->fer) {
             encodeTimeNsTotal_.fetch_add(packetTime->ferc - packetTime->fer,
@@ -1005,48 +1079,54 @@ public:
         // The external RTMP receiver has its own sequence and is correlated
         // by rational PTS/timebase, never by log order alone.
         const uint64_t packetIndex = packetFrameCount_.fetch_add(1, std::memory_order_relaxed);
-        TakeContext context;
         const uint64_t callbackAt = nowNs();
-        uint64_t observed = callbackAt;
-        {
-            std::lock_guard<std::mutex> lock(stateMutex_);
-            if (!enabled_ || !committed_.valid || lastPacketTake_ == committed_.takeCommandId)
-                return;
-            if (packetTime) {
-                if (packetTime->cts < committed_.ptsNs)
-                    return;
-                if (packetTime->pir)
-                    observed = packetTime->pir;
-            }
-            context = committed_;
-            lastPacketTake_ = committed_.takeCommandId;
-        }
+        const TraceContextSnapshot *context = activeContext_.load(std::memory_order_acquire);
+        if (!context || (packetTime && packetTime->cts < context->ptsNs) ||
+            context->packetCaptured.exchange(true, std::memory_order_acq_rel))
+            return;
 
-        std::ostringstream observation;
-        observation << "{\"record_type\":\"observation\",\"boundary\":\"encoded_first_packet\","
-                    << "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
-                    << escape(context.runtimeInstanceId) << "\",\"command_id\":\""
-                    << escape(context.commandId) << "\",\"intent_id\":\"" << escape(context.intentId)
-                    << "\",\"take_command_id\":\"" << escape(context.takeCommandId)
-                    << "\",\"revisions\":"
-                    << revisionJson(context.programRevision, context.previewRevision, context.roleMapRevision)
-                    << ",\"frame_id\":" << context.frameId << ",\"pts_ns\":" << context.ptsNs
-                    << ",\"observed_at_monotonic_ns\":" << observed
-                    << ",\"valid\":true,\"packet_index\":" << packetIndex
-                    << ",\"packet_pts\":" << packet->pts
-                    << ",\"packet_dts\":" << packet->dts
-                    << ",\"packet_timebase_num\":" << packet->timebase_num
-                    << ",\"packet_timebase_den\":" << packet->timebase_den;
+        SignalEvent event;
+        event.kind = SignalKind::EncodedObservation;
+        event.observedNs = packetTime && packetTime->pir ? packetTime->pir : callbackAt;
+        event.packetIndex = packetIndex;
+        event.packetPts = packet->pts;
+        event.packetDts = packet->dts;
+        event.packetTimebaseNum = packet->timebase_num;
+        event.packetTimebaseDen = packet->timebase_den;
+        event.packetCallbackNs = callbackAt;
         if (packetTime) {
-            observation << ",\"packet_cts_monotonic_ns\":" << packetTime->cts
-                        << ",\"packet_fer_monotonic_ns\":" << packetTime->fer
-                        << ",\"packet_ferc_monotonic_ns\":" << packetTime->ferc
-                        << ",\"packet_pir_monotonic_ns\":" << packetTime->pir
-                        << ",\"packet_callback_monotonic_ns\":" << callbackAt;
+            event.packetCtsNs = packetTime->cts;
+            event.packetFerNs = packetTime->fer;
+            event.packetFercNs = packetTime->ferc;
+            event.packetPirNs = packetTime->pir;
+            event.packetOutputEnqueueNs = packetTime->output_enqueue_monotonic_ns;
         }
-        observation
-                    << ",\"surface\":\"EncoderOutput\",\"consumer\":\"encoder_callback\"}";
-        writeLine(observation.str());
+        copyContextToEvent(event, *context);
+        enqueueSignal(event);
+
+        if (signalEnabled("encoder_frame_ready") && event.packetFerNs &&
+            event.packetFercNs >= event.packetFerNs) {
+            event.kind = SignalKind::EncoderFrameReady;
+            event.startNs = event.packetFerNs;
+            event.endNs = event.packetFercNs;
+            event.observedNs = event.packetFercNs;
+            enqueueSignal(event);
+        }
+        if (signalEnabled("encode_callback_enqueue") && event.packetOutputEnqueueNs &&
+            event.packetCallbackNs >= event.packetOutputEnqueueNs) {
+            event.kind = SignalKind::EncodeCallbackEnqueue;
+            event.startNs = event.packetOutputEnqueueNs;
+            event.endNs = event.packetCallbackNs;
+            event.observedNs = event.packetCallbackNs;
+            enqueueSignal(event);
+        }
+        if (signalEnabled("output_mux_enqueue") && event.packetFercNs && event.packetOutputEnqueueNs >= event.packetFercNs) {
+            event.kind = SignalKind::OutputMuxEnqueue;
+            event.startNs = event.packetFercNs;
+            event.endNs = event.packetOutputEnqueueNs;
+            event.observedNs = event.packetOutputEnqueueNs;
+            enqueueSignal(event);
+        }
     }
 
     void snapshot(calldata_t *cd)
@@ -1615,7 +1695,13 @@ private:
             << ",\"nvenc\":" << (nvenc ? "true" : "false") << "},"
             << "\"capture_paths\":[\"encoder_input_raw\",\"directshow_return\",\"encoded_first_packet\","
             << "\"decoded_first_frame\",\"antenna_first_frame\"],"
-            << "\"source_types\":[";
+            << "\"telemetry_signals\":[";
+        for (size_t index = 0; index < traceSignals_.size(); ++index) {
+            if (index)
+                out << ",";
+            out << quoted(traceSignals_[index]);
+        }
+        out << "],\"source_types\":[";
         bool firstSourceType = true;
         if (wgcSourceBound) {
             out << quoted("window_capture");
@@ -1636,6 +1722,189 @@ private:
             << ",\"producer_count\":" << producerCount_ << ","
             << "\"evidence_kind\":" << quoted("runtime") << "}";
         return out.str();
+    }
+
+    bool signalEnabled(const char *name) const
+    {
+        const auto signal = pulsar_runtime_telemetry::signal_from_name(name);
+        return signal != pulsar_runtime_telemetry::Signal::Count &&
+               (signalMask_.load(std::memory_order_acquire) & pulsar_runtime_telemetry::signal_bit(signal)) != 0;
+    }
+
+    static void copyTraceText(char (&destination)[129], const char *source)
+    {
+        if (!source)
+            return;
+        std::memcpy(destination, source, std::min<size_t>(std::strlen(source), sizeof(destination) - 1));
+    }
+
+    static void copyContextToEvent(SignalEvent &event, const TraceContextSnapshot &context)
+    {
+        event.frameId = context.frameId;
+        event.ptsNs = context.ptsNs;
+        event.programRevision = context.programRevision;
+        event.previewRevision = context.previewRevision;
+        event.roleMapRevision = context.roleMapRevision;
+        std::memcpy(event.runtimeInstanceId, context.runtimeInstanceId, sizeof(event.runtimeInstanceId));
+        std::memcpy(event.commandId, context.commandId, sizeof(event.commandId));
+        std::memcpy(event.intentId, context.intentId, sizeof(event.intentId));
+        std::memcpy(event.takeCommandId, context.takeCommandId, sizeof(event.takeCommandId));
+    }
+
+    void publishContext(const TakeContext &context)
+    {
+        const uint64_t index = contextWriteIndex_.fetch_add(1, std::memory_order_relaxed);
+        if (index >= contextSnapshots_.size()) {
+            contextSnapshotDrops_.fetch_add(1, std::memory_order_relaxed);
+            activeContext_.store(nullptr, std::memory_order_release);
+            return;
+        }
+        TraceContextSnapshot &snapshot = contextSnapshots_[index];
+        snapshot.frameId = context.frameId;
+        snapshot.ptsNs = context.ptsNs;
+        snapshot.programRevision = context.programRevision;
+        snapshot.previewRevision = context.previewRevision;
+        snapshot.roleMapRevision = context.roleMapRevision;
+        std::memset(snapshot.runtimeInstanceId, 0, sizeof(snapshot.runtimeInstanceId));
+        std::memset(snapshot.commandId, 0, sizeof(snapshot.commandId));
+        std::memset(snapshot.intentId, 0, sizeof(snapshot.intentId));
+        std::memset(snapshot.takeCommandId, 0, sizeof(snapshot.takeCommandId));
+        copyTraceText(snapshot.runtimeInstanceId, context.runtimeInstanceId.c_str());
+        copyTraceText(snapshot.commandId, context.commandId.c_str());
+        copyTraceText(snapshot.intentId, context.intentId.c_str());
+        copyTraceText(snapshot.takeCommandId, context.takeCommandId.c_str());
+        snapshot.rawCaptured.store(false, std::memory_order_relaxed);
+        snapshot.packetCaptured.store(false, std::memory_order_relaxed);
+        activeContext_.store(&snapshot, std::memory_order_release);
+    }
+
+    bool enqueueSignal(const SignalEvent &event)
+    {
+        uint64_t position = signalWritePosition_.load(std::memory_order_relaxed);
+        SignalQueueSlot &slot = signalQueue_[position % kSignalQueueCapacity];
+        if (slot.sequence.load(std::memory_order_acquire) != position ||
+            !signalWritePosition_.compare_exchange_strong(position, position + 1,
+                                                           std::memory_order_relaxed)) {
+            // A callback never waits for another producer or for the worker;
+            // a transient collision is an explicit bounded-drop outcome.
+            signalQueueDrops_.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        slot.event = event;
+        slot.sequence.store(position + 1, std::memory_order_release);
+        writerCv_.notify_one();
+        return true;
+    }
+
+    bool dequeueSignal(SignalEvent &event)
+    {
+        uint64_t position = signalReadPosition_.load(std::memory_order_relaxed);
+        for (;;) {
+            SignalQueueSlot &slot = signalQueue_[position % kSignalQueueCapacity];
+            const uint64_t sequence = slot.sequence.load(std::memory_order_acquire);
+            const intptr_t difference = static_cast<intptr_t>(sequence) - static_cast<intptr_t>(position + 1);
+            if (difference == 0) {
+                if (signalReadPosition_.compare_exchange_weak(position, position + 1,
+                                                               std::memory_order_relaxed))
+                    break;
+            } else if (difference < 0) {
+                return false;
+            } else {
+                position = signalReadPosition_.load(std::memory_order_relaxed);
+            }
+        }
+        SignalQueueSlot &slot = signalQueue_[position % kSignalQueueCapacity];
+        event = slot.event;
+        slot.sequence.store(position + kSignalQueueCapacity, std::memory_order_release);
+        return true;
+    }
+
+    bool signalAvailable() const
+    {
+        const uint64_t position = signalReadPosition_.load(std::memory_order_acquire);
+        return signalQueue_[position % kSignalQueueCapacity].sequence.load(std::memory_order_acquire) ==
+               position + 1;
+    }
+
+    void resetSignalQueue()
+    {
+        signalWritePosition_.store(0, std::memory_order_relaxed);
+        signalReadPosition_.store(0, std::memory_order_relaxed);
+        for (size_t index = 0; index < kSignalQueueCapacity; ++index)
+            signalQueue_[index].sequence.store(index, std::memory_order_relaxed);
+        signalQueueDrops_.store(0, std::memory_order_relaxed);
+        contextSnapshotDrops_.store(0, std::memory_order_relaxed);
+    }
+
+    static const char *signalName(SignalKind kind)
+    {
+        switch (kind) {
+        case SignalKind::EncoderFrameReady: return "encoder_frame_ready";
+        case SignalKind::EncodeCallbackEnqueue: return "encode_callback_enqueue";
+        case SignalKind::OutputMuxEnqueue: return "output_mux_enqueue";
+        default: return "unknown";
+        }
+    }
+
+    void writeSignalEvent(const SignalEvent &event)
+    {
+        const std::string runtime = event.runtimeInstanceId;
+        const std::string command = event.commandId;
+        const std::string intent = event.intentId;
+        const std::string take = event.takeCommandId;
+        const std::string revisions = revisionJson(event.programRevision, event.previewRevision,
+                                                   event.roleMapRevision);
+        std::ostringstream out;
+        if (event.kind == SignalKind::RawObservation) {
+            out << "{\"record_type\":\"observation\",\"boundary\":\"encoder_input_raw\","
+                << "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
+                << escape(runtime) << "\",\"command_id\":\"" << escape(command)
+                << "\",\"intent_id\":\"" << escape(intent) << "\",\"take_command_id\":\""
+                << escape(take) << "\",\"revisions\":" << revisions << ",\"frame_id\":"
+                << event.frameId << ",\"pts_ns\":" << event.ptsNs
+                << ",\"observed_at_monotonic_ns\":" << event.observedNs
+                << ",\"valid\":true,\"program_frame\":true,\"surface\":\"ProgramView\","
+                << "\"consumer\":\"encoder_input\"}";
+        } else if (event.kind == SignalKind::EncodedObservation) {
+            out << "{\"record_type\":\"observation\",\"boundary\":\"encoded_first_packet\","
+                << "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
+                << escape(runtime) << "\",\"command_id\":\"" << escape(command)
+                << "\",\"intent_id\":\"" << escape(intent) << "\",\"take_command_id\":\""
+                << escape(take) << "\",\"revisions\":" << revisions << ",\"frame_id\":"
+                << event.frameId << ",\"pts_ns\":" << event.ptsNs
+                << ",\"observed_at_monotonic_ns\":" << event.observedNs
+                << ",\"valid\":true,\"packet_index\":" << event.packetIndex
+                << ",\"packet_pts\":" << event.packetPts << ",\"packet_dts\":" << event.packetDts
+                << ",\"packet_timebase_num\":" << event.packetTimebaseNum
+                << ",\"packet_timebase_den\":" << event.packetTimebaseDen;
+            if (event.packetCtsNs) {
+                out << ",\"packet_cts_monotonic_ns\":" << event.packetCtsNs
+                    << ",\"packet_fer_monotonic_ns\":" << event.packetFerNs
+                    << ",\"packet_ferc_monotonic_ns\":" << event.packetFercNs
+                    << ",\"packet_pir_monotonic_ns\":" << event.packetPirNs
+                    << ",\"packet_callback_monotonic_ns\":" << event.packetCallbackNs
+                    << ",\"packet_output_enqueue_monotonic_ns\":" << event.packetOutputEnqueueNs;
+            }
+            out << ",\"surface\":\"EncoderOutput\",\"consumer\":\"encoder_callback\"}";
+        } else {
+            out << "{\"record_type\":\"telemetry_signal\",\"signal\":\""
+                << signalName(event.kind) << "\",\"clock_domain\":\"monotonic_ns\","
+                << "\"runtime_instance_id\":\"" << escape(runtime) << "\",\"command_id\":\""
+                << escape(command) << "\",\"intent_id\":\"" << escape(intent)
+                << "\",\"take_command_id\":\"" << escape(take) << "\",\"revisions\":"
+                << revisions << ",\"frame_id\":" << event.frameId << ",\"pts_ns\":"
+                << event.ptsNs << ",\"observed_at_monotonic_ns\":" << event.observedNs
+                << ",\"start_monotonic_ns\":" << event.startNs << ",\"end_monotonic_ns\":"
+                << event.endNs << ",\"valid\":true}";
+        }
+        writeLine(out.str());
+    }
+
+    void drainSignalEvents()
+    {
+        SignalEvent event;
+        while (dequeueSignal(event))
+            writeSignalEvent(event);
     }
 
     bool startTraceWriter()
@@ -1675,12 +1944,19 @@ private:
     void traceWriterLoop()
     {
         for (;;) {
+            drainSignalEvents();
             std::string line;
             {
                 std::unique_lock<std::mutex> lock(writerMutex_);
-                writerCv_.wait(lock, [this] { return writerStopping_ || !writerQueue_.empty(); });
-                if (writerQueue_.empty() && writerStopping_)
+                writerCv_.wait(lock, [this] {
+                    return writerStopping_ || !writerQueue_.empty() ||
+                           signalAvailable();
+                });
+                if (writerQueue_.empty() && writerStopping_ &&
+                    !signalAvailable())
                     return;
+                if (writerQueue_.empty())
+                    continue;
                 line = std::move(writerQueue_.front());
                 writerQueue_.pop_front();
             }
@@ -1854,6 +2130,19 @@ private:
     std::atomic<uint64_t> packetFrameCount_{0};
     std::atomic<uint64_t> encodeTimeNsTotal_{0};
     std::atomic<uint64_t> encodeTimeSampleCount_{0};
+    std::vector<std::string> traceSignals_;
+    // Snapshots are write-once for the lifetime of this telemetry object.  A
+    // slot is never reused, so a callback that acquired an old pointer cannot
+    // race a later Take publication.  Exhaustion fails closed for evidence.
+    static constexpr size_t kContextSnapshotCapacity = 512;
+    std::array<TraceContextSnapshot, kContextSnapshotCapacity> contextSnapshots_{};
+    std::atomic<uint64_t> contextWriteIndex_{0};
+    std::atomic<const TraceContextSnapshot *> activeContext_{nullptr};
+    std::array<SignalQueueSlot, kSignalQueueCapacity> signalQueue_{};
+    std::atomic<uint64_t> signalWritePosition_{0};
+    std::atomic<uint64_t> signalReadPosition_{0};
+    std::atomic<uint64_t> signalQueueDrops_{0};
+    std::atomic<uint64_t> contextSnapshotDrops_{0};
     std::atomic<bool> resourceStop_{true};
     std::thread resourceThread_;
     os_cpu_usage_info_t *resourceCpuInfo_ = nullptr;

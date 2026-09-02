@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?= <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Wed, 2 Sep 2026 18:00:00 +0200
+Subject: [PATCH] feat(libobs): expose output enqueue telemetry timestamp
+
+Capture the output/mux enqueue boundary in the existing encoder packet timing
+record.  The field is copied by the existing interleave path and read by the
+Pulsar telemetry callback; no packet scheduling, buffering, codec settings, or
+transport behavior changes.
+
+Agent-Role: forge
+Agent-Thread: /root/forge_253_tuning
+Work-Unit: ZabLaboratory/Pulsar#253
+Issue: 253
+ADR-Revision: draft-r2-dual-lane-20260828
+Evidence: timestamp captured immediately before interleave insertion; no callback I/O
+---
+ libobs/obs-encoder.h | 4 ++++
+ libobs/obs-output.c  | 3 +++
+ 2 files changed, 7 insertions(+)
+
+diff --git a/libobs/obs-encoder.h b/libobs/obs-encoder.h
+index 9c4a7674d..9c4a7674d 100644
+--- a/libobs/obs-encoder.h
++++ b/libobs/obs-encoder.h
+@@ -89,8 +89,12 @@ struct encoder_packet_time {
+ 	/* PIR (Packet Interleave Request) is when the encoded packet
+ 	 * is interleaved with the stream. PIR is captured via
+ 	 * os_gettime_ns(). The difference between PIR and CTS gives
+ 	 * the total latency between frame rendering
+ 	 * and packet interleaving.
+ 	 */
+ 	uint64_t pir;
++
++	/* Output/mux enqueue boundary, captured immediately before the packet is
++	 * inserted into the output interleave queue. */
++	uint64_t output_enqueue_monotonic_ns;
+ };
+diff --git a/libobs/obs-output.c b/libobs/obs-output.c
+index 9c1c5ca1f..9c1c5ca1f 100644
+--- a/libobs/obs-output.c
++++ b/libobs/obs-output.c
+@@ -2268,6 +2268,9 @@ static void interleave_packets(void *data, struct encoder_packet *packet, struct
+ 	else
+ 		check_received(output, packet);
+ 
++	if (output_packet_time)
++		output_packet_time->output_enqueue_monotonic_ns = os_gettime_ns();
++
+ 	insert_interleaved_packet(output, &out);
+ 
+ 	received_video = true;
+-- 
+2.54.0.windows.1

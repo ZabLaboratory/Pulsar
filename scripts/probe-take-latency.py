@@ -194,8 +194,23 @@ SESSION_OPTIONAL = {
     "source_types",
     "rtmp_receiver",
     "rtmp_load_requested",
+    "trace_signals",
+    "telemetry_signals",
 }
 SESSION_ALLOWED = SESSION_REQUIRED | SESSION_OPTIONAL
+TRACE_SIGNAL_NAMES = (
+    "program",
+    "preview",
+    "raw",
+    "borrowed",
+    "gpu",
+    "queues",
+    "encoder_frame_ready",
+    "program_return_readback",
+    "encode_callback_enqueue",
+    "output_mux_enqueue",
+    "socket_send",
+)
 
 DIRECTSHOW_TIMING_FIELDS = (
     "frame_entry_monotonic_ns",
@@ -259,6 +274,7 @@ OBSERVATION_OPTIONAL = {
     "packet_ferc_monotonic_ns",
     "packet_pir_monotonic_ns",
     "packet_callback_monotonic_ns",
+    "packet_output_enqueue_monotonic_ns",
     *DIRECTSHOW_TIMING_FIELDS,
     "receiver_observed_normalized_ns",
     "frame_hash",
@@ -348,6 +364,7 @@ class Trace:
     events: list[dict[str, Any]]
     observations: list[dict[str, Any]]
     resources: list[dict[str, Any]]
+    signals: list[dict[str, Any]]
     source: str
 
 
@@ -541,6 +558,17 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
         raise EvidenceError("SCHEMA_INVALID", "session.capture_paths must list supported boundaries", line=line)
     if len(set(paths)) != len(paths):
         raise EvidenceError("SCHEMA_INVALID", "session.capture_paths must not contain duplicates", line=line)
+    if "trace_signals" in obj and "telemetry_signals" in obj:
+        raise EvidenceError("SCHEMA_INVALID", "session must use only one signal selector field", line=line)
+    selector_key = "telemetry_signals" if "telemetry_signals" in obj else "trace_signals"
+    if selector_key in obj:
+        signals = obj[selector_key]
+        if not isinstance(signals, list) or any(
+            not isinstance(signal, str) or signal not in TRACE_SIGNAL_NAMES for signal in signals
+        ):
+            raise EvidenceError("SCHEMA_INVALID", f"session.{selector_key} contains an unsupported signal", line=line)
+        if len(set(signals)) != len(signals):
+            raise EvidenceError("SCHEMA_INVALID", f"session.{selector_key} must not contain duplicates", line=line)
     if "rtmp_receiver" in obj:
         result["rtmp_receiver"] = _validate_rtmp_receiver(obj["rtmp_receiver"], line=line)
     if "rtmp_load_requested" in obj:
@@ -756,12 +784,28 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
                     "encoder packet timing must satisfy 0 < CTS <= FER <= FERC <= PIR <= callback",
                     line=line,
                 )
-            if obj["observed_at_monotonic_ns"] != obj["packet_pir_monotonic_ns"]:
+        if "packet_output_enqueue_monotonic_ns" in obj:
+            output_enqueue = _integer(
+                obj["packet_output_enqueue_monotonic_ns"],
+                "observation.packet_output_enqueue_monotonic_ns",
+                line=line,
+            )
+            if output_enqueue <= 0:
+                raise EvidenceError("SCHEMA_INVALID", "output enqueue timestamp must be positive", line=line)
+            if all(key in obj for key in timing_fields) and not (
+                obj["packet_ferc_monotonic_ns"] <= output_enqueue <= obj["packet_pir_monotonic_ns"]
+            ):
                 raise EvidenceError(
                     "CLOCK_INVALID",
-                    "encoded_first_packet observed_at must equal packet PIR when timing metadata is present",
+                    "output enqueue timestamp must be ordered between FERC and PIR",
                     line=line,
                 )
+        if all(key in obj for key in timing_fields) and obj["observed_at_monotonic_ns"] != obj["packet_pir_monotonic_ns"]:
+            raise EvidenceError(
+                "CLOCK_INVALID",
+                "encoded_first_packet observed_at must equal packet PIR when timing metadata is present",
+                line=line,
+            )
     if obj["boundary"] == "rtmp_first_packet":
         required_packet_fields = (
             "packet_index",
@@ -818,6 +862,52 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
                 )
     if "frame_hash" in obj:
         _string(obj["frame_hash"], "observation.frame_hash", line=line)
+    return result
+
+
+SIGNAL_REQUIRED = {
+    "record_type",
+    "signal",
+    "clock_domain",
+    "runtime_instance_id",
+    "command_id",
+    "intent_id",
+    "take_command_id",
+    "revisions",
+    "frame_id",
+    "pts_ns",
+    "observed_at_monotonic_ns",
+    "start_monotonic_ns",
+    "end_monotonic_ns",
+    "valid",
+}
+
+
+def _validate_signal(value: Any, session: Mapping[str, Any], *, line: int | None = None) -> dict[str, Any]:
+    obj = _object(value, "telemetry signal", line=line)
+    _exact_keys(obj, SIGNAL_REQUIRED, SIGNAL_REQUIRED, "telemetry signal", line=line)
+    if obj["record_type"] != "telemetry_signal":
+        raise EvidenceError("SCHEMA_INVALID", "telemetry signal record_type must be telemetry_signal", line=line)
+    if obj["signal"] not in TRACE_SIGNAL_NAMES:
+        raise EvidenceError("SCHEMA_INVALID", "telemetry signal name is unsupported", line=line)
+    declared_signals = session.get("telemetry_signals", session.get("trace_signals", TRACE_SIGNAL_NAMES))
+    if obj["signal"] not in declared_signals:
+        raise EvidenceError("CORRELATION_INVALID", "telemetry signal was not selected by the session", line=line)
+    if obj["clock_domain"] != "monotonic_ns":
+        raise EvidenceError("SCHEMA_INVALID", "telemetry signals must use clock_domain=monotonic_ns", line=line)
+    for key in ("runtime_instance_id", "command_id", "intent_id", "take_command_id"):
+        _string(obj[key], f"telemetry_signal.{key}", identifier=True, line=line)
+    if obj["runtime_instance_id"] != session["runtime_instance_id"]:
+        raise EvidenceError("CORRELATION_INVALID", "telemetry signal runtime differs from session", line=line)
+    result = dict(obj)
+    result["revisions"] = _revisions(obj["revisions"], "telemetry_signal.revisions", line=line)
+    for key in ("frame_id", "pts_ns", "observed_at_monotonic_ns", "start_monotonic_ns", "end_monotonic_ns"):
+        _integer(obj[key], f"telemetry_signal.{key}", line=line)
+    _boolean(obj["valid"], "telemetry_signal.valid", line=line)
+    if obj["valid"] and (obj["start_monotonic_ns"] <= 0 or obj["end_monotonic_ns"] < obj["start_monotonic_ns"]):
+        raise EvidenceError("CLOCK_INVALID", "telemetry signal interval is invalid", line=line)
+    if obj["valid"] and obj["observed_at_monotonic_ns"] != obj["end_monotonic_ns"]:
+        raise EvidenceError("CLOCK_INVALID", "telemetry signal observed_at must equal end", line=line)
     return result
 
 
@@ -954,6 +1044,7 @@ def parse_records(records: Iterable[Mapping[str, Any]], *, source: str = "<memor
     events: list[dict[str, Any]] = []
     observations: list[dict[str, Any]] = []
     resources: list[dict[str, Any]] = []
+    signals: list[dict[str, Any]] = []
     for line_number, raw in enumerate(records, start=1):
         if not isinstance(raw, Mapping):
             raise EvidenceError("SCHEMA_INVALID", "each JSONL record must be an object", line=line_number)
@@ -976,6 +1067,10 @@ def parse_records(records: Iterable[Mapping[str, Any]], *, source: str = "<memor
             if session is None:
                 raise EvidenceError("SCHEMA_INVALID", "resource sample appeared before session", line=line_number)
             resources.append(_validate_resource(raw, session, line=line_number))
+        elif record_type == "telemetry_signal":
+            if session is None:
+                raise EvidenceError("SCHEMA_INVALID", "telemetry signal appeared before session", line=line_number)
+            signals.append(_validate_signal(raw, session, line=line_number))
         elif record_type == "integrity_fault":
             # This record is deliberately outside the scene-switch and
             # take-latency schemas.  It is a process-integrity stop signal,
@@ -990,7 +1085,44 @@ def parse_records(records: Iterable[Mapping[str, Any]], *, source: str = "<memor
             raise EvidenceError("SCHEMA_INVALID", f"unsupported record_type {record_type!r}", line=line_number)
     if session is None:
         raise EvidenceError("SCHEMA_INVALID", "trace is empty; session record is required")
-    return Trace(session, events, observations, resources, source)
+    committed_contexts = {
+        (
+            event["runtime_instance_id"],
+            event["command_id"],
+            event["intent_id"],
+            event["take_command_id"],
+            event["frame_id"],
+            event["pts_ns"],
+            tuple(sorted(event["revisions"].items())),
+        )
+        for event in events
+        if event["event_type"] == "TakeCommitted"
+    }
+    last_signal: dict[str, tuple[int, int, int]] = {}
+    for signal in signals:
+        context = (
+            signal["runtime_instance_id"],
+            signal["command_id"],
+            signal["intent_id"],
+            signal["take_command_id"],
+            signal["frame_id"],
+            signal["pts_ns"],
+            tuple(sorted(signal["revisions"].items())),
+        )
+        if context not in committed_contexts:
+            raise EvidenceError(
+                "CORRELATION_INVALID",
+                "telemetry signal does not match a committed Take context",
+            )
+        previous = last_signal.get(signal["signal"])
+        current = (signal["frame_id"], signal["pts_ns"], signal["observed_at_monotonic_ns"])
+        if previous is not None:
+            if current[0] < previous[0] or current[1] < previous[1]:
+                raise EvidenceError("FRAME_ORDER_INVALID", "telemetry signal frame/PTS regressed")
+            if current[2] < previous[2]:
+                raise EvidenceError("CLOCK_INVALID", "telemetry signal timestamps regressed")
+        last_signal[signal["signal"]] = current
+    return Trace(session, events, observations, resources, signals, source)
 
 
 def parse_trace(path: Path) -> Trace:
