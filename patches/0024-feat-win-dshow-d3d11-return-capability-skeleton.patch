@@ -1,4 +1,4 @@
-From 46459ed1e71dd7617c51ca8200cac2c60c909c42 Mon Sep 17 00:00:00 2001
+From e65d114f51dca54dfbf5413477b71b96bb2ebf94 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Tue, 1 Sep 2026 19:14:42 +0200
@@ -21,13 +21,13 @@ Evidence: static ABI timeout rollback tests; upstream patch-stack replay; hardwa
 ---
  plugins/win-dshow/CMakeLists.txt              |   3 +
  .../virtualcam-module/CMakeLists.txt          |   4 +
- .../d3d11-return-transport.cpp                | 677 ++++++++++++++++++
+ .../d3d11-return-transport.cpp                | 680 ++++++++++++++++++
  .../d3d11-return-transport.hpp                | 127 ++++
  .../virtualcam-module/virtualcam-filter.cpp   |  72 +-
  .../virtualcam-module/virtualcam-filter.hpp   |  17 +
  plugins/win-dshow/virtualcam.c                |  25 +-
  .../shared-memory-queue.c                     |  25 +-
- 8 files changed, 936 insertions(+), 14 deletions(-)
+ 8 files changed, 939 insertions(+), 14 deletions(-)
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
 
@@ -76,10 +76,10 @@ index 8ac916e17..ec3f43b8e 100644
  if(OBS_PARENT_ARCHITECTURE STREQUAL CMAKE_VS_PLATFORM_NAME)
 diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
 new file mode 100644
-index 000000000..49b0f2bb1
+index 000000000..3adc8b21d
 --- /dev/null
 +++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
-@@ -0,0 +1,677 @@
+@@ -0,0 +1,680 @@
 +#include "d3d11-return-transport.hpp"
 +
 +#include "../../../shared/obs-shared-memory-queue/shared-memory-queue.h"
@@ -101,7 +101,7 @@ index 000000000..49b0f2bb1
 +
 +namespace {
 +
-+constexpr uint32_t kWaitMs = 2;
++constexpr uint32_t kFenceWaitMs = 2;
 +constexpr uint64_t kMaxSequence = UINT64_MAX - 1;
 +constexpr uint32_t kSharedReadWrite = DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE;
 +
@@ -670,7 +670,10 @@ index 000000000..49b0f2bb1
 +		consumer->control->gap_count += published - consumed - 1;
 +	const uint32_t index = static_cast<uint32_t>((published - 1) % PULSAR_D3D11_RETURN_SLOT_COUNT);
 +	const uint64_t wait_start = now_ns();
-+	const HRESULT acquire = consumer->mutexes[index]->AcquireSync(1, kWaitMs);
++	/* DirectShow's callback already has a CPU fallback. Never spend the
++	 * callback budget waiting for a producer-owned slot: a transient keyed
++	 * mutex collision is immediately handed to that fallback. */
++	const HRESULT acquire = consumer->mutexes[index]->AcquireSync(1, 0);
 +	const uint64_t wait_end = now_ns();
 +	consumer->control->mutex_wait_ns = wait_end >= wait_start ? wait_end - wait_start : 0;
 +	if (is_wait_timeout(acquire)) {
@@ -695,7 +698,7 @@ index 000000000..49b0f2bb1
 +	consumer->context->Flush();
 +	const uint64_t fence_start = now_ns();
 +	HRESULT query_result = S_FALSE;
-+	const uint64_t deadline = now_ns() + static_cast<uint64_t>(kWaitMs) * 1000000ULL;
++	const uint64_t deadline = now_ns() + static_cast<uint64_t>(kFenceWaitMs) * 1000000ULL;
 +	while ((query_result = consumer->context->GetData(consumer->query.Get(), nullptr, 0, 0)) == S_FALSE && now_ns() < deadline)
 +		SwitchToThread();
 +	if (query_result != S_OK) {
@@ -1200,3 +1203,4 @@ index 789f8187f..19601116c 100644
  	struct queue_header *qh = vq->header;
 -- 
 2.54.0.windows.1
+

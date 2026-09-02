@@ -116,7 +116,7 @@ def test_patch_is_signed_and_scope_is_real_canonical_transport() -> None:
         "VirtualQuery",
         "CreateSharedHandle",
         "DuplicateHandle",
-        "AcquireSync(1, kWaitMs)",
+        "AcquireSync(1, 0)",
         "D3D11_QUERY_EVENT",
         "PULSAR_D3D11_FALLBACK_TIMEOUT",
         "PULSAR_D3D11_FALLBACK_DEVICE_REMOVED",
@@ -168,3 +168,10 @@ def test_canonical_transport_has_an_explicit_cpu_rollback() -> None:
     assert 'strcmp(transport, "disabled")' in text
     assert "if (consumed_d3d11_frame && d3d11_requested && d3d11)" not in text
     assert "IMediaSample" in runbook
+
+
+def test_consumer_timeout_does_not_block_the_directshow_callback() -> None:
+    text = PATCH.read_text(encoding="utf-8")
+    assert "AcquireSync(1, 0)" in text
+    assert "const uint64_t deadline" in text
+    assert "HRESULT 258" in (PATCH.parents[1] / "docs" / "runbooks" / "d3d11-return-transport.md").read_text(encoding="utf-8")

@@ -14,7 +14,9 @@ queue for an A/B run or an operational rollback. Unknown values keep the
 canonical D3D11 attempt enabled. It duplicates NT handles into the consumer
 process after the consumer publishes PID/session, records the producer adapter
 LUID and epoch,
-uses keyed mutex key 0→1/1→0 ownership, and polls a D3D11 event query with a
+uses keyed mutex key 0→1/1→0 ownership. The DirectShow consumer probes keyed
+mutex ownership without waiting; a busy slot immediately takes the existing
+CPU queue fallback. The GPU copy then uses a D3D11 event query with a bounded
 2 ms deadline before readback. A borrowed frame pointer is copied into a
 tightly-packed upload vector synchronously; `cpu_upload_ns` measures this
 required conversion and no pointer crosses the callback.
@@ -56,3 +58,7 @@ frame age. Because DirectShow exposes an `IMediaSample` system-memory buffer,
 the consumer-side `Map` and row copies are required for this boundary; this is
 not a zero-copy DirectShow path and hardware A/B evidence is required before
 calling the canonical attempt an optimization.
+
+The consumer-side keyed-mutex probe intentionally uses a zero-millisecond
+timeout. `HRESULT 258` (`WAIT_TIMEOUT`) therefore costs one non-blocking probe,
+not a 2 ms sleep; it remains fail-closed and is visible in `fallback_hresult`.
