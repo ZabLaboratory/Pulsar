@@ -16,6 +16,19 @@ def _producer_patch() -> str:
     return text[start:end]
 
 
+def test_lease_patch_stays_after_bootstrap_in_the_lexical_stack() -> None:
+    patch_names = sorted(path.name for path in (ROOT / "patches").glob("*.patch"))
+    assert "0025-fix-win-dshow-bootstrap-consumer-gated-return-format.patch" in patch_names
+    assert "0026-fix-win-dshow-lease-watcher.patch" in patch_names
+    assert patch_names.index("0025-fix-win-dshow-bootstrap-consumer-gated-return-format.patch") < patch_names.index(
+        "0026-fix-win-dshow-lease-watcher.patch"
+    )
+    if any(path.startswith("0027-") for path in patch_names):
+        assert patch_names.index("0026-fix-win-dshow-lease-watcher.patch") < next(
+            index for index, path in enumerate(patch_names) if path.startswith("0027-")
+        )
+
+
 def test_lease_probe_is_off_the_video_callback_and_bounded() -> None:
     producer = _producer_patch()
     assert "#define PULSAR_DIRECTSHOW_LEASE_POLL_MS 20U" in producer
@@ -42,7 +55,8 @@ def test_lease_lifecycle_is_fail_closed_and_joined() -> None:
     assert "os_atomic_set_long(&vcam->consumer_active, 0L)" in producer
     assert "pthread_join(vcam->lease_thread, NULL)" in producer
     assert "os_event_destroy(vcam->lease_wakeup)" in producer
-    assert "CloseHandle(lease)" in producer
+    assert "HANDLE lease = OpenEventW" in producer
+    assert "if (lease)" in producer
 
 
 def test_lease_counters_and_ungated_compatibility_are_observable() -> None:
