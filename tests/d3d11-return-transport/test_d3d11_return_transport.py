@@ -92,7 +92,7 @@ class _ControlAbi(ctypes.Structure):
     ]
 
 
-def test_patch_is_signed_and_scope_is_real_canonical_transport() -> None:
+def test_patch_is_signed_and_scope_is_real_experimental_transport() -> None:
     text = PATCH.read_text(encoding="utf-8")
     assert text.startswith("From ")
     for marker in (
@@ -103,7 +103,7 @@ def test_patch_is_signed_and_scope_is_real_canonical_transport() -> None:
         "PULSAR_D3D11_PROGRAM_RETURN",
         "PULSAR_D3D11_PREVIEW_RETURN",
         'getenv("PULSAR_RETURN_TRANSPORT")',
-        'strcmp(transport, "cpu")',
+        'strcmp(transport, "d3d11") == 0',
         "cpu_upload_ns",
         "D3D11_RESOURCE_MISC_SHARED_NTHANDLE",
         "#include <d3d11_1.h>",
@@ -160,14 +160,25 @@ def test_default_cpu_and_forced_d3d11_fallback_preserve_both_return_lanes() -> N
         assert _select("P010", requested=True) == ("CPU", "format", -2147024809)
 
 
-def test_canonical_transport_has_an_explicit_cpu_rollback() -> None:
+def test_experimental_transport_is_not_nominal_and_has_cpu_rollback() -> None:
     text = PATCH.read_text(encoding="utf-8")
     runbook = (PATCH.parents[1] / "docs" / "runbooks" / "d3d11-return-transport.md").read_text(encoding="utf-8")
-    assert "canonical return path" in text
-    assert 'strcmp(transport, "off")' in text
-    assert 'strcmp(transport, "disabled")' in text
+    assert "D3D11 is an explicit experiment only" in text
+    assert 'return !transport ||' not in text
+    assert 'PULSAR_RETURN_TRANSPORT=d3d11' in runbook
+    assert "not retained on the nominal" in runbook
+    assert "+8.87 ms p95" in runbook
+    assert "`off`" in runbook
+    assert "`disabled`" in runbook
     assert "if (consumed_d3d11_frame && d3d11_requested && d3d11)" not in text
     assert "IMediaSample" in runbook
+
+
+def test_unknown_and_unset_transport_values_keep_the_cpu_nominal_path() -> None:
+    text = PATCH.read_text(encoding="utf-8")
+    assert 'return_transport && strcmp(return_transport, "d3d11") == 0' in text
+    assert 'd3d11_requested = consumer_gated &&' in text
+    assert '(!return_transport ||' not in text
 
 
 def test_consumer_timeout_does_not_block_the_directshow_callback() -> None:

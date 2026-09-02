@@ -1,33 +1,32 @@
-From e65d114f51dca54dfbf5413477b71b96bb2ebf94 Mon Sep 17 00:00:00 2001
+From 65f2da5e6ac4216417e4338895c97b87005beab7 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Tue, 1 Sep 2026 19:14:42 +0200
-Subject: [PATCH] fix(win-dshow): make D3D11 return transport canonical and
- measurable
+Subject: [PATCH] fix(win-dshow): keep D3D11 return transport experimental
 
-Attempt the shared NV12 texture ring by default for the fixed ProgramReturn and PreviewReturn contract, with an explicit CPU/off/disabled rollback. Preserve the ordinary DirectShow system-memory sample boundary and record CPU upload, GPU copy, fence wait and readback costs so A/B qualification cannot claim zero-copy. Fail closed on format, adapter, interop, keyed mutex, query, release and device errors while retaining the CPU return queue.
+The shared texture ring still crosses the DirectShow system-memory IMediaSample
+boundary and the exact hardware run observed fallback HRESULT 258 with a
+measured +8.87 ms DirectShow NVENC p95 candidate. Keep the existing CPU queue
+as the nominal ProgramReturn/PreviewReturn path and require an explicit
+PULSAR_RETURN_TRANSPORT=d3d11 experiment. Preserve telemetry and fail-closed
+fallbacks for future qualification.
 
 Agent-Role: forge
-
 Agent-Thread: /root/forge_253_d3d11_transport
-
 Work-Unit: ZabLaboratory/Pulsar#253
-
 Issue: 253
-
 ADR-Revision: draft-r2-dual-lane-20260828
-
-Evidence: static ABI timeout rollback tests; upstream patch-stack replay; hardware A/B pending Probe
+Evidence: exact hardware fallback HRESULT 258 and +8.87 ms p95; static tests and upstream patch-stack replay
 ---
  plugins/win-dshow/CMakeLists.txt              |   3 +
  .../virtualcam-module/CMakeLists.txt          |   4 +
  .../d3d11-return-transport.cpp                | 680 ++++++++++++++++++
  .../d3d11-return-transport.hpp                | 127 ++++
- .../virtualcam-module/virtualcam-filter.cpp   |  72 +-
+ .../virtualcam-module/virtualcam-filter.cpp   |  71 +-
  .../virtualcam-module/virtualcam-filter.hpp   |  17 +
  plugins/win-dshow/virtualcam.c                |  25 +-
  .../shared-memory-queue.c                     |  25 +-
- 8 files changed, 939 insertions(+), 14 deletions(-)
+ 8 files changed, 938 insertions(+), 14 deletions(-)
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
 
@@ -76,7 +75,7 @@ index 8ac916e17..ec3f43b8e 100644
  if(OBS_PARENT_ARCHITECTURE STREQUAL CMAKE_VS_PLATFORM_NAME)
 diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
 new file mode 100644
-index 000000000..3adc8b21d
+index 000000000..4635c4046
 --- /dev/null
 +++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
 @@ -0,0 +1,680 @@
@@ -169,18 +168,18 @@ index 000000000..3adc8b21d
 +	return name ? std::wstring(name) + L".D3D11" : std::wstring();
 +}
 +
-+/* Keep the canonical selection and explicit CPU rollback invariant inside the
-+ * ABI boundary as well as at the OBS call sites. This makes a stale
-+ * module/object pointer fail closed if the environment is changed between
-+ * construction and teardown. */
++/* Keep the experimental selection inside the ABI boundary as well as at the
++ * OBS call sites. The default remains the existing CPU queue because this
++ * transport still has to read back into DirectShow's system-memory sample.
++ * This also makes a stale module/object pointer fail closed if the environment
++ * is changed between construction and teardown. */
 +static bool d3d11_transport_enabled()
 +{
 +	const char *transport = getenv("PULSAR_RETURN_TRANSPORT");
-+	/* D3D11 is the canonical return path when the consumer and format can
-+	 * prove compatibility.  Keep an explicit, process-local escape hatch for
-+	 * CPU-only hosts and qualification A/B runs. */
-+	return !transport || (strcmp(transport, "cpu") != 0 && strcmp(transport, "off") != 0 &&
-+				      strcmp(transport, "disabled") != 0);
++	/* D3D11 is an explicit experiment only. Until hardware evidence proves
++	 * that the GPU copy/query/readback beats the CPU queue, an unset, cpu, off,
++	 * disabled, or unknown value must not add work to the nominal path. */
++	return transport && strcmp(transport, "d3d11") == 0;
 +}
 +
 +static bool is_wait_timeout(HRESULT hr)
@@ -894,10 +893,10 @@ index 000000000..58627676a
 +}
 +#endif
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
-index d3293efd9..4a517055d 100644
+index d3293efd9..26a0db1d0 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 +++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
-@@ -49,11 +49,20 @@ static std::wstring queue_name_for_filter(enum directshow_queue_namespace queue_
+@@ -49,11 +49,19 @@ static std::wstring queue_name_for_filter(enum directshow_queue_namespace queue_
  }
  
  VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
@@ -914,12 +913,11 @@ index d3293efd9..4a517055d 100644
  	consumer_gated = program_return || preview_return;
 +	const char *return_transport = getenv("PULSAR_RETURN_TRANSPORT");
 +	d3d11_requested = consumer_gated &&
-+		(!return_transport || (strcmp(return_transport, "cpu") != 0 && strcmp(return_transport, "off") != 0 &&
-+					       strcmp(return_transport, "disabled") != 0));
++		return_transport && strcmp(return_transport, "d3d11") == 0;
  	const enum directshow_queue_namespace queue_namespace = directshow_queue_namespace_for_consumer(filter_kind);
  	queue_namespace_rejected = queue_namespace == DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
  	queue_name = queue_name_for_filter(queue_namespace, filter_kind);
-@@ -152,6 +161,9 @@ VCamFilter::~VCamFilter()
+@@ -152,6 +160,9 @@ VCamFilter::~VCamFilter()
  	SetEvent(thread_stop);
  	if (th.joinable())
  		th.join();
@@ -929,7 +927,7 @@ index d3293efd9..4a517055d 100644
  	video_queue_close(vq);
  
  	if (placeholder.scaled_data)
-@@ -379,16 +391,50 @@ void VCamFilter::Frame(uint64_t ts)
+@@ -379,16 +390,50 @@ void VCamFilter::Frame(uint64_t ts)
  	struct directshow_stage_timing timing = {};
  	timing.frame_entry_monotonic_ns = frame_entry_monotonic_ns;
  	bool consumed_program_frame = false;
@@ -984,7 +982,7 @@ index d3293efd9..4a517055d 100644
  
  		UnlockSampleData(ts, ts + obs_interval);
  		timing.unlock_sample_data_completed_monotonic_ns = trace_monotonic_ns();
-@@ -528,7 +574,21 @@ void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metada
+@@ -528,7 +573,21 @@ void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metada
  			<< "\"gap_count\":" << timing.queue_counters.gap_count
  			<< ",\"duplicate_count\":" << timing.queue_counters.duplicate_count
  			<< ",\"retry_count\":" << timing.queue_counters.retry_count
