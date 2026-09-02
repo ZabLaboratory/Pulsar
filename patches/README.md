@@ -45,3 +45,17 @@ to a Pulsar plugin), delete the file and renumber subsequent patches
 only if the gap is awkward. Sequence gaps are fine.
 
 Patches whose filename contains `obs-browser` target the nested `upstream/plugins/obs-browser` submodule. The build script and CI apply those patches inside that pinned submodule after applying the root OBS patches; they must not be pushed to the upstream OBS repository.
+
+## #253 continuation order
+
+The libobs/lease continuations use distinct sequence numbers and must be replayed in
+this lexical order after `0025`:
+
+1. `0026-fix-libobs-borrowed-video-mailbox.patch`
+2. `0027-fix-win-dshow-lease-watcher.patch`
+3. `0028-fix-libobs-pipeline-stats-atomic-after-mailbox.patch`
+
+The atomic snapshot patch is intentionally rebased after the mailbox so its producer
+updates and snapshot loads cover the mailbox counters without overlapping hunks. The
+old duplicate `0027` mailbox name is invalid; the static patch-stack contract test
+guards these names and rejects conflict markers.

@@ -1,4 +1,4 @@
-From e524dd3da04386efd6eece5208a370f0667b2ae7 Mon Sep 17 00:00:00 2001
+From 92cf74e11d009f915929b42a17b0cbdb77211553 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Wed, 2 Sep 2026 16:20:30 +0200
@@ -10,7 +10,7 @@ Agent-Role: Forge
 Agent-Thread: /root/forge_253_libobs_core
 Work-Unit: ZabLaboratory/Pulsar#253
 Issue: 253
-ADR-Revision: draft-r2-dual-lane-20260828
+ADR-Revision: ADR-PULSAR-DUAL-LANE-001@draft-r2-dual-lane-20260828
 Evidence: borrowed-mailbox-static-tests; telemetry-selector-table; sequential-patch-stack
 ---
  libobs/obs-internal.h |  20 ++++++-
@@ -345,4 +345,3 @@ index 2cb13a593..ddba4e552 100644
  
 -- 
 2.54.0.windows.1
-

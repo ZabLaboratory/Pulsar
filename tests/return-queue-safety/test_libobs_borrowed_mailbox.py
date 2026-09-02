@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).parents[2]
-MAILBOX_PATCH = ROOT / "patches" / "0027-fix-libobs-borrowed-video-mailbox.patch"
+MAILBOX_PATCH = ROOT / "patches" / "0026-fix-libobs-borrowed-video-mailbox.patch"
 
 
 def patch_text() -> str:

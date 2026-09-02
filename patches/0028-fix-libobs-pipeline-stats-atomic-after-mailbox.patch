@@ -1,0 +1,370 @@
+From 1a403f43f9143d11c3581b6167c223bdb79eb404 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Wed, 2 Sep 2026 14:44:35 +0200
+Subject: [PATCH] fix(libobs): make pipeline telemetry counters atomic
+
+Agent-Role: Forge
+Agent-Thread: /root/forge_253_libobs_core
+Work-Unit: ZabLaboratory/Pulsar#253
+Issue: 253
+ADR-Revision: ADR-PULSAR-DUAL-LANE-001@draft-r2-dual-lane-20260828
+Evidence: atomic u64 producer updates and per-field snapshot loads
+---
+ libobs/obs-internal.h | 22 +++++++++++++++++-
+ libobs/obs-output.c   | 15 ++++--------
+ libobs/obs-video.c    | 45 ++++++++++++++++++------------------
+ libobs/obs.c          | 53 +++++++++++++++++++++++++++++++------------
+ 4 files changed, 87 insertions(+), 48 deletions(-)
+
+diff --git a/libobs/obs-internal.h b/libobs/obs-internal.h
+index 5848beb25..0fe61ae66 100644
+--- a/libobs/obs-internal.h
++++ b/libobs/obs-internal.h
+@@ -43,6 +43,27 @@
+ #include <obsversion.h>
+ #include <caption/caption.h>
+ 
++/* Pipeline telemetry is updated from graphics, borrowed-video and output
++ * callback threads.  Keep the counters ABI-compatible with the public plain
++ * uint64_t snapshots while making every producer update/read atomic. */
++static inline void obs_pipeline_stats_add_u64(volatile uint64_t *value, uint64_t delta)
++{
++#ifdef _WIN32
++	_InterlockedExchangeAdd64((volatile long long *)value, (long long)delta);
++#else
++	__atomic_fetch_add(value, delta, __ATOMIC_RELAXED);
++#endif
++}
++
++static inline uint64_t obs_pipeline_stats_load_u64(const volatile uint64_t *value)
++{
++#ifdef _WIN32
++	return (uint64_t)_InterlockedCompareExchange64((volatile long long *)value, 0, 0);
++#else
++	return __atomic_load_n(value, __ATOMIC_RELAXED);
++#endif
++}
++
+ /* Custom helpers for the UUID hash table */
+ #define HASH_FIND_UUID(head, uuid, out) HASH_FIND(hh_uuid, head, uuid, UUID_STR_LENGTH, out)
+ #define HASH_ADD_UUID(head, uuid_field, add) HASH_ADD(hh_uuid, head, uuid_field[0], UUID_STR_LENGTH, add)
+@@ -1282,7 +1303,6 @@ struct obs_output {
+ 	bool received_audio;
+ 	volatile bool data_active;
+ 	bool borrowed_video_active;
+-	pthread_mutex_t raw_pipeline_mutex;
+ 	struct obs_raw_output_pipeline_stats raw_pipeline_stats;
+ 	volatile bool end_data_capture_thread_active;
+ 	int64_t video_offsets[MAX_OUTPUT_VIDEO_ENCODERS];
+diff --git a/libobs/obs-output.c b/libobs/obs-output.c
+index ed7fac097..4021d458b 100644
+--- a/libobs/obs-output.c
++++ b/libobs/obs-output.c
+@@ -204,7 +204,6 @@ obs_output_t *obs_output_create(const char *id, const char *name, obs_data_t *se
+ 	pthread_mutex_init_value(&output->delay_mutex);
+ 	pthread_mutex_init_value(&output->pause.mutex);
+ 	pthread_mutex_init_value(&output->pkt_callbacks_mutex);
+-	pthread_mutex_init_value(&output->raw_pipeline_mutex);
+ 
+ 	if (pthread_mutex_init(&output->interleaved_mutex, NULL) != 0)
+ 		goto fail;
+@@ -214,8 +213,6 @@ obs_output_t *obs_output_create(const char *id, const char *name, obs_data_t *se
+ 		goto fail;
+ 	if (pthread_mutex_init(&output->pkt_callbacks_mutex, NULL) != 0)
+ 		goto fail;
+-	if (pthread_mutex_init(&output->raw_pipeline_mutex, NULL) != 0)
+-		goto fail;
+ 	if (os_event_init(&output->stopping_event, OS_EVENT_TYPE_MANUAL) != 0)
+ 		goto fail;
+ 	if (!init_output_handlers(output, name, settings, hotkey_data))
+@@ -343,7 +340,6 @@ void obs_output_destroy(obs_output_t *output)
+ 		pthread_mutex_destroy(&output->interleaved_mutex);
+ 		pthread_mutex_destroy(&output->delay_mutex);
+ 		pthread_mutex_destroy(&output->pkt_callbacks_mutex);
+-		pthread_mutex_destroy(&output->raw_pipeline_mutex);
+ 		os_event_destroy(output->reconnect_stop_event);
+ 		obs_context_data_free(&output->context);
+ 		deque_free(&output->delay_data);
+@@ -2380,10 +2376,8 @@ static void default_raw_video_callback(void *param, struct video_data *frame)
+ 	if (data_active(output))
+ 		output->info.raw_video(output->context.data, frame);
+ 	output->total_frames++;
+-	pthread_mutex_lock(&output->raw_pipeline_mutex);
+-	output->raw_pipeline_stats.callback_ns += os_gettime_ns() - callback_start;
+-	output->raw_pipeline_stats.sample_count++;
+-	pthread_mutex_unlock(&output->raw_pipeline_mutex);
++	obs_pipeline_stats_add_u64(&output->raw_pipeline_stats.callback_ns, os_gettime_ns() - callback_start);
++	obs_pipeline_stats_add_u64(&output->raw_pipeline_stats.sample_count, 1);
+ }
+ 
+ bool obs_output_get_raw_pipeline_stats(const obs_output_t *output, struct obs_raw_output_pipeline_stats *stats)
+@@ -2391,9 +2385,8 @@ bool obs_output_get_raw_pipeline_stats(const obs_output_t *output, struct obs_ra
+ 	if (!obs_output_valid(output, "obs_output_get_raw_pipeline_stats") || !stats || flag_encoded(output))
+ 		return false;
+ 
+-	pthread_mutex_lock((pthread_mutex_t *)&output->raw_pipeline_mutex);
+-	*stats = output->raw_pipeline_stats;
+-	pthread_mutex_unlock((pthread_mutex_t *)&output->raw_pipeline_mutex);
++	stats->sample_count = obs_pipeline_stats_load_u64(&output->raw_pipeline_stats.sample_count);
++	stats->callback_ns = obs_pipeline_stats_load_u64(&output->raw_pipeline_stats.callback_ns);
+ 	return true;
+ }
+ 
+diff --git a/libobs/obs-video.c b/libobs/obs-video.c
+index 2f8f4980c..92b8e0573 100644
+--- a/libobs/obs-video.c
++++ b/libobs/obs-video.c
+@@ -544,11 +544,11 @@ static inline void render_video(struct obs_core_video_mix *video, bool raw_activ
+ 
+ 	gs_enable_depth_test(false);
+ 	gs_set_cull_mode(GS_NEITHER);
+-	video->pipeline_stats.render_setup_ns += os_gettime_ns() - stage_start;
++	obs_pipeline_stats_add_u64(&video->pipeline_stats.render_setup_ns, os_gettime_ns() - stage_start);
+ 
+ 	stage_start = os_gettime_ns();
+ 	render_main_texture(video);
+-	video->pipeline_stats.render_main_ns += os_gettime_ns() - stage_start;
++	obs_pipeline_stats_add_u64(&video->pipeline_stats.render_main_ns, os_gettime_ns() - stage_start);
+ 
+ 	if (raw_active || gpu_active) {
+ 		gs_texture_t *const *convert_textures = video->convert_textures;
+@@ -556,7 +556,7 @@ static inline void render_video(struct obs_core_video_mix *video, bool raw_activ
+ 		size_t channel_count = NUM_CHANNELS;
+ 		stage_start = os_gettime_ns();
+ 		gs_texture_t *output_texture = render_output_texture(video);
+-		video->pipeline_stats.render_scale_ns += os_gettime_ns() - stage_start;
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.render_scale_ns, os_gettime_ns() - stage_start);
+ 
+ 		if (gpu_active) {
+ 			convert_textures = video->convert_textures_encode;
+@@ -566,29 +566,29 @@ static inline void render_video(struct obs_core_video_mix *video, bool raw_activ
+ #endif
+ 			stage_start = os_gettime_ns();
+ 			gs_flush();
+-			video->pipeline_stats.gpu_flush_ns += os_gettime_ns() - stage_start;
++			obs_pipeline_stats_add_u64(&video->pipeline_stats.gpu_flush_ns, os_gettime_ns() - stage_start);
+ 		}
+ 
+ 		if (video->gpu_conversion) {
+ 			stage_start = os_gettime_ns();
+ 			render_convert_texture(video, convert_textures, output_texture);
+-			video->pipeline_stats.render_convert_ns += os_gettime_ns() - stage_start;
++			obs_pipeline_stats_add_u64(&video->pipeline_stats.render_convert_ns, os_gettime_ns() - stage_start);
+ 		}
+ 
+ 		if (gpu_active) {
+ 			stage_start = os_gettime_ns();
+ 			gs_flush();
+-			video->pipeline_stats.gpu_flush_ns += os_gettime_ns() - stage_start;
++			obs_pipeline_stats_add_u64(&video->pipeline_stats.gpu_flush_ns, os_gettime_ns() - stage_start);
+ 			stage_start = os_gettime_ns();
+ 			output_gpu_encoders(video, raw_active);
+-			video->pipeline_stats.gpu_encode_submit_ns += os_gettime_ns() - stage_start;
++			obs_pipeline_stats_add_u64(&video->pipeline_stats.gpu_encode_submit_ns, os_gettime_ns() - stage_start);
+ 		}
+ 
+ 		if (raw_active) {
+ 			stage_start = os_gettime_ns();
+ 			stage_output_texture(video, cur_texture, convert_textures, output_texture, copy_surfaces,
+ 					     channel_count);
+-			video->pipeline_stats.raw_stage_ns += os_gettime_ns() - stage_start;
++			obs_pipeline_stats_add_u64(&video->pipeline_stats.raw_stage_ns, os_gettime_ns() - stage_start);
+ 		}
+ 	}
+ 
+@@ -597,7 +597,7 @@ static inline void render_video(struct obs_core_video_mix *video, bool raw_activ
+ 	gs_enable_blending(true);
+ 
+ 	gs_end_scene();
+-	video->pipeline_stats.render_teardown_ns += os_gettime_ns() - stage_start;
++	obs_pipeline_stats_add_u64(&video->pipeline_stats.render_teardown_ns, os_gettime_ns() - stage_start);
+ }
+ 
+ static inline bool download_frame(struct obs_core_video_mix *video, int prev_texture, struct video_data *frame)
+@@ -910,7 +910,7 @@ static inline void output_frame(struct obs_core_video_mix *video)
+ 	const uint64_t render_start = os_gettime_ns();
+ 	GS_DEBUG_MARKER_BEGIN(GS_DEBUG_COLOR_RENDER_VIDEO, output_frame_render_video_name);
+ 	render_video(video, raw_active, gpu_active, cur_texture);
+-	video->pipeline_stats.render_submit_ns += os_gettime_ns() - render_start;
++	obs_pipeline_stats_add_u64(&video->pipeline_stats.render_submit_ns, os_gettime_ns() - render_start);
+ 	GS_DEBUG_MARKER_END();
+ 	profile_end(output_frame_render_video_name);
+ 
+@@ -918,14 +918,14 @@ static inline void output_frame(struct obs_core_video_mix *video)
+ 		profile_start(output_frame_download_frame_name);
+ 		const uint64_t download_start = os_gettime_ns();
+ 		frame_ready = download_frame(video, prev_texture, &frame);
+-		video->pipeline_stats.download_ns += os_gettime_ns() - download_start;
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.download_ns, os_gettime_ns() - download_start);
+ 		profile_end(output_frame_download_frame_name);
+ 	}
+ 
+ 	profile_start(output_frame_gs_flush_name);
+ 	const uint64_t flush_start = os_gettime_ns();
+ 	gs_flush();
+-	video->pipeline_stats.flush_ns += os_gettime_ns() - flush_start;
++	obs_pipeline_stats_add_u64(&video->pipeline_stats.flush_ns, os_gettime_ns() - flush_start);
+ 	profile_end(output_frame_gs_flush_name);
+ 
+ 	gs_leave_context();
+@@ -938,19 +938,20 @@ static inline void output_frame(struct obs_core_video_mix *video)
+ 		frame.timestamp = vframe_info.timestamp;
+ 		const uint64_t borrowed_schedule_start = os_gettime_ns();
+ 		output_borrowed_video_data(video, &frame);
+-		video->pipeline_stats.borrowed_schedule_ns += os_gettime_ns() - borrowed_schedule_start;
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.borrowed_schedule_ns,
++					   os_gettime_ns() - borrowed_schedule_start);
+ 		profile_start(output_frame_output_video_data_name);
+ 		const uint64_t output_start = os_gettime_ns();
+ 		if (video_output_active(video->video))
+ 			output_video_data(video, &frame, vframe_info.count);
+-		video->pipeline_stats.output_copy_ns += os_gettime_ns() - output_start;
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.output_copy_ns, os_gettime_ns() - output_start);
+ 		profile_end(output_frame_output_video_data_name);
+ 	}
+ 
+ 	if (++video->cur_texture == NUM_TEXTURES)
+ 		video->cur_texture = 0;
+-	video->pipeline_stats.frame_total_ns += os_gettime_ns() - frame_start;
+-	video->pipeline_stats.sample_count++;
++	obs_pipeline_stats_add_u64(&video->pipeline_stats.frame_total_ns, os_gettime_ns() - frame_start);
++	obs_pipeline_stats_add_u64(&video->pipeline_stats.sample_count, 1);
+ }
+ 
+ static inline void output_frames(void)
+@@ -1191,12 +1192,12 @@ bool obs_graphics_thread_loop(struct obs_graphics_context *context)
+ 
+ 	frame_time_ns = os_gettime_ns() - frame_start;
+ 	pthread_mutex_lock(&obs->video.mixes_mutex);
+-	obs->video.pipeline_stats.sample_count++;
+-	obs->video.pipeline_stats.tick_sources_ns += tick_sources_ns;
+-	obs->video.pipeline_stats.output_frames_ns += output_frames_ns;
+-	obs->video.pipeline_stats.render_displays_ns += render_displays_ns;
+-	obs->video.pipeline_stats.graphics_tasks_ns += graphics_tasks_ns;
+-	obs->video.pipeline_stats.frame_total_ns += frame_time_ns;
++	obs_pipeline_stats_add_u64(&obs->video.pipeline_stats.sample_count, 1);
++	obs_pipeline_stats_add_u64(&obs->video.pipeline_stats.tick_sources_ns, tick_sources_ns);
++	obs_pipeline_stats_add_u64(&obs->video.pipeline_stats.output_frames_ns, output_frames_ns);
++	obs_pipeline_stats_add_u64(&obs->video.pipeline_stats.render_displays_ns, render_displays_ns);
++	obs_pipeline_stats_add_u64(&obs->video.pipeline_stats.graphics_tasks_ns, graphics_tasks_ns);
++	obs_pipeline_stats_add_u64(&obs->video.pipeline_stats.frame_total_ns, frame_time_ns);
+ 	pthread_mutex_unlock(&obs->video.mixes_mutex);
+ 
+ 	source_profiler_frame_collect();
+diff --git a/libobs/obs.c b/libobs/obs.c
+index dd49df549..91d389eb3 100644
+--- a/libobs/obs.c
++++ b/libobs/obs.c
+@@ -633,8 +633,9 @@ static void *borrowed_video_thread(void *data)
+ 		da_free(callbacks);
+ 
+ 		pthread_mutex_lock(&video->borrowed_video_mutex);
+-		video->pipeline_stats.borrowed_publish_ns += os_gettime_ns() - publish_start;
+-		video->pipeline_stats.borrowed_publish_sample_count++;
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.borrowed_publish_ns,
++					   os_gettime_ns() - publish_start);
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.borrowed_publish_sample_count, 1);
+ 		video->borrowed_video_slots[slot_index].busy = false;
+ 		video->borrowed_video_busy_slot = -1;
+ 		pthread_cond_broadcast(&video->borrowed_video_cond);
+@@ -727,7 +728,7 @@ void obs_borrowed_video_publish(struct obs_core_video_mix *video, struct video_d
+ 	}
+ 
+ 	if (video->borrowed_video_pending_slot >= 0 || video->borrowed_video_busy_slot >= 0)
+-		video->pipeline_stats.borrowed_wait_count++;
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.borrowed_wait_count, 1);
+ 
+ 	int slot_index = video->borrowed_video_pending_slot;
+ 	if (slot_index < 0) {
+@@ -740,7 +741,7 @@ void obs_borrowed_video_publish(struct obs_core_video_mix *video, struct video_d
+ 	}
+ 	if (slot_index < 0 || video->borrowed_video_slots[slot_index].busy ||
+ 	    video->borrowed_video_slots[slot_index].writing) {
+-		video->pipeline_stats.borrowed_dropped_count++;
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.borrowed_dropped_count, 1);
+ 		pthread_mutex_unlock(&video->borrowed_video_mutex);
+ 		return;
+ 	}
+@@ -767,7 +768,7 @@ void obs_borrowed_video_publish(struct obs_core_video_mix *video, struct video_d
+ 	pthread_mutex_lock(&video->borrowed_video_mutex);
+ 	video->borrowed_video_slots[slot_index].writing = false;
+ 	if (video->borrowed_video_stop || !info || !source.data[0]) {
+-		video->pipeline_stats.borrowed_dropped_count++;
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.borrowed_dropped_count, 1);
+ 		pthread_cond_broadcast(&video->borrowed_video_cond);
+ 		pthread_mutex_unlock(&video->borrowed_video_mutex);
+ 		return;
+@@ -775,9 +776,9 @@ void obs_borrowed_video_publish(struct obs_core_video_mix *video, struct video_d
+ 	video->borrowed_video_slots[slot_index].data.timestamp = frame->timestamp;
+ 	video->borrowed_video_slots[slot_index].generation = generation;
+ 	if (replacing_pending)
+-		video->pipeline_stats.borrowed_overwritten_count++;
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.borrowed_overwritten_count, 1);
+ 	else if (video->borrowed_video_pending_slot >= 0 && video->borrowed_video_pending_slot != slot_index)
+-		video->pipeline_stats.borrowed_overwritten_count++;
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.borrowed_overwritten_count, 1);
+ 	video->borrowed_video_pending_slot = slot_index;
+ 	pthread_cond_signal(&video->borrowed_video_cond);
+ 	pthread_cond_broadcast(&video->borrowed_video_cond);
+@@ -3116,9 +3117,12 @@ bool obs_get_graphics_pipeline_stats(struct obs_graphics_pipeline_stats *stats)
+ {
+ 	if (!obs || !stats)
+ 		return false;
+-	pthread_mutex_lock(&obs->video.mixes_mutex);
+-	*stats = obs->video.pipeline_stats;
+-	pthread_mutex_unlock(&obs->video.mixes_mutex);
++	stats->sample_count = obs_pipeline_stats_load_u64(&obs->video.pipeline_stats.sample_count);
++	stats->tick_sources_ns = obs_pipeline_stats_load_u64(&obs->video.pipeline_stats.tick_sources_ns);
++	stats->output_frames_ns = obs_pipeline_stats_load_u64(&obs->video.pipeline_stats.output_frames_ns);
++	stats->render_displays_ns = obs_pipeline_stats_load_u64(&obs->video.pipeline_stats.render_displays_ns);
++	stats->graphics_tasks_ns = obs_pipeline_stats_load_u64(&obs->video.pipeline_stats.graphics_tasks_ns);
++	stats->frame_total_ns = obs_pipeline_stats_load_u64(&obs->video.pipeline_stats.frame_total_ns);
+ 	return true;
+ }
+ 
+@@ -3132,9 +3136,30 @@ bool obs_video_get_mix_pipeline_stats(video_t *v, struct obs_video_mix_pipeline_
+ 	for (size_t i = 0, num = obs->video.mixes.num; i < num; i++) {
+ 		struct obs_core_video_mix *mix = obs->video.mixes.array[i];
+ 		if (mix->video == v) {
+-			pthread_mutex_lock(&mix->borrowed_video_mutex);
+-			*stats = mix->pipeline_stats;
+-			pthread_mutex_unlock(&mix->borrowed_video_mutex);
++			stats->sample_count = obs_pipeline_stats_load_u64(&mix->pipeline_stats.sample_count);
++			stats->render_submit_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.render_submit_ns);
++			stats->render_setup_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.render_setup_ns);
++			stats->render_main_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.render_main_ns);
++			stats->render_scale_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.render_scale_ns);
++			stats->render_convert_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.render_convert_ns);
++			stats->gpu_flush_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.gpu_flush_ns);
++			stats->gpu_encode_submit_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.gpu_encode_submit_ns);
++			stats->raw_stage_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.raw_stage_ns);
++			stats->render_teardown_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.render_teardown_ns);
++			stats->download_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.download_ns);
++			stats->flush_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.flush_ns);
++			stats->output_copy_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.output_copy_ns);
++			stats->borrowed_schedule_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.borrowed_schedule_ns);
++			stats->borrowed_publish_sample_count =
++				obs_pipeline_stats_load_u64(&mix->pipeline_stats.borrowed_publish_sample_count);
++			stats->borrowed_publish_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.borrowed_publish_ns);
++			stats->borrowed_wait_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.borrowed_wait_ns);
++			stats->borrowed_dropped_count = obs_pipeline_stats_load_u64(&mix->pipeline_stats.borrowed_dropped_count);
++			stats->borrowed_overwritten_count =
++				obs_pipeline_stats_load_u64(&mix->pipeline_stats.borrowed_overwritten_count);
++			stats->borrowed_wait_count = obs_pipeline_stats_load_u64(&mix->pipeline_stats.borrowed_wait_count);
++			stats->borrowed_fallback_count = obs_pipeline_stats_load_u64(&mix->pipeline_stats.borrowed_fallback_count);
++			stats->frame_total_ns = obs_pipeline_stats_load_u64(&mix->pipeline_stats.frame_total_ns);
+ 			found = true;
+ 			break;
+ 		}
+@@ -3376,7 +3401,7 @@ bool start_borrowed_raw_video(video_t *v, void (*callback)(void *param, struct v
+ 	struct obs_borrowed_video_callback cb = {callback, param};
+ 	pthread_mutex_lock(&video->borrowed_video_mutex);
+ 	if (!video->borrowed_video_supported) {
+-		video->pipeline_stats.borrowed_fallback_count++;
++		obs_pipeline_stats_add_u64(&video->pipeline_stats.borrowed_fallback_count, 1);
+ 		pthread_mutex_unlock(&video->borrowed_video_mutex);
+ 		return false;
+ 	}
+-- 
+2.54.0.windows.1
