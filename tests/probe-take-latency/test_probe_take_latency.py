@@ -987,6 +987,59 @@ def test_directshow_stage_timing_requires_complete_strictly_ordered_metadata():
         probe.parse_records(records)
 
 
+def test_transport_and_borrowed_counters_are_allowlisted_auxiliary_telemetry():
+    records = _take_records(3)
+    transport = {
+        "path": 1,
+        "fallback_reason": 0,
+        "fallback_hresult": 0,
+        "lane": 1,
+        "epoch": 7,
+        "produced_sequence": 11,
+        "published_sequence": 11,
+        "consumed_sequence": 10,
+        "mutex_wait_ns": 100,
+        "fence_wait_ns": 200,
+        "cpu_upload_ns": 300,
+        "gpu_copy_ns": 400,
+        "readback_ns": 500,
+        "frame_age_ns": 600,
+    }
+    for record in records:
+        if record.get("record_type") == "observation" and record.get("boundary") == "directshow_return":
+            record["transport"] = dict(transport)
+        if record.get("record_type") == "resource_sample":
+            for mix_name in ("program_mix", "preview_mix"):
+                record[mix_name].update(
+                    {
+                        "borrowed_dropped_count": 0,
+                        "borrowed_overwritten_count": 0,
+                        "borrowed_wait_count": 0,
+                        "borrowed_fallback_count": 0,
+                    }
+                )
+    parsed = probe.parse_records(records)
+    report = probe.analyze_trace(parsed, minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
+    assert report["criteria"]["AC-12"]["ac12a"]["count"] == 3
+    assert report["criteria"]["AC-12"]["ac12b"]["same_packet_count"] == 3
+
+    invalid_transport = _take_records(3)
+    directshow = next(
+        item
+        for item in invalid_transport
+        if item.get("record_type") == "observation" and item.get("boundary") == "directshow_return"
+    )
+    directshow["transport"] = {**transport, "arbitrary_metric_ns": 1}
+    with pytest.raises(probe.EvidenceError, match="observation.transport contains unknown fields"):
+        probe.parse_records(invalid_transport)
+
+    invalid_borrowed = _take_records(3)
+    resource = next(item for item in invalid_borrowed if item.get("record_type") == "resource_sample")
+    resource["program_mix"]["borrowed_arbitrary_count"] = 1
+    with pytest.raises(probe.EvidenceError, match="resource.program_mix contains unknown fields"):
+        probe.parse_records(invalid_borrowed)
+
+
 def test_mismatched_observation_revision_is_rejected():
     records = _take_records(3)
     for record in records:

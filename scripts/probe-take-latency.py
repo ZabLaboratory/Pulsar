@@ -158,6 +158,12 @@ MIX_STAGE_FIELDS = (
     "frame_unattributed_ms",
     "frame_total_ms",
 )
+MIX_COUNTER_FIELDS = (
+    "borrowed_dropped_count",
+    "borrowed_overwritten_count",
+    "borrowed_wait_count",
+    "borrowed_fallback_count",
+)
 ACCOUNTING_RESIDUAL_FIELDS = ("render_unattributed_ms", "frame_unattributed_ms")
 ACCOUNTING_COMPLETE_P95_MS = 0.1
 MIX_FORMAT_FIELDS = ("width", "height", "fps_num", "fps_den")
@@ -248,6 +254,7 @@ DIRECTSHOW_TRANSPORT_FIELDS = (
     "consumed_sequence",
     "mutex_wait_ns",
     "fence_wait_ns",
+    "cpu_upload_ns",
     "gpu_copy_ns",
     "readback_ns",
     "frame_age_ns",
@@ -1067,7 +1074,8 @@ def _validate_resource(value: Any, session: Mapping[str, Any], *, line: int | No
             continue
         mix = _object(obj[mix_name], f"resource.{mix_name}", line=line)
         required = set(MIX_STAGE_FIELDS) | set(MIX_FORMAT_FIELDS) | ({"active"} if mix_name == "preview_mix" else set())
-        _exact_keys(mix, required, required, f"resource.{mix_name}", line=line)
+        allowed = required | set(MIX_COUNTER_FIELDS)
+        _exact_keys(mix, required, allowed, f"resource.{mix_name}", line=line)
         if mix_name == "preview_mix":
             _boolean(mix["active"], "resource.preview_mix.active", line=line)
             if mix["active"] != (producer_count == 2):
@@ -1083,6 +1091,11 @@ def _validate_resource(value: Any, session: Mapping[str, Any], *, line: int | No
                     )
             elif value < 0:
                 raise EvidenceError("SCHEMA_INVALID", f"resource.{mix_name}.{key} must be non-negative", line=line)
+        for key in MIX_COUNTER_FIELDS:
+            if key in mix:
+                counter = _integer(mix[key], f"resource.{mix_name}.{key}", line=line)
+                if counter < 0:
+                    raise EvidenceError("SCHEMA_INVALID", f"resource.{mix_name}.{key} must be non-negative", line=line)
         for key in MIX_FORMAT_FIELDS:
             if _integer(mix[key], f"resource.{mix_name}.{key}", line=line) <= 0:
                 raise EvidenceError("SCHEMA_INVALID", f"resource.{mix_name}.{key} must be positive", line=line)
