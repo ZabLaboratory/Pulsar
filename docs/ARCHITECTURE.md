@@ -126,6 +126,13 @@ Implemented in `scripts/build-win.ps1`. Idempotent — every run resets
 7. Output lands under
    `upstream/build_x64/rundir/RelWithDebInfo/{bin,obs-plugins,data}/`.
 
+For local runtime loops only, `scripts/build-win.ps1 -Fast` skips a redundant
+configure when the existing cache is provably headless, then builds the
+`libobs`, `win-dshow`, 32/64-bit virtual-camera, NVENC, x264 and
+`pulsar-headless` targets. The complete path above remains the default and is
+required for CI, packaging, release, browser/CEF changes and patch-stack
+qualification.
+
 First run is ~25–30 min on a typical machine (obs-deps + Qt6 + CEF
 download once into the cache); incremental rebuilds are seconds.
 

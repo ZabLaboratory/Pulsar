@@ -1,0 +1,505 @@
+From af1f881f188797039ba7566d3f6a5e9d314fa844 Mon Sep 17 00:00:00 2001
+From: ClodoCapeo <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Tue, 1 Sep 2026 18:09:46 +0200
+Subject: [PATCH] fix(win-dshow): harden latest-frame return queue
+
+Agent-Role: forge
+Agent-Thread: /root/pulsar_queue_safety
+Work-Unit: pulsar-return-queue-safety-20260901
+Evidence: seqlock-return-queue, nv12-stride-validation, fixed-width-metadata-abi
+---
+ .../virtualcam-module/virtualcam-filter.cpp   |  22 ++-
+ .../virtualcam-module/virtualcam-filter.hpp   |   4 +-
+ plugins/win-dshow/virtualcam.c                |  15 +-
+ .../shared-memory-queue.c                     | 182 ++++++++++++++----
+ .../shared-memory-queue.h                     |  30 ++-
+ 5 files changed, 203 insertions(+), 50 deletions(-)
+
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index 2ce2e50d8..d3293efd9 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -384,10 +384,10 @@ void VCamFilter::Frame(uint64_t ts)
+ 		if (state == SHARED_QUEUE_STATE_READY)
+ 			timing.queue_read_start_monotonic_ns = trace_monotonic_ns();
+ 		if (state == SHARED_QUEUE_STATE_READY)
+-			consumed_program_frame = ShowOBSFrame(ptr, &metadata);
++			consumed_program_frame = ShowOBSFrame(ptr, &metadata, &timing.queue_counters);
+ 		if (state == SHARED_QUEUE_STATE_READY)
+ 			timing.queue_read_completed_monotonic_ns = trace_monotonic_ns();
+-		else
++		if (state != SHARED_QUEUE_STATE_READY || !consumed_program_frame)
+ 			ShowDefaultFrame(ptr);
+ 
+ 		UnlockSampleData(ts, ts + obs_interval);
+@@ -398,15 +398,13 @@ void VCamFilter::Frame(uint64_t ts)
+ 		EmitDirectShowObservation(metadata, timing);
+ }
+ 
+-bool VCamFilter::ShowOBSFrame(uint8_t *ptr, struct video_queue_frame_metadata *metadata)
++bool VCamFilter::ShowOBSFrame(uint8_t *ptr, struct video_queue_frame_metadata *metadata,
++				      struct video_queue_read_counters *counters)
+ {
+ 	uint64_t temp = 0;
+-	if (!video_queue_read_ex(vq, &scaler, ptr, &temp, metadata)) {
+-		video_queue_close(vq);
+-		vq = nullptr;
+-		return false;
+-	}
+-	return true;
++	const bool consumed = video_queue_read_ex(vq, &scaler, ptr, &temp, metadata);
++	video_queue_get_read_counters(vq, counters);
++	return consumed;
+ }
+ 
+ static uint64_t trace_monotonic_ns()
+@@ -526,7 +524,11 @@ void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metada
+ 			<< "\"frame_id\":" << metadata.frame_id << ",\"pts_ns\":" << metadata.pts_ns
+ 			<< ",\"observed_at_monotonic_ns\":" << observed_at_monotonic_ns
+ 			<< ",\"valid\":true,\"program_frame\":true,\"surface\":\"ProgramReturn\","
+-			<< "\"consumer\":\"DirectShow\"}";
++			<< "\"consumer\":\"DirectShow\",\"queue_counters\":{"
++			<< "\"gap_count\":" << timing.queue_counters.gap_count
++			<< ",\"duplicate_count\":" << timing.queue_counters.duplicate_count
++			<< ",\"retry_count\":" << timing.queue_counters.retry_count
++			<< ",\"torn_count\":" << timing.queue_counters.torn_count << "}}";
+ 	if (timing_complete) {
+ 		observation.seekp(-1, std::ios_base::end);
+ 		observation << ",\"frame_entry_monotonic_ns\":" << timing.frame_entry_monotonic_ns
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+index 8540605ee..aa2992b0d 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+@@ -37,6 +37,7 @@ struct directshow_stage_timing {
+ 	uint64_t queue_read_completed_monotonic_ns = 0;
+ 	uint64_t unlock_sample_data_completed_monotonic_ns = 0;
+ 	uint64_t emission_monotonic_ns = 0;
++	struct video_queue_read_counters queue_counters = {};
+ };
+ 
+ class VCamFilter : public DShow::OutputFilter {
+@@ -73,7 +74,8 @@ class VCamFilter : public DShow::OutputFilter {
+ 
+ 	void Thread();
+ 	void Frame(uint64_t ts);
+-	bool ShowOBSFrame(uint8_t *ptr, struct video_queue_frame_metadata *metadata);
++	bool ShowOBSFrame(uint8_t *ptr, struct video_queue_frame_metadata *metadata,
++			  struct video_queue_read_counters *counters);
+ 	void ShowDefaultFrame(uint8_t *ptr);
+ 	void EmitDirectShowObservation(const struct video_queue_frame_metadata &metadata,
+ 					      const struct directshow_stage_timing &timing);
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index 028563c10..dfe23b476 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -104,6 +104,22 @@ static void snapshot_runtime_frame(struct video_queue_frame_metadata *metadata)
+ 	calldata_free(&cd);
+ }
+ 
++static enum video_queue_pixel_format queue_pixel_format(obs_output_t *output)
++{
++	const struct video_scale_info *conversion = obs_output_get_video_conversion(output);
++	/* Some obs_output implementations expose the conversion only after the
++	 * first data-capture callback.  The return outputs are created with the
++	 * canonical NV12 conversion, so keep the producer live during that short
++	 * initialization window instead of dropping every frame as INVALID. */
++	if (!conversion)
++		return VIDEO_QUEUE_PIXEL_FORMAT_NV12;
++	if (conversion->format == VIDEO_FORMAT_NV12)
++		return VIDEO_QUEUE_PIXEL_FORMAT_NV12;
++	if (conversion->format == VIDEO_FORMAT_P010)
++		return VIDEO_QUEUE_PIXEL_FORMAT_P010;
++	return VIDEO_QUEUE_PIXEL_FORMAT_INVALID;
++}
++
+ static bool queue_name_for_output(obs_output_t *output, wchar_t *destination, size_t capacity)
+ {
+ 	const char *output_name = obs_output_get_name(output);
+@@ -261,7 +273,8 @@ static void virtual_video(void *param, struct video_data *frame)
+ 
+ 	struct video_queue_frame_metadata metadata;
+ 	snapshot_runtime_frame(&metadata);
+-	video_queue_write_ex(vcam->vq, frame->data, frame->linesize, frame->timestamp, &metadata);
++	(void)video_queue_write_ex(vcam->vq, frame->data, frame->linesize, frame->timestamp,
++				   queue_pixel_format(vcam->output), &metadata);
+ }
+ 
+ struct obs_output_info virtualcam_info = {
+diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.c b/shared/obs-shared-memory-queue/shared-memory-queue.c
+index 8a1257e3d..bb2a69260 100644
+--- a/shared/obs-shared-memory-queue/shared-memory-queue.c
++++ b/shared/obs-shared-memory-queue/shared-memory-queue.c
+@@ -32,11 +32,19 @@ struct queue_header {
+ 	uint32_t reserved[6];
+ };
+ 
++struct video_queue_slot_header {
++	/* Odd means the producer is writing; even means a complete publication.
++	 * InterlockedExchange64 supplies release publication and the matching
++	 * compare-exchange load supplies acquire observation on x86 and x64. */
++	volatile uint64_t sequence;
++};
++
+ struct video_queue {
+ 	HANDLE handle;
+ 	bool ready_to_read;
+ 	struct queue_header *header;
+ 	struct video_queue_frame_metadata *metadata[3];
++	struct video_queue_slot_header *slot[3];
+ 	uint64_t *timestamp[3];
+ 	uint8_t *frame[3];
+ 	long last_inc;
+@@ -46,16 +54,28 @@ struct video_queue {
+ 	bool layout_valid;
+ 	size_t mapping_size;
+ 	uint32_t frame_header_size;
++	uint8_t *read_buffer;
++	size_t read_buffer_size;
++	uint32_t last_read_index;
++	bool have_last_read_index;
++	uint64_t next_sequence;
++	struct video_queue_read_counters counters;
+ };
+ 
+ #define LEGACY_FRAME_HEADER_SIZE 32U
+-#define FRAME_HEADER_SIZE ((uint32_t)sizeof(struct video_queue_frame_metadata))
++#define FRAME_HEADER_SIZE ((uint32_t)(sizeof(struct video_queue_slot_header) + sizeof(struct video_queue_frame_metadata)))
++
++#if defined(__cplusplus)
++static_assert(sizeof(struct video_queue_slot_header) == 8, "slot sequence ABI must be 64-bit");
++#else
++_Static_assert(sizeof(struct video_queue_slot_header) == 8, "slot sequence ABI must be 64-bit");
++#endif
+ 
+ static bool queue_frame_size(uint32_t cx, uint32_t cy, size_t *frame_size)
+ {
+ 	const size_t width = (size_t)cx;
+ 	const size_t height = (size_t)cy;
+-	if (!width || !height || width > (size_t)-1 / height)
++	if (!width || !height || (width & 1U) != 0 || (height & 1U) != 0 || width > (size_t)-1 / height)
+ 		return false;
+ 
+ 	const size_t pixels = width * height;
+@@ -66,6 +86,53 @@ static bool queue_frame_size(uint32_t cx, uint32_t cy, size_t *frame_size)
+ 	return true;
+ }
+ 
++/* The DirectShow mapping is opened FILE_MAP_READ.  Interlocked* compare-
++ * exchange operations are read-modify-write instructions even when the
++ * value/comparand are both zero, so using them here faults on a read-only
++ * view.  Aligned volatile loads are atomic for the 32/64-bit fields; the
++ * acquire barrier after the load keeps the published frame payload and
++ * metadata after the index/sequence observation. */
++static uint32_t queue_load_index(const volatile uint32_t *value)
++{
++	if (!value)
++		return 0;
++	const uint32_t loaded = *value;
++	MemoryBarrier();
++	return loaded;
++}
++
++static uint64_t queue_load_sequence(const struct video_queue_slot_header *slot)
++{
++	if (!slot)
++		return 0;
++	const uint64_t loaded = slot->sequence;
++	MemoryBarrier();
++	return loaded;
++}
++
++static void queue_store_sequence(struct video_queue_slot_header *slot, uint64_t sequence)
++{
++	InterlockedExchange64((volatile LONG64 *)&slot->sequence, (LONG64)sequence);
++}
++
++static bool queue_validate_nv12(uint32_t cx, uint32_t cy, uint8_t **data, uint32_t *linesize,
++				       enum video_queue_pixel_format format)
++{
++	return format == VIDEO_QUEUE_PIXEL_FORMAT_NV12 && data && linesize && data[0] && data[1] &&
++		linesize[0] >= cx && linesize[1] >= cx && cx && cy && (cx & 1U) == 0 && (cy & 1U) == 0;
++}
++
++static void queue_copy_nv12(uint8_t *destination, uint8_t **data, const uint32_t *linesize,
++				    uint32_t cx, uint32_t cy)
++{
++	for (uint32_t row = 0; row < cy; ++row)
++		memcpy(destination + (size_t)row * cx, data[0] + (size_t)row * linesize[0], cx);
++
++	destination += (size_t)cx * cy;
++	for (uint32_t row = 0; row < cy / 2; ++row)
++		memcpy(destination + (size_t)row * cx, data[1] + (size_t)row * linesize[1], cx);
++}
++
+ static bool queue_add_dword(DWORD *size, size_t addition)
+ {
+ 	if (!size || addition > (size_t)UINT32_MAX - (size_t)*size)
+@@ -161,8 +214,10 @@ static void queue_set_frame_pointers(struct video_queue *vq)
+ {
+ 	for (size_t i = 0; i < 3; ++i) {
+ 		const uint32_t off = vq->header->offsets[i];
++		vq->slot[i] = vq->metadata_enabled ?
++			(struct video_queue_slot_header *)(((uint8_t *)vq->header) + off) : NULL;
+ 		vq->metadata[i] = vq->metadata_enabled ?
+-			(struct video_queue_frame_metadata *)(((uint8_t *)vq->header) + off) : NULL;
++			(struct video_queue_frame_metadata *)(((uint8_t *)vq->header) + off + sizeof(struct video_queue_slot_header)) : NULL;
+ 		vq->timestamp[i] = vq->metadata_enabled ? &vq->metadata[i]->timestamp :
+ 			(uint64_t *)(((uint8_t *)vq->header) + off);
+ 		vq->frame[i] = ((uint8_t *)vq->header) + off + vq->frame_header_size;
+@@ -286,15 +341,33 @@ video_queue_t *video_queue_open_named(const wchar_t *name)
+ 		CloseHandle(vq.handle);
+ 		return NULL;
+ 	}
++	{
++		size_t frame_size = 0;
++		if (!queue_frame_size(vq.header->cx, vq.header->cy, &frame_size))
++			goto open_failed;
++		vq.read_buffer_size = frame_size;
++		vq.read_buffer = malloc(frame_size);
++		if (!vq.read_buffer)
++			goto open_failed;
++	}
++	/* Legacy queues use a packed NV12 frame and modern return queues use the
++	 * same payload after their sequence/metadata header. */
+ 
+ 	struct video_queue *pvq = malloc(sizeof(vq));
+ 	if (!pvq) {
++		free(vq.read_buffer);
+ 		UnmapViewOfFile(vq.header);
+ 		CloseHandle(vq.handle);
+ 		return NULL;
+ 	}
+ 	memcpy(pvq, &vq, sizeof(vq));
+ 	return pvq;
++
++open_failed:
++	UnmapViewOfFile(vq.header);
++	CloseHandle(vq.handle);
++	free(vq.read_buffer);
++	return NULL;
+ }
+ 
+ video_queue_t *video_queue_create(uint32_t cx, uint32_t cy, uint64_t interval)
+@@ -313,11 +386,12 @@ void video_queue_close(video_queue_t *vq)
+ 		return;
+ 	}
+ 	if (vq->is_writer) {
+-		vq->header->state = SHARED_QUEUE_STATE_STOPPING;
++		InterlockedExchange((volatile LONG *)&vq->header->state, SHARED_QUEUE_STATE_STOPPING);
+ 	}
+ 
+ 	UnmapViewOfFile(vq->header);
+ 	CloseHandle(vq->handle);
++	free(vq->read_buffer);
+ 	free(vq);
+ }
+ 
+@@ -337,39 +411,43 @@ void video_queue_get_info(video_queue_t *vq, uint32_t *cx, uint32_t *cy, uint64_
+ 
+ #define get_idx(inc) ((unsigned long)inc % 3)
+ 
+-void video_queue_write_ex(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp,
++bool video_queue_write_ex(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp,
++				  enum video_queue_pixel_format format,
+ 				  const struct video_queue_frame_metadata *metadata)
+ {
+-	if (!vq || !vq->layout_valid || !vq->is_writer || !data || !linesize)
+-		return;
++	if (!vq || !vq->layout_valid || !vq->is_writer || !queue_validate_nv12(vq->header->cx, vq->header->cy,
++							 data, linesize, format))
++		return false;
+ 
+ 	struct queue_header *qh = vq->header;
+-	long inc = ++qh->write_idx;
++	const uint32_t inc = (uint32_t)InterlockedIncrement((volatile LONG *)&qh->write_idx);
+ 
+ 	unsigned long idx = get_idx(inc);
+-	size_t size = linesize[0] * qh->cy;
+-
+-	memcpy(vq->frame[idx], data[0], size);
+-	memcpy(vq->frame[idx] + size, data[1], size / 2);
+ 	if (vq->metadata_enabled) {
++		if (vq->next_sequence >= (UINT64_MAX / 2U) - 1U)
++			return false;
++		const uint64_t publication = ++vq->next_sequence * 2U;
++		queue_store_sequence(vq->slot[idx], publication - 1U);
++		queue_copy_nv12(vq->frame[idx], data, linesize, qh->cx, qh->cy);
+ 		if (metadata)
+ 			vq->metadata[idx][0] = *metadata;
+ 		else
+ 			memset(vq->metadata[idx], 0, sizeof(*vq->metadata[idx]));
+ 		vq->metadata[idx]->timestamp = timestamp;
++		MemoryBarrier();
++		queue_store_sequence(vq->slot[idx], publication);
+ 	} else {
+-		/* The original OBSVirtualCamVideo queue stores its timestamp as the
+-		 * first eight bytes before each NV12 frame. */
++		queue_copy_nv12(vq->frame[idx], data, linesize, qh->cx, qh->cy);
+ 		*vq->timestamp[idx] = timestamp;
+ 	}
+-
+-	qh->read_idx = inc;
+-	qh->state = SHARED_QUEUE_STATE_READY;
++	InterlockedExchange((volatile LONG *)&qh->read_idx, (LONG)inc);
++	InterlockedExchange((volatile LONG *)&qh->state, SHARED_QUEUE_STATE_READY);
++	return true;
+ }
+ 
+ void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp)
+ {
+-	video_queue_write_ex(vq, data, linesize, timestamp, NULL);
++	(void)video_queue_write_ex(vq, data, linesize, timestamp, VIDEO_QUEUE_PIXEL_FORMAT_NV12, NULL);
+ }
+ 
+ enum queue_state video_queue_state(video_queue_t *vq)
+@@ -378,7 +456,7 @@ enum queue_state video_queue_state(video_queue_t *vq)
+ 		return SHARED_QUEUE_STATE_INVALID;
+ 	}
+ 
+-	enum queue_state state = (enum queue_state)vq->header->state;
++	enum queue_state state = (enum queue_state)queue_load_index(&vq->header->state);
+ 	if (!vq->ready_to_read && state == SHARED_QUEUE_STATE_READY) {
+ 		queue_set_frame_pointers(vq);
+ 	}
+@@ -395,32 +473,64 @@ bool video_queue_read_ex(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint
+ 		return false;
+ 
+ 	struct queue_header *qh = vq->header;
+-	long inc = qh->read_idx;
++	const uint32_t inc = queue_load_index(&qh->read_idx);
+ 
+-	if (qh->state == SHARED_QUEUE_STATE_STOPPING) {
++	if (queue_load_index(&qh->state) == SHARED_QUEUE_STATE_STOPPING) {
+ 		return false;
+ 	}
+ 
+-	if (inc == vq->last_inc) {
+-		if (++vq->dup_counter == 10) {
+-			return false;
++	for (unsigned attempt = 0; attempt < 3; ++attempt) {
++		const uint32_t candidate = attempt == 0 ? inc : queue_load_index(&qh->read_idx);
++		const unsigned long idx = get_idx(candidate);
++		struct video_queue_frame_metadata metadata_copy = {0};
++		const uint64_t before = vq->metadata_enabled ? queue_load_sequence(vq->slot[idx]) : 0;
++		if (vq->metadata_enabled && (before == 0 || (before & 1U) != 0)) {
++			++vq->counters.retry_count;
++			continue;
+ 		}
+-	} else {
+-		vq->dup_counter = 0;
+-		vq->last_inc = inc;
+-	}
+-
+-	unsigned long idx = get_idx(inc);
+ 
+-	if (metadata) {
+ 		if (vq->metadata_enabled)
+-			*metadata = vq->metadata[idx][0];
++			metadata_copy = vq->metadata[idx][0];
++		else if (!vq->read_buffer || vq->read_buffer_size < (size_t)vq->header->cx * vq->header->cy * 3 / 2)
++			return false;
++		memcpy(vq->read_buffer, vq->frame[idx], vq->read_buffer_size);
++		const uint64_t after = vq->metadata_enabled ? queue_load_sequence(vq->slot[idx]) : before;
++		if (vq->metadata_enabled && (before != after || (after & 1U) != 0)) {
++			++vq->counters.retry_count;
++			++vq->counters.torn_count;
++			continue;
++		}
++
++		if (vq->have_last_read_index) {
++			const uint32_t delta = candidate - vq->last_read_index;
++			if (delta == 0) {
++				++vq->counters.duplicate_count;
++				if (++vq->dup_counter == 10)
++					return false;
++			} else {
++				if (delta > 1)
++					vq->counters.gap_count += delta - 1U;
++				vq->dup_counter = 0;
++			}
++		}
++		vq->last_read_index = candidate;
++		vq->have_last_read_index = true;
++		if (metadata) {
++			if (vq->metadata_enabled)
++				*metadata = metadata_copy;
++		}
++		if (ts)
++			*ts = vq->metadata_enabled ? metadata_copy.timestamp : *vq->timestamp[idx];
++		nv12_do_scale(scale, dst, vq->read_buffer);
++		return true;
+ 	}
+-	if (ts)
+-		*ts = *vq->timestamp[idx];
++	return false;
++}
+ 
+-	nv12_do_scale(scale, dst, vq->frame[idx]);
+-	return true;
++void video_queue_get_read_counters(video_queue_t *vq, struct video_queue_read_counters *counters)
++{
++	if (counters)
++		*counters = vq ? vq->counters : (struct video_queue_read_counters){0};
+ }
+ 
+ bool video_queue_read(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_t *ts)
+diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.h b/shared/obs-shared-memory-queue/shared-memory-queue.h
+index 029e73084..a48db9f63 100644
+--- a/shared/obs-shared-memory-queue/shared-memory-queue.h
++++ b/shared/obs-shared-memory-queue/shared-memory-queue.h
+@@ -19,7 +19,8 @@ typedef struct nv12_scale nv12_scale_t;
+  * the legacy queue timestamp layout; old callers can continue using
+  * video_queue_read()/video_queue_write(). */
+ #define VIDEO_QUEUE_IDENTIFIER_CAPACITY 129
+-#define VIDEO_QUEUE_METADATA_VERSION 1U
++#define VIDEO_QUEUE_METADATA_VERSION 2U
++#define VIDEO_QUEUE_METADATA_ABI_SIZE 576U
+ struct video_queue_frame_metadata {
+ 	uint64_t timestamp;
+ 	uint64_t frame_id;
+@@ -35,6 +36,29 @@ struct video_queue_frame_metadata {
+ 	char take_command_id[VIDEO_QUEUE_IDENTIFIER_CAPACITY];
+ };
+ 
++/* These counters are local to a DirectShow reader.  They are intentionally
++ * fixed-width so the telemetry ABI is identical in x86 and x64 builds. */
++struct video_queue_read_counters {
++	uint64_t gap_count;
++	uint64_t duplicate_count;
++	uint64_t retry_count;
++	uint64_t torn_count;
++};
++
++enum video_queue_pixel_format {
++	VIDEO_QUEUE_PIXEL_FORMAT_INVALID = 0,
++	VIDEO_QUEUE_PIXEL_FORMAT_NV12 = 1,
++	VIDEO_QUEUE_PIXEL_FORMAT_P010 = 2,
++};
++
++#if defined(__cplusplus)
++static_assert(sizeof(struct video_queue_frame_metadata) == VIDEO_QUEUE_METADATA_ABI_SIZE,
++		      "video queue metadata ABI must be fixed-width");
++#else
++_Static_assert(sizeof(struct video_queue_frame_metadata) == VIDEO_QUEUE_METADATA_ABI_SIZE,
++		       "video queue metadata ABI must be fixed-width");
++#endif
++
+ enum queue_state {
+ 	SHARED_QUEUE_STATE_INVALID,
+ 	SHARED_QUEUE_STATE_STARTING,
+@@ -51,12 +75,14 @@ extern void video_queue_close(video_queue_t *vq);
+ 
+ extern void video_queue_get_info(video_queue_t *vq, uint32_t *cx, uint32_t *cy, uint64_t *interval);
+ extern void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp);
+-extern void video_queue_write_ex(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp,
++extern bool video_queue_write_ex(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp,
++					 enum video_queue_pixel_format format,
+ 					 const struct video_queue_frame_metadata *metadata);
+ extern enum queue_state video_queue_state(video_queue_t *vq);
+ extern bool video_queue_read(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_t *ts);
+ extern bool video_queue_read_ex(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_t *ts,
+ 					struct video_queue_frame_metadata *metadata);
++extern void video_queue_get_read_counters(video_queue_t *vq, struct video_queue_read_counters *counters);
+ 
+ #ifdef __cplusplus
+ }

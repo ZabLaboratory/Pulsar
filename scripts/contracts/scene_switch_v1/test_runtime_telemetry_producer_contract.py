@@ -31,6 +31,11 @@ PROGRAM_RETURN_FASTPATH_PATCH = ROOT / "patches" / "0019-perf-win-dshow-pipeline
 PREVIEW_CONSUMER_LEASE_PATCH = (
     ROOT / "patches" / "0020-perf-win-dshow-elide-unconsumed-preview-return-copies.patch"
 )
+PROGRAM_CONSUMER_LEASE_PATCH = (
+    ROOT / "patches" / "0021-perf-win-dshow-elide-unconsumed-program-return-copies.patch"
+)
+QT_HOST_TOOLS_PATCH = ROOT / "patches" / "0022-fix-cmake-qt-host-tool-argument-parsing.patch"
+BUILD_SCRIPT = ROOT / "scripts" / "build-win.ps1"
 FRONTEND_CMAKE = ROOT / "plugins" / "pulsar-frontend-stub" / "CMakeLists.txt"
 WEBSOCKET_CMAKE = ROOT / "plugins" / "pulsar-websocket" / "CMakeLists.txt"
 FRONTEND_SOURCE = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
@@ -222,7 +227,7 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert patch.index("UnlockSampleData") < patch.index("if (consumed_program_frame && program_return)")
     assert '"boundary\\":\\"directshow_return' in patch
     assert "video_queue_read_ex" in patch
-    assert "video_queue_write_ex" in patch
+    assert "-\tvideo_queue_write_ex" not in patch
     assert "copy_telemetry_counter" in patch
     assert "INT64_MAX" in patch
     assert "queue_rejected" in frontend
@@ -736,3 +741,58 @@ def test_preview_return_copy_is_gated_by_an_active_directshow_consumer_lease() -
     # only the optional shared-memory queue write is skipped.
     assert ".raw_video_borrowed = virtual_video" not in patch
     assert "video_queue_write_ex" in patch
+
+
+def test_program_return_copy_uses_the_same_crash_safe_consumer_gate() -> None:
+    patch = PROGRAM_CONSUMER_LEASE_PATCH.read_text(encoding="utf-8")
+
+    for token in (
+        "consumer_gated = program_return || preview_return",
+        "if (consumer_gated && !queue_namespace_rejected)",
+        "if (!vcam->consumer_gated)",
+        "vcam->consumer_gated = vcam->program_return || vcam->preview_return",
+        "if (!return_consumer_is_active(vcam))",
+        'vcam->program_return ? "ProgramReturn" : "PreviewReturn"',
+    ):
+        assert token in patch
+
+    # The gate surrounds only the DirectShow queue publication. Program mixing,
+    # encoding and the borrowed output worker remain untouched.
+    assert "-\tvideo_queue_write_ex" not in patch
+    assert "obs_encoder" not in patch
+    assert "raw_video_borrowed" not in patch
+
+
+def test_pristine_windows_configure_keeps_architecture_out_of_keyword_parsing() -> None:
+    patch = QT_HOST_TOOLS_PATCH.read_text(encoding="utf-8")
+
+    assert "function(_handle_qt_cross_compile architecture)" in patch
+    assert '-  cmake_parse_arguments(PARSE_ARGV 0 _HQCC' in patch
+    assert '+  cmake_parse_arguments(PARSE_ARGV 1 _HQCC' in patch
+    assert 'set(host_processor "$ENV{PROCESSOR_ARCHITEW6432}")' in patch
+    assert 'set(host_processor "$ENV{PROCESSOR_ARCHITECTURE}")' in patch
+    assert "Unable to determine the Windows host processor for Qt host tools" in patch
+    assert "-DIRECTORY" in patch
+
+
+def test_local_build_fastpath_is_guarded_complete_and_opt_in() -> None:
+    text = BUILD_SCRIPT.read_text(encoding="utf-8")
+
+    assert "[switch] $Fast" in text
+    assert "$Fast -and ($Full -or $GuiBuild -or $Clean -or $Stage -eq 'configure')" in text
+    assert "-Fast requires an existing compatible headless build_x64 cache" in text
+    for flag in ("ENABLE_FRONTEND", "ENABLE_UI", "ENABLE_BROWSER", "ENABLE_WEBSOCKET"):
+        assert f"^{flag}:BOOL=OFF\\r?$" in text
+    for target in (
+        "libobs",
+        "win-dshow",
+        "obs-virtualcam-module",
+        "obs-nvenc",
+        "obs-x264",
+        "pulsar-headless",
+    ):
+        assert target in text
+
+    # Full builds remain the default and retain the original preset paths.
+    assert "& $cmake --build --preset $preset --config RelWithDebInfo --parallel" in text
+    assert "& $cmake --build $pulsarBuild --config RelWithDebInfo --parallel" in text

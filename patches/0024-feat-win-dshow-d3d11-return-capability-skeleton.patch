@@ -1,0 +1,1153 @@
+From cec25f31d5e8aaef5756459bb88b4f365e8685a4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Tue, 1 Sep 2026 19:14:42 +0200
+Subject: [PATCH] fix(pulsar): validate shared queue mapping before atomic
+ reads
+
+Agent-Role: forge
+Agent-Thread: /root/pulsar_d3d11_return
+Work-Unit: pulsar-d3d11-return-transport-20260901
+Issue: none
+Evidence: VirtualQuery mapping guard, sequential patch apply, targeted tests
+---
+ plugins/win-dshow/CMakeLists.txt              |   3 +
+ .../virtualcam-module/CMakeLists.txt          |   4 +
+ .../d3d11-return-transport.cpp                | 645 ++++++++++++++++++
+ .../d3d11-return-transport.hpp                | 126 ++++
+ .../virtualcam-module/virtualcam-filter.cpp   |  67 +-
+ .../virtualcam-module/virtualcam-filter.hpp   |  16 +
+ plugins/win-dshow/virtualcam.c                |  23 +-
+ .../shared-memory-queue.c                     |  26 +-
+ 8 files changed, 896 insertions(+), 14 deletions(-)
+ create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+ create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
+
+diff --git a/plugins/win-dshow/CMakeLists.txt b/plugins/win-dshow/CMakeLists.txt
+index 078151f69..0ade03f4e 100644
+--- a/plugins/win-dshow/CMakeLists.txt
++++ b/plugins/win-dshow/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ target_sources(
+   win-dshow
+   PRIVATE dshow-plugin.cpp encode-dstr.hpp ffmpeg-decode.c ffmpeg-decode.h win-dshow-encoder.cpp win-dshow.cpp
++          virtualcam-module/d3d11-return-transport.cpp virtualcam-module/d3d11-return-transport.hpp
+ )
+ 
+ configure_file(cmake/windows/obs-module.rc.in win-dshow.rc)
+@@ -42,6 +43,8 @@ target_link_libraries(
+     FFmpeg::avutil
+     strmiids
+     winmm
++    d3d11
++    dxgi
+ )
+ 
+ add_subdirectory(virtualcam-module)
+diff --git a/plugins/win-dshow/virtualcam-module/CMakeLists.txt b/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+index 8ac916e17..ec3f43b8e 100644
+--- a/plugins/win-dshow/virtualcam-module/CMakeLists.txt
++++ b/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+@@ -79,6 +79,8 @@ target_sources(
+   obs-virtualcam-module
+   PRIVATE
+     ${CMAKE_CURRENT_BINARY_DIR}/virtualcam-module.rc
++    d3d11-return-transport.cpp
++    d3d11-return-transport.hpp
+     placeholder.cpp
+     sleepto.c
+     sleepto.h
+@@ -102,6 +104,8 @@ target_link_libraries(
+     gdiplus
+     strmiids
+     winmm
++    d3d11
++    dxgi
+ )
+ 
+ if(OBS_PARENT_ARCHITECTURE STREQUAL CMAKE_VS_PLATFORM_NAME)
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+new file mode 100644
+index 000000000..f99a5307d
+--- /dev/null
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+@@ -0,0 +1,645 @@
++#include "d3d11-return-transport.hpp"
++
++#include "../../../shared/obs-shared-memory-queue/shared-memory-queue.h"
++
++#include <d3d11.h>
++#include <d3d11_1.h>
++#include <dxgi1_2.h>
++#include <windows.h>
++#include <wrl/client.h>
++
++#include <algorithm>
++#include <array>
++#include <chrono>
++#include <cstring>
++#include <string>
++#include <vector>
++
++using Microsoft::WRL::ComPtr;
++
++namespace {
++
++constexpr uint32_t kWaitMs = 2;
++constexpr uint64_t kMaxSequence = UINT64_MAX - 1;
++constexpr uint32_t kSharedReadWrite = DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE;
++
++static uint64_t now_ns()
++{
++	LARGE_INTEGER frequency = {};
++	LARGE_INTEGER counter = {};
++	if (!QueryPerformanceFrequency(&frequency) || !QueryPerformanceCounter(&counter) || frequency.QuadPart <= 0)
++		return 0;
++	const uint64_t ticks = static_cast<uint64_t>(counter.QuadPart);
++	const uint64_t hz = static_cast<uint64_t>(frequency.QuadPart);
++	return (ticks / hz) * 1000000000ULL + ((ticks % hz) * 1000000000ULL) / hz;
++}
++
++static uint64_t load_u64(const volatile uint64_t *value)
++{
++	return static_cast<uint64_t>(InterlockedCompareExchange64((volatile LONG64 *)value, 0, 0));
++}
++
++static void store_u64(volatile uint64_t *value, uint64_t next)
++{
++	InterlockedExchange64((volatile LONG64 *)value, static_cast<LONG64>(next));
++}
++
++static uint32_t process_session(DWORD pid)
++{
++	DWORD session = 0;
++	return ProcessIdToSessionId(pid, &session) ? session : UINT32_MAX;
++}
++
++static void set_fallback(pulsar_d3d11_return_control *control, enum pulsar_d3d11_return_fallback reason,
++				 HRESULT hr)
++{
++	if (!control)
++		return;
++	control->selected_path = PULSAR_D3D11_PATH_CPU;
++	control->fallback_reason = static_cast<uint32_t>(reason);
++	control->fallback_hresult = static_cast<int32_t>(hr);
++	InterlockedExchange((volatile LONG *)&control->consumer_ready, 0);
++}
++
++static bool valid_nv12(uint32_t width, uint32_t height, uint8_t **data, uint32_t *linesize)
++{
++	return width == PULSAR_D3D11_RETURN_WIDTH && height == PULSAR_D3D11_RETURN_HEIGHT && data && linesize &&
++		data[0] && data[1] && linesize[0] >= width && linesize[1] >= width && (width & 1U) == 0 &&
++		(height & 1U) == 0;
++}
++
++static bool pack_nv12(uint32_t width, uint32_t height, uint8_t **data, uint32_t *linesize,
++			      std::vector<uint8_t> &packed)
++{
++	if (!valid_nv12(width, height, data, linesize))
++		return false;
++	packed.resize(static_cast<size_t>(width) * height * 3 / 2);
++	for (uint32_t row = 0; row < height; ++row)
++		memcpy(packed.data() + static_cast<size_t>(row) * width, data[0] + static_cast<size_t>(row) * linesize[0], width);
++	uint8_t *uv = packed.data() + static_cast<size_t>(width) * height;
++	for (uint32_t row = 0; row < height / 2; ++row)
++		memcpy(uv + static_cast<size_t>(row) * width, data[1] + static_cast<size_t>(row) * linesize[1], width);
++	return true;
++}
++
++static std::wstring control_name(const wchar_t *name)
++{
++	return name ? std::wstring(name) + L".D3D11" : std::wstring();
++}
++
++/* Keep the transport opt-in invariant inside the ABI boundary as well as at
++ * the OBS call sites. This makes a stale module/object pointer fail closed if
++ * the process is running the default CPU transport (or the environment was
++ * changed between construction and teardown). */
++static bool d3d11_transport_requested()
++{
++	const char *transport = getenv("PULSAR_RETURN_TRANSPORT");
++	return transport && strcmp(transport, "d3d11") == 0;
++}
++
++static HRESULT create_device_for_luid(const pulsar_d3d11_return_luid *wanted, ComPtr<ID3D11Device> &device,
++					     ComPtr<ID3D11DeviceContext> &context, pulsar_d3d11_return_luid *actual)
++{
++	ComPtr<IDXGIFactory1> factory;
++	HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
++	if (FAILED(hr))
++		return hr;
++
++	ComPtr<IDXGIAdapter1> selected;
++	for (UINT index = 0;; ++index) {
++		ComPtr<IDXGIAdapter1> candidate;
++		if (factory->EnumAdapters1(index, &candidate) == DXGI_ERROR_NOT_FOUND)
++			break;
++		DXGI_ADAPTER_DESC1 desc = {};
++		if (FAILED(candidate->GetDesc1(&desc)) || (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE))
++			continue;
++		if (wanted && (desc.AdapterLuid.LowPart != wanted->low || desc.AdapterLuid.HighPart != wanted->high))
++			continue;
++		selected = candidate;
++		if (actual) {
++			actual->low = desc.AdapterLuid.LowPart;
++			actual->high = desc.AdapterLuid.HighPart;
++		}
++		break;
++	}
++	if (!selected)
++		return DXGI_ERROR_NOT_FOUND;
++
++	constexpr D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1,
++						D3D_FEATURE_LEVEL_10_0};
++	return D3D11CreateDevice(selected.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
++					 levels, ARRAYSIZE(levels), D3D11_SDK_VERSION, &device, nullptr, &context);
++}
++
++static HRESULT create_shared_texture(ID3D11Device *device, ID3D11Texture2D **texture, HANDLE *handle,
++					    ComPtr<IDXGIKeyedMutex> &mutex)
++{
++	if (!device || !texture || !handle)
++		return E_INVALIDARG;
++	*texture = nullptr;
++	*handle = nullptr;
++	D3D11_TEXTURE2D_DESC desc = {};
++	desc.Width = PULSAR_D3D11_RETURN_WIDTH;
++	desc.Height = PULSAR_D3D11_RETURN_HEIGHT;
++	desc.MipLevels = 1;
++	desc.ArraySize = 1;
++	desc.Format = DXGI_FORMAT_NV12;
++	desc.SampleDesc.Count = 1;
++	desc.Usage = D3D11_USAGE_DEFAULT;
++	desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
++	ComPtr<ID3D11Texture2D> created;
++	HRESULT hr = device->CreateTexture2D(&desc, nullptr, &created);
++	if (FAILED(hr))
++		return hr;
++	ComPtr<IDXGIResource1> resource;
++	hr = created.As(&resource);
++	if (FAILED(hr))
++		return hr;
++	hr = resource->CreateSharedHandle(nullptr, kSharedReadWrite, nullptr, handle);
++	if (FAILED(hr))
++		return hr;
++	hr = created.As(&mutex);
++	if (FAILED(hr)) {
++		CloseHandle(*handle);
++		*handle = nullptr;
++		return hr;
++	}
++	*texture = created.Detach();
++	return S_OK;
++}
++
++static HRESULT duplicate_handle_for_pid(HANDLE source, DWORD pid, uint64_t *value)
++{
++	if (!source || !value || !pid)
++		return E_INVALIDARG;
++	HANDLE target_process = OpenProcess(PROCESS_DUP_HANDLE, FALSE, pid);
++	if (!target_process)
++		return HRESULT_FROM_WIN32(GetLastError());
++	HANDLE duplicated = nullptr;
++	const BOOL ok = DuplicateHandle(GetCurrentProcess(), source, target_process, &duplicated, 0, FALSE,
++						DUPLICATE_SAME_ACCESS);
++	const DWORD error = GetLastError();
++	CloseHandle(target_process);
++	if (!ok)
++		return HRESULT_FROM_WIN32(error ? error : ERROR_INVALID_HANDLE);
++	*value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(duplicated));
++	return S_OK;
++}
++
++} // namespace
++
++struct pulsar_d3d11_return_producer {
++	HANDLE mapping = nullptr;
++	pulsar_d3d11_return_control *control = nullptr;
++	ComPtr<ID3D11Device> device;
++	ComPtr<ID3D11DeviceContext> context;
++	ComPtr<ID3D11Texture2D> textures[PULSAR_D3D11_RETURN_SLOT_COUNT];
++	ComPtr<IDXGIKeyedMutex> mutexes[PULSAR_D3D11_RETURN_SLOT_COUNT];
++	HANDLE source_handles[PULSAR_D3D11_RETURN_SLOT_COUNT] = {};
++	uint32_t consumer_pid = 0;
++	uint64_t epoch = 1;
++	uint64_t sequence = 0;
++	uint32_t width = 0;
++	uint32_t height = 0;
++	std::vector<uint8_t> upload;
++};
++
++struct pulsar_d3d11_return_consumer {
++	HANDLE mapping = nullptr;
++	pulsar_d3d11_return_control *control = nullptr;
++	ComPtr<ID3D11Device> device;
++	ComPtr<ID3D11DeviceContext> context;
++	ComPtr<ID3D11Texture2D> textures[PULSAR_D3D11_RETURN_SLOT_COUNT];
++	ComPtr<IDXGIKeyedMutex> mutexes[PULSAR_D3D11_RETURN_SLOT_COUNT];
++	ComPtr<ID3D11Texture2D> staging;
++	ComPtr<ID3D11Query> query;
++	uint32_t width = 0;
++	uint32_t height = 0;
++	bool active = false;
++};
++
++extern "C" pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
++	const wchar_t *name, enum pulsar_d3d11_return_lane lane, uint32_t width, uint32_t height)
++{
++	if (!d3d11_transport_requested() || !name || !*name ||
++		(lane != PULSAR_D3D11_PROGRAM_RETURN && lane != PULSAR_D3D11_PREVIEW_RETURN) ||
++		width != PULSAR_D3D11_RETURN_WIDTH || height != PULSAR_D3D11_RETURN_HEIGHT)
++		return nullptr;
++	const std::wstring map_name = control_name(name);
++	auto *producer = new pulsar_d3d11_return_producer();
++	producer->width = width;
++	producer->height = height;
++	producer->mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
++							 static_cast<DWORD>(sizeof(pulsar_d3d11_return_control)), map_name.c_str());
++	const bool existed = GetLastError() == ERROR_ALREADY_EXISTS;
++	if (!producer->mapping) {
++		delete producer;
++		return nullptr;
++	}
++	producer->control = static_cast<pulsar_d3d11_return_control *>(MapViewOfFile(
++		producer->mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(pulsar_d3d11_return_control)));
++	if (!producer->control) {
++		CloseHandle(producer->mapping);
++		delete producer;
++		return nullptr;
++	}
++	if (existed && producer->control->producer_pid != 0) {
++		UnmapViewOfFile(producer->control);
++		CloseHandle(producer->mapping);
++		delete producer;
++		return nullptr;
++	}
++	memset(producer->control, 0, sizeof(*producer->control));
++	producer->control->abi_version = PULSAR_D3D11_RETURN_ABI_VERSION;
++	producer->control->lane = lane;
++	producer->control->width = width;
++	producer->control->height = height;
++	producer->control->producer_pid = GetCurrentProcessId();
++	producer->control->producer_session = process_session(producer->control->producer_pid);
++	producer->control->selected_path = PULSAR_D3D11_PATH_CPU;
++	producer->control->fallback_reason = PULSAR_D3D11_FALLBACK_CAPABILITY;
++	producer->control->fallback_hresult = static_cast<int32_t>(E_PENDING);
++	producer->control->epoch = producer->epoch;
++	return producer;
++}
++
++static void producer_release_ring(pulsar_d3d11_return_producer *producer)
++{
++	if (!producer)
++		return;
++	for (HANDLE &handle : producer->source_handles) {
++		if (handle) {
++			CloseHandle(handle);
++			handle = nullptr;
++		}
++	}
++	for (auto &texture : producer->textures)
++		texture.Reset();
++	for (auto &mutex : producer->mutexes)
++		mutex.Reset();
++	producer->device.Reset();
++	producer->context.Reset();
++	producer->consumer_pid = 0;
++}
++
++extern "C" void pulsar_d3d11_return_producer_close(pulsar_d3d11_return_producer_t *producer)
++{
++	if (!producer)
++		return;
++	if (producer->control)
++		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_INTEROP, E_ABORT);
++	producer_release_ring(producer);
++	if (producer->control)
++		UnmapViewOfFile(producer->control);
++	if (producer->mapping)
++		CloseHandle(producer->mapping);
++	delete producer;
++}
++
++static bool producer_prepare_ring(pulsar_d3d11_return_producer *producer)
++{
++	if (!producer || !producer->control)
++		return false;
++	const uint32_t pid = producer->control->consumer_pid;
++	if (!pid)
++		return false;
++	if (producer->consumer_pid == pid && producer->control->selected_path == PULSAR_D3D11_PATH_SHARED_TEXTURE &&
++		producer->control->consumer_ready)
++		return true;
++	if (producer->consumer_pid == pid && producer->control->selected_path == PULSAR_D3D11_PATH_SHARED_TEXTURE)
++		return false;
++	if (producer->consumer_pid == pid && producer->control->fallback_reason != PULSAR_D3D11_FALLBACK_NONE)
++		return false;
++	producer_release_ring(producer);
++	ComPtr<ID3D11Device> device;
++	ComPtr<ID3D11DeviceContext> context;
++	pulsar_d3d11_return_luid luid = {};
++	HRESULT hr = create_device_for_luid(nullptr, device, context, &luid);
++	if (FAILED(hr)) {
++		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_CAPABILITY, hr);
++		producer->consumer_pid = pid;
++		return false;
++	}
++	producer->device = device;
++	producer->context = context;
++	producer->control->adapter_luid = luid;
++	++producer->epoch;
++	for (uint32_t i = 0; i < PULSAR_D3D11_RETURN_SLOT_COUNT; ++i) {
++		ID3D11Texture2D *texture = nullptr;
++		HANDLE handle = nullptr;
++		ComPtr<IDXGIKeyedMutex> mutex;
++		hr = create_shared_texture(producer->device.Get(), &texture, &handle, mutex);
++		if (FAILED(hr))
++			break;
++		uint64_t duplicated = 0;
++		hr = duplicate_handle_for_pid(handle, pid, &duplicated);
++		if (FAILED(hr)) {
++			texture->Release();
++			CloseHandle(handle);
++			break;
++		}
++		producer->textures[i].Attach(texture);
++		producer->mutexes[i] = mutex;
++		producer->source_handles[i] = handle;
++		producer->control->slots[i].handle.value = duplicated;
++		producer->control->slots[i].epoch = producer->epoch;
++		producer->control->slots[i].sequence = 0;
++	}
++	if (FAILED(hr)) {
++		producer_release_ring(producer);
++		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_INTEROP, hr);
++		producer->consumer_pid = pid;
++		return false;
++	}
++	producer->consumer_pid = pid;
++	producer->control->epoch = producer->epoch;
++	producer->control->selected_path = PULSAR_D3D11_PATH_SHARED_TEXTURE;
++	producer->control->fallback_reason = PULSAR_D3D11_FALLBACK_NONE;
++	producer->control->fallback_hresult = 0;
++	InterlockedExchange((volatile LONG *)&producer->control->consumer_ready, 1);
++	return true;
++}
++
++extern "C" bool pulsar_d3d11_return_producer_ready(pulsar_d3d11_return_producer_t *producer)
++{
++	return producer_prepare_ring(producer);
++}
++
++extern "C" bool pulsar_d3d11_return_producer_write(pulsar_d3d11_return_producer_t *producer, uint8_t **data,
++								 uint32_t *linesize, uint64_t timestamp,
++								 const struct video_queue_frame_metadata *metadata)
++{
++	if (!producer || !producer_prepare_ring(producer) || producer->sequence >= kMaxSequence)
++		return false;
++	if (!pack_nv12(producer->width, producer->height, data, linesize, producer->upload)) {
++		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_FORMAT, E_INVALIDARG);
++		return false;
++	}
++	const uint32_t index = static_cast<uint32_t>(producer->sequence % PULSAR_D3D11_RETURN_SLOT_COUNT);
++	const uint64_t wait_start = now_ns();
++	const HRESULT acquire = producer->mutexes[index]->AcquireSync(0, 0);
++	const uint64_t wait_end = now_ns();
++	producer->control->mutex_wait_ns = wait_end >= wait_start ? wait_end - wait_start : 0;
++	if (acquire == WAIT_TIMEOUT) {
++		++producer->control->retry_count;
++		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_TIMEOUT, HRESULT_FROM_WIN32(WAIT_TIMEOUT));
++		return false;
++	}
++	if (FAILED(acquire)) {
++		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_DEVICE_REMOVED, acquire);
++		return false;
++	}
++	const uint64_t copy_start = now_ns();
++	producer->context->UpdateSubresource(producer->textures[index].Get(), 0, nullptr, producer->upload.data(),
++						 producer->width, 0);
++	producer->context->Flush();
++	const uint64_t copy_end = now_ns();
++	producer->control->gpu_copy_ns = copy_end >= copy_start ? copy_end - copy_start : 0;
++	const uint64_t sequence = ++producer->sequence;
++	auto &slot = producer->control->slots[index];
++	slot.timestamp = timestamp;
++	if (metadata) {
++		slot.frame_id = metadata->frame_id;
++		slot.pts_ns = metadata->pts_ns;
++		slot.server_seq = metadata->server_seq;
++		slot.program_revision = metadata->program_revision;
++		slot.preview_revision = metadata->preview_revision;
++		slot.role_map_revision = metadata->role_map_revision;
++		slot.valid = metadata->valid;
++		memcpy(slot.runtime_instance_id, metadata->runtime_instance_id, sizeof(slot.runtime_instance_id));
++		memcpy(slot.command_id, metadata->command_id, sizeof(slot.command_id));
++		memcpy(slot.intent_id, metadata->intent_id, sizeof(slot.intent_id));
++		memcpy(slot.take_command_id, metadata->take_command_id, sizeof(slot.take_command_id));
++	} else {
++		slot.frame_id = slot.pts_ns = slot.server_seq = slot.program_revision = slot.preview_revision =
++			slot.role_map_revision = 0;
++		slot.valid = 0;
++		memset(slot.runtime_instance_id, 0, sizeof(slot.runtime_instance_id));
++		memset(slot.command_id, 0, sizeof(slot.command_id));
++		memset(slot.intent_id, 0, sizeof(slot.intent_id));
++		memset(slot.take_command_id, 0, sizeof(slot.take_command_id));
++	}
++	slot.sequence = sequence;
++	MemoryBarrier();
++	producer->mutexes[index]->ReleaseSync(1);
++	store_u64((volatile uint64_t *)&producer->control->produced_sequence, sequence);
++	store_u64((volatile uint64_t *)&producer->control->published_sequence, sequence);
++	return true;
++}
++
++extern "C" const struct pulsar_d3d11_return_control *pulsar_d3d11_return_producer_control(
++	pulsar_d3d11_return_producer_t *producer)
++{
++	return producer ? producer->control : nullptr;
++}
++
++static bool consumer_open_ring(pulsar_d3d11_return_consumer *consumer)
++{
++	if (!consumer || !consumer->control || consumer->control->selected_path != PULSAR_D3D11_PATH_SHARED_TEXTURE)
++		return false;
++	if (consumer->control->width != PULSAR_D3D11_RETURN_WIDTH ||
++		consumer->control->height != PULSAR_D3D11_RETURN_HEIGHT)
++		return false;
++	ComPtr<ID3D11Device> device;
++	ComPtr<ID3D11DeviceContext> context;
++	pulsar_d3d11_return_luid actual = {};
++	HRESULT hr = create_device_for_luid(&consumer->control->adapter_luid, device, context, &actual);
++	if (FAILED(hr) || actual.low != consumer->control->adapter_luid.low ||
++		actual.high != consumer->control->adapter_luid.high) {
++		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_ADAPTER, FAILED(hr) ? hr : DXGI_ERROR_NOT_FOUND);
++		return false;
++	}
++	consumer->device = device;
++	consumer->context = context;
++	for (uint32_t i = 0; i < PULSAR_D3D11_RETURN_SLOT_COUNT; ++i) {
++		const uint64_t handle_value = consumer->control->slots[i].handle.value;
++		if (sizeof(uintptr_t) < sizeof(uint64_t) && handle_value > UINT32_MAX) {
++			set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP,
++				     HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW));
++			return false;
++		}
++		HANDLE shared = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle_value));
++		if (!shared) {
++			set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP, E_HANDLE);
++			return false;
++		}
++		ComPtr<ID3D11Device1> device1;
++		hr = consumer->device.As(&device1);
++		if (SUCCEEDED(hr))
++			hr = device1->OpenSharedResource1(shared, IID_PPV_ARGS(&consumer->textures[i]));
++		CloseHandle(shared);
++		consumer->control->slots[i].handle.value = 0;
++		if (FAILED(hr) || FAILED(consumer->textures[i].As(&consumer->mutexes[i]))) {
++			set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP, FAILED(hr) ? hr : E_NOINTERFACE);
++			return false;
++		}
++	}
++	D3D11_TEXTURE2D_DESC desc = {};
++	consumer->textures[0]->GetDesc(&desc);
++	desc.Usage = D3D11_USAGE_STAGING;
++	desc.BindFlags = 0;
++	desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
++	desc.MiscFlags = 0;
++	hr = consumer->device->CreateTexture2D(&desc, nullptr, &consumer->staging);
++	if (FAILED(hr)) {
++		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP, hr);
++		return false;
++	}
++	D3D11_QUERY_DESC query_desc = {};
++	query_desc.Query = D3D11_QUERY_EVENT;
++	hr = consumer->device->CreateQuery(&query_desc, &consumer->query);
++	if (FAILED(hr)) {
++		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP, hr);
++		return false;
++	}
++	consumer->active = true;
++	InterlockedExchange((volatile LONG *)&consumer->control->consumer_ready, 1);
++	return true;
++}
++
++extern "C" pulsar_d3d11_return_consumer_t *pulsar_d3d11_return_consumer_open(
++	const wchar_t *name, enum pulsar_d3d11_return_lane lane, uint32_t width, uint32_t height)
++{
++	if (!d3d11_transport_requested() || !name || !*name ||
++		width != PULSAR_D3D11_RETURN_WIDTH || height != PULSAR_D3D11_RETURN_HEIGHT)
++		return nullptr;
++	const std::wstring map_name = control_name(name);
++	HANDLE mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, map_name.c_str());
++	if (!mapping)
++		return nullptr;
++	auto *consumer = new pulsar_d3d11_return_consumer();
++	consumer->mapping = mapping;
++	consumer->control = static_cast<pulsar_d3d11_return_control *>(MapViewOfFile(
++		mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(pulsar_d3d11_return_control)));
++	if (!consumer->control || consumer->control->abi_version != PULSAR_D3D11_RETURN_ABI_VERSION ||
++		consumer->control->lane != static_cast<uint32_t>(lane)) {
++		if (consumer->control)
++			UnmapViewOfFile(consumer->control);
++		CloseHandle(mapping);
++		delete consumer;
++		return nullptr;
++	}
++	consumer->width = width;
++	consumer->height = height;
++	consumer->control->consumer_pid = GetCurrentProcessId();
++	consumer->control->consumer_session = process_session(consumer->control->consumer_pid);
++	if (!consumer_open_ring(consumer) && consumer->control->selected_path != PULSAR_D3D11_PATH_CPU) {
++		UnmapViewOfFile(consumer->control);
++		CloseHandle(consumer->mapping);
++		delete consumer;
++		return nullptr;
++	}
++	return consumer;
++}
++
++extern "C" void pulsar_d3d11_return_consumer_close(pulsar_d3d11_return_consumer_t *consumer)
++{
++	if (!consumer)
++		return;
++	if (consumer->control)
++		InterlockedExchange((volatile LONG *)&consumer->control->consumer_ready, 0);
++	consumer->active = false;
++	if (consumer->control)
++		UnmapViewOfFile(consumer->control);
++	if (consumer->mapping)
++		CloseHandle(consumer->mapping);
++	delete consumer;
++}
++
++extern "C" bool pulsar_d3d11_return_consumer_read(pulsar_d3d11_return_consumer_t *consumer, uint8_t *dst,
++								 uint64_t *timestamp,
++								 struct video_queue_frame_metadata *metadata)
++{
++	if (!d3d11_transport_requested() || !consumer || !dst || !consumer->control)
++		return false;
++	if (!consumer->active && !consumer_open_ring(consumer))
++		return false;
++	if (consumer->control->selected_path != PULSAR_D3D11_PATH_SHARED_TEXTURE)
++		return false;
++	const uint64_t published = load_u64((volatile uint64_t *)&consumer->control->published_sequence);
++	if (!published)
++		return false;
++	const uint64_t consumed = load_u64((volatile uint64_t *)&consumer->control->consumed_sequence);
++	if (published > consumed + 1)
++		consumer->control->gap_count += published - consumed - 1;
++	const uint32_t index = static_cast<uint32_t>((published - 1) % PULSAR_D3D11_RETURN_SLOT_COUNT);
++	const uint64_t wait_start = now_ns();
++	const HRESULT acquire = consumer->mutexes[index]->AcquireSync(1, kWaitMs);
++	const uint64_t wait_end = now_ns();
++	consumer->control->mutex_wait_ns = wait_end >= wait_start ? wait_end - wait_start : 0;
++	if (acquire == WAIT_TIMEOUT) {
++		++consumer->control->retry_count;
++		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_TIMEOUT, HRESULT_FROM_WIN32(WAIT_TIMEOUT));
++		return false;
++	}
++	if (FAILED(acquire)) {
++		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_DEVICE_REMOVED, acquire);
++		return false;
++	}
++	auto &slot = consumer->control->slots[index];
++	if (slot.sequence != published || slot.epoch != consumer->control->epoch) {
++		consumer->mutexes[index]->ReleaseSync(0);
++		++consumer->control->retry_count;
++		++consumer->control->torn_count;
++		return false;
++	}
++	const uint64_t copy_start = now_ns();
++	consumer->context->CopyResource(consumer->staging.Get(), consumer->textures[index].Get());
++	consumer->context->End(consumer->query.Get());
++	consumer->context->Flush();
++	const uint64_t deadline = now_ns() + static_cast<uint64_t>(kWaitMs) * 1000000ULL;
++	while (consumer->context->GetData(consumer->query.Get(), nullptr, 0, 0) == S_FALSE && now_ns() < deadline)
++		SwitchToThread();
++	if (consumer->context->GetData(consumer->query.Get(), nullptr, 0, 0) != S_OK) {
++		consumer->mutexes[index]->ReleaseSync(0);
++		++consumer->control->retry_count;
++		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_TIMEOUT, HRESULT_FROM_WIN32(WAIT_TIMEOUT));
++		return false;
++	}
++	D3D11_MAPPED_SUBRESOURCE mapped = {};
++	HRESULT hr = consumer->context->Map(consumer->staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
++	if (FAILED(hr)) {
++		consumer->mutexes[index]->ReleaseSync(0);
++		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_DEVICE_REMOVED, hr);
++		return false;
++	}
++	for (uint32_t row = 0; row < consumer->height; ++row)
++		memcpy(dst + static_cast<size_t>(row) * consumer->width,
++			static_cast<uint8_t *>(mapped.pData) + static_cast<size_t>(row) * mapped.RowPitch, consumer->width);
++	uint8_t *dst_uv = dst + static_cast<size_t>(consumer->width) * consumer->height;
++	uint8_t *src_uv = static_cast<uint8_t *>(mapped.pData) + static_cast<size_t>(mapped.RowPitch) * consumer->height;
++	for (uint32_t row = 0; row < consumer->height / 2; ++row)
++		memcpy(dst_uv + static_cast<size_t>(row) * consumer->width, src_uv + static_cast<size_t>(row) * mapped.RowPitch,
++		       consumer->width);
++	consumer->context->Unmap(consumer->staging.Get(), 0);
++	consumer->mutexes[index]->ReleaseSync(0);
++	const uint64_t copy_end = now_ns();
++	consumer->control->readback_ns = copy_end >= copy_start ? copy_end - copy_start : 0;
++	const uint64_t frame_clock = slot.pts_ns ? slot.pts_ns : slot.timestamp;
++	consumer->control->frame_age_ns = frame_clock && copy_end >= frame_clock ? copy_end - frame_clock : 0;
++	if (timestamp)
++		*timestamp = slot.timestamp;
++	if (metadata) {
++		memset(metadata, 0, sizeof(*metadata));
++		metadata->timestamp = slot.timestamp;
++		metadata->frame_id = slot.frame_id;
++		metadata->pts_ns = slot.pts_ns;
++		metadata->server_seq = slot.server_seq;
++		metadata->program_revision = slot.program_revision;
++		metadata->preview_revision = slot.preview_revision;
++		metadata->role_map_revision = slot.role_map_revision;
++		metadata->valid = slot.valid;
++		memcpy(metadata->runtime_instance_id, slot.runtime_instance_id, sizeof(metadata->runtime_instance_id));
++		memcpy(metadata->command_id, slot.command_id, sizeof(metadata->command_id));
++		memcpy(metadata->intent_id, slot.intent_id, sizeof(metadata->intent_id));
++		memcpy(metadata->take_command_id, slot.take_command_id, sizeof(metadata->take_command_id));
++	}
++	store_u64((volatile uint64_t *)&consumer->control->consumed_sequence, published);
++	return true;
++}
++
++extern "C" const struct pulsar_d3d11_return_control *pulsar_d3d11_return_consumer_control(
++	pulsar_d3d11_return_consumer_t *consumer)
++{
++	return consumer ? consumer->control : nullptr;
++}
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
+new file mode 100644
+index 000000000..65efe46ed
+--- /dev/null
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
+@@ -0,0 +1,126 @@
++#pragma once
++
++#include <stdbool.h>
++#include <stdint.h>
++#include <wchar.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define PULSAR_D3D11_RETURN_SLOT_COUNT 3U
++#define PULSAR_D3D11_RETURN_ABI_VERSION 1U
++#define PULSAR_D3D11_RETURN_WIDTH 1920U
++#define PULSAR_D3D11_RETURN_HEIGHT 1080U
++#define PULSAR_D3D11_RETURN_IDENTIFIER_CAPACITY 129U
++
++enum pulsar_d3d11_return_lane {
++	PULSAR_D3D11_PROGRAM_RETURN = 1,
++	PULSAR_D3D11_PREVIEW_RETURN = 2,
++};
++
++enum pulsar_d3d11_return_path {
++	PULSAR_D3D11_PATH_CPU = 0,
++	PULSAR_D3D11_PATH_SHARED_TEXTURE = 1,
++};
++
++enum pulsar_d3d11_return_fallback {
++	PULSAR_D3D11_FALLBACK_NONE = 0,
++	PULSAR_D3D11_FALLBACK_NOT_REQUESTED = 1,
++	PULSAR_D3D11_FALLBACK_CAPABILITY = 2,
++	PULSAR_D3D11_FALLBACK_ADAPTER = 3,
++	PULSAR_D3D11_FALLBACK_DEVICE_REMOVED = 4,
++	PULSAR_D3D11_FALLBACK_TIMEOUT = 5,
++	PULSAR_D3D11_FALLBACK_FORMAT = 6,
++	PULSAR_D3D11_FALLBACK_INTEROP = 7,
++};
++
++struct pulsar_d3d11_return_luid {
++	uint32_t low;
++	int32_t high;
++};
++
++struct pulsar_d3d11_return_handle {
++	uint64_t value;
++};
++
++struct pulsar_d3d11_return_slot {
++	struct pulsar_d3d11_return_handle handle;
++	uint64_t sequence;
++	uint64_t epoch;
++	uint64_t timestamp;
++	uint64_t frame_id;
++	uint64_t pts_ns;
++	uint64_t server_seq;
++	uint64_t program_revision;
++	uint64_t preview_revision;
++	uint64_t role_map_revision;
++	uint32_t valid;
++	uint32_t reserved;
++	char runtime_instance_id[PULSAR_D3D11_RETURN_IDENTIFIER_CAPACITY];
++	char command_id[PULSAR_D3D11_RETURN_IDENTIFIER_CAPACITY];
++	char intent_id[PULSAR_D3D11_RETURN_IDENTIFIER_CAPACITY];
++	char take_command_id[PULSAR_D3D11_RETURN_IDENTIFIER_CAPACITY];
++};
++
++struct pulsar_d3d11_return_control {
++	uint32_t abi_version;
++	uint32_t lane;
++	uint32_t width;
++	uint32_t height;
++	uint32_t producer_pid;
++	uint32_t consumer_pid;
++	uint32_t producer_session;
++	uint32_t consumer_session;
++	uint32_t consumer_ready;
++	uint32_t selected_path;
++	uint32_t fallback_reason;
++	int32_t fallback_hresult;
++	struct pulsar_d3d11_return_luid adapter_luid;
++	uint64_t epoch;
++	uint64_t produced_sequence;
++	uint64_t published_sequence;
++	uint64_t consumed_sequence;
++	uint64_t mutex_wait_ns;
++	uint64_t fence_wait_ns;
++	uint64_t gpu_copy_ns;
++	uint64_t readback_ns;
++	uint64_t gap_count;
++	uint64_t retry_count;
++	uint64_t torn_count;
++	uint64_t frame_age_ns;
++	struct pulsar_d3d11_return_slot slots[PULSAR_D3D11_RETURN_SLOT_COUNT];
++};
++
++#ifdef __cplusplus
++static_assert(sizeof(struct pulsar_d3d11_return_handle) == 8, "shared handle ABI must be uint64");
++static_assert(sizeof(struct pulsar_d3d11_return_slot) == 608, "slot ABI must be fixed-width");
++static_assert(sizeof(struct pulsar_d3d11_return_luid) == 8, "adapter LUID ABI must be fixed-width");
++static_assert(sizeof(struct pulsar_d3d11_return_control) == 1976, "control ABI must be fixed-width");
++#endif
++
++typedef struct pulsar_d3d11_return_producer pulsar_d3d11_return_producer_t;
++typedef struct pulsar_d3d11_return_consumer pulsar_d3d11_return_consumer_t;
++struct video_queue_frame_metadata;
++
++pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
++	const wchar_t *control_name, enum pulsar_d3d11_return_lane lane, uint32_t width, uint32_t height);
++void pulsar_d3d11_return_producer_close(pulsar_d3d11_return_producer_t *producer);
++bool pulsar_d3d11_return_producer_ready(pulsar_d3d11_return_producer_t *producer);
++bool pulsar_d3d11_return_producer_write(pulsar_d3d11_return_producer_t *producer, uint8_t **data,
++						uint32_t *linesize, uint64_t timestamp,
++						const struct video_queue_frame_metadata *metadata);
++const struct pulsar_d3d11_return_control *pulsar_d3d11_return_producer_control(
++	pulsar_d3d11_return_producer_t *producer);
++
++pulsar_d3d11_return_consumer_t *pulsar_d3d11_return_consumer_open(
++	const wchar_t *control_name, enum pulsar_d3d11_return_lane lane, uint32_t width, uint32_t height);
++void pulsar_d3d11_return_consumer_close(pulsar_d3d11_return_consumer_t *consumer);
++bool pulsar_d3d11_return_consumer_read(pulsar_d3d11_return_consumer_t *consumer, uint8_t *dst,
++						uint64_t *timestamp, struct video_queue_frame_metadata *metadata);
++const struct pulsar_d3d11_return_control *pulsar_d3d11_return_consumer_control(
++	pulsar_d3d11_return_consumer_t *consumer);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index d3293efd9..1606e2e3e 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -49,11 +49,18 @@ static std::wstring queue_name_for_filter(enum directshow_queue_namespace queue_
+ }
+ 
+ VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
+-	: OutputFilter()
++	: OutputFilter(),
++	  program_return(false),
++	  preview_return(false),
++	  consumer_gated(false),
++	  d3d11(nullptr),
++	  d3d11_requested(false)
+ {
+ 	program_return = filter_kind == DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN;
+ 	preview_return = filter_kind == DIRECTSHOW_CONSUMER_FILTER_PREVIEW_RETURN;
+ 	consumer_gated = program_return || preview_return;
++	const char *return_transport = getenv("PULSAR_RETURN_TRANSPORT");
++	d3d11_requested = consumer_gated && return_transport && strcmp(return_transport, "d3d11") == 0;
+ 	const enum directshow_queue_namespace queue_namespace = directshow_queue_namespace_for_consumer(filter_kind);
+ 	queue_namespace_rejected = queue_namespace == DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
+ 	queue_name = queue_name_for_filter(queue_namespace, filter_kind);
+@@ -152,6 +159,9 @@ VCamFilter::~VCamFilter()
+ 	SetEvent(thread_stop);
+ 	if (th.joinable())
+ 		th.join();
++	if (d3d11_requested && d3d11)
++		pulsar_d3d11_return_consumer_close(d3d11);
++	d3d11 = nullptr;
+ 	video_queue_close(vq);
+ 
+ 	if (placeholder.scaled_data)
+@@ -379,16 +389,48 @@ void VCamFilter::Frame(uint64_t ts)
+ 	struct directshow_stage_timing timing = {};
+ 	timing.frame_entry_monotonic_ns = frame_entry_monotonic_ns;
+ 	bool consumed_program_frame = false;
++	bool consumed_d3d11_frame = false;
++	if (d3d11_requested && current_format == VideoFormat::NV12 && obs_cx == PULSAR_D3D11_RETURN_WIDTH &&
++	    obs_cy == PULSAR_D3D11_RETURN_HEIGHT) {
++		if (!d3d11) {
++			const enum pulsar_d3d11_return_lane lane = program_return ? PULSAR_D3D11_PROGRAM_RETURN
++										 : PULSAR_D3D11_PREVIEW_RETURN;
++			d3d11 = pulsar_d3d11_return_consumer_open(queue_name.c_str(), lane, obs_cx, obs_cy);
++		}
++	}
+ 	if (LockSampleData(&ptr)) {
+ 		timing.lock_sample_data_acquired_monotonic_ns = trace_monotonic_ns();
+-		if (state == SHARED_QUEUE_STATE_READY)
++		if (state == SHARED_QUEUE_STATE_READY || (d3d11_requested && d3d11))
+ 			timing.queue_read_start_monotonic_ns = trace_monotonic_ns();
+-		if (state == SHARED_QUEUE_STATE_READY)
++		if (d3d11_requested && d3d11)
++			consumed_d3d11_frame = pulsar_d3d11_return_consumer_read(d3d11, ptr, nullptr, &metadata);
++		if (!consumed_d3d11_frame && state == SHARED_QUEUE_STATE_READY)
+ 			consumed_program_frame = ShowOBSFrame(ptr, &metadata, &timing.queue_counters);
+-		if (state == SHARED_QUEUE_STATE_READY)
++		if (state == SHARED_QUEUE_STATE_READY || (d3d11_requested && d3d11))
+ 			timing.queue_read_completed_monotonic_ns = trace_monotonic_ns();
+-		if (state != SHARED_QUEUE_STATE_READY || !consumed_program_frame)
++		if ((!consumed_program_frame && !consumed_d3d11_frame) ||
++		    (state != SHARED_QUEUE_STATE_READY && !consumed_d3d11_frame))
+ 			ShowDefaultFrame(ptr);
++		if (consumed_d3d11_frame && d3d11_requested && d3d11) {
++			consumed_program_frame = true;
++			const struct pulsar_d3d11_return_control *control =
++				pulsar_d3d11_return_consumer_control(d3d11);
++			if (control) {
++				timing.transport_path = control->selected_path;
++				timing.transport_fallback = control->fallback_reason;
++				timing.transport_hresult = control->fallback_hresult;
++				timing.transport_lane = control->lane;
++				timing.transport_epoch = control->epoch;
++				timing.transport_produced_sequence = control->produced_sequence;
++				timing.transport_published_sequence = control->published_sequence;
++				timing.transport_consumed_sequence = control->consumed_sequence;
++				timing.transport_mutex_wait_ns = control->mutex_wait_ns;
++				timing.transport_fence_wait_ns = control->fence_wait_ns;
++				timing.transport_gpu_copy_ns = control->gpu_copy_ns;
++				timing.transport_readback_ns = control->readback_ns;
++				timing.transport_frame_age_ns = control->frame_age_ns;
++			}
++		}
+ 
+ 		UnlockSampleData(ts, ts + obs_interval);
+ 		timing.unlock_sample_data_completed_monotonic_ns = trace_monotonic_ns();
+@@ -528,7 +570,20 @@ void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metada
+ 			<< "\"gap_count\":" << timing.queue_counters.gap_count
+ 			<< ",\"duplicate_count\":" << timing.queue_counters.duplicate_count
+ 			<< ",\"retry_count\":" << timing.queue_counters.retry_count
+-			<< ",\"torn_count\":" << timing.queue_counters.torn_count << "}}";
++			<< ",\"torn_count\":" << timing.queue_counters.torn_count << "},\"transport\":{";
++	observation << "\"path\":" << timing.transport_path
++			<< ",\"fallback_reason\":" << timing.transport_fallback
++			<< ",\"fallback_hresult\":" << timing.transport_hresult
++			<< ",\"lane\":" << timing.transport_lane
++			<< ",\"epoch\":" << timing.transport_epoch
++			<< ",\"produced_sequence\":" << timing.transport_produced_sequence
++			<< ",\"published_sequence\":" << timing.transport_published_sequence
++			<< ",\"consumed_sequence\":" << timing.transport_consumed_sequence
++			<< ",\"mutex_wait_ns\":" << timing.transport_mutex_wait_ns
++			<< ",\"fence_wait_ns\":" << timing.transport_fence_wait_ns
++			<< ",\"gpu_copy_ns\":" << timing.transport_gpu_copy_ns
++			<< ",\"readback_ns\":" << timing.transport_readback_ns
++			<< ",\"frame_age_ns\":" << timing.transport_frame_age_ns << "}}";
+ 	if (timing_complete) {
+ 		observation.seekp(-1, std::ios_base::end);
+ 		observation << ",\"frame_entry_monotonic_ns\":" << timing.frame_entry_monotonic_ns
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+index aa2992b0d..c27bf31eb 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include <windows.h>
+ #include "../directshow-namespace.h"
++#include "d3d11-return-transport.hpp"
+ #include <cstdint>
+ #include <string>
+ #include <thread>
+@@ -38,6 +39,19 @@ struct directshow_stage_timing {
+ 	uint64_t unlock_sample_data_completed_monotonic_ns = 0;
+ 	uint64_t emission_monotonic_ns = 0;
+ 	struct video_queue_read_counters queue_counters = {};
++	uint32_t transport_path = PULSAR_D3D11_PATH_CPU;
++	uint32_t transport_fallback = PULSAR_D3D11_FALLBACK_NOT_REQUESTED;
++	int32_t transport_hresult = 0;
++	uint32_t transport_lane = 0;
++	uint64_t transport_epoch = 0;
++	uint64_t transport_produced_sequence = 0;
++	uint64_t transport_published_sequence = 0;
++	uint64_t transport_consumed_sequence = 0;
++	uint64_t transport_mutex_wait_ns = 0;
++	uint64_t transport_fence_wait_ns = 0;
++	uint64_t transport_gpu_copy_ns = 0;
++	uint64_t transport_readback_ns = 0;
++	uint64_t transport_frame_age_ns = 0;
+ };
+ 
+ class VCamFilter : public DShow::OutputFilter {
+@@ -50,6 +64,8 @@ class VCamFilter : public DShow::OutputFilter {
+ 	bool program_return = false;
+ 	bool preview_return = false;
+ 	bool consumer_gated = false;
++	pulsar_d3d11_return_consumer_t *d3d11 = nullptr;
++	bool d3d11_requested = false;
+ 	WinHandle consumer_lease;
+ 	int queue_mode = 0;
+ 	bool in_obs = false;
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index dfe23b476..31c42f6d4 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -8,6 +8,7 @@
+ #include "util/threading.h"
+ #include "../../shared/obs-shared-memory-queue/shared-memory-queue.h"
+ #include "directshow-namespace.h"
++#include "virtualcam-module/d3d11-return-transport.hpp"
+ #include "../../../plugins/pulsar-frontend-stub/include/pulsar-runtime-telemetry-abi.h"
+ 
+ struct virtualcam_data {
+@@ -20,6 +21,8 @@ struct virtualcam_data {
+ 	bool preview_return;
+ 	bool consumer_gated;
+ 	volatile long consumer_active;
++	pulsar_d3d11_return_producer_t *d3d11;
++	bool d3d11_requested;
+ 	volatile bool active;
+ 	volatile bool stopping;
+ };
+@@ -158,6 +161,7 @@ static const char *virtualcam_name(void *unused)
+ static void virtualcam_destroy(void *data)
+ {
+ 	struct virtualcam_data *vcam = (struct virtualcam_data *)data;
++	pulsar_d3d11_return_producer_close(vcam->d3d11);
+ 	video_queue_close(vcam->vq);
+ 	bfree(data);
+ }
+@@ -171,6 +175,8 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+ 	vcam->preview_return = obs_output_get_id(output) &&
+ 				       strcmp(obs_output_get_id(output), "preview_return_output") == 0;
+ 	vcam->consumer_gated = vcam->program_return || vcam->preview_return;
++	const char *transport = getenv("PULSAR_RETURN_TRANSPORT");
++	vcam->d3d11_requested = vcam->consumer_gated && transport && strcmp(transport, "d3d11") == 0;
+ 	vcam->queue_namespace_rejected = !queue_name_for_output(
+ 		output, vcam->queue_name, sizeof(vcam->queue_name) / sizeof(vcam->queue_name[0]));
+ 	if (vcam->consumer_gated && !vcam->queue_namespace_rejected)
+@@ -219,6 +225,14 @@ static bool virtualcam_start(void *data)
+ 	vsi.width = width;
+ 	vsi.height = height;
+ 	obs_output_set_video_conversion(vcam->output, &vsi);
++	if (vcam->d3d11_requested) {
++		const enum pulsar_d3d11_return_lane lane = vcam->program_return ? PULSAR_D3D11_PROGRAM_RETURN
++										 : PULSAR_D3D11_PREVIEW_RETURN;
++		vcam->d3d11 = pulsar_d3d11_return_producer_create(vcam->queue_name, lane, width, height);
++		if (!vcam->d3d11)
++			blog(LOG_WARNING, "[pulsar-directshow] D3D11 %s control unavailable; using CPU return queue",
++			     vcam->program_return ? "ProgramReturn" : "PreviewReturn");
++	}
+ 
+ 	os_atomic_set_bool(&vcam->active, true);
+ 	os_atomic_set_bool(&vcam->stopping, false);
+@@ -231,6 +245,8 @@ static bool virtualcam_start(void *data)
+ static void virtualcam_deactive(struct virtualcam_data *vcam)
+ {
+ 	obs_output_end_data_capture(vcam->output);
++	pulsar_d3d11_return_producer_close(vcam->d3d11);
++	vcam->d3d11 = NULL;
+ 	video_queue_close(vcam->vq);
+ 	vcam->vq = NULL;
+ 
+@@ -273,8 +289,11 @@ static void virtual_video(void *param, struct video_data *frame)
+ 
+ 	struct video_queue_frame_metadata metadata;
+ 	snapshot_runtime_frame(&metadata);
+-	(void)video_queue_write_ex(vcam->vq, frame->data, frame->linesize, frame->timestamp,
+-				   queue_pixel_format(vcam->output), &metadata);
++	const enum video_queue_pixel_format format = queue_pixel_format(vcam->output);
++	if (vcam->d3d11 && format == VIDEO_QUEUE_PIXEL_FORMAT_NV12 &&
++	    pulsar_d3d11_return_producer_write(vcam->d3d11, frame->data, frame->linesize, frame->timestamp, &metadata))
++		return;
++	(void)video_queue_write_ex(vcam->vq, frame->data, frame->linesize, frame->timestamp, format, &metadata);
+ }
+ 
+ struct obs_output_info virtualcam_info = {
+diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.c b/shared/obs-shared-memory-queue/shared-memory-queue.c
+index bb2a69260..3c14236d0 100644
+--- a/shared/obs-shared-memory-queue/shared-memory-queue.c
++++ b/shared/obs-shared-memory-queue/shared-memory-queue.c
+@@ -169,6 +169,17 @@ static bool queue_mapping_size(const void *mapping, size_t *mapping_size)
+ 	return true;
+ }
+ 
++/* A producer can publish STOPPING while a DirectShow consumer is between
++ * timer ticks. Treat a view that was already unmapped (or whose section was
++ * replaced) as invalid before touching queue_header atomics. */
++static bool queue_mapping_live(const struct video_queue *vq)
++{
++	MEMORY_BASIC_INFORMATION info = {0};
++	return vq && vq->layout_valid && vq->header && vq->mapping_size &&
++		VirtualQuery(vq->header, &info, sizeof(info)) == sizeof(info) &&
++		info.State == MEM_COMMIT && info.RegionSize != 0;
++}
++
+ static bool queue_layout_valid(const struct queue_header *header, size_t mapping_size,
+ 				       uint32_t frame_header_size)
+ {
+@@ -385,11 +397,13 @@ void video_queue_close(video_queue_t *vq)
+ 	if (!vq) {
+ 		return;
+ 	}
+-	if (vq->is_writer) {
++	const bool mapping_live = queue_mapping_live(vq);
++	if (vq->is_writer && mapping_live) {
+ 		InterlockedExchange((volatile LONG *)&vq->header->state, SHARED_QUEUE_STATE_STOPPING);
+ 	}
+ 
+-	UnmapViewOfFile(vq->header);
++	if (mapping_live)
++		UnmapViewOfFile(vq->header);
+ 	CloseHandle(vq->handle);
+ 	free(vq->read_buffer);
+ 	free(vq);
+@@ -397,7 +411,7 @@ void video_queue_close(video_queue_t *vq)
+ 
+ void video_queue_get_info(video_queue_t *vq, uint32_t *cx, uint32_t *cy, uint64_t *interval)
+ {
+-	if (!vq || !vq->layout_valid)
++	if (!queue_mapping_live(vq))
+ 		return;
+ 
+ 	struct queue_header *qh = vq->header;
+@@ -415,7 +429,7 @@ bool video_queue_write_ex(video_queue_t *vq, uint8_t **data, uint32_t *linesize,
+ 				  enum video_queue_pixel_format format,
+ 				  const struct video_queue_frame_metadata *metadata)
+ {
+-	if (!vq || !vq->layout_valid || !vq->is_writer || !queue_validate_nv12(vq->header->cx, vq->header->cy,
++	if (!queue_mapping_live(vq) || !vq->is_writer || !queue_validate_nv12(vq->header->cx, vq->header->cy,
+ 							 data, linesize, format))
+ 		return false;
+ 
+@@ -452,7 +466,7 @@ void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, ui
+ 
+ enum queue_state video_queue_state(video_queue_t *vq)
+ {
+-	if (!vq || !vq->layout_valid) {
++	if (!queue_mapping_live(vq)) {
+ 		return SHARED_QUEUE_STATE_INVALID;
+ 	}
+ 
+@@ -469,7 +483,7 @@ bool video_queue_read_ex(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint
+ {
+ 	if (metadata)
+ 		memset(metadata, 0, sizeof(*metadata));
+-	if (!vq || !vq->layout_valid || !vq->ready_to_read || !scale || !dst)
++	if (!queue_mapping_live(vq) || !vq->ready_to_read || !scale || !dst)
+ 		return false;
+ 
+ 	struct queue_header *qh = vq->header;
+-- 
+2.54.0.windows.1

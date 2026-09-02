@@ -1,0 +1,53 @@
+From a0731d837ec17fec00f711234f972cf2037418db Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Tue, 1 Sep 2026 18:03:13 +0200
+Subject: [PATCH] fix(cmake): parse Qt host tool arguments correctly
+
+Agent-Role: Eleven
+Agent-Thread: /root
+Work-Unit: pulsar-program-preview-transport-v2
+Evidence: pristine x64 configure resolved DIRECTORY as architecture
+---
+ cmake/windows/buildspec.cmake | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
+
+diff --git a/cmake/windows/buildspec.cmake b/cmake/windows/buildspec.cmake
+index f2a58493c..58741dbed 100644
+--- a/cmake/windows/buildspec.cmake
++++ b/cmake/windows/buildspec.cmake
+@@ -9,7 +9,11 @@ function(_handle_qt_cross_compile architecture)
+   set(options "")
+   set(oneValueArgs DIRECTORY)
+   set(multiValueArgs "")
+-  cmake_parse_arguments(PARSE_ARGV 0 _HQCC "${options}" "${oneValueArgs}" "${multiValueArgs}")
++  # Argument zero is the named `architecture` parameter.  Parsing from zero
++  # makes its value an unparsed token and shifts DIRECTORY into `architecture`
++  # on a pristine configure, producing a bogus Qt host-tools path ending in
++  # `-DIRECTORY`.  Parse only the keyword arguments that follow it.
++  cmake_parse_arguments(PARSE_ARGV 1 _HQCC "${options}" "${oneValueArgs}" "${multiValueArgs}")
+ 
+   _get_dependency_data(dependency_data)
+ 
+@@ -102,7 +106,17 @@ function(_check_dependencies_windows)
+   _check_dependencies(${dependencies_list})
+ 
+   if(NOT CMAKE_VS_PLATFORM_NAME STREQUAL Win32)
+-    _handle_qt_cross_compile(${CMAKE_HOST_SYSTEM_PROCESSOR} DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.deps/${qt6_destination}")
++    set(host_processor "${CMAKE_HOST_SYSTEM_PROCESSOR}")
++    if(NOT host_processor)
++      set(host_processor "$ENV{PROCESSOR_ARCHITEW6432}")
++    endif()
++    if(NOT host_processor)
++      set(host_processor "$ENV{PROCESSOR_ARCHITECTURE}")
++    endif()
++    if(NOT host_processor)
++      message(FATAL_ERROR "Unable to determine the Windows host processor for Qt host tools")
++    endif()
++    _handle_qt_cross_compile(${host_processor} DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.deps/${qt6_destination}")
+   endif()
+ endfunction()
+ 
+-- 
+2.54.0.windows.1
+

@@ -232,6 +232,18 @@ npm ci
 .\scripts\build-win.ps1 -Full
 ~~~
 
+After one compatible headless build, use the guarded local runtime fastpath
+for edit/probe loops that touch libobs, DirectShow, NVENC, x264 or Pulsar:
+
+~~~powershell
+.\scripts\build-win.ps1 -Fast
+~~~
+
+`-Fast` reuses the verified headless CMake cache and rebuilds every runtime
+target required by local probes. It is intentionally incompatible with
+`-Full`, `-GuiBuild`, `-Clean` and configure-only runs. CI, packaging and
+release validation continue to use the complete build.
+
 CI uses the runtime directory:
 
 ~~~text

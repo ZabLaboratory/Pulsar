@@ -35,12 +35,20 @@ param(
     # so re-configure does not re-download obs-deps / Qt6 / CEF; only
     # the CMake cache and compiled artefacts go.
     [switch] $Clean,
+    # Rebuild only the runtime targets needed by local Pulsar probes while
+    # reusing an already validated headless CMake configuration.  The default
+    # remains the complete build; CI/release/package flows must not pass -Fast.
+    [switch] $Fast,
     # Force the vendored OBS patch stacks to be rebuilt from their pins.
     # Normally the script reuses an exact, clean, fingerprinted patched
     # checkout so incremental CMake builds keep their object cache and source
     # mtimes across every Pulsar test loop.
     [switch] $RefreshPatches
 )
+
+if ($Fast -and ($Full -or $GuiBuild -or $Clean -or $Stage -eq 'configure')) {
+    throw '-Fast requires an existing headless cache and cannot be combined with -Full, -GuiBuild, -Clean, or -Stage configure'
+}
 
 # Windows PowerShell 5.1 wraps native command stderr lines as
 # ErrorRecords. With $ErrorActionPreference = 'Stop', a single cmake
@@ -394,7 +402,21 @@ if ($Clean) {
     }
 }
 
-if ($Stage -in @('configure', 'all')) {
+$upstreamCache = Join-Path $upstream 'build_x64\CMakeCache.txt'
+$reuseFastUpstreamConfigure = $false
+if ($Fast -and (Test-Path $upstreamCache)) {
+    $cacheText = Get-Content -Raw $upstreamCache
+    $reuseFastUpstreamConfigure =
+        $cacheText -match '(?m)^ENABLE_FRONTEND:BOOL=OFF\r?$' -and
+        $cacheText -match '(?m)^ENABLE_UI:BOOL=OFF\r?$' -and
+        $cacheText -match '(?m)^ENABLE_BROWSER:BOOL=OFF\r?$' -and
+        $cacheText -match '(?m)^ENABLE_WEBSOCKET:BOOL=OFF\r?$'
+}
+if ($Fast -and -not $reuseFastUpstreamConfigure) {
+    throw '-Fast requires an existing compatible headless build_x64 cache; run scripts/build-win.ps1 once first'
+}
+
+if ($Stage -in @('configure', 'all') -and -not $reuseFastUpstreamConfigure) {
     Write-Host ""
     if ($GuiBuild) {
         Write-Host "--- Configuring (GUI build: obs-studio with Qt + Browser) ---"
@@ -479,7 +501,13 @@ if ($Stage -in @('build', 'all')) {
     # directory, so we cd into upstream/ for the build call.
     Push-Location $upstream
     try {
-        & $cmake --build --preset $preset --config RelWithDebInfo --parallel
+        if ($Fast) {
+            Write-Host 'Fastpath targets: libobs, win-dshow, DirectShow filter, NVENC and x264'
+            & $cmake --build build_x64 --config RelWithDebInfo --parallel --target `
+                libobs win-dshow obs-virtualcam-module obs-nvenc obs-x264
+        } else {
+            & $cmake --build --preset $preset --config RelWithDebInfo --parallel
+        }
         if ($LASTEXITCODE -ne 0) { throw "Build failed" }
     } finally {
         Pop-Location
@@ -574,7 +602,11 @@ if ($Stage -in @('build', 'all')) {
 
         Write-Host ""
         Write-Host "--- Building Pulsar plugins ---"
-        & $cmake --build $pulsarBuild --config RelWithDebInfo --parallel
+        if ($Fast) {
+            & $cmake --build $pulsarBuild --config RelWithDebInfo --parallel --target pulsar-headless
+        } else {
+            & $cmake --build $pulsarBuild --config RelWithDebInfo --parallel
+        }
         if ($LASTEXITCODE -ne 0) { throw "Pulsar build failed" }
 
         $pulsarExe = Join-Path $upstream 'build_x64\rundir\RelWithDebInfo\bin\64bit\pulsar.exe'
