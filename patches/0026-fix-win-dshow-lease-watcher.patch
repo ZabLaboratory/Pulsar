@@ -1,0 +1,250 @@
+From 6c2fe56ad0248e45f60cb6008810e19e3d00190d Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Wed, 2 Sep 2026 16:12:20 +0200
+Subject: [PATCH] perf(win-dshow): watch return consumer lease off frame path
+
+Move DirectShow lease observation to a bounded lifecycle watcher while preserving fail-closed publication and the ungated compatibility path.
+
+Agent-Role: forge
+
+Agent-Thread: /root/forge_253_lease_watcher
+
+Work-Unit: ZabLaboratory/Pulsar#253
+
+Issue: 253
+
+ADR-Revision: ADR-PULSAR-DUAL-LANE-001@draft-r2-dual-lane-20260828
+
+Evidence: bounded lease watcher, static transition contract, no per-frame OpenEventW
+
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index 37316c1fb..f4dd39ef7 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -13,2 +13,12 @@
+ 
++#define PULSAR_DIRECTSHOW_LEASE_POLL_MS 20U
++
++enum return_lease_state {
++	RETURN_LEASE_STOPPED = 0,
++	RETURN_LEASE_STARTING,
++	RETURN_LEASE_DETACHED,
++	RETURN_LEASE_ATTACHED,
++	RETURN_LEASE_RECONNECTING,
++};
++
+ struct virtualcam_data {
+@@ -23,2 +33,13 @@ struct virtualcam_data {
+ 	volatile long consumer_active;
++	volatile long lease_state;
++	volatile long lease_watcher_stop;
++	volatile long lease_watcher_started;
++	volatile long lease_watcher_fallback;
++	volatile long lease_polls;
++	volatile long lease_hits;
++	volatile long lease_misses;
++	volatile long lease_expiry;
++	bool lease_telemetry_enabled;
++	os_event_t *lease_wakeup;
++	pthread_t lease_thread;
+ 	pulsar_d3d11_return_producer_t *d3d11;
+@@ -29,9 +50,44 @@ struct virtualcam_data {
+ 
+-static bool return_consumer_is_active(struct virtualcam_data *vcam)
++static const char *return_lease_role(const struct virtualcam_data *vcam)
+ {
+-	if (!vcam->consumer_gated)
+-		return true;
++	return vcam->program_return ? "ProgramReturn" : "PreviewReturn";
++}
++
++static bool return_lease_telemetry_enabled(void)
++{
++	const char *value = getenv("PULSAR_DIRECTSHOW_LEASE_TELEMETRY");
++	return value && (strcmp(value, "1") == 0 || strcmp(value, "true") == 0 || strcmp(value, "TRUE") == 0);
++}
++
++static const char *return_lease_state_name(enum return_lease_state state)
++{
++	switch (state) {
++	case RETURN_LEASE_STARTING:
++		return "start";
++	case RETURN_LEASE_DETACHED:
++		return "detach";
++	case RETURN_LEASE_ATTACHED:
++		return "attach";
++	case RETURN_LEASE_RECONNECTING:
++		return "reconnect";
++	case RETURN_LEASE_STOPPED:
++	default:
++		return "stop";
++	}
++}
++
++static void return_lease_log_state(struct virtualcam_data *vcam, enum return_lease_state state)
++{
++	const long previous = os_atomic_exchange_long(&vcam->lease_state, (long)state);
++	if (previous != (long)state)
++		blog(LOG_INFO, "[pulsar-directshow] %s lease state=%s name=%ls", return_lease_role(vcam),
++		     return_lease_state_name(state), vcam->consumer_lease_name);
++}
+ 
++static bool return_lease_probe_once(struct virtualcam_data *vcam)
++{
++	InterlockedIncrement(&vcam->lease_polls);
+ 	HANDLE lease = OpenEventW(SYNCHRONIZE, FALSE, vcam->consumer_lease_name);
+ 	const bool active = lease != NULL;
++	const DWORD probe_error = active ? ERROR_SUCCESS : GetLastError();
+ 	if (lease)
+@@ -39,7 +95,19 @@ static bool return_consumer_is_active(struct virtualcam_data *vcam)
+ 
+-	const long previous = InterlockedExchange(&vcam->consumer_active, active ? 1L : 0L);
+-	if (previous != (active ? 1L : 0L))
+-		blog(LOG_INFO, "[pulsar-directshow] %s consumer %s (lease=%ls)",
+-		     vcam->program_return ? "ProgramReturn" : "PreviewReturn", active ? "attached" : "detached",
+-		     vcam->consumer_lease_name);
++	if (active) {
++		InterlockedIncrement(&vcam->lease_hits);
++		InterlockedExchange(&vcam->consumer_active, 1L);
++		const long state = os_atomic_load_long(&vcam->lease_state);
++		return_lease_log_state(vcam,
++				       state == RETURN_LEASE_DETACHED ? RETURN_LEASE_RECONNECTING
++									 : RETURN_LEASE_ATTACHED);
++	} else {
++		InterlockedIncrement(&vcam->lease_misses);
++		if (probe_error != ERROR_FILE_NOT_FOUND && probe_error != ERROR_PATH_NOT_FOUND)
++			InterlockedIncrement(&vcam->lease_watcher_fallback);
++		const long previous = InterlockedExchange(&vcam->consumer_active, 0L);
++		if (previous)
++			InterlockedIncrement(&vcam->lease_expiry);
++		return_lease_log_state(vcam, RETURN_LEASE_DETACHED);
++	}
++
+ 	return active;
+@@ -47,2 +115,96 @@ static bool return_consumer_is_active(struct virtualcam_data *vcam)
+ 
++static void *return_lease_watcher(void *param)
++{
++	struct virtualcam_data *vcam = (struct virtualcam_data *)param;
++
++	while (!os_atomic_load_long(&vcam->lease_watcher_stop)) {
++		return_lease_probe_once(vcam);
++		const int wait_result = os_event_timedwait(vcam->lease_wakeup, PULSAR_DIRECTSHOW_LEASE_POLL_MS);
++		if (wait_result != ETIMEDOUT) {
++			if (wait_result != 0)
++				InterlockedIncrement(&vcam->lease_watcher_fallback);
++			break;
++		}
++	}
++
++	os_atomic_set_long(&vcam->consumer_active, 0L);
++	return_lease_log_state(vcam, RETURN_LEASE_STOPPED);
++	return NULL;
++}
++
++static bool return_lease_watcher_start(struct virtualcam_data *vcam)
++{
++	if (!vcam->consumer_gated) {
++		InterlockedIncrement(&vcam->lease_watcher_fallback);
++		return true;
++	}
++
++	if (os_atomic_load_long(&vcam->lease_watcher_started))
++		return true;
++
++	os_atomic_set_long(&vcam->consumer_active, 0L);
++	os_atomic_set_long(&vcam->lease_watcher_stop, 0L);
++	return_lease_log_state(vcam, RETURN_LEASE_STARTING);
++	vcam->lease_wakeup = NULL;
++	if (os_event_init(&vcam->lease_wakeup, OS_EVENT_TYPE_MANUAL) != 0 ||
++	    pthread_create(&vcam->lease_thread, NULL, return_lease_watcher, vcam) != 0) {
++		if (vcam->lease_wakeup) {
++			os_event_destroy(vcam->lease_wakeup);
++			vcam->lease_wakeup = NULL;
++		}
++		InterlockedIncrement(&vcam->lease_watcher_fallback);
++		os_atomic_set_long(&vcam->consumer_active, 0L);
++		return_lease_log_state(vcam, RETURN_LEASE_DETACHED);
++		return false;
++	}
++	os_atomic_set_long(&vcam->lease_watcher_started, 1L);
++	return true;
++}
++
++static void return_lease_log_counters(const struct virtualcam_data *vcam)
++{
++	if (vcam->lease_telemetry_enabled)
++		blog(LOG_INFO,
++		     "[pulsar-directshow] %s lease telemetry polls=%ld hits=%ld misses=%ld expiry=%ld fallback=%ld poll_ms=%u",
++		     return_lease_role(vcam), os_atomic_load_long(&vcam->lease_polls),
++		     os_atomic_load_long(&vcam->lease_hits), os_atomic_load_long(&vcam->lease_misses),
++		     os_atomic_load_long(&vcam->lease_expiry), os_atomic_load_long(&vcam->lease_watcher_fallback),
++		     PULSAR_DIRECTSHOW_LEASE_POLL_MS);
++}
++
++static void return_lease_watcher_stop(struct virtualcam_data *vcam)
++{
++	if (!vcam->consumer_gated) {
++		return_lease_log_counters(vcam);
++		return;
++	}
++
++	os_atomic_set_long(&vcam->consumer_active, 0L);
++	if (!os_atomic_load_long(&vcam->lease_watcher_started)) {
++		return_lease_log_counters(vcam);
++		return_lease_log_state(vcam, RETURN_LEASE_STOPPED);
++		return;
++	}
++
++	os_atomic_set_long(&vcam->lease_watcher_stop, 1L);
++	if (vcam->lease_wakeup)
++		os_event_signal(vcam->lease_wakeup);
++	pthread_join(vcam->lease_thread, NULL);
++	os_atomic_set_long(&vcam->lease_watcher_started, 0L);
++	if (vcam->lease_wakeup) {
++		os_event_destroy(vcam->lease_wakeup);
++		vcam->lease_wakeup = NULL;
++	}
++	return_lease_log_counters(vcam);
++	return_lease_log_state(vcam, RETURN_LEASE_STOPPED);
++}
++
++static bool return_consumer_is_active(struct virtualcam_data *vcam)
++{
++	if (!vcam->consumer_gated)
++		return true;
++
++	return os_atomic_load_long(&vcam->consumer_active) != 0;
++}
++
+ static void copy_telemetry_identifier(char *destination, const char *value)
+@@ -167,2 +329,3 @@ static void virtualcam_destroy(void *data)
+ 	struct virtualcam_data *vcam = (struct virtualcam_data *)data;
++	return_lease_watcher_stop(vcam);
+ 	pulsar_d3d11_return_producer_close(vcam->d3d11);
+@@ -181,2 +344,3 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+ 	vcam->consumer_gated = vcam->program_return || vcam->preview_return;
++	vcam->lease_telemetry_enabled = return_lease_telemetry_enabled();
+ 	const char *transport = getenv("PULSAR_RETURN_TRANSPORT");
+@@ -239,2 +403,5 @@ static bool virtualcam_start(void *data)
+ 	}
++	if (!return_lease_watcher_start(vcam))
++		blog(LOG_WARNING, "[pulsar-directshow] %s lease watcher unavailable; publication remains disabled",
++		     return_lease_role(vcam));
+ 
+@@ -250,2 +417,3 @@ static void virtualcam_deactive(struct virtualcam_data *vcam)
+ {
++	os_atomic_set_bool(&vcam->active, false);
+ 	obs_output_end_data_capture(vcam->output);
+@@ -256,3 +424,2 @@ static void virtualcam_deactive(struct virtualcam_data *vcam)
+ 
+-	os_atomic_set_bool(&vcam->active, false);
+ 	os_atomic_set_bool(&vcam->stopping, false);
+@@ -266,2 +433,3 @@ static void virtualcam_stop(void *data, uint64_t ts)
+ 	os_atomic_set_bool(&vcam->stopping, true);
++	return_lease_watcher_stop(vcam);
+ 
+-- 
+2.54.0.windows.1
+
