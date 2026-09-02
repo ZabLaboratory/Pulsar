@@ -63,3 +63,13 @@ def test_lease_fastpath_is_explicitly_deferred_for_lifecycle_safety() -> None:
     assert "fail-closed" in text
     assert "detach" in text and "reconnect" in text
     assert "heartbeat protocol" in text
+
+
+def test_corrective_followup_rejects_unproven_candidate_without_loosening_race_fix() -> None:
+    text = LEASE_NOTE.read_text(encoding="utf-8")
+    assert "candidate `33934edb`" in text
+    assert "rejected for a new Probe pair" in text
+    assert "Mann-Whitney" in text and "p=0.267" in text
+    assert "KS result" in text and "p=0.0156" in text
+    assert "atomic\ncounter discipline remains the safe implementation" in text
+    assert "plain-data seqlock" in text
