@@ -53,6 +53,13 @@ def test_shared_route_identity_is_single_and_explicit() -> None:
     assert "obs_encoder_set_audio(enc, programAudio);" in frontend
     assert "obs_encoder_set_audio(enc, obs_get_audio())" not in frontend
     assert "ProgramAudioRoute=%s ProgramAudio=%p" in frontend
+    # Process loopback is configured through win-wasapi's OBS window
+    # descriptor parser.  Guard the regression where a bare executable name
+    # creates the source but leaves it uninitialised (silent AAC).
+    assert '#include <util/windows/window-helpers.h>' in frontend
+    assert 'std::string processWindow = std::string("::") + exe;' in frontend
+    assert 'obs_data_set_int(procSettings, "priority", WINDOW_PRIORITY_EXE);' in frontend
+    assert 'obs_data_set_string(procSettings, "window", processWindow.c_str());' in frontend
 
 
 def test_route_observer_reads_encoder_mixers_and_pts_and_unhooks() -> None:

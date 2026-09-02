@@ -92,6 +92,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <util/windows/window-helpers.h>
 #endif
 
 #ifdef _WIN32
@@ -5069,12 +5070,23 @@ bool PulsarFrontendAPI::setup()
     // (older Windows or older win-wasapi).
     if (const char *exe = std::getenv("PULSAR_PROCESS_AUDIO_NAME"); exe && *exe) {
         OBSDataAutoRelease procSettings = obs_data_create();
-        // win-wasapi process loopback settings: priority=0 means match by
-        // executable; "window" is the value field even though it carries
-        // an exe path -- inherited from the window-capture-style API in
-        // upstream win-capture.
+        // win-wasapi resolves a process loopback target through OBS's
+        // window descriptor parser, not through a bare executable string.
+        // A plain `chrome.exe` would leave the descriptor fields unset and
+        // the source would be created but never initialize (silent AAC).
+        // Build an exe-priority descriptor with empty title/class fields so
+        // changing Chrome's tab title cannot invalidate the target between
+        // Pulsar setup and WASAPI initialization.
+#ifdef _WIN32
+        const std::string processWindow = std::string("::") + exe;
+        obs_data_set_int(procSettings, "priority", WINDOW_PRIORITY_EXE);
+        obs_data_set_string(procSettings, "window", processWindow.c_str());
+#else
+        // The source ID is Windows-specific; retain the historical value for
+        // non-Windows builds where a platform implementation may provide it.
         obs_data_set_int(procSettings, "priority", 0);
         obs_data_set_string(procSettings, "window", exe);
+#endif
         processAudioSource = obs_source_create("wasapi_process_output_capture",
                                                 "PulsarProcessAudio",
                                                 procSettings, nullptr);
