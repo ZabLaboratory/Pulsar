@@ -115,6 +115,9 @@ def test_runtime_callback_registration_is_selector_gated():
     assert "signalMask_.store(0, std::memory_order_release);" in source
     assert "Signal::EncoderFrameReady" in source
     assert "Signal::OutputMuxEnqueue" in source
+    assert "std::atomic<uint32_t> signalMask_{0};" in source
+    assert "mutable std::atomic<bool> rawCaptured" in source
+    assert "mutable std::atomic<bool> packetCaptured" in source
 
 
 def test_callback_selector_cases_are_fail_closed_and_stage_specific():

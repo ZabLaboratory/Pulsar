@@ -375,8 +375,8 @@ class PulsarRuntimeTelemetry {
         char commandId[129] = {};
         char intentId[129] = {};
         char takeCommandId[129] = {};
-        std::atomic<bool> rawCaptured{false};
-        std::atomic<bool> packetCaptured{false};
+        mutable std::atomic<bool> rawCaptured{false};
+        mutable std::atomic<bool> packetCaptured{false};
     };
 
     // A bounded, non-blocking MPMC queue. Encoder and raw-video callbacks only
@@ -2149,6 +2149,7 @@ private:
     std::atomic<uint64_t> packetFrameCount_{0};
     std::atomic<uint64_t> encodeTimeNsTotal_{0};
     std::atomic<uint64_t> encodeTimeSampleCount_{0};
+    std::atomic<uint32_t> signalMask_{0};
     std::vector<std::string> traceSignals_;
     // Snapshots are write-once for the lifetime of this telemetry object.  A
     // slot is never reused, so a callback that acquired an old pointer cannot
