@@ -117,9 +117,11 @@ SHUTDOWN_GRACE_S = 8.0
 REPLAY_FILL_S = 5.0
 
 # Output stops go through a real muxer flush (ffmpeg_muxer) -- the probe waits,
-# the request does not. 15 s is generous next to the ~1 s a healthy stop takes;
-# it only costs time on a genuine failure.
+# the request does not. Keep the recovery budget separate from the server's
+# short response window: a loaded CI runner may need several seconds to drain
+# the shared record/replay encoders after a truthful 702 Pending response.
 STOP_ATTEMPTS = 60
+PENDING_STOP_SETTLE_S = 45.0
 
 # --------------------------------------------------------------------------
 # Known, DATED, JUSTIFIED exceptions to "OK_NO_EFFECT fails the probe".
@@ -836,19 +838,14 @@ async def finish_record(ws: PulsarWs) -> None:
         # StopRecord keeps its response truthful when the muxer flush exceeds
         # the bounded server window.  Consume the authoritative completion
         # before Replay/scene probes reuse this shared process; do not turn the
-        # 702 request response into a fake Success.
-        landed = await ws.wait_for_event(
-            "RecordStateChanged",
-            "OBS_WEBSOCKET_OUTPUT_STOPPED",
-            timeout=15.0,
-        )
-        stopped = await ws.poll("GetRecordStatus", "outputActive", False, attempts=STOP_ATTEMPTS)
+        # 702 request response into a fake Success.  Observe the event and the
+        # independent status readback in ONE bounded loop: waiting 15 s for the
+        # event and only then polling status created a false negative when a
+        # loaded runner delivered one boundary just after the other window.
+        landed, stopped = await wait_for_record_stop(ws)
         # Either observation is authoritative.  The STOPPED event can race the
-        # request response and therefore already be consumed before this wait
-        # begins, while GetRecordStatus remains a stable independent readback.
-        # Conversely, a landed STOPPED event is sufficient if a congested
-        # status request has not returned yet.  Fail only when neither boundary
-        # proves completion.
+        # request response and already be buffered before this helper starts,
+        # while GetRecordStatus remains a stable independent readback.
         if not landed and stopped is not False:
             record(
                 "Record",
@@ -874,6 +871,41 @@ async def finish_record(ws: PulsarWs) -> None:
     else:
         record("Record", "StopRecord", Verdict.OK_NO_EFFECT, f"result=True but outputActive={stopped!r}")
         raise RuntimeError("StopRecord returned success but outputActive stayed true")
+
+
+async def wait_for_record_stop(ws: PulsarWs, timeout: float = PENDING_STOP_SETTLE_S) -> tuple[bool, Any]:
+    """Wait for either authoritative record-stop boundary.
+
+    A 702 response means libobs accepted the stop but its ffmpeg muxer is still
+    draining.  Under load, the websocket STOPPED event and the status readback
+    do not necessarily arrive in the same scheduling slice.  Poll both on one
+    shared deadline so the probe never turns a late-but-valid completion into a
+    failure, while still failing closed after a finite budget.
+    """
+    deadline = time.monotonic() + timeout
+    landed = ws._seen("RecordStateChanged", "OBS_WEBSOCKET_OUTPUT_STOPPED")
+    stopped: Any = None
+    while True:
+        if landed:
+            return True, stopped
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return landed, stopped
+
+        try:
+            _, data, _ = await ws.req("GetRecordStatus", timeout=min(2.0, remaining))
+            stopped = data.get("outputActive")
+        except (asyncio.TimeoutError, TimeoutError):
+            # A congested status request is not proof that the output is still
+            # active; keep the same bounded deadline and continue observing.
+            pass
+
+        landed = ws._seen("RecordStateChanged", "OBS_WEBSOCKET_OUTPUT_STOPPED")
+        if landed or stopped is False:
+            return landed, stopped
+
+        await asyncio.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
 
 
 async def probe_offair_arm(ws: PulsarWs) -> tuple[bool, bool, str | None]:
