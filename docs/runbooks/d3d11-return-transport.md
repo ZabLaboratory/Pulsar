@@ -13,6 +13,11 @@ uses keyed mutex key 0→1/1→0 ownership, and polls a D3D11 event query with a
 2 ms deadline before readback. A borrowed frame pointer is copied into a
 tightly-packed upload vector synchronously; no pointer crosses the callback.
 
+For the dual-lane probe, pass `--return-transport d3d11`. The harness propagates
+that explicit policy to both the Pulsar child and the FFmpeg DirectShow
+consumer. Omitting the option preserves the inherited environment/default; use
+`--return-transport cpu` to force the legacy CPU path for a comparison.
+
 The current implementation is a bounded GPU transport, not a zero-copy path:
 the `raw_video` callback still receives OBS's converted system-memory NV12 frame,
 copies it synchronously into the shared texture, and the consumer reads it back

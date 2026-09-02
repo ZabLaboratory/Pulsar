@@ -143,6 +143,23 @@ def test_parse_args_accepts_persistent_record_directory(tmp_path):
     assert args.record_dir == tmp_path / "evidence"
 
 
+def test_return_transport_opt_in_is_explicit_and_defaults_to_inherited_policy(monkeypatch):
+    monkeypatch.delenv("PULSAR_RETURN_TRANSPORT", raising=False)
+    assert probe.parse_args(["--encoder", "x264"]).return_transport is None
+
+    monkeypatch.setenv("PULSAR_RETURN_TRANSPORT", "d3d11")
+    assert probe.parse_args(["--encoder", "x264"]).return_transport == "d3d11"
+
+    assert probe.parse_args(["--encoder", "x264", "--return-transport", "cpu"]).return_transport == "cpu"
+
+
+def test_return_transport_is_propagated_to_runtime_and_directshow_children():
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert source.count('env["PULSAR_RETURN_TRANSPORT"] = self.return_transport') == 2
+    assert "default=os.environ.get(\"PULSAR_RETURN_TRANSPORT\") or None" in source
+    assert "args.return_transport," in source
+
+
 def test_recording_output_must_stay_under_runtime_directory(tmp_path):
     record_dir = tmp_path / "session"
     record_dir.mkdir()

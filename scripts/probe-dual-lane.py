@@ -31,6 +31,10 @@ The canonical three-command acceptance sequence is::
         --trace artifacts/249/nvenc-rtmp.jsonl --runtime-id runtime-nvenc-001 \
         --build-revision <candidate-sha> --capture-window <visible-title:class:exe> \
         --cef-workload --trace-append --resource-mode dual_lane --rtmp-receiver
+    python scripts/probe-dual-lane.py --exe <pulsar.exe> --encoder nvenc --takes 1 \
+        --return-transport d3d11 --trace artifacts/253/nvenc-d3d11.jsonl \
+        --runtime-id runtime-nvenc-d3d11 --build-revision <candidate-sha> \
+        --capture-window <visible-title:class:exe> --cef-workload --rtmp-receiver
 
 The x264 trace is a latency-only campaign (AC-13 is not applicable); the
 NVENC trace's reference phase must run with ``--resource-mode reference
@@ -1296,6 +1300,7 @@ class PulsarProcess:
         cef_url: str | None = None,
         trace_host: str | None = None,
         trace_gpu: str | None = None,
+        return_transport: str | None = None,
     ) -> None:
         self.exe = exe
         self.encoder = encoder
@@ -1311,6 +1316,10 @@ class PulsarProcess:
         self.cef_url = cef_url or os.environ.get("PULSAR_CEF_URL")
         self.trace_host = trace_host
         self.trace_gpu = trace_gpu
+        # Resolve the opt-in once so the Pulsar producer and the external
+        # DirectShow consumer cannot observe different transport policies.
+        # ``None`` preserves the historical inherited environment/default.
+        self.return_transport = return_transport or os.environ.get("PULSAR_RETURN_TRANSPORT") or None
         self.producer_topology = (
             "single_lane_reference" if resource_mode == "reference" else "dual_lane_ab"
         )
@@ -1345,6 +1354,8 @@ class PulsarProcess:
         env["PULSAR_PASSWORD"] = self.password
         env["PULSAR_RECORD_DIR"] = str(self.record_dir)
         env["PULSAR_VIDEO_ENCODER"] = self.encoder
+        if self.return_transport is not None:
+            env["PULSAR_RETURN_TRANSPORT"] = self.return_transport
         # The inherited shutdown-control acknowledgement is keyed by this
         # identity in traced and non-traced runs alike. Export it before the
         # trace-only block so a normal smoke cannot wait for an ID the child
@@ -1580,6 +1591,8 @@ class PulsarProcess:
         env["PULSAR_RUNTIME_INSTANCE_ID"] = self.runtime_id
         env["PULSAR_TRACE_PATH"] = str(self.trace_path)
         env["PULSAR_DIRECTSHOW_LEGACY_ALIAS"] = "0"
+        if self.return_transport is not None:
+            env["PULSAR_RETURN_TRANSPORT"] = self.return_transport
         command = [
             ffmpeg,
             "-hide_banner",
@@ -4067,6 +4080,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="start a real FFmpeg loopback RTMP receiver and fuse correlated AC-12 evidence after shutdown",
     )
     parser.add_argument(
+        "--return-transport",
+        choices=("cpu", "d3d11"),
+        default=os.environ.get("PULSAR_RETURN_TRANSPORT") or None,
+        help="return transport policy propagated to Pulsar and DirectShow (default: PULSAR_RETURN_TRANSPORT)",
+    )
+    parser.add_argument(
         "--cef-url",
         default=os.environ.get("PULSAR_CEF_URL"),
         help="URL for the --cef-workload browser_source (or PULSAR_CEF_URL; default is an ephemeral local page)",
@@ -4094,6 +4113,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--trace-append requires --rtmp-receiver for AC-13 evidence")
     if args.rtmp_receiver and args.trace is None:
         parser.error("--rtmp-receiver requires --trace")
+    if args.return_transport not in (None, "cpu", "d3d11"):
+        parser.error("--return-transport or PULSAR_RETURN_TRANSPORT must be cpu or d3d11")
     if args.rtmp_receiver and args.resource_only and (
         args.encoder != "nvenc" or args.resource_mode != "reference" or args.trace_append
     ):
@@ -4173,6 +4194,7 @@ def run(args: argparse.Namespace) -> int:
             cef_url,
             trace_host,
             trace_gpu,
+            args.return_transport,
         )
         if args.rtmp_receiver:
             if rtmp_ffmpeg is None:
