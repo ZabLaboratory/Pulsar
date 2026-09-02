@@ -565,6 +565,88 @@ def test_runtime_selector_schema_accepts_none_and_filtered_signal_payloads() -> 
         parser._validate_resource(resource, none_session)
 
 
+def test_runtime_selector_schema_rejects_adversarial_declarations() -> None:
+    spec = importlib.util.spec_from_file_location("probe_take_latency_selector_adversarial", TAKE_LATENCY_PROBE)
+    assert spec is not None and spec.loader is not None
+    parser = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = parser
+    spec.loader.exec_module(parser)
+
+    candidate_sha = "0123456789abcdef" * 2 + "01234567"
+    session = {
+        "record_type": "session",
+        "schema": "pulsar.take-latency.v1",
+        "runtime_instance_id": "runtime-selector-adversarial",
+        "session_id": "runtime-selector-adversarial-gpu",
+        "codec": "x264",
+        "warmup_takes": 100,
+        "video": {"width": 1920, "height": 1080, "fps_num": 60, "fps_den": 1},
+        "workload": {"wgc": True, "cef": True, "nvenc": False},
+        "capture_paths": [],
+        "source_types": ["window_capture", "browser_source"],
+        "resource_reference": {"extra_frame_render_ms": 0.091, "extra_resident_bytes": 3_130_000},
+        "build_revision": candidate_sha,
+        "command_line": "selector-adversarial-contract",
+        "hardware": {"host": "test-host", "gpu": "test-gpu"},
+        "producer_topology": "dual_lane_ab",
+        "producer_count": 2,
+        "telemetry_signals": ["gpu"],
+        "evidence_kind": "runtime",
+    }
+
+    invalid_selectors = (
+        (["not-a-signal"], "contains an unsupported signal"),
+        (["gpu", "gpu"], "must not contain duplicates"),
+        ([""], "contains an unsupported signal"),
+        (None, "must be a list"),
+    )
+    for selector, message in invalid_selectors:
+        with pytest.raises(parser.EvidenceError, match=message):
+            parser._validate_session({**session, "telemetry_signals": selector})
+
+    none_session = {
+        "record_type": "session",
+        "schema": "pulsar.take-latency.v1",
+        "runtime_instance_id": "runtime-selector-none",
+        "session_id": "runtime-selector-none-none",
+        "telemetry_signals": [],
+        "evidence_kind": "runtime",
+    }
+    assert parser._validate_session(none_session) == none_session
+    with pytest.raises(parser.EvidenceError, match="unknown fields"):
+        parser._validate_session({**none_session, "codec": "x264"})
+
+    # An encoded packet alone is not the program selector's complete path:
+    # the raw encoder input boundary remains mandatory for that selection.
+    with pytest.raises(parser.EvidenceError, match="declare the boundaries"):
+        parser._validate_session(
+            {
+                **session,
+                "telemetry_signals": ["program"],
+                "capture_paths": ["encoded_first_packet"],
+            }
+        )
+
+    gpu_resource = {
+        "record_type": "resource_sample",
+        "sample_mode": "dual_lane",
+        "measurement_phase": "dual_lane",
+        "clock_domain": "monotonic_ns",
+        "runtime_instance_id": session["runtime_instance_id"],
+        "observed_at_monotonic_ns": 123,
+        "telemetry_signals_mask": parser.TELEMETRY_SIGNAL_BITS["gpu"],
+        "build_revision": candidate_sha,
+        "hardware": session["hardware"],
+        "producer_topology": "dual_lane_ab",
+        "producer_count": 2,
+        "gpu": {"host_gpu_percent": 12.0, "encoder_utilization_percent": 3.0, "gpu_memory_bytes": 42},
+    }
+    with pytest.raises(parser.EvidenceError, match="must be a non-negative integer"):
+        parser._validate_resource({**gpu_resource, "telemetry_signals_mask": 63.0}, session)
+    with pytest.raises(parser.EvidenceError, match="outside the selector range"):
+        parser._validate_filtered_resource({**gpu_resource, "telemetry_signals_mask": 0}, session)
+
+
 def test_wire_deadline_uses_qpc_compatible_perf_counter_and_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     spec = importlib.util.spec_from_file_location("probe_dual_lane_clock_contract", DUAL_LANE_PROBE)
     assert spec is not None and spec.loader is not None

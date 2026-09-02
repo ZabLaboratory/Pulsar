@@ -539,11 +539,23 @@ def _revisions(value: Any, name: str, *, line: int | None = None) -> dict[str, i
     return {key: _integer(obj[key], f"{name}.{key}", line=line) for key in ("program", "preview", "role_map")}
 
 
+def _validate_telemetry_signals(value: Any, *, line: int | None = None) -> list[str]:
+    """Validate a selector declaration without coercion or fail-open behavior."""
+    if not isinstance(value, list):
+        raise EvidenceError("SCHEMA_INVALID", "session.telemetry_signals must be a list", line=line)
+    if any(not isinstance(signal, str) or signal not in TELEMETRY_SIGNALS for signal in value):
+        raise EvidenceError("SCHEMA_INVALID", "session.telemetry_signals contains an unsupported signal", line=line)
+    if len(set(value)) != len(value):
+        raise EvidenceError("SCHEMA_INVALID", "session.telemetry_signals must not contain duplicates", line=line)
+    return list(value)
+
+
 def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
     obj = _object(value, "session", line=line)
     if obj.get("record_type") != "session" or obj.get("schema") != TRACE_SCHEMA:
         raise EvidenceError("SCHEMA_INVALID", "session record_type/schema is not pulsar.take-latency.v1", line=line)
-    if obj.get("telemetry_signals") == []:
+    signals = _validate_telemetry_signals(obj["telemetry_signals"], line=line) if "telemetry_signals" in obj else None
+    if signals == []:
         _exact_keys(obj, SESSION_NONE_REQUIRED, SESSION_NONE_REQUIRED, "session", line=line)
         for key in ("runtime_instance_id", "session_id"):
             _string(obj[key], f"session.{key}", identifier=True, line=line)
@@ -580,12 +592,6 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
         _boolean(workload[key], f"session.workload.{key}", line=line)
     if obj["codec"] == "nvenc" and not workload["nvenc"]:
         raise EvidenceError("SCHEMA_INVALID", "an nvenc session must declare workload.nvenc=true", line=line)
-    if "telemetry_signals" in obj:
-        signals = obj["telemetry_signals"]
-        if not isinstance(signals, list) or any(signal not in TELEMETRY_SIGNALS for signal in signals):
-            raise EvidenceError("SCHEMA_INVALID", "session.telemetry_signals contains an unsupported signal", line=line)
-        if len(set(signals)) != len(signals):
-            raise EvidenceError("SCHEMA_INVALID", "session.telemetry_signals must not contain duplicates", line=line)
     source_types = obj.get("source_types")
     if obj["evidence_kind"] == "runtime":
         if not isinstance(source_types, list) or not source_types or any(
@@ -605,20 +611,20 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
         if workload["cef"] and "browser_source" not in source_types:
             raise EvidenceError("SCHEMA_INVALID", "workload.cef=true requires browser_source in source_types", line=line)
     paths = obj["capture_paths"]
-    signals = set(obj.get("telemetry_signals", ()))
+    signal_set = set(signals or ())
     expected_paths = set()
-    if "program" in signals:
+    if "program" in signal_set:
         expected_paths.update(("encoder_input_raw", "encoded_first_packet"))
-    if "raw" in signals:
+    if "raw" in signal_set:
         expected_paths.add("directshow_return")
-    if signals == set(TELEMETRY_SIGNALS):
+    if signal_set == set(TELEMETRY_SIGNALS):
         expected_paths.update(("decoded_first_frame", "antenna_first_frame"))
-    paths_empty_allowed = "telemetry_signals" in obj and not expected_paths
+    paths_empty_allowed = signals is not None and not expected_paths
     if not isinstance(paths, list) or (not paths and not paths_empty_allowed) or any(path not in BOUNDARIES for path in paths):
         raise EvidenceError("SCHEMA_INVALID", "session.capture_paths must list supported boundaries", line=line)
     if len(set(paths)) != len(paths):
         raise EvidenceError("SCHEMA_INVALID", "session.capture_paths must not contain duplicates", line=line)
-    if "telemetry_signals" in obj and not expected_paths.issubset(paths):
+    if signals is not None and not expected_paths.issubset(paths):
         raise EvidenceError(
             "SCHEMA_INVALID",
             "session.capture_paths must declare the boundaries enabled by telemetry_signals",
@@ -966,6 +972,11 @@ def _validate_filtered_resource(value: Any, session: Mapping[str, Any], *, line:
 
 def _validate_resource(value: Any, session: Mapping[str, Any], *, line: int | None = None) -> dict[str, Any]:
     obj = _object(value, "resource sample", line=line)
+    resource_mask = (
+        _integer(obj["telemetry_signals_mask"], "resource.telemetry_signals_mask", line=line)
+        if "telemetry_signals_mask" in obj
+        else None
+    )
     if "telemetry_signals" in session:
         session_signals = session["telemetry_signals"]
         if not isinstance(session_signals, list) or not session_signals:
@@ -981,13 +992,13 @@ def _validate_resource(value: Any, session: Mapping[str, Any], *, line: int | No
                 line=line,
             )
         expected_mask = sum(TELEMETRY_SIGNAL_BITS[signal] for signal in session_signals)
-        if _integer(obj["telemetry_signals_mask"], "resource.telemetry_signals_mask", line=line) != expected_mask:
+        if resource_mask != expected_mask:
             raise EvidenceError(
                 "CORRELATION_INVALID",
                 "resource telemetry_signals_mask must match session.telemetry_signals",
                 line=line,
             )
-    if "telemetry_signals_mask" in obj and obj["telemetry_signals_mask"] != TELEMETRY_ALL_MASK:
+    if resource_mask is not None and resource_mask != TELEMETRY_ALL_MASK:
         return _validate_filtered_resource(obj, session, line=line)
     _exact_keys(obj, RESOURCE_REQUIRED, RESOURCE_ALLOWED, "resource sample", line=line)
     result = dict(obj)
