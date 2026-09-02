@@ -522,9 +522,9 @@ if ($Stage -in @('build', 'all')) {
     Push-Location $upstream
     try {
         if ($Fast) {
-            Write-Host 'Fastpath targets: libobs, frontend API, win-dshow, DirectShow filter, NVENC and x264'
+            Write-Host 'Fastpath targets: libobs, D3D11, frontend API, win-dshow, DirectShow filter, NVENC and x264'
             & $cmake --build $upstreamBuildDir --config RelWithDebInfo --parallel --target `
-                libobs obs-frontend-api win-dshow obs-virtualcam-module obs-nvenc obs-x264
+                libobs libobs-d3d11 obs-frontend-api win-dshow obs-virtualcam-module obs-nvenc obs-x264
         } else {
             # Legacy default form: & $cmake --build --preset $preset --config RelWithDebInfo --parallel
             & $cmake --build $upstreamBuildDir --config RelWithDebInfo --parallel
