@@ -8,6 +8,8 @@ The continuation stack is intentionally split into three uniquely numbered patch
    its lifecycle fallback.
 3. `0028-fix-libobs-pipeline-stats-atomic-after-mailbox.patch` owns atomic producer
    updates and lock-free snapshots, including the mailbox counters.
+4. `0029-perf-win-dshow-bulk-copy-tight-nv12.patch` owns the bounded tight-stride
+   NV12 copy optimization and preserves the padded-row fallback.
 
 The atomic patch is rebased after the mailbox because both changes touch `obs.c` and
 `obs-video.c`; applying the former standalone `0026` atomic candidate would leave

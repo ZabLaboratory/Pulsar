@@ -12,15 +12,18 @@ def test_libobs_continuations_have_unique_deterministic_sequence() -> None:
         "0026-fix-libobs-borrowed-video-mailbox.patch",
         "0027-fix-win-dshow-lease-watcher.patch",
         "0028-fix-libobs-pipeline-stats-atomic-after-mailbox.patch",
+        "0029-perf-win-dshow-bulk-copy-tight-nv12.patch",
     )
     actual = tuple(
         path.name
         for path in sorted(PATCHES.glob("00??-*.patch"))
-        if path.name.startswith(("0026-", "0027-", "0028-"))
+        if path.name.startswith(("0026-", "0027-", "0028-", "0029-"))
     )
     assert actual == expected
     assert len({name[:4] for name in actual}) == len(actual)
     assert not (PATCHES / "0027-fix-libobs-borrowed-video-mailbox.patch").exists()
+    assert not (PATCHES / "0026-fix-win-dshow-lease-watcher.patch").exists()
+    assert not (PATCHES / "0027-perf-win-dshow-bulk-copy-tight-nv12.patch").exists()
 
 
 def test_libobs_continuation_patches_are_replayable_mailboxes_without_conflicts() -> None:
@@ -28,6 +31,7 @@ def test_libobs_continuation_patches_are_replayable_mailboxes_without_conflicts(
         "0026-fix-libobs-borrowed-video-mailbox.patch",
         "0027-fix-win-dshow-lease-watcher.patch",
         "0028-fix-libobs-pipeline-stats-atomic-after-mailbox.patch",
+        "0029-perf-win-dshow-bulk-copy-tight-nv12.patch",
     ):
         text = (PATCHES / name).read_text(encoding="utf-8")
         assert text.startswith("From ")
