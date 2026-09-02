@@ -108,7 +108,9 @@ telemetry producer and log the exact rejection reason (fail-closed).
 `program` selects ProgramView/encoder observations, `preview` selects the
 Preview mix, `raw` selects raw pipeline stages, `borrowed` selects the borrowed
 mailbox metrics, `gpu` selects GPU/encoder metrics, and `queues` selects queue
-and drop counters. TakeAccepted, TakeCommitted, frame identity/PTS, and
+and drop counters. Resource samples use a filtered top-level payload for a CSV
+selection; an `all` selection retains the historical composite resource shape
+for schema compatibility. TakeAccepted, TakeCommitted, frame identity/PTS, and
 integrity or lifecycle failures remain mandatory even with `none`; this keeps
 the safety/audit trail distinct from optional performance signals.
 

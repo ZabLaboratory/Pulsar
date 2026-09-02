@@ -637,6 +637,27 @@ public:
                 pulsar_runtime_telemetry::signal_bit(signal)) != 0;
     }
 
+    void previewFrame(struct video_data *frame, uint64_t frameId)
+    {
+        if (!frame || !signalEnabled(pulsar_runtime_telemetry::Signal::Preview))
+            return;
+        std::string runtime;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            if (!enabled_)
+                return;
+            runtime = runtimeInstanceId_;
+        }
+        std::ostringstream observation;
+        observation << "{\"record_type\":\"observation\",\"boundary\":\"preview_mix\","
+                    << "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
+                    << escape(runtime) << "\",\"frame_id\":" << frameId
+                    << ",\"pts_ns\":" << frame->timestamp << ",\"observed_at_monotonic_ns\":"
+                    << nowNs() << ",\"valid\":true,\"surface\":\"PreviewView\","
+                    << "\"consumer\":\"preview_ready\"}";
+        writeLine(observation.str());
+    }
+
     static bool resourceReferenceRequested()
     {
         const char *tracePath = std::getenv("PULSAR_TRACE_PATH");
@@ -1269,9 +1290,20 @@ private:
             const uint32_t selectedSignals = signalMask_.load(std::memory_order_acquire);
             if (selectedSignals == 0)
                 continue;
+            const bool programSelected =
+                (selectedSignals & pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Program)) != 0;
+            const bool previewSelected =
+                (selectedSignals & pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Preview)) != 0;
+            const bool rawSelected =
+                (selectedSignals & pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Raw)) != 0;
+            const bool borrowedSelected =
+                (selectedSignals & pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Borrowed)) != 0;
+            const bool gpuSelected =
+                (selectedSignals & pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Gpu)) != 0;
+            const bool queuesSelected =
+                (selectedSignals & pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Queues)) != 0;
             GpuMetrics gpu;
-            if ((selectedSignals & pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Gpu)) != 0 &&
-                !queryGpuMetrics(gpu)) {
+            if (gpuSelected && !queryGpuMetrics(gpu)) {
                 if (!gpuWarningLogged) {
                     blog(LOG_WARNING,
                          "[pulsar-runtime-telemetry] resource sample skipped: nvidia-smi GPU counters unavailable");
@@ -1280,15 +1312,19 @@ private:
                 continue;
             }
 
-            const double cpu = resourceCpuInfo_ ? os_cpu_usage_info_query(resourceCpuInfo_) : -1.0;
+            const double cpu = (queuesSelected || programSelected || previewSelected) && resourceCpuInfo_
+                ? os_cpu_usage_info_query(resourceCpuInfo_)
+                : 0.0;
             if (cpu < 0.0 || !std::isfinite(cpu))
                 continue;
-            const double frameRenderMs = static_cast<double>(obs_get_average_frame_time_ns()) / 1000000.0;
+            const double frameRenderMs = (queuesSelected || programSelected || previewSelected)
+                ? static_cast<double>(obs_get_average_frame_time_ns()) / 1000000.0
+                : 0.0;
             if (!std::isfinite(frameRenderMs) || frameRenderMs < 0.0)
                 continue;
 
-            const uint64_t rawFrames = rawFrameCount_.load(std::memory_order_relaxed);
-            const uint64_t encodedFrames = packetFrameCount_.load(std::memory_order_relaxed);
+            const uint64_t rawFrames = queuesSelected ? rawFrameCount_.load(std::memory_order_relaxed) : 0;
+            const uint64_t encodedFrames = queuesSelected ? packetFrameCount_.load(std::memory_order_relaxed) : 0;
             const uint64_t queueDepth = rawFrames > encodedFrames ? rawFrames - encodedFrames : 0;
             std::string mode;
             std::string runtime;
@@ -1333,13 +1369,19 @@ private:
             obs_video_mix_pipeline_stats preview = {};
             obs_raw_output_pipeline_stats programReturn = {};
             obs_raw_output_pipeline_stats previewReturn = {};
-            if (!obs_get_graphics_pipeline_stats(&graphics) ||
-                !obs_video_get_mix_pipeline_stats(programVideo, &program) ||
-                (producerCount == 2 && !obs_video_get_mix_pipeline_stats(previewVideo, &preview)) ||
-                (programReturnOutput &&
-                 !obs_output_get_raw_pipeline_stats(programReturnOutput, &programReturn)) ||
-                (producerCount == 2 && previewReturnOutput &&
-                 !obs_output_get_raw_pipeline_stats(previewReturnOutput, &previewReturn)))
+            if ((programSelected || previewSelected) && !obs_get_graphics_pipeline_stats(&graphics))
+                continue;
+            if ((programSelected || rawSelected || borrowedSelected) &&
+                !obs_video_get_mix_pipeline_stats(programVideo, &program))
+                continue;
+            if ((previewSelected || rawSelected || borrowedSelected) && producerCount == 2 &&
+                !obs_video_get_mix_pipeline_stats(previewVideo, &preview))
+                continue;
+            if (rawSelected && programReturnOutput &&
+                !obs_output_get_raw_pipeline_stats(programReturnOutput, &programReturn))
+                continue;
+            if (rawSelected && producerCount == 2 && previewReturnOutput &&
+                !obs_output_get_raw_pipeline_stats(previewReturnOutput, &previewReturn))
                 continue;
             if (!havePipelineBaseline) {
                 previousGraphics = graphics;
@@ -1353,23 +1395,114 @@ private:
 
             profiler_result_t programProfile = {};
             profiler_result_t previewProfile = {};
-            const bool programProfileValid = programRoot &&
+            const bool programProfileValid = programSelected && programRoot &&
                                              source_profiler_fill_result(programRoot, &programProfile);
-            const bool previewProfileValid = producerCount == 2 && previewRoot &&
+            const bool previewProfileValid = previewSelected && producerCount == 2 && previewRoot &&
                                              source_profiler_fill_result(previewRoot, &previewProfile);
-            const bool encoderActive = videoEncoder && obs_encoder_active(videoEncoder);
-            const bool rtmpLoadActive = streamOutput && obs_output_active(streamOutput);
+            const bool encoderActive = programSelected && videoEncoder && obs_encoder_active(videoEncoder);
+            const bool rtmpLoadActive = queuesSelected && streamOutput && obs_output_active(streamOutput);
             const int outputDropped = rtmpLoadActive ? obs_output_get_frames_dropped(streamOutput) : 0;
             const uint64_t droppedFrames =
                 outputDropped > 0 ? static_cast<uint64_t>(outputDropped) : 0;
             const uint64_t missedFrames = static_cast<uint64_t>(obs_get_lagged_frames());
-            const uint64_t encodeSamples =
-                encodeTimeSampleCount_.load(std::memory_order_relaxed);
-            const uint64_t encodeTimeNs = encodeTimeNsTotal_.load(std::memory_order_relaxed);
+            const uint64_t encodeSamples = programSelected
+                ? encodeTimeSampleCount_.load(std::memory_order_relaxed)
+                : 0;
+            const uint64_t encodeTimeNs = programSelected
+                ? encodeTimeNsTotal_.load(std::memory_order_relaxed)
+                : 0;
             const double encodeTimeMs = encodeSamples > 0
                 ? static_cast<double>(encodeTimeNs) /
                       static_cast<double>(encodeSamples) / 1000000.0
                 : 0.0;
+
+            if (selectedSignals != pulsar_runtime_telemetry::all_signal_mask()) {
+                std::ostringstream filtered;
+                filtered << "{\"record_type\":\"resource_sample\",\"sample_mode\":\""
+                         << escape(mode) << "\",\"clock_domain\":\"monotonic_ns\","
+                         << "\"runtime_instance_id\":\"" << escape(runtime)
+                         << "\",\"observed_at_monotonic_ns\":" << nowNs()
+                         << ",\"telemetry_signals_mask\":" << selectedSignals;
+                const auto payload = [&filtered](const char *name, const std::string &value) {
+                    filtered << ",\"" << name << "\":" << value;
+                };
+                if (programSelected) {
+                    std::ostringstream value;
+                    value << "{\"frame_render_ms\":" << frameRenderMs
+                          << ",\"encode_time_ms\":" << encodeTimeMs
+                          << ",\"encode_time_samples\":" << encodeSamples
+                          << ",\"frame_total_ms\":"
+                          << intervalAverageMs(program.frame_total_ns, previousProgram.frame_total_ns,
+                                                program.sample_count, previousProgram.sample_count)
+                          << "}";
+                    payload("program", value.str());
+                }
+                if (previewSelected) {
+                    std::ostringstream value;
+                    value << "{\"frame_total_ms\":"
+                          << intervalAverageMs(preview.frame_total_ns, previousPreview.frame_total_ns,
+                                                preview.sample_count, previousPreview.sample_count)
+                          << ",\"render_main_ms\":"
+                          << intervalAverageMs(preview.render_main_ns, previousPreview.render_main_ns,
+                                                preview.sample_count, previousPreview.sample_count)
+                          << "}";
+                    payload("preview", value.str());
+                }
+                if (rawSelected) {
+                    std::ostringstream value;
+                    value << "{\"program_return_callback_ms\":"
+                          << intervalAverageMs(programReturn.callback_ns, previousProgramReturn.callback_ns,
+                                                programReturn.sample_count, previousProgramReturn.sample_count)
+                          << ",\"preview_return_callback_ms\":"
+                          << intervalAverageMs(previewReturn.callback_ns, previousPreviewReturn.callback_ns,
+                                                previewReturn.sample_count, previousPreviewReturn.sample_count)
+                          << "}";
+                    payload("raw", value.str());
+                }
+                if (borrowedSelected) {
+                    std::ostringstream value;
+                    value << "{\"program_publish_ms\":"
+                          << intervalAverageMs(program.borrowed_publish_ns, previousProgram.borrowed_publish_ns,
+                                                program.borrowed_publish_sample_count,
+                                                previousProgram.borrowed_publish_sample_count)
+                          << ",\"program_dropped_count\":" << program.borrowed_dropped_count
+                          << ",\"program_overwritten_count\":" << program.borrowed_overwritten_count
+                          << ",\"program_wait_count\":" << program.borrowed_wait_count
+                          << ",\"program_fallback_count\":" << program.borrowed_fallback_count
+                          << ",\"preview_publish_ms\":"
+                          << intervalAverageMs(preview.borrowed_publish_ns, previousPreview.borrowed_publish_ns,
+                                                preview.borrowed_publish_sample_count,
+                                                previousPreview.borrowed_publish_sample_count)
+                          << ",\"preview_dropped_count\":" << preview.borrowed_dropped_count
+                          << ",\"preview_overwritten_count\":" << preview.borrowed_overwritten_count
+                          << ",\"preview_wait_count\":" << preview.borrowed_wait_count
+                          << ",\"preview_fallback_count\":" << preview.borrowed_fallback_count << "}";
+                    payload("borrowed", value.str());
+                }
+                if (gpuSelected) {
+                    std::ostringstream value;
+                    value << "{\"host_gpu_percent\":" << gpu.utilization
+                          << ",\"encoder_utilization_percent\":" << gpu.encoderUtilization
+                          << ",\"gpu_memory_bytes\":" << gpu.memoryBytes << "}";
+                    payload("gpu", value.str());
+                }
+                if (queuesSelected) {
+                    std::ostringstream value;
+                    value << "{\"callback_backlog_estimate\":" << queueDepth
+                          << ",\"dropped_frames\":" << droppedFrames
+                          << ",\"missed_frames\":" << missedFrames
+                          << ",\"process_cpu_percent\":" << cpu << "}";
+                    payload("queues", value.str());
+                }
+                filtered << "}";
+                writeLine(filtered.str());
+                previousGraphics = graphics;
+                previousProgram = program;
+                previousPreview = preview;
+                previousProgramReturn = programReturn;
+                previousPreviewReturn = previewReturn;
+                continue;
+            }
 
             std::ostringstream sample;
             sample << "{\"record_type\":\"resource_sample\",\"sample_mode\":\"" << mode
@@ -1636,6 +1769,15 @@ private:
             if (end && *end == '\0' && parsed <= 1000000)
                 warmup = parsed;
         }
+        const uint32_t selectedSignals = signalMask_.load(std::memory_order_acquire);
+        if (selectedSignals == 0) {
+            std::ostringstream minimal;
+            minimal << "{\"record_type\":\"session\",\"schema\":\"pulsar.take-latency.v1\","
+                    << "\"runtime_instance_id\":" << quoted(runtimeInstanceId_)
+                    << ",\"session_id\":" << quoted(sessionId_)
+                    << ",\"telemetry_signals\":[],\"evidence_kind\":\"runtime\"}";
+            return minimal.str();
+        }
         std::ostringstream out;
         out << "{\"record_type\":" << quoted("session") << ",\"schema\":"
             << quoted("pulsar.take-latency.v1")
@@ -1646,8 +1788,7 @@ private:
             << ",\"fps_num\":" << video.fps_num << ",\"fps_den\":" << video.fps_den << "},"
             << "\"workload\":{"
             << "\"wgc\":" << (wgcWorkload ? "true" : "false") << ",\"cef\":" << (cefWorkload ? "true" : "false")
-            << ",\"nvenc\":" << (nvenc ? "true" : "false") << "},"
-        const uint32_t selectedSignals = signalMask_.load(std::memory_order_acquire);
+            << ",\"nvenc\":" << (nvenc ? "true" : "false") << "},";
         out << "\"capture_paths\":[";
         bool firstCapturePath = true;
         const auto capturePath = [&out, &firstCapturePath](const char *name) {
@@ -4081,7 +4222,11 @@ void PulsarFrontendAPI::OnSceneSwitchPreviewVideoFrame(void *param, struct video
 {
     auto *self = static_cast<PulsarFrontendAPI *>(param);
     auto *vendor = g_sceneSwitchVendor.load(std::memory_order_acquire);
-    if (!self || !vendor)
+    if (!self)
+        return;
+    const uint64_t frameId = self->previewVideo ? video_output_get_total_frames(self->previewVideo) : 0;
+    g_runtimeTelemetry.previewFrame(frame, frameId);
+    if (!vendor)
         return;
     std::string prepared;
     {
@@ -4089,7 +4234,7 @@ void PulsarFrontendAPI::OnSceneSwitchPreviewVideoFrame(void *param, struct video
         prepared = self->sceneSwitchPreparedCommandId;
     }
     if (!prepared.empty() && frame)
-        vendor->previewRendered(prepared, video_output_get_total_frames(self->previewVideo), frame->timestamp);
+        vendor->previewRendered(prepared, frameId, frame->timestamp);
 }
 
 void PulsarFrontendAPI::OnDualLaneTick(void *param, float)
@@ -5281,13 +5426,16 @@ bool PulsarFrontendAPI::setup()
                                       previewVideo, currentScene, previewScene);
         if (g_runtimeTelemetry.enabled()) {
             runtimeTelemetryVideo = programVideo ? programVideo : obs_get_video();
-            runtimeTelemetryRawConnected = obs_video_add_borrowed_callback(
-                runtimeTelemetryVideo, pulsar_runtime_raw_video_callback, nullptr);
-            if (!runtimeTelemetryRawConnected)
-                blog(LOG_ERROR, "[pulsar-runtime-telemetry] failed to install borrowed ProgramView/raw callback");
-            if (streamOutput)
+            if (g_runtimeTelemetry.signalEnabled(pulsar_runtime_telemetry::Signal::Program)) {
+                runtimeTelemetryRawConnected = obs_video_add_borrowed_callback(
+                    runtimeTelemetryVideo, pulsar_runtime_raw_video_callback, nullptr);
+                if (!runtimeTelemetryRawConnected)
+                    blog(LOG_ERROR, "[pulsar-runtime-telemetry] failed to install borrowed ProgramView/raw callback");
+            }
+            if (streamOutput && g_runtimeTelemetry.signalEnabled(pulsar_runtime_telemetry::Signal::Program))
                 obs_output_add_packet_callback(streamOutput, pulsar_runtime_packet_callback, nullptr);
-            blog(LOG_INFO, "[pulsar-runtime-telemetry] borrowed ProgramView/raw and encoded-output callbacks installed");
+            if (g_runtimeTelemetry.signalEnabled(pulsar_runtime_telemetry::Signal::Program))
+                blog(LOG_INFO, "[pulsar-runtime-telemetry] borrowed ProgramView/raw and encoded-output callbacks installed");
 
             // A trace campaign may opt into the real ProgramReturn producer;
             // ordinary headless starts keep this output dormant.  The
