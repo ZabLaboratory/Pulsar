@@ -50,6 +50,7 @@ class _TelemetryAbi(ctypes.Structure):
         ("consumed_sequence", ctypes.c_uint64),
         ("mutex_wait_ns", ctypes.c_uint64),
         ("fence_wait_ns", ctypes.c_uint64),
+        ("cpu_upload_ns", ctypes.c_uint64),
         ("gpu_copy_ns", ctypes.c_uint64),
         ("readback_ns", ctypes.c_uint64),
         ("gap_count", ctypes.c_uint64),
@@ -80,6 +81,7 @@ class _ControlAbi(ctypes.Structure):
         ("consumed_sequence", ctypes.c_uint64),
         ("mutex_wait_ns", ctypes.c_uint64),
         ("fence_wait_ns", ctypes.c_uint64),
+        ("cpu_upload_ns", ctypes.c_uint64),
         ("gpu_copy_ns", ctypes.c_uint64),
         ("readback_ns", ctypes.c_uint64),
         ("gap_count", ctypes.c_uint64),
@@ -90,20 +92,26 @@ class _ControlAbi(ctypes.Structure):
     ]
 
 
-def test_patch_is_signed_and_scope_is_real_opt_in_transport() -> None:
+def test_patch_is_signed_and_scope_is_real_canonical_transport() -> None:
     text = PATCH.read_text(encoding="utf-8")
-    assert text.startswith("From cec25f31d5e8aaef5756459bb88b4f365e8685a4 ")
+    assert text.startswith("From ")
     for marker in (
         "Agent-Role: forge",
-        "Agent-Thread: /root/pulsar_d3d11_return",
-        "Work-Unit: pulsar-d3d11-return-transport-20260901",
+        "Agent-Thread: /root/forge_253_d3d11_transport",
+        "Work-Unit: ZabLaboratory/Pulsar#253",
+        "ADR-Revision: draft-r2-dual-lane-20260828",
         "PULSAR_D3D11_PROGRAM_RETURN",
         "PULSAR_D3D11_PREVIEW_RETURN",
         'getenv("PULSAR_RETURN_TRANSPORT")',
-        'strcmp(transport, "d3d11") == 0',
+        'strcmp(transport, "cpu")',
+        "cpu_upload_ns",
         "D3D11_RESOURCE_MISC_SHARED_NTHANDLE",
         "#include <d3d11_1.h>",
-        "d3d11_transport_requested()",
+        "d3d11_transport_enabled()",
+        "fallback_for_hresult",
+        "DXGI_ERROR_WAIT_TIMEOUT",
+        "DXGI_ERROR_DEVICE_REMOVED",
+        "DXGI_ERROR_DEVICE_RESET",
         "queue_mapping_live",
         "VirtualQuery",
         "CreateSharedHandle",
@@ -126,13 +134,13 @@ def test_handle_ring_and_control_abis_are_pointer_free_on_x86_and_x64() -> None:
     assert ctypes.sizeof(_HandleAbi) == 8
     assert ctypes.sizeof(_SlotAbi) == 608
     assert ctypes.sizeof(_AdapterLuidAbi) == 8
-    assert ctypes.sizeof(_TelemetryAbi) == 120
-    assert ctypes.sizeof(_ControlAbi) == 1976
+    assert ctypes.sizeof(_TelemetryAbi) == 128
+    assert ctypes.sizeof(_ControlAbi) == 1984
     assert _SlotAbi.sequence.offset == 8
     assert _SlotAbi.epoch.offset == 16
     assert _SlotAbi.timestamp.offset == 24
     assert _ControlAbi.epoch.offset == 56
-    assert _ControlAbi.slots.offset == 152
+    assert _ControlAbi.slots.offset == 160
 
 
 def _select(format_name: str, requested: bool) -> tuple[str, str, int]:
@@ -150,3 +158,13 @@ def test_default_cpu_and_forced_d3d11_fallback_preserve_both_return_lanes() -> N
         assert _select("NV12", requested=False) == ("CPU", "none", 0)
         assert _select("NV12", requested=True) == ("CPU", "capability", -2147483638)
         assert _select("P010", requested=True) == ("CPU", "format", -2147024809)
+
+
+def test_canonical_transport_has_an_explicit_cpu_rollback() -> None:
+    text = PATCH.read_text(encoding="utf-8")
+    runbook = (PATCH.parents[1] / "docs" / "runbooks" / "d3d11-return-transport.md").read_text(encoding="utf-8")
+    assert "canonical return path" in text
+    assert 'strcmp(transport, "off")' in text
+    assert 'strcmp(transport, "disabled")' in text
+    assert "if (consumed_d3d11_frame && d3d11_requested && d3d11)" not in text
+    assert "IMediaSample" in runbook

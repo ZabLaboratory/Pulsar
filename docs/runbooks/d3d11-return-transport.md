@@ -1,17 +1,23 @@
 # D3D11 return transport qualification
 
-Status: opt-in and fail-closed for ProgramReturn and PreviewReturn.
+Status: canonical when compatible, explicitly disableable, and fail-closed for
+ProgramReturn and PreviewReturn.
 
 Patch `0024` adds a separate D3D11 control mapping and three-slot NV12 texture
 ring for each return lane. The outward DirectShow sample remains ordinary
-system-memory NV12. The default remains the existing CPU seqlock queue.
+system-memory NV12. The existing CPU seqlock queue remains the fail-closed
+fallback.
 
-The transport is enabled only with `PULSAR_RETURN_TRANSPORT=d3d11` and only for
-1920x1080 NV12. It duplicates NT handles into the consumer process after the
-consumer publishes PID/session, records the producer adapter LUID and epoch,
+The transport is attempted by default for 1920x1080 NV12. Set
+`PULSAR_RETURN_TRANSPORT=cpu` (or `off`/`disabled`) to force the existing CPU
+queue for an A/B run or an operational rollback. Unknown values keep the
+canonical D3D11 attempt enabled. It duplicates NT handles into the consumer
+process after the consumer publishes PID/session, records the producer adapter
+LUID and epoch,
 uses keyed mutex key 0→1/1→0 ownership, and polls a D3D11 event query with a
 2 ms deadline before readback. A borrowed frame pointer is copied into a
-tightly-packed upload vector synchronously; no pointer crosses the callback.
+tightly-packed upload vector synchronously; `cpu_upload_ns` measures this
+required conversion and no pointer crosses the callback.
 
 The current implementation is a bounded GPU transport, not a zero-copy path:
 the `raw_video` callback still receives OBS's converted system-memory NV12 frame,
@@ -20,15 +26,19 @@ into the ordinary DirectShow sample. It does not render a second composition and
 does not retain a borrowed CPU pointer asynchronously. A future producer-side
 GPU texture hand-off must be a separate architectural change.
 
-The implementation satisfies these gates:
+The implementation satisfies these safety gates:
 
-- explicit `PULSAR_RETURN_TRANSPORT=d3d11` opt-in and independent ProgramReturn
-  and PreviewReturn control maps/rings;
+- canonical D3D11 attempt with explicit `PULSAR_RETURN_TRANSPORT=cpu`/`off`/
+  `disabled` rollback and independent ProgramReturn and PreviewReturn control
+  maps/rings;
 - three NV12 textures per lane, fixed-width `uint64_t` duplicated handles,
   monotonic sequence/epoch metadata, matching adapter LUID, and bounded keyed
   mutex waits;
 - consumer-side GPU copy/readback into the existing system-memory NV12 sample
   while preserving frame ID, PTS, revisions, and correlation identifiers;
+- separate `cpu_upload_ns`, `gpu_copy_ns`, `fence_wait_ns`, and `readback_ns`
+  telemetry so a claimed improvement cannot hide a CPU conversion or the
+  DirectShow sample readback;
 - observable fallback on creation/open, adapter, device-removed, timeout,
   format, and inter-bitness failures, without stopping Program, Preview, audio,
   encoding, RTMP, or readiness;
@@ -41,4 +51,8 @@ adapter/session, device-removed, duplicate-handle, keyed-mutex, and query
 timeout failures set a numeric fallback reason and HRESULT in the control ABI,
 clear `consumer_ready`, and make the producer resume CPU publication on the
 next frame. Telemetry includes selected path, fallback, adapter LUID, epoch,
-sequences, waits, copy/readback, gaps, retries, torn reads, and frame age.
+sequences, waits, CPU upload, GPU copy/readback, gaps, retries, torn reads, and
+frame age. Because DirectShow exposes an `IMediaSample` system-memory buffer,
+the consumer-side `Map` and row copies are required for this boundary; this is
+not a zero-copy DirectShow path and hardware A/B evidence is required before
+calling the canonical attempt an optimization.

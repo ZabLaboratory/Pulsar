@@ -1,25 +1,33 @@
-From cec25f31d5e8aaef5756459bb88b4f365e8685a4 Mon Sep 17 00:00:00 2001
+From 46459ed1e71dd7617c51ca8200cac2c60c909c42 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Tue, 1 Sep 2026 19:14:42 +0200
-Subject: [PATCH] fix(pulsar): validate shared queue mapping before atomic
- reads
+Subject: [PATCH] fix(win-dshow): make D3D11 return transport canonical and
+ measurable
+
+Attempt the shared NV12 texture ring by default for the fixed ProgramReturn and PreviewReturn contract, with an explicit CPU/off/disabled rollback. Preserve the ordinary DirectShow system-memory sample boundary and record CPU upload, GPU copy, fence wait and readback costs so A/B qualification cannot claim zero-copy. Fail closed on format, adapter, interop, keyed mutex, query, release and device errors while retaining the CPU return queue.
 
 Agent-Role: forge
-Agent-Thread: /root/pulsar_d3d11_return
-Work-Unit: pulsar-d3d11-return-transport-20260901
-Issue: none
-Evidence: VirtualQuery mapping guard, sequential patch apply, targeted tests
+
+Agent-Thread: /root/forge_253_d3d11_transport
+
+Work-Unit: ZabLaboratory/Pulsar#253
+
+Issue: 253
+
+ADR-Revision: draft-r2-dual-lane-20260828
+
+Evidence: static ABI timeout rollback tests; upstream patch-stack replay; hardware A/B pending Probe
 ---
  plugins/win-dshow/CMakeLists.txt              |   3 +
  .../virtualcam-module/CMakeLists.txt          |   4 +
- .../d3d11-return-transport.cpp                | 645 ++++++++++++++++++
- .../d3d11-return-transport.hpp                | 126 ++++
- .../virtualcam-module/virtualcam-filter.cpp   |  67 +-
- .../virtualcam-module/virtualcam-filter.hpp   |  16 +
- plugins/win-dshow/virtualcam.c                |  23 +-
- .../shared-memory-queue.c                     |  26 +-
- 8 files changed, 896 insertions(+), 14 deletions(-)
+ .../d3d11-return-transport.cpp                | 677 ++++++++++++++++++
+ .../d3d11-return-transport.hpp                | 127 ++++
+ .../virtualcam-module/virtualcam-filter.cpp   |  72 +-
+ .../virtualcam-module/virtualcam-filter.hpp   |  17 +
+ plugins/win-dshow/virtualcam.c                |  25 +-
+ .../shared-memory-queue.c                     |  25 +-
+ 8 files changed, 936 insertions(+), 14 deletions(-)
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
  create mode 100644 plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
 
@@ -68,10 +76,10 @@ index 8ac916e17..ec3f43b8e 100644
  if(OBS_PARENT_ARCHITECTURE STREQUAL CMAKE_VS_PLATFORM_NAME)
 diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
 new file mode 100644
-index 000000000..f99a5307d
+index 000000000..49b0f2bb1
 --- /dev/null
 +++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
-@@ -0,0 +1,645 @@
+@@ -0,0 +1,677 @@
 +#include "d3d11-return-transport.hpp"
 +
 +#include "../../../shared/obs-shared-memory-queue/shared-memory-queue.h"
@@ -161,14 +169,30 @@ index 000000000..f99a5307d
 +	return name ? std::wstring(name) + L".D3D11" : std::wstring();
 +}
 +
-+/* Keep the transport opt-in invariant inside the ABI boundary as well as at
-+ * the OBS call sites. This makes a stale module/object pointer fail closed if
-+ * the process is running the default CPU transport (or the environment was
-+ * changed between construction and teardown). */
-+static bool d3d11_transport_requested()
++/* Keep the canonical selection and explicit CPU rollback invariant inside the
++ * ABI boundary as well as at the OBS call sites. This makes a stale
++ * module/object pointer fail closed if the environment is changed between
++ * construction and teardown. */
++static bool d3d11_transport_enabled()
 +{
 +	const char *transport = getenv("PULSAR_RETURN_TRANSPORT");
-+	return transport && strcmp(transport, "d3d11") == 0;
++	/* D3D11 is the canonical return path when the consumer and format can
++	 * prove compatibility.  Keep an explicit, process-local escape hatch for
++	 * CPU-only hosts and qualification A/B runs. */
++	return !transport || (strcmp(transport, "cpu") != 0 && strcmp(transport, "off") != 0 &&
++				      strcmp(transport, "disabled") != 0);
++}
++
++static bool is_wait_timeout(HRESULT hr)
++{
++	return hr == WAIT_TIMEOUT || hr == HRESULT_FROM_WIN32(WAIT_TIMEOUT) || hr == DXGI_ERROR_WAIT_TIMEOUT;
++}
++
++static enum pulsar_d3d11_return_fallback fallback_for_hresult(HRESULT hr)
++{
++	return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_HUNG || hr == DXGI_ERROR_DEVICE_RESET
++		? PULSAR_D3D11_FALLBACK_DEVICE_REMOVED
++		: PULSAR_D3D11_FALLBACK_INTEROP;
 +}
 +
 +static HRESULT create_device_for_luid(const pulsar_d3d11_return_luid *wanted, ComPtr<ID3D11Device> &device,
@@ -295,7 +319,7 @@ index 000000000..f99a5307d
 +extern "C" pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
 +	const wchar_t *name, enum pulsar_d3d11_return_lane lane, uint32_t width, uint32_t height)
 +{
-+	if (!d3d11_transport_requested() || !name || !*name ||
++	if (!d3d11_transport_enabled() || !name || !*name ||
 +		(lane != PULSAR_D3D11_PROGRAM_RETURN && lane != PULSAR_D3D11_PREVIEW_RETURN) ||
 +		width != PULSAR_D3D11_RETURN_WIDTH || height != PULSAR_D3D11_RETURN_HEIGHT)
 +		return nullptr;
@@ -443,24 +467,28 @@ index 000000000..f99a5307d
 +								 uint32_t *linesize, uint64_t timestamp,
 +								 const struct video_queue_frame_metadata *metadata)
 +{
-+	if (!producer || !producer_prepare_ring(producer) || producer->sequence >= kMaxSequence)
++	if (!d3d11_transport_enabled() || !producer || !producer_prepare_ring(producer) ||
++		producer->sequence >= kMaxSequence)
 +		return false;
++	const uint64_t pack_start = now_ns();
 +	if (!pack_nv12(producer->width, producer->height, data, linesize, producer->upload)) {
 +		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_FORMAT, E_INVALIDARG);
 +		return false;
 +	}
++	const uint64_t pack_end = now_ns();
++	producer->control->cpu_upload_ns = pack_end >= pack_start ? pack_end - pack_start : 0;
 +	const uint32_t index = static_cast<uint32_t>(producer->sequence % PULSAR_D3D11_RETURN_SLOT_COUNT);
 +	const uint64_t wait_start = now_ns();
 +	const HRESULT acquire = producer->mutexes[index]->AcquireSync(0, 0);
 +	const uint64_t wait_end = now_ns();
 +	producer->control->mutex_wait_ns = wait_end >= wait_start ? wait_end - wait_start : 0;
-+	if (acquire == WAIT_TIMEOUT) {
++	if (is_wait_timeout(acquire)) {
 +		++producer->control->retry_count;
-+		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_TIMEOUT, HRESULT_FROM_WIN32(WAIT_TIMEOUT));
++		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_TIMEOUT, acquire);
 +		return false;
 +	}
 +	if (FAILED(acquire)) {
-+		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_DEVICE_REMOVED, acquire);
++		set_fallback(producer->control, fallback_for_hresult(acquire), acquire);
 +		return false;
 +	}
 +	const uint64_t copy_start = now_ns();
@@ -495,7 +523,11 @@ index 000000000..f99a5307d
 +	}
 +	slot.sequence = sequence;
 +	MemoryBarrier();
-+	producer->mutexes[index]->ReleaseSync(1);
++	const HRESULT release = producer->mutexes[index]->ReleaseSync(1);
++	if (FAILED(release)) {
++		set_fallback(producer->control, fallback_for_hresult(release), release);
++		return false;
++	}
 +	store_u64((volatile uint64_t *)&producer->control->produced_sequence, sequence);
 +	store_u64((volatile uint64_t *)&producer->control->published_sequence, sequence);
 +	return true;
@@ -574,7 +606,7 @@ index 000000000..f99a5307d
 +extern "C" pulsar_d3d11_return_consumer_t *pulsar_d3d11_return_consumer_open(
 +	const wchar_t *name, enum pulsar_d3d11_return_lane lane, uint32_t width, uint32_t height)
 +{
-+	if (!d3d11_transport_requested() || !name || !*name ||
++	if (!d3d11_transport_enabled() || !name || !*name ||
 +		width != PULSAR_D3D11_RETURN_WIDTH || height != PULSAR_D3D11_RETURN_HEIGHT)
 +		return nullptr;
 +	const std::wstring map_name = control_name(name);
@@ -624,7 +656,7 @@ index 000000000..f99a5307d
 +								 uint64_t *timestamp,
 +								 struct video_queue_frame_metadata *metadata)
 +{
-+	if (!d3d11_transport_requested() || !consumer || !dst || !consumer->control)
++	if (!d3d11_transport_enabled() || !consumer || !dst || !consumer->control)
 +		return false;
 +	if (!consumer->active && !consumer_open_ring(consumer))
 +		return false;
@@ -641,13 +673,13 @@ index 000000000..f99a5307d
 +	const HRESULT acquire = consumer->mutexes[index]->AcquireSync(1, kWaitMs);
 +	const uint64_t wait_end = now_ns();
 +	consumer->control->mutex_wait_ns = wait_end >= wait_start ? wait_end - wait_start : 0;
-+	if (acquire == WAIT_TIMEOUT) {
++	if (is_wait_timeout(acquire)) {
 +		++consumer->control->retry_count;
-+		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_TIMEOUT, HRESULT_FROM_WIN32(WAIT_TIMEOUT));
++		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_TIMEOUT, acquire);
 +		return false;
 +	}
 +	if (FAILED(acquire)) {
-+		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_DEVICE_REMOVED, acquire);
++		set_fallback(consumer->control, fallback_for_hresult(acquire), acquire);
 +		return false;
 +	}
 +	auto &slot = consumer->control->slots[index];
@@ -661,20 +693,24 @@ index 000000000..f99a5307d
 +	consumer->context->CopyResource(consumer->staging.Get(), consumer->textures[index].Get());
 +	consumer->context->End(consumer->query.Get());
 +	consumer->context->Flush();
++	const uint64_t fence_start = now_ns();
++	HRESULT query_result = S_FALSE;
 +	const uint64_t deadline = now_ns() + static_cast<uint64_t>(kWaitMs) * 1000000ULL;
-+	while (consumer->context->GetData(consumer->query.Get(), nullptr, 0, 0) == S_FALSE && now_ns() < deadline)
++	while ((query_result = consumer->context->GetData(consumer->query.Get(), nullptr, 0, 0)) == S_FALSE && now_ns() < deadline)
 +		SwitchToThread();
-+	if (consumer->context->GetData(consumer->query.Get(), nullptr, 0, 0) != S_OK) {
++	if (query_result != S_OK) {
 +		consumer->mutexes[index]->ReleaseSync(0);
 +		++consumer->control->retry_count;
 +		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_TIMEOUT, HRESULT_FROM_WIN32(WAIT_TIMEOUT));
 +		return false;
 +	}
++	const uint64_t fence_end = now_ns();
++	consumer->control->fence_wait_ns = fence_end >= fence_start ? fence_end - fence_start : 0;
 +	D3D11_MAPPED_SUBRESOURCE mapped = {};
 +	HRESULT hr = consumer->context->Map(consumer->staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
 +	if (FAILED(hr)) {
 +		consumer->mutexes[index]->ReleaseSync(0);
-+		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_DEVICE_REMOVED, hr);
++		set_fallback(consumer->control, fallback_for_hresult(hr), hr);
 +		return false;
 +	}
 +	for (uint32_t row = 0; row < consumer->height; ++row)
@@ -686,7 +722,11 @@ index 000000000..f99a5307d
 +		memcpy(dst_uv + static_cast<size_t>(row) * consumer->width, src_uv + static_cast<size_t>(row) * mapped.RowPitch,
 +		       consumer->width);
 +	consumer->context->Unmap(consumer->staging.Get(), 0);
-+	consumer->mutexes[index]->ReleaseSync(0);
++	const HRESULT release = consumer->mutexes[index]->ReleaseSync(0);
++	if (FAILED(release)) {
++		set_fallback(consumer->control, fallback_for_hresult(release), release);
++		return false;
++	}
 +	const uint64_t copy_end = now_ns();
 +	consumer->control->readback_ns = copy_end >= copy_start ? copy_end - copy_start : 0;
 +	const uint64_t frame_clock = slot.pts_ns ? slot.pts_ns : slot.timestamp;
@@ -719,10 +759,10 @@ index 000000000..f99a5307d
 +}
 diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
 new file mode 100644
-index 000000000..65efe46ed
+index 000000000..58627676a
 --- /dev/null
 +++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,127 @@
 +#pragma once
 +
 +#include <stdbool.h>
@@ -734,7 +774,7 @@ index 000000000..65efe46ed
 +#endif
 +
 +#define PULSAR_D3D11_RETURN_SLOT_COUNT 3U
-+#define PULSAR_D3D11_RETURN_ABI_VERSION 1U
++#define PULSAR_D3D11_RETURN_ABI_VERSION 2U
 +#define PULSAR_D3D11_RETURN_WIDTH 1920U
 +#define PULSAR_D3D11_RETURN_HEIGHT 1080U
 +#define PULSAR_D3D11_RETURN_IDENTIFIER_CAPACITY 129U
@@ -808,6 +848,7 @@ index 000000000..65efe46ed
 +	uint64_t consumed_sequence;
 +	uint64_t mutex_wait_ns;
 +	uint64_t fence_wait_ns;
++	uint64_t cpu_upload_ns;
 +	uint64_t gpu_copy_ns;
 +	uint64_t readback_ns;
 +	uint64_t gap_count;
@@ -821,7 +862,7 @@ index 000000000..65efe46ed
 +static_assert(sizeof(struct pulsar_d3d11_return_handle) == 8, "shared handle ABI must be uint64");
 +static_assert(sizeof(struct pulsar_d3d11_return_slot) == 608, "slot ABI must be fixed-width");
 +static_assert(sizeof(struct pulsar_d3d11_return_luid) == 8, "adapter LUID ABI must be fixed-width");
-+static_assert(sizeof(struct pulsar_d3d11_return_control) == 1976, "control ABI must be fixed-width");
++static_assert(sizeof(struct pulsar_d3d11_return_control) == 1984, "control ABI must be fixed-width");
 +#endif
 +
 +typedef struct pulsar_d3d11_return_producer pulsar_d3d11_return_producer_t;
@@ -850,10 +891,10 @@ index 000000000..65efe46ed
 +}
 +#endif
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
-index d3293efd9..1606e2e3e 100644
+index d3293efd9..4a517055d 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 +++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
-@@ -49,11 +49,18 @@ static std::wstring queue_name_for_filter(enum directshow_queue_namespace queue_
+@@ -49,11 +49,20 @@ static std::wstring queue_name_for_filter(enum directshow_queue_namespace queue_
  }
  
  VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
@@ -869,11 +910,13 @@ index d3293efd9..1606e2e3e 100644
  	preview_return = filter_kind == DIRECTSHOW_CONSUMER_FILTER_PREVIEW_RETURN;
  	consumer_gated = program_return || preview_return;
 +	const char *return_transport = getenv("PULSAR_RETURN_TRANSPORT");
-+	d3d11_requested = consumer_gated && return_transport && strcmp(return_transport, "d3d11") == 0;
++	d3d11_requested = consumer_gated &&
++		(!return_transport || (strcmp(return_transport, "cpu") != 0 && strcmp(return_transport, "off") != 0 &&
++					       strcmp(return_transport, "disabled") != 0));
  	const enum directshow_queue_namespace queue_namespace = directshow_queue_namespace_for_consumer(filter_kind);
  	queue_namespace_rejected = queue_namespace == DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
  	queue_name = queue_name_for_filter(queue_namespace, filter_kind);
-@@ -152,6 +159,9 @@ VCamFilter::~VCamFilter()
+@@ -152,6 +161,9 @@ VCamFilter::~VCamFilter()
  	SetEvent(thread_stop);
  	if (th.joinable())
  		th.join();
@@ -883,7 +926,7 @@ index d3293efd9..1606e2e3e 100644
  	video_queue_close(vq);
  
  	if (placeholder.scaled_data)
-@@ -379,16 +389,48 @@ void VCamFilter::Frame(uint64_t ts)
+@@ -379,16 +391,50 @@ void VCamFilter::Frame(uint64_t ts)
  	struct directshow_stage_timing timing = {};
  	timing.frame_entry_monotonic_ns = frame_entry_monotonic_ns;
  	bool consumed_program_frame = false;
@@ -913,8 +956,9 @@ index d3293efd9..1606e2e3e 100644
 +		if ((!consumed_program_frame && !consumed_d3d11_frame) ||
 +		    (state != SHARED_QUEUE_STATE_READY && !consumed_d3d11_frame))
  			ShowDefaultFrame(ptr);
-+		if (consumed_d3d11_frame && d3d11_requested && d3d11) {
-+			consumed_program_frame = true;
++		if (d3d11_requested && d3d11) {
++			if (consumed_d3d11_frame)
++				consumed_program_frame = true;
 +			const struct pulsar_d3d11_return_control *control =
 +				pulsar_d3d11_return_consumer_control(d3d11);
 +			if (control) {
@@ -928,6 +972,7 @@ index d3293efd9..1606e2e3e 100644
 +				timing.transport_consumed_sequence = control->consumed_sequence;
 +				timing.transport_mutex_wait_ns = control->mutex_wait_ns;
 +				timing.transport_fence_wait_ns = control->fence_wait_ns;
++				timing.transport_cpu_upload_ns = control->cpu_upload_ns;
 +				timing.transport_gpu_copy_ns = control->gpu_copy_ns;
 +				timing.transport_readback_ns = control->readback_ns;
 +				timing.transport_frame_age_ns = control->frame_age_ns;
@@ -936,7 +981,7 @@ index d3293efd9..1606e2e3e 100644
  
  		UnlockSampleData(ts, ts + obs_interval);
  		timing.unlock_sample_data_completed_monotonic_ns = trace_monotonic_ns();
-@@ -528,7 +570,20 @@ void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metada
+@@ -528,7 +574,21 @@ void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metada
  			<< "\"gap_count\":" << timing.queue_counters.gap_count
  			<< ",\"duplicate_count\":" << timing.queue_counters.duplicate_count
  			<< ",\"retry_count\":" << timing.queue_counters.retry_count
@@ -952,6 +997,7 @@ index d3293efd9..1606e2e3e 100644
 +			<< ",\"consumed_sequence\":" << timing.transport_consumed_sequence
 +			<< ",\"mutex_wait_ns\":" << timing.transport_mutex_wait_ns
 +			<< ",\"fence_wait_ns\":" << timing.transport_fence_wait_ns
++			<< ",\"cpu_upload_ns\":" << timing.transport_cpu_upload_ns
 +			<< ",\"gpu_copy_ns\":" << timing.transport_gpu_copy_ns
 +			<< ",\"readback_ns\":" << timing.transport_readback_ns
 +			<< ",\"frame_age_ns\":" << timing.transport_frame_age_ns << "}}";
@@ -959,7 +1005,7 @@ index d3293efd9..1606e2e3e 100644
  		observation.seekp(-1, std::ios_base::end);
  		observation << ",\"frame_entry_monotonic_ns\":" << timing.frame_entry_monotonic_ns
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
-index aa2992b0d..c27bf31eb 100644
+index aa2992b0d..56833a4e2 100644
 --- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
 +++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
 @@ -2,6 +2,7 @@
@@ -970,7 +1016,7 @@ index aa2992b0d..c27bf31eb 100644
  #include <cstdint>
  #include <string>
  #include <thread>
-@@ -38,6 +39,19 @@ struct directshow_stage_timing {
+@@ -38,6 +39,20 @@ struct directshow_stage_timing {
  	uint64_t unlock_sample_data_completed_monotonic_ns = 0;
  	uint64_t emission_monotonic_ns = 0;
  	struct video_queue_read_counters queue_counters = {};
@@ -984,13 +1030,14 @@ index aa2992b0d..c27bf31eb 100644
 +	uint64_t transport_consumed_sequence = 0;
 +	uint64_t transport_mutex_wait_ns = 0;
 +	uint64_t transport_fence_wait_ns = 0;
++	uint64_t transport_cpu_upload_ns = 0;
 +	uint64_t transport_gpu_copy_ns = 0;
 +	uint64_t transport_readback_ns = 0;
 +	uint64_t transport_frame_age_ns = 0;
  };
  
  class VCamFilter : public DShow::OutputFilter {
-@@ -50,6 +64,8 @@ class VCamFilter : public DShow::OutputFilter {
+@@ -50,6 +65,8 @@ class VCamFilter : public DShow::OutputFilter {
  	bool program_return = false;
  	bool preview_return = false;
  	bool consumer_gated = false;
@@ -1000,7 +1047,7 @@ index aa2992b0d..c27bf31eb 100644
  	int queue_mode = 0;
  	bool in_obs = false;
 diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
-index dfe23b476..31c42f6d4 100644
+index 60544538c..ada13cfed 100644
 --- a/plugins/win-dshow/virtualcam.c
 +++ b/plugins/win-dshow/virtualcam.c
 @@ -8,6 +8,7 @@
@@ -1020,7 +1067,7 @@ index dfe23b476..31c42f6d4 100644
  	volatile bool active;
  	volatile bool stopping;
  };
-@@ -158,6 +161,7 @@ static const char *virtualcam_name(void *unused)
+@@ -162,6 +165,7 @@ static const char *virtualcam_name(void *unused)
  static void virtualcam_destroy(void *data)
  {
  	struct virtualcam_data *vcam = (struct virtualcam_data *)data;
@@ -1028,16 +1075,18 @@ index dfe23b476..31c42f6d4 100644
  	video_queue_close(vcam->vq);
  	bfree(data);
  }
-@@ -171,6 +175,8 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+@@ -175,6 +179,10 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
  	vcam->preview_return = obs_output_get_id(output) &&
  				       strcmp(obs_output_get_id(output), "preview_return_output") == 0;
  	vcam->consumer_gated = vcam->program_return || vcam->preview_return;
 +	const char *transport = getenv("PULSAR_RETURN_TRANSPORT");
-+	vcam->d3d11_requested = vcam->consumer_gated && transport && strcmp(transport, "d3d11") == 0;
++	vcam->d3d11_requested = vcam->consumer_gated &&
++		(!transport || (strcmp(transport, "cpu") != 0 && strcmp(transport, "off") != 0 &&
++				       strcmp(transport, "disabled") != 0));
  	vcam->queue_namespace_rejected = !queue_name_for_output(
  		output, vcam->queue_name, sizeof(vcam->queue_name) / sizeof(vcam->queue_name[0]));
  	if (vcam->consumer_gated && !vcam->queue_namespace_rejected)
-@@ -219,6 +225,14 @@ static bool virtualcam_start(void *data)
+@@ -223,6 +231,14 @@ static bool virtualcam_start(void *data)
  	vsi.width = width;
  	vsi.height = height;
  	obs_output_set_video_conversion(vcam->output, &vsi);
@@ -1052,7 +1101,7 @@ index dfe23b476..31c42f6d4 100644
  
  	os_atomic_set_bool(&vcam->active, true);
  	os_atomic_set_bool(&vcam->stopping, false);
-@@ -231,6 +245,8 @@ static bool virtualcam_start(void *data)
+@@ -235,6 +251,8 @@ static bool virtualcam_start(void *data)
  static void virtualcam_deactive(struct virtualcam_data *vcam)
  {
  	obs_output_end_data_capture(vcam->output);
@@ -1061,7 +1110,7 @@ index dfe23b476..31c42f6d4 100644
  	video_queue_close(vcam->vq);
  	vcam->vq = NULL;
  
-@@ -273,8 +289,11 @@ static void virtual_video(void *param, struct video_data *frame)
+@@ -277,8 +295,11 @@ static void virtual_video(void *param, struct video_data *frame)
  
  	struct video_queue_frame_metadata metadata;
  	snapshot_runtime_frame(&metadata);
@@ -1076,10 +1125,10 @@ index dfe23b476..31c42f6d4 100644
  
  struct obs_output_info virtualcam_info = {
 diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.c b/shared/obs-shared-memory-queue/shared-memory-queue.c
-index bb2a69260..3c14236d0 100644
+index 789f8187f..19601116c 100644
 --- a/shared/obs-shared-memory-queue/shared-memory-queue.c
 +++ b/shared/obs-shared-memory-queue/shared-memory-queue.c
-@@ -169,6 +169,17 @@ static bool queue_mapping_size(const void *mapping, size_t *mapping_size)
+@@ -183,6 +183,17 @@ static bool queue_mapping_size(const void *mapping, size_t *mapping_size)
  	return true;
  }
  
@@ -1097,7 +1146,7 @@ index bb2a69260..3c14236d0 100644
  static bool queue_layout_valid(const struct queue_header *header, size_t mapping_size,
  				       uint32_t frame_header_size)
  {
-@@ -385,11 +397,13 @@ void video_queue_close(video_queue_t *vq)
+@@ -399,11 +410,13 @@ void video_queue_close(video_queue_t *vq)
  	if (!vq) {
  		return;
  	}
@@ -1113,7 +1162,7 @@ index bb2a69260..3c14236d0 100644
  	CloseHandle(vq->handle);
  	free(vq->read_buffer);
  	free(vq);
-@@ -397,7 +411,7 @@ void video_queue_close(video_queue_t *vq)
+@@ -411,7 +424,7 @@ void video_queue_close(video_queue_t *vq)
  
  void video_queue_get_info(video_queue_t *vq, uint32_t *cx, uint32_t *cy, uint64_t *interval)
  {
@@ -1122,7 +1171,7 @@ index bb2a69260..3c14236d0 100644
  		return;
  
  	struct queue_header *qh = vq->header;
-@@ -415,7 +429,7 @@ bool video_queue_write_ex(video_queue_t *vq, uint8_t **data, uint32_t *linesize,
+@@ -429,7 +442,7 @@ bool video_queue_write_ex(video_queue_t *vq, uint8_t **data, uint32_t *linesize,
  				  enum video_queue_pixel_format format,
  				  const struct video_queue_frame_metadata *metadata)
  {
@@ -1131,7 +1180,7 @@ index bb2a69260..3c14236d0 100644
  							 data, linesize, format))
  		return false;
  
-@@ -452,7 +466,7 @@ void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, ui
+@@ -466,7 +479,7 @@ void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, ui
  
  enum queue_state video_queue_state(video_queue_t *vq)
  {
@@ -1140,7 +1189,7 @@ index bb2a69260..3c14236d0 100644
  		return SHARED_QUEUE_STATE_INVALID;
  	}
  
-@@ -469,7 +483,7 @@ bool video_queue_read_ex(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint
+@@ -483,7 +496,7 @@ bool video_queue_read_ex(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint
  {
  	if (metadata)
  		memset(metadata, 0, sizeof(*metadata));
