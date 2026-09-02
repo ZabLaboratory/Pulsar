@@ -21,6 +21,7 @@ enum class Signal : uint8_t {
     ProgramReturnReadback,
     EncodeCallbackEnqueue,
     OutputMuxEnqueue,
+    InterleaverMutexWait,
     SocketSend,
     Count,
 };
@@ -50,7 +51,8 @@ inline const std::array<const char *, static_cast<size_t>(Signal::Count)> &signa
 {
     static constexpr std::array<const char *, static_cast<size_t>(Signal::Count)> names = {
         "program", "preview", "raw", "borrowed", "gpu", "queues", "encoder_frame_ready",
-        "program_return_readback", "encode_callback_enqueue", "output_mux_enqueue", "socket_send",
+        "program_return_readback", "encode_callback_enqueue", "output_mux_enqueue", "interleaver_mutex_wait",
+        "socket_send",
     };
     return names;
 }

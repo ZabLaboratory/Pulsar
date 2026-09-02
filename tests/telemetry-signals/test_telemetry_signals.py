@@ -52,12 +52,18 @@ def test_signal_stages_are_correlated_and_reported_as_percentiles():
     for record in list(records):
         event = record.get("event")
         if event and event.get("event_type") == "TakeCommitted":
-            for name in ("encoder_frame_ready", "encode_callback_enqueue", "output_mux_enqueue"):
+            for name in (
+                "encoder_frame_ready",
+                "encode_callback_enqueue",
+                "output_mux_enqueue",
+                "interleaver_mutex_wait",
+            ):
                 records.append(_signal(event, name, 2_000_000))
     trace = probe.parse_records(records, source="signal-fixture.jsonl")
     report = analyzer.analyze_trace(trace)
     assert report["stages"]["encoder_frame_ready"]["count"] == 3
     assert report["stages"]["output_mux_enqueue"]["p95_ms"] == pytest.approx(1.0)
+    assert report["stages"]["interleaver_mutex_wait"]["p95_ms"] == pytest.approx(1.0)
     assert report["stages"]["program_return_readback"]["count"] == 3
     assert report["stages"]["socket_send"]["status"] == "NOT_AVAILABLE"
 
@@ -87,6 +93,8 @@ def test_frontend_callback_contains_no_synchronous_json_or_state_lock():
     assert "enqueueSignal" in callback
     assert "PULSAR_TRACE_SIGNALS" in source
     assert "packet_output_enqueue_monotonic_ns" in source
+    assert "packet_interleaver_mutex_wait_start_monotonic_ns" in source
+    assert "packet_interleaver_mutex_acquired_monotonic_ns" in source
 
 
 def test_selector_contract_keeps_legacy_names_and_canonical_session_field():
@@ -115,6 +123,7 @@ def test_runtime_callback_registration_is_selector_gated():
     assert "signalMask_.store(0, std::memory_order_release);" in source
     assert "Signal::EncoderFrameReady" in source
     assert "Signal::OutputMuxEnqueue" in source
+    assert "Signal::InterleaverMutexWait" in source
     assert "std::atomic<uint32_t> signalMask_{0};" in source
     assert "mutable std::atomic<bool> rawCaptured" in source
     assert "mutable std::atomic<bool> packetCaptured" in source
@@ -138,6 +147,7 @@ def test_callback_selector_cases_are_fail_closed_and_stage_specific():
     assert "Signal::EncoderFrameReady" in packet_method
     assert "Signal::EncodeCallbackEnqueue" in packet_method
     assert "Signal::OutputMuxEnqueue" in packet_method
+    assert "Signal::InterleaverMutexWait" in packet_method
     assert "Signal::Program" in raw_method
     assert "Signal::Program" in packet_method
     # all: the selector header expands all bits, and installation is guarded

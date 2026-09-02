@@ -209,6 +209,7 @@ TRACE_SIGNAL_NAMES = (
     "program_return_readback",
     "encode_callback_enqueue",
     "output_mux_enqueue",
+    "interleaver_mutex_wait",
     "socket_send",
 )
 
@@ -275,6 +276,8 @@ OBSERVATION_OPTIONAL = {
     "packet_pir_monotonic_ns",
     "packet_callback_monotonic_ns",
     "packet_output_enqueue_monotonic_ns",
+    "packet_interleaver_mutex_wait_start_monotonic_ns",
+    "packet_interleaver_mutex_acquired_monotonic_ns",
     *DIRECTSHOW_TIMING_FIELDS,
     "receiver_observed_normalized_ns",
     "frame_hash",
@@ -798,6 +801,31 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
                 raise EvidenceError(
                     "CLOCK_INVALID",
                     "output enqueue timestamp must be ordered between FERC and PIR",
+                    line=line,
+                )
+        lock_fields = (
+            "packet_interleaver_mutex_wait_start_monotonic_ns",
+            "packet_interleaver_mutex_acquired_monotonic_ns",
+        )
+        if any(key in obj for key in lock_fields) and not all(key in obj for key in lock_fields):
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "interleaver mutex timing metadata must be complete",
+                line=line,
+            )
+        if all(key in obj for key in lock_fields):
+            lock_start = _integer(obj[lock_fields[0]], f"observation.{lock_fields[0]}", line=line)
+            lock_acquired = _integer(obj[lock_fields[1]], f"observation.{lock_fields[1]}", line=line)
+            if lock_start <= 0 or lock_acquired < lock_start:
+                raise EvidenceError(
+                    "CLOCK_INVALID",
+                    "interleaver mutex timing must satisfy 0 < wait_start <= acquired",
+                    line=line,
+                )
+            if "packet_ferc_monotonic_ns" in obj and lock_start < obj["packet_ferc_monotonic_ns"]:
+                raise EvidenceError(
+                    "CLOCK_INVALID",
+                    "interleaver mutex wait cannot begin before FERC",
                     line=line,
                 )
         if all(key in obj for key in timing_fields) and obj["observed_at_monotonic_ns"] != obj["packet_pir_monotonic_ns"]:

@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ClodoCapeo <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Thu, 3 Sep 2026 10:00:00 +0200
+Subject: [PATCH] perf(libobs): expose interleaver mutex wait telemetry
+
+Record the monotonic interval spent waiting for the output interleaver mutex
+in the existing per-packet timing record.  This is diagnostic-only: packet
+ownership, ordering, timestamps, audio behavior, and output scheduling remain
+unchanged.  Pulsar can use the opt-in field to distinguish encoder delay from
+interleaver contention before attempting an unsafe asynchronous redesign.
+
+Agent-Role: Eleven
+Agent-Thread: /root
+Work-Unit: ZabLaboratory/Pulsar#253
+Issue: 253
+ADR-Revision: amendment-1-draft-r1-ac12-boundaries-20260831
+Evidence: dual-lane full bench shows NVENC FERC-to-PIR p99 outlier; causal wait is now directly observable
+---
+ libobs/obs-encoder.h | 6 ++++++
+ libobs/obs-output.c  | 4 ++++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/libobs/obs-encoder.h b/libobs/obs-encoder.h
+index b432b6a3c..5205c8fa7 100644
+--- a/libobs/obs-encoder.h
++++ b/libobs/obs-encoder.h
+@@ -97,6 +97,12 @@ struct encoder_packet_time {
+ 	/* Output/mux enqueue boundary, captured immediately before the packet is
+ 	 * inserted into the output interleave queue. */
+ 	uint64_t output_enqueue_monotonic_ns;
++
++	/* Start and acquisition timestamps for the interleaver mutex.  These are
++	 * diagnostic only and use the same monotonic clock as the other pipeline
++	 * stages; they do not alter packet ordering or ownership. */
++	uint64_t interleaved_mutex_wait_start_monotonic_ns;
++	uint64_t interleaved_mutex_acquired_monotonic_ns;
+ };
+ 
+ /** Encoder output packet */
+ struct encoder_packet {
+diff --git a/libobs/obs-output.c b/libobs/obs-output.c
+index 30142c114..35c0b73fb 100644
+--- a/libobs/obs-output.c
++++ b/libobs/obs-output.c
+@@ -2260,6 +2260,7 @@ static void interleave_packets(void *data, struct encoder_packet *packet, struct
+ 	bool was_started;
+ 	bool received_video;
+ 	struct encoder_packet_time *output_packet_time = NULL;
++	const uint64_t interleaved_mutex_wait_start = os_gettime_ns();
+ 
+ 	if (!active(output))
+ 		return;
+@@ -2267,6 +2268,7 @@ static void interleave_packets(void *data, struct encoder_packet *packet, struct
+ 	packet->track_idx = get_encoder_index(output, packet);
+ 
+ 	pthread_mutex_lock(&output->interleaved_mutex);
++	const uint64_t interleaved_mutex_acquired = os_gettime_ns();
+ 
+ 	/* if first video frame is not a keyframe, discard until received */
+ 	if (packet->type == OBS_ENCODER_VIDEO && !output->received_video[packet->track_idx] && !packet->keyframe) {
+@@ -2296,6 +2298,8 @@ static void interleave_packets(void *data, struct encoder_packet *packet, struct
+ 	if (packet_time) {
+ 		output_packet_time = da_push_back_new(output->encoder_packet_times[packet->track_idx]);
+ 		*output_packet_time = *packet_time;
++		output_packet_time->interleaved_mutex_wait_start_monotonic_ns = interleaved_mutex_wait_start;
++		output_packet_time->interleaved_mutex_acquired_monotonic_ns = interleaved_mutex_acquired;
+ 	}
+ 
+ 	if (was_started)
+-- 
+2.54.0.windows.1

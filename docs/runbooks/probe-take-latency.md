@@ -182,7 +182,7 @@ same; callback-only evidence cannot satisfy AC-12.
 Set `PULSAR_TRACE_SIGNALS` to a comma-separated subset of the established
 `program`, `preview`, `raw`, `borrowed`, `gpu`, and `queues` selectors plus
 `encoder_frame_ready`, `program_return_readback`, `encode_callback_enqueue`,
-`output_mux_enqueue`, and `socket_send`; unset means all signals and `none`
+`output_mux_enqueue`, `interleaver_mutex_wait`, and `socket_send`; unset means all signals and `none`
 selects no optional producer. Signal
 records carry the runtime, Take identifiers, post-commit revisions, frame ID,
 PTS, monotonic start/end and observation timestamps. The callback only copies
@@ -192,7 +192,10 @@ closed and is counted, never blocking the graphics or encoder callback.
 
 `encoder_frame_ready` measures FER to FERC, `output_mux_enqueue` measures FERC
 to the output interleave insertion timestamp, and `encode_callback_enqueue`
-measures output insertion to callback entry. `program_return_readback` is
+measures output insertion to callback entry. `interleaver_mutex_wait` measures
+the exact monotonic interval waiting to acquire libobs's output interleaver
+mutex; it is diagnostic evidence for contention, not a scheduling contract.
+`program_return_readback` is
 derived from the validated DirectShow frame-entry/readback sequence. No safe
 socket boundary is currently available, so `socket_send` is reported as
 `NOT_AVAILABLE`; it is never inferred from RTMP receiver arrival. Analyze a

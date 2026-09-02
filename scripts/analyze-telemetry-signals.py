@@ -30,6 +30,7 @@ SIGNALS = (
     "program_return_readback",
     "encode_callback_enqueue",
     "output_mux_enqueue",
+    "interleaver_mutex_wait",
     "socket_send",
 )
 

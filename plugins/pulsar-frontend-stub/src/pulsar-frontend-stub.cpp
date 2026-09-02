@@ -363,6 +363,7 @@ class PulsarRuntimeTelemetry {
         EncoderFrameReady,
         EncodeCallbackEnqueue,
         OutputMuxEnqueue,
+        InterleaverMutexWait,
     };
 
     struct TraceContextSnapshot {
@@ -403,6 +404,8 @@ class PulsarRuntimeTelemetry {
         uint64_t packetPirNs = 0;
         uint64_t packetCallbackNs = 0;
         uint64_t packetOutputEnqueueNs = 0;
+        uint64_t packetInterleaverMutexWaitStartNs = 0;
+        uint64_t packetInterleaverMutexAcquiredNs = 0;
         char runtimeInstanceId[129] = {};
         char commandId[129] = {};
         char intentId[129] = {};
@@ -683,7 +686,8 @@ public:
             pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Program) |
             pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::EncoderFrameReady) |
             pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::EncodeCallbackEnqueue) |
-            pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::OutputMuxEnqueue);
+            pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::OutputMuxEnqueue) |
+            pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::InterleaverMutexWait);
         return (signalMask_.load(std::memory_order_acquire) & stageMask) != 0;
     }
 
@@ -1087,7 +1091,8 @@ public:
         if (!packet || packet->type != OBS_ENCODER_VIDEO)
             return;
         if (!signalEnabled("program") && !signalEnabled("encoder_frame_ready") &&
-            !signalEnabled("output_mux_enqueue") && !signalEnabled("encode_callback_enqueue"))
+            !signalEnabled("output_mux_enqueue") && !signalEnabled("encode_callback_enqueue") &&
+            !signalEnabled("interleaver_mutex_wait"))
             return;
         if (packetTime && packetTime->fer > 0 && packetTime->ferc >= packetTime->fer) {
             encodeTimeNsTotal_.fetch_add(packetTime->ferc - packetTime->fer,
@@ -1119,6 +1124,8 @@ public:
             event.packetFercNs = packetTime->ferc;
             event.packetPirNs = packetTime->pir;
             event.packetOutputEnqueueNs = packetTime->output_enqueue_monotonic_ns;
+            event.packetInterleaverMutexWaitStartNs = packetTime->interleaved_mutex_wait_start_monotonic_ns;
+            event.packetInterleaverMutexAcquiredNs = packetTime->interleaved_mutex_acquired_monotonic_ns;
         }
         copyContextToEvent(event, *context);
         enqueueSignal(event);
@@ -1144,6 +1151,14 @@ public:
             event.startNs = event.packetFercNs;
             event.endNs = event.packetOutputEnqueueNs;
             event.observedNs = event.packetOutputEnqueueNs;
+            enqueueSignal(event);
+        }
+        if (signalEnabled("interleaver_mutex_wait") && event.packetInterleaverMutexWaitStartNs &&
+            event.packetInterleaverMutexAcquiredNs >= event.packetInterleaverMutexWaitStartNs) {
+            event.kind = SignalKind::InterleaverMutexWait;
+            event.startNs = event.packetInterleaverMutexWaitStartNs;
+            event.endNs = event.packetInterleaverMutexAcquiredNs;
+            event.observedNs = event.packetInterleaverMutexAcquiredNs;
             enqueueSignal(event);
         }
     }
@@ -1861,6 +1876,7 @@ private:
         case SignalKind::EncoderFrameReady: return "encoder_frame_ready";
         case SignalKind::EncodeCallbackEnqueue: return "encode_callback_enqueue";
         case SignalKind::OutputMuxEnqueue: return "output_mux_enqueue";
+        case SignalKind::InterleaverMutexWait: return "interleaver_mutex_wait";
         default: return "unknown";
         }
     }
@@ -1902,7 +1918,11 @@ private:
                     << ",\"packet_ferc_monotonic_ns\":" << event.packetFercNs
                     << ",\"packet_pir_monotonic_ns\":" << event.packetPirNs
                     << ",\"packet_callback_monotonic_ns\":" << event.packetCallbackNs
-                    << ",\"packet_output_enqueue_monotonic_ns\":" << event.packetOutputEnqueueNs;
+                    << ",\"packet_output_enqueue_monotonic_ns\":" << event.packetOutputEnqueueNs
+                    << ",\"packet_interleaver_mutex_wait_start_monotonic_ns\":"
+                    << event.packetInterleaverMutexWaitStartNs
+                    << ",\"packet_interleaver_mutex_acquired_monotonic_ns\":"
+                    << event.packetInterleaverMutexAcquiredNs;
             }
             out << ",\"surface\":\"EncoderOutput\",\"consumer\":\"encoder_callback\"}";
         } else {

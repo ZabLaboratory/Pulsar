@@ -713,6 +713,57 @@ def test_encoder_pipeline_timing_is_complete_ordered_and_diagnostic_only():
         probe.parse_records(broken)
 
 
+def test_interleaver_mutex_timing_is_complete_and_begins_after_ferc():
+    records = _take_records(3)
+    packet = next(
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "encoded_first_packet"
+    )
+    packet.update(
+        {
+            "packet_cts_monotonic_ns": packet["observed_at_monotonic_ns"] - 6_000_000,
+            "packet_fer_monotonic_ns": packet["observed_at_monotonic_ns"] - 5_000_000,
+            "packet_ferc_monotonic_ns": packet["observed_at_monotonic_ns"] - 2_000_000,
+            "packet_pir_monotonic_ns": packet["observed_at_monotonic_ns"],
+            "packet_callback_monotonic_ns": packet["observed_at_monotonic_ns"] + 100_000,
+            "packet_interleaver_mutex_wait_start_monotonic_ns": packet["observed_at_monotonic_ns"] - 1_000_000,
+            "packet_interleaver_mutex_acquired_monotonic_ns": packet["observed_at_monotonic_ns"],
+        }
+    )
+    probe.parse_records(records)
+
+    records = _take_records(3)
+    packet = next(
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "encoded_first_packet"
+    )
+    packet["packet_interleaver_mutex_acquired_monotonic_ns"] = packet["observed_at_monotonic_ns"]
+    with pytest.raises(probe.EvidenceError, match="interleaver mutex timing metadata must be complete"):
+        probe.parse_records(records)
+
+    records = _take_records(3)
+    packet = next(
+        item
+        for item in records
+        if item.get("record_type") == "observation" and item.get("boundary") == "encoded_first_packet"
+    )
+    packet.update(
+        {
+            "packet_cts_monotonic_ns": packet["observed_at_monotonic_ns"] - 6_000_000,
+            "packet_fer_monotonic_ns": packet["observed_at_monotonic_ns"] - 5_000_000,
+            "packet_ferc_monotonic_ns": packet["observed_at_monotonic_ns"] - 2_000_000,
+            "packet_pir_monotonic_ns": packet["observed_at_monotonic_ns"],
+            "packet_callback_monotonic_ns": packet["observed_at_monotonic_ns"] + 100_000,
+            "packet_interleaver_mutex_wait_start_monotonic_ns": packet["observed_at_monotonic_ns"] - 3_000_001,
+            "packet_interleaver_mutex_acquired_monotonic_ns": packet["observed_at_monotonic_ns"],
+        }
+    )
+    with pytest.raises(probe.EvidenceError, match="interleaver mutex wait cannot begin before FERC"):
+        probe.parse_records(records)
+
+
 def test_rtmp_load_request_and_receiver_metadata_are_an_atomic_session_pair():
     records = _take_records(1)
     records[0].pop("rtmp_load_requested")
