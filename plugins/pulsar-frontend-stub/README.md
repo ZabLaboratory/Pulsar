@@ -113,6 +113,11 @@ selection; an `all` selection retains the historical composite resource shape
 for schema compatibility. TakeAccepted, TakeCommitted, frame identity/PTS, and
 integrity or lifecycle failures remain mandatory even with `none`; this keeps
 the safety/audit trail distinct from optional performance signals.
+The session `capture_paths` array is generated from the selected signals:
+`program` declares encoder-input and encoded-packet boundaries, `raw` declares
+the DirectShow-return boundary, and `all` additionally declares decoded and
+antenna boundaries. A selector with no capture-boundary signal may emit an
+empty array; it is not a static declaration of every possible path.
 
 - `scripts/probe-events.py` — `SetStudioModeEnabled` round-trip → `StudioModeStateChanged` event end-to-end.
 - `scripts/probe-record.py` — `StartRecord` → 3 s capture → `StopRecord` → file ≥ 100 KB on disk.

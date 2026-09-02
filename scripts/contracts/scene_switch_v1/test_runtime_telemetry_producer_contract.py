@@ -124,7 +124,12 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert '\\"packet_ferc_monotonic_ns\\":' in frontend
     assert '\\"packet_pir_monotonic_ns\\":' in frontend
     assert '\\"packet_callback_monotonic_ns\\":' in frontend
-    assert '\\"capture_paths\\":[\\"encoder_input_raw\\",\\"directshow_return\\",\\"encoded_first_packet\\"' in frontend
+    assert 'out << "\\\"capture_paths\\\":["' in frontend
+    assert 'capturePath("encoder_input_raw")' in frontend
+    assert 'capturePath("directshow_return")' in frontend
+    assert 'capturePath("encoded_first_packet")' in frontend
+    assert 'if (selectedSignals == pulsar_runtime_telemetry::all_signal_mask())' in frontend
+    assert "telemetry_signals" in frontend
     assert "streamOutput_ = streamOutput" in frontend
     assert "rtmp_load_active" in frontend
     assert "obs_output_active(streamOutput)" in frontend
@@ -471,6 +476,93 @@ def test_runtime_session_line_is_valid_json_and_has_bound_source_topology() -> N
         assert gpu_value in line
         malformed = line.replace(gpu_value, gpu_value[:-1], 1)
         json.loads(malformed)
+
+
+def test_runtime_selector_schema_accepts_none_and_filtered_signal_payloads() -> None:
+    spec = importlib.util.spec_from_file_location("probe_take_latency_selector_contract", TAKE_LATENCY_PROBE)
+    assert spec is not None and spec.loader is not None
+    parser = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = parser
+    spec.loader.exec_module(parser)
+
+    none_session = {
+        "record_type": "session",
+        "schema": "pulsar.take-latency.v1",
+        "runtime_instance_id": "runtime-none-001",
+        "session_id": "runtime-none-001-none",
+        "telemetry_signals": [],
+        "evidence_kind": "runtime",
+    }
+    assert parser._validate_session(none_session) == none_session
+
+    candidate_sha = "0123456789abcdef" * 2 + "01234567"
+    session = {
+        "record_type": "session",
+        "schema": "pulsar.take-latency.v1",
+        "runtime_instance_id": "runtime-gpu-001",
+        "session_id": "runtime-gpu-001-gpu",
+        "codec": "x264",
+        "warmup_takes": 100,
+        "video": {"width": 1920, "height": 1080, "fps_num": 60, "fps_den": 1},
+        "workload": {"wgc": True, "cef": True, "nvenc": False},
+        "capture_paths": [],
+        "source_types": ["window_capture", "browser_source"],
+        "resource_reference": {"extra_frame_render_ms": 0.091, "extra_resident_bytes": 3_130_000},
+        "build_revision": candidate_sha,
+        "command_line": "selector-contract",
+        "hardware": {"host": "test-host", "gpu": "test-gpu"},
+        "producer_topology": "dual_lane_ab",
+        "producer_count": 2,
+        "telemetry_signals": ["gpu"],
+        "evidence_kind": "runtime",
+    }
+    assert parser._validate_session(session)["telemetry_signals"] == ["gpu"]
+    resource = {
+        "record_type": "resource_sample",
+        "sample_mode": "dual_lane",
+        "measurement_phase": "dual_lane",
+        "clock_domain": "monotonic_ns",
+        "runtime_instance_id": session["runtime_instance_id"],
+        "observed_at_monotonic_ns": 123,
+        "telemetry_signals_mask": parser.TELEMETRY_SIGNAL_BITS["gpu"],
+        "build_revision": candidate_sha,
+        "hardware": session["hardware"],
+        "producer_topology": "dual_lane_ab",
+        "producer_count": 2,
+        "gpu": {"host_gpu_percent": 12.0, "encoder_utilization_percent": 3.0, "gpu_memory_bytes": 42},
+    }
+    assert parser._validate_resource(resource, session)["gpu"]["gpu_memory_bytes"] == 42
+    with pytest.raises(parser.EvidenceError, match="payloads must match"):
+        parser._validate_resource({**resource, "queues": {}}, session)
+    with pytest.raises(parser.EvidenceError, match="must match session.telemetry_signals"):
+        parser._validate_resource({**resource, "telemetry_signals_mask": parser.TELEMETRY_ALL_MASK}, session)
+
+    all_session = {**session, "runtime_instance_id": "runtime-all-001", "session_id": "runtime-all-001-all",
+                   "telemetry_signals": list(parser.TELEMETRY_SIGNALS),
+                   "capture_paths": ["encoder_input_raw", "directshow_return", "encoded_first_packet",
+                                     "decoded_first_frame", "antenna_first_frame"]}
+    assert parser._validate_session(all_session)["telemetry_signals"] == list(parser.TELEMETRY_SIGNALS)
+
+    payloads = {
+        signal: {field: (1 if field.endswith("_count") or field == "encode_time_samples" else 1.0)
+                 for field in fields}
+        for signal, fields in parser.FILTERED_RESOURCE_FIELDS.items()
+    }
+    for signal in parser.TELEMETRY_SIGNALS:
+        single_session = {**session, "runtime_instance_id": f"runtime-{signal}-001",
+                          "session_id": f"runtime-{signal}-001-{signal}",
+                          "telemetry_signals": [signal]}
+        single_resource = {**resource, "runtime_instance_id": single_session["runtime_instance_id"],
+                           "telemetry_signals_mask": parser.TELEMETRY_SIGNAL_BITS[signal],
+                           signal: payloads[signal]}
+        for other_signal in parser.TELEMETRY_SIGNALS:
+            if other_signal != signal:
+                single_resource.pop(other_signal, None)
+        assert parser._validate_resource(single_resource, single_session)[signal] == payloads[signal]
+    with pytest.raises(parser.EvidenceError, match="must match session.telemetry_signals"):
+        parser._validate_resource(resource, {**session, "telemetry_signals": ["program"]})
+    with pytest.raises(parser.EvidenceError, match="must not emit resource samples"):
+        parser._validate_resource(resource, none_session)
 
 
 def test_wire_deadline_uses_qpc_compatible_perf_counter_and_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

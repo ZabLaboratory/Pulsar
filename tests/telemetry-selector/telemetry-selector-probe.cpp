@@ -26,11 +26,16 @@ struct Case {
 
 int main()
 {
-    const std::array<Case, 16> cases = {{
+    const std::array<Case, 21> cases = {{
         {nullptr, true, all_signal_mask()},
         {"all", true, all_signal_mask()},
         {"none", true, 0},
         {"program", true, signal_bit(Signal::Program)},
+        {"preview", true, signal_bit(Signal::Preview)},
+        {"raw", true, signal_bit(Signal::Raw)},
+        {"borrowed", true, signal_bit(Signal::Borrowed)},
+        {"gpu", true, signal_bit(Signal::Gpu)},
+        {"queues", true, signal_bit(Signal::Queues)},
         {"preview,raw", true, signal_bit(Signal::Preview) | signal_bit(Signal::Raw)},
         {"borrowed,gpu,queues", true, signal_bit(Signal::Borrowed) | signal_bit(Signal::Gpu) |
                                       signal_bit(Signal::Queues)},

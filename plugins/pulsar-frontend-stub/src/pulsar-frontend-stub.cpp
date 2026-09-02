@@ -637,27 +637,6 @@ public:
                 pulsar_runtime_telemetry::signal_bit(signal)) != 0;
     }
 
-    void previewFrame(struct video_data *frame, uint64_t frameId)
-    {
-        if (!frame || !signalEnabled(pulsar_runtime_telemetry::Signal::Preview))
-            return;
-        std::string runtime;
-        {
-            std::lock_guard<std::mutex> lock(stateMutex_);
-            if (!enabled_)
-                return;
-            runtime = runtimeInstanceId_;
-        }
-        std::ostringstream observation;
-        observation << "{\"record_type\":\"observation\",\"boundary\":\"preview_mix\","
-                    << "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
-                    << escape(runtime) << "\",\"frame_id\":" << frameId
-                    << ",\"pts_ns\":" << frame->timestamp << ",\"observed_at_monotonic_ns\":"
-                    << nowNs() << ",\"valid\":true,\"surface\":\"PreviewView\","
-                    << "\"consumer\":\"preview_ready\"}";
-        writeLine(observation.str());
-    }
-
     static bool resourceReferenceRequested()
     {
         const char *tracePath = std::getenv("PULSAR_TRACE_PATH");
@@ -1271,14 +1250,20 @@ private:
     void resourceLoop()
     {
         const uint32_t interval = resourceIntervalMs();
+        const uint32_t selectedSignalsAtStart = signalMask_.load(std::memory_order_acquire);
+        const bool cpuSamplingRequired =
+            (selectedSignalsAtStart &
+             (pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Program) |
+              pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Preview) |
+              pulsar_runtime_telemetry::signal_bit(pulsar_runtime_telemetry::Signal::Queues))) != 0;
         obs_graphics_pipeline_stats previousGraphics = {};
         obs_video_mix_pipeline_stats previousProgram = {};
         obs_video_mix_pipeline_stats previousPreview = {};
         obs_raw_output_pipeline_stats previousProgramReturn = {};
         obs_raw_output_pipeline_stats previousPreviewReturn = {};
         bool havePipelineBaseline = false;
-        resourceCpuInfo_ = os_cpu_usage_info_start();
-        if (!resourceCpuInfo_)
+        resourceCpuInfo_ = cpuSamplingRequired ? os_cpu_usage_info_start() : nullptr;
+        if (cpuSamplingRequired && !resourceCpuInfo_)
             blog(LOG_WARNING, "[pulsar-runtime-telemetry] process CPU sampler unavailable");
 
         bool gpuWarningLogged = false;
@@ -1317,7 +1302,7 @@ private:
                 : 0.0;
             if (cpu < 0.0 || !std::isfinite(cpu))
                 continue;
-            const double frameRenderMs = (queuesSelected || programSelected || previewSelected)
+            const double frameRenderMs = (programSelected || previewSelected)
                 ? static_cast<double>(obs_get_average_frame_time_ns()) / 1000000.0
                 : 0.0;
             if (!std::isfinite(frameRenderMs) || frameRenderMs < 0.0)
@@ -1371,10 +1356,10 @@ private:
             obs_raw_output_pipeline_stats previewReturn = {};
             if ((programSelected || previewSelected) && !obs_get_graphics_pipeline_stats(&graphics))
                 continue;
-            if ((programSelected || rawSelected || borrowedSelected) &&
+            if ((programSelected || borrowedSelected) &&
                 !obs_video_get_mix_pipeline_stats(programVideo, &program))
                 continue;
-            if ((previewSelected || rawSelected || borrowedSelected) && producerCount == 2 &&
+            if ((previewSelected || borrowedSelected) && producerCount == 2 &&
                 !obs_video_get_mix_pipeline_stats(previewVideo, &preview))
                 continue;
             if (rawSelected && programReturnOutput &&
@@ -1404,7 +1389,7 @@ private:
             const int outputDropped = rtmpLoadActive ? obs_output_get_frames_dropped(streamOutput) : 0;
             const uint64_t droppedFrames =
                 outputDropped > 0 ? static_cast<uint64_t>(outputDropped) : 0;
-            const uint64_t missedFrames = static_cast<uint64_t>(obs_get_lagged_frames());
+            const uint64_t missedFrames = queuesSelected ? static_cast<uint64_t>(obs_get_lagged_frames()) : 0;
             const uint64_t encodeSamples = programSelected
                 ? encodeTimeSampleCount_.load(std::memory_order_relaxed)
                 : 0;
@@ -1419,10 +1404,16 @@ private:
             if (selectedSignals != pulsar_runtime_telemetry::all_signal_mask()) {
                 std::ostringstream filtered;
                 filtered << "{\"record_type\":\"resource_sample\",\"sample_mode\":\""
-                         << escape(mode) << "\",\"clock_domain\":\"monotonic_ns\","
+                         << escape(mode) << "\",\"measurement_phase\":\"" << escape(mode)
+                         << "\",\"clock_domain\":\"monotonic_ns\","
                          << "\"runtime_instance_id\":\"" << escape(runtime)
                          << "\",\"observed_at_monotonic_ns\":" << nowNs()
-                         << ",\"telemetry_signals_mask\":" << selectedSignals;
+                         << ",\"telemetry_signals_mask\":" << selectedSignals
+                         << ",\"build_revision\":\"" << escape(buildRevision)
+                         << "\",\"hardware\":{\"host\":\"" << escape(host)
+                         << "\",\"gpu\":\"" << escape(gpuName)
+                         << "\"},\"producer_topology\":\"" << escape(producerTopology)
+                         << "\",\"producer_count\":" << producerCount;
                 const auto payload = [&filtered](const char *name, const std::string &value) {
                     filtered << ",\"" << name << "\":" << value;
                 };
@@ -4224,8 +4215,6 @@ void PulsarFrontendAPI::OnSceneSwitchPreviewVideoFrame(void *param, struct video
     auto *vendor = g_sceneSwitchVendor.load(std::memory_order_acquire);
     if (!self)
         return;
-    const uint64_t frameId = self->previewVideo ? video_output_get_total_frames(self->previewVideo) : 0;
-    g_runtimeTelemetry.previewFrame(frame, frameId);
     if (!vendor)
         return;
     std::string prepared;
@@ -4234,7 +4223,7 @@ void PulsarFrontendAPI::OnSceneSwitchPreviewVideoFrame(void *param, struct video
         prepared = self->sceneSwitchPreparedCommandId;
     }
     if (!prepared.empty() && frame)
-        vendor->previewRendered(prepared, frameId, frame->timestamp);
+        vendor->previewRendered(prepared, video_output_get_total_frames(self->previewVideo), frame->timestamp);
 }
 
 void PulsarFrontendAPI::OnDualLaneTick(void *param, float)

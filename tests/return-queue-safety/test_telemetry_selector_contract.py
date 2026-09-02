@@ -26,13 +26,17 @@ def test_each_signal_controls_a_real_producer_or_payload() -> None:
     source = FRONTEND.read_text(encoding="utf-8")
     for signal in ("Program", "Preview", "Raw", "Borrowed", "Gpu", "Queues"):
         assert f"Signal::{signal}" in source
-    assert "g_runtimeTelemetry.previewFrame(frame, frameId);" in source
     assert "if (programSelected)" in source
     assert "if (previewSelected)" in source
     assert "if (rawSelected)" in source
     assert "if (borrowedSelected)" in source
     assert "if (gpuSelected)" in source
     assert "if (queuesSelected)" in source
+    assert "queuesSelected ? static_cast<uint64_t>(obs_get_lagged_frames()) : 0" in source
+    assert "cpuSamplingRequired ? os_cpu_usage_info_start() : nullptr" in source
+    assert "const double frameRenderMs = (programSelected || previewSelected)" in source
+    assert "if ((programSelected || borrowedSelected)" in source
+    assert "if ((previewSelected || borrowedSelected)" in source
     assert "if (selectedSignals != pulsar_runtime_telemetry::all_signal_mask())" in source
     assert "if (selectedSignals == 0)" in source
     assert "telemetry_signals" in source and "evidence_kind" in source

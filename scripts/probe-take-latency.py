@@ -194,8 +194,34 @@ SESSION_OPTIONAL = {
     "source_types",
     "rtmp_receiver",
     "rtmp_load_requested",
+    "telemetry_signals",
 }
 SESSION_ALLOWED = SESSION_REQUIRED | SESSION_OPTIONAL
+TELEMETRY_SIGNALS = ("program", "preview", "raw", "borrowed", "gpu", "queues")
+TELEMETRY_SIGNAL_BITS = {name: 1 << index for index, name in enumerate(TELEMETRY_SIGNALS)}
+TELEMETRY_ALL_MASK = sum(TELEMETRY_SIGNAL_BITS.values())
+SESSION_NONE_REQUIRED = {
+    "record_type",
+    "schema",
+    "runtime_instance_id",
+    "session_id",
+    "telemetry_signals",
+    "evidence_kind",
+}
+RESOURCE_FILTERED_REQUIRED = {
+    "record_type",
+    "sample_mode",
+    "measurement_phase",
+    "clock_domain",
+    "runtime_instance_id",
+    "observed_at_monotonic_ns",
+    "telemetry_signals_mask",
+    "build_revision",
+    "hardware",
+    "producer_topology",
+    "producer_count",
+}
+RESOURCE_FILTERED_PAYLOADS = set(TELEMETRY_SIGNALS)
 
 DIRECTSHOW_TIMING_FIELDS = (
     "frame_entry_monotonic_ns",
@@ -295,8 +321,30 @@ RESOURCE_OPTIONAL = {
     "preview_mix",
     "source_profile",
     "notes",
+    "telemetry_signals_mask",
+    *RESOURCE_FILTERED_PAYLOADS,
 }
 RESOURCE_ALLOWED = RESOURCE_REQUIRED | RESOURCE_OPTIONAL
+
+FILTERED_RESOURCE_FIELDS = {
+    "program": {"frame_render_ms", "encode_time_ms", "encode_time_samples", "frame_total_ms"},
+    "preview": {"frame_total_ms", "render_main_ms"},
+    "raw": {"program_return_callback_ms", "preview_return_callback_ms"},
+    "borrowed": {
+        "program_publish_ms",
+        "program_dropped_count",
+        "program_overwritten_count",
+        "program_wait_count",
+        "program_fallback_count",
+        "preview_publish_ms",
+        "preview_dropped_count",
+        "preview_overwritten_count",
+        "preview_wait_count",
+        "preview_fallback_count",
+    },
+    "gpu": {"host_gpu_percent", "encoder_utilization_percent", "gpu_memory_bytes"},
+    "queues": {"callback_backlog_estimate", "dropped_frames", "missed_frames", "process_cpu_percent"},
+}
 
 RTMP_RECEIVER_REQUIRED = {
     "server_url",
@@ -486,9 +534,16 @@ def _revisions(value: Any, name: str, *, line: int | None = None) -> dict[str, i
 
 def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
     obj = _object(value, "session", line=line)
-    _exact_keys(obj, SESSION_REQUIRED, SESSION_ALLOWED, "session", line=line)
     if obj.get("record_type") != "session" or obj.get("schema") != TRACE_SCHEMA:
         raise EvidenceError("SCHEMA_INVALID", "session record_type/schema is not pulsar.take-latency.v1", line=line)
+    if obj.get("telemetry_signals") == []:
+        _exact_keys(obj, SESSION_NONE_REQUIRED, SESSION_NONE_REQUIRED, "session", line=line)
+        for key in ("runtime_instance_id", "session_id"):
+            _string(obj[key], f"session.{key}", identifier=True, line=line)
+        if obj["evidence_kind"] not in ("runtime", "fixture"):
+            raise EvidenceError("SCHEMA_INVALID", "session.evidence_kind must be runtime or fixture", line=line)
+        return dict(obj)
+    _exact_keys(obj, SESSION_REQUIRED, SESSION_ALLOWED, "session", line=line)
     result = dict(obj)
     for key in ("runtime_instance_id", "session_id"):
         _string(obj[key], f"session.{key}", identifier=True, line=line)
@@ -518,6 +573,12 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
         _boolean(workload[key], f"session.workload.{key}", line=line)
     if obj["codec"] == "nvenc" and not workload["nvenc"]:
         raise EvidenceError("SCHEMA_INVALID", "an nvenc session must declare workload.nvenc=true", line=line)
+    if "telemetry_signals" in obj:
+        signals = obj["telemetry_signals"]
+        if not isinstance(signals, list) or any(signal not in TELEMETRY_SIGNALS for signal in signals):
+            raise EvidenceError("SCHEMA_INVALID", "session.telemetry_signals contains an unsupported signal", line=line)
+        if len(set(signals)) != len(signals):
+            raise EvidenceError("SCHEMA_INVALID", "session.telemetry_signals must not contain duplicates", line=line)
     source_types = obj.get("source_types")
     if obj["evidence_kind"] == "runtime":
         if not isinstance(source_types, list) or not source_types or any(
@@ -537,10 +598,25 @@ def _validate_session(value: Any, *, line: int | None = None) -> dict[str, Any]:
         if workload["cef"] and "browser_source" not in source_types:
             raise EvidenceError("SCHEMA_INVALID", "workload.cef=true requires browser_source in source_types", line=line)
     paths = obj["capture_paths"]
-    if not isinstance(paths, list) or not paths or any(path not in BOUNDARIES for path in paths):
+    signals = set(obj.get("telemetry_signals", ()))
+    expected_paths = set()
+    if "program" in signals:
+        expected_paths.update(("encoder_input_raw", "encoded_first_packet"))
+    if "raw" in signals:
+        expected_paths.add("directshow_return")
+    if signals == set(TELEMETRY_SIGNALS):
+        expected_paths.update(("decoded_first_frame", "antenna_first_frame"))
+    paths_empty_allowed = "telemetry_signals" in obj and not expected_paths
+    if not isinstance(paths, list) or (not paths and not paths_empty_allowed) or any(path not in BOUNDARIES for path in paths):
         raise EvidenceError("SCHEMA_INVALID", "session.capture_paths must list supported boundaries", line=line)
     if len(set(paths)) != len(paths):
         raise EvidenceError("SCHEMA_INVALID", "session.capture_paths must not contain duplicates", line=line)
+    if "telemetry_signals" in obj and not expected_paths.issubset(paths):
+        raise EvidenceError(
+            "SCHEMA_INVALID",
+            "session.capture_paths must declare the boundaries enabled by telemetry_signals",
+            line=line,
+        )
     if "rtmp_receiver" in obj:
         result["rtmp_receiver"] = _validate_rtmp_receiver(obj["rtmp_receiver"], line=line)
     if "rtmp_load_requested" in obj:
@@ -821,8 +897,91 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
     return result
 
 
+def _validate_filtered_resource(value: Any, session: Mapping[str, Any], *, line: int | None = None) -> dict[str, Any]:
+    obj = _object(value, "resource sample", line=line)
+    allowed = RESOURCE_FILTERED_REQUIRED | RESOURCE_FILTERED_PAYLOADS
+    _exact_keys(obj, RESOURCE_FILTERED_REQUIRED, allowed, "resource sample", line=line)
+    if obj["record_type"] != "resource_sample":
+        raise EvidenceError("SCHEMA_INVALID", "resource record_type must be resource_sample", line=line)
+    if obj["sample_mode"] not in RESOURCE_MODES or obj["measurement_phase"] != obj["sample_mode"]:
+        raise EvidenceError("SCHEMA_INVALID", "resource sample mode/measurement phase is invalid", line=line)
+    if obj["clock_domain"] != "monotonic_ns":
+        raise EvidenceError("SCHEMA_INVALID", "resource samples must use clock_domain=monotonic_ns", line=line)
+    _string(obj["runtime_instance_id"], "resource.runtime_instance_id", identifier=True, line=line)
+    if obj["runtime_instance_id"] != session["runtime_instance_id"]:
+        raise EvidenceError("CORRELATION_INVALID", "resource runtime_instance_id differs from session", line=line)
+    build_revision = _string(obj["build_revision"], "resource.build_revision", line=line)
+    if build_revision != session["build_revision"]:
+        raise EvidenceError("CORRELATION_INVALID", "resource build_revision differs from session", line=line)
+    hardware = _object(obj["hardware"], "resource.hardware", line=line)
+    _exact_keys(hardware, {"host", "gpu"}, {"host", "gpu"}, "resource.hardware", line=line)
+    if hardware != session["hardware"]:
+        raise EvidenceError("CORRELATION_INVALID", "resource hardware identity differs from session", line=line)
+    producer_topology = obj["producer_topology"]
+    if producer_topology not in ("single_lane_reference", "dual_lane_ab"):
+        raise EvidenceError("SCHEMA_INVALID", "resource producer_topology is unsupported", line=line)
+    producer_count = _integer(obj["producer_count"], "resource.producer_count", line=line)
+    expected_count = 1 if producer_topology == "single_lane_reference" else 2
+    if producer_count != expected_count:
+        raise EvidenceError("SCHEMA_INVALID", "resource.producer_count does not match resource.producer_topology", line=line)
+    expected_topology = "single_lane_reference" if obj["sample_mode"] == "reference" else "dual_lane_ab"
+    if producer_topology != expected_topology:
+        raise EvidenceError("CORRELATION_INVALID", "resource producer topology does not match measurement phase", line=line)
+    _integer(obj["observed_at_monotonic_ns"], "resource.observed_at_monotonic_ns", line=line)
+    mask = _integer(obj["telemetry_signals_mask"], "resource.telemetry_signals_mask", line=line)
+    if mask <= 0 or mask >= TELEMETRY_ALL_MASK + 1:
+        raise EvidenceError("SCHEMA_INVALID", "resource telemetry_signals_mask is outside the selector range", line=line)
+    selected = {name for name, bit in TELEMETRY_SIGNAL_BITS.items() if mask & bit}
+    session_signals = session.get("telemetry_signals")
+    if not isinstance(session_signals, list) or set(session_signals) != selected:
+        raise EvidenceError(
+            "CORRELATION_INVALID",
+            "resource telemetry_signals_mask must match session.telemetry_signals",
+            line=line,
+        )
+    if set(obj) & RESOURCE_FILTERED_PAYLOADS != selected:
+        raise EvidenceError("SCHEMA_INVALID", "resource payloads must match telemetry_signals_mask", line=line)
+    for signal, fields in FILTERED_RESOURCE_FIELDS.items():
+        if signal not in selected:
+            continue
+        payload = _object(obj[signal], f"resource.{signal}", line=line)
+        _exact_keys(payload, fields, fields, f"resource.{signal}", line=line)
+        for key, item in payload.items():
+            if key.endswith("_count") or key == "encode_time_samples":
+                _integer(item, f"resource.{signal}.{key}", line=line)
+                if item < 0:
+                    raise EvidenceError("SCHEMA_INVALID", f"resource.{signal}.{key} must be non-negative", line=line)
+            else:
+                if _number(item, f"resource.{signal}.{key}", line=line) < 0:
+                    raise EvidenceError("SCHEMA_INVALID", f"resource.{signal}.{key} must be non-negative", line=line)
+    return dict(obj)
+
+
 def _validate_resource(value: Any, session: Mapping[str, Any], *, line: int | None = None) -> dict[str, Any]:
     obj = _object(value, "resource sample", line=line)
+    if "telemetry_signals" in session:
+        session_signals = session["telemetry_signals"]
+        if not isinstance(session_signals, list) or not session_signals:
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "none telemetry selection must not emit resource samples",
+                line=line,
+            )
+        if "telemetry_signals_mask" not in obj:
+            raise EvidenceError(
+                "SCHEMA_INVALID",
+                "selector-aware resource samples must declare telemetry_signals_mask",
+                line=line,
+            )
+        expected_mask = sum(TELEMETRY_SIGNAL_BITS[signal] for signal in session_signals)
+        if _integer(obj["telemetry_signals_mask"], "resource.telemetry_signals_mask", line=line) != expected_mask:
+            raise EvidenceError(
+                "CORRELATION_INVALID",
+                "resource telemetry_signals_mask must match session.telemetry_signals",
+                line=line,
+            )
+    if "telemetry_signals_mask" in obj and obj["telemetry_signals_mask"] != TELEMETRY_ALL_MASK:
+        return _validate_filtered_resource(obj, session, line=line)
     _exact_keys(obj, RESOURCE_REQUIRED, RESOURCE_ALLOWED, "resource sample", line=line)
     result = dict(obj)
     if obj["record_type"] != "resource_sample":
