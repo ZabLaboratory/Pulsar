@@ -224,6 +224,9 @@ RequestResult RequestHandler::ToggleReplayBuffer(const Request &)
 	if (wasActive) {
 		if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
 			return OutputStopFailure(output, "The replay buffer");
+		if (obs_output_active(output))
+			return RequestResult::Error(RequestStatus::RequestProcessingFailed,
+				"Replay buffer stop remains active; toggle is not settled.");
 	} else {
 		if (Utils::Obs::OutputHelper::SettleStart(output, watch) == ActionVerdict::Refused)
 			return OutputStartFailure(output, "The replay buffer");
