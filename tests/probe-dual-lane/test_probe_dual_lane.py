@@ -948,3 +948,36 @@ def test_resource_fusion_preserves_observed_active_samples(tmp_path):
     fused = [json.loads(line) for line in final.read_text(encoding="utf-8").splitlines()]
     assert fused[0]["rtmp_load_requested"] is True
     assert all(record["rtmp_load_active"] is True for record in fused if record.get("record_type") == "resource_sample")
+
+
+def test_resource_sample_timeout_budget_adds_only_bounded_schedule_margin():
+    assert probe.resource_sample_timeout_budget(10, 500) == 30.0
+    assert probe.resource_sample_timeout_budget(300, 500) == 465.0
+    assert probe.resource_sample_timeout_budget(600, 500) == 915.0
+    with pytest.raises(probe.ProbeFailure):
+        probe.resource_sample_timeout_budget(0, 500)
+    with pytest.raises(probe.ProbeFailure):
+        probe.resource_sample_timeout_budget(1, 99)
+
+
+def test_reader_cleanup_closes_only_after_bounded_join():
+    source = inspect.getsource(probe.PulsarProcess._join_process_reader)
+    assert "PROCESS_READER_JOIN_TIMEOUT_S" in source
+    assert "_close_process_stdout" in source
+    directshow = inspect.getsource(probe.PulsarProcess._join_directshow_reader)
+    assert "_close_directshow_stdout" in directshow
+    assert "thread.is_alive()" in source
+
+
+def test_recording_release_probe_restores_owned_path(tmp_path):
+    recording = tmp_path / "recording.mp4"
+    recording.write_bytes(b"fixture")
+    probe.wait_for_recording_release(recording, timeout=0.5)
+    assert recording.read_bytes() == b"fixture"
+    assert not list(tmp_path.glob("*.release-check"))
+
+
+def test_program_audio_waits_for_recording_handle_release():
+    source = (ROOT / "scripts" / "probe-program-audio.py").read_text(encoding="utf-8")
+    assert "wait_for_recording_release" in source
+    assert "ensure_recording_output_owned" in source

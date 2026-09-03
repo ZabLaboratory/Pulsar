@@ -194,6 +194,9 @@ ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 ENCODER_BIND_RE = re.compile(
     DUAL_LANE_LOG_PREFIX + r"\s*encoder video_t bound once to ProgramView"
 )
+TRACE_INTEGRITY_FAULT_RE = re.compile(
+    r"\[pulsar-runtime-telemetry\] integrity_fault=1 reason=trace_write_failed"
+)
 COMMIT_RE = re.compile(
     DUAL_LANE_LOG_PREFIX
     + r"\s*TakeCommitted count=(\d+) frame_id=(\d+) "
@@ -224,6 +227,14 @@ LANE_SOURCE_NAMES = {
 }
 SOURCE_SCREENSHOT_DEADLINE_S = 20.0
 SOURCE_SCREENSHOT_INTERVAL_S = 0.5
+# Native resource sampling is scheduled by the runtime, not by this probe. On
+# a loaded Windows host it can run slower than the requested interval. Keep
+# the sample-count gate unchanged, but give the bounded wait a scheduling
+# margin; this is never a retry or acceptance relaxation.
+RESOURCE_SAMPLE_TIMEOUT_MULTIPLIER = 3.0
+RESOURCE_SAMPLE_TIMEOUT_GRACE_S = 15.0
+PROCESS_READER_JOIN_TIMEOUT_S = 2.0
+RECORDING_RELEASE_TIMEOUT_S = 8.0
 # The trace contract's warm-up count is an observed partition of the same
 # process: the first 100 committed Takes are discarded from latency
 # percentiles, and the following --takes commits are the measured sample.
@@ -1013,7 +1024,13 @@ class RtmpReceiver:
         if process.poll() is None:
             failure = failure or "RTMP receiver remained alive after cleanup"
         if self.thread is not None:
-            self.thread.join(timeout=2)
+            self.thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
+            if self.thread.is_alive() and process.stdout is not None:
+                try:
+                    process.stdout.close()
+                except (OSError, ValueError):
+                    pass
+                self.thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
             if self.thread.is_alive():
                 failure = failure or "RTMP receiver reader thread did not exit"
         if failure is not None:
@@ -1510,10 +1527,15 @@ class PulsarProcess:
 
     def _pump(self) -> None:
         assert self.proc is not None and self.proc.stdout is not None
-        for line in self.proc.stdout:
-            with self.condition:
-                self.lines.append(line.rstrip("\r\n"))
-                self.condition.notify_all()
+        try:
+            for line in self.proc.stdout:
+                with self.condition:
+                    self.lines.append(line.rstrip("\r\n"))
+                    self.condition.notify_all()
+        except (OSError, ValueError):
+            # A descendant can inherit the pipe writer after the owner exits.
+            # The bounded join below closes the parent's read end to unblock it.
+            return
 
     def snapshot(self) -> list[str]:
         with self.condition:
@@ -1756,11 +1778,22 @@ class PulsarProcess:
 
         if self.directshow_thread is None:
             return None
-        self.directshow_thread.join(timeout=2)
+        self.directshow_thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
+        if self.directshow_thread.is_alive():
+            self._close_directshow_stdout()
+            self.directshow_thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
         if self.directshow_thread.is_alive():
             return "ProgramReturn DirectShow reader thread did not exit"
         self.directshow_thread = None
         return None
+
+    def _close_directshow_stdout(self) -> None:
+        if self.directshow_proc is None or self.directshow_proc.stdout is None:
+            return
+        try:
+            self.directshow_proc.stdout.close()
+        except (OSError, ValueError):
+            return
 
     def assert_directshow_consumer_alive(self) -> None:
         if self.directshow_proc is None:
@@ -1824,8 +1857,11 @@ class PulsarProcess:
     def _pump_directshow(self, process: subprocess.Popen[str]) -> None:
         if process.stdout is None:
             return
-        for line in process.stdout:
-            self.directshow_lines.append(line.rstrip("\r\n"))
+        try:
+            for line in process.stdout:
+                self.directshow_lines.append(line.rstrip("\r\n"))
+        except (OSError, ValueError):
+            return
 
     def shutdown(self) -> None:
         # Release the external DirectShow reader before the producer so the
@@ -1913,6 +1949,8 @@ class PulsarProcess:
     def assert_shutdown_clean(self, *, require_runtime_lease: bool = False) -> None:
         """Fail a campaign if an owned process, reader, or lease survived."""
 
+        if any(TRACE_INTEGRITY_FAULT_RE.search(line) for line in self.snapshot()):
+            raise ProbeFailure("runtime reported trace integrity fault")
         if self.directshow_cleanup_failure is not None:
             raise ProbeFailure(self.directshow_cleanup_failure)
         if self.rtmp_cleanup_failure is not None:
@@ -1991,11 +2029,22 @@ class PulsarProcess:
 
         if self.thread is None:
             return None
-        self.thread.join(timeout=2)
+        self.thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
+        if self.thread.is_alive():
+            self._close_process_stdout()
+            self.thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
         if self.thread.is_alive():
             return "Pulsar log reader thread did not exit"
         self.thread = None
         return None
+
+    def _close_process_stdout(self) -> None:
+        if self.proc is None or self.proc.stdout is None:
+            return
+        try:
+            self.proc.stdout.close()
+        except (OSError, ValueError):
+            return
 
 
 class Inbox:
@@ -2403,6 +2452,43 @@ def ensure_recording_output_owned(path_text: str, record_dir: pathlib.Path) -> p
             f"recording output is outside this probe's PULSAR_RECORD_DIR: {output}"
         ) from exc
     return output
+
+
+def wait_for_recording_release(
+    path: pathlib.Path, *, timeout: float = RECORDING_RELEASE_TIMEOUT_S
+) -> None:
+    """Require a stopped recording to release its filesystem handle.
+
+    Windows can report StopRecord before an encoder child releases the MP4
+    handle. A reversible rename probe detects that condition without deleting,
+    truncating, or accepting a still-locked recording.
+    """
+
+    if timeout <= 0:
+        raise ProbeFailure("recording release timeout must be positive")
+    if not path.exists():
+        return
+    probe_path = path.with_name(f".{path.name}.{os.getpid()}.release-check")
+    if probe_path.exists():
+        raise ProbeFailure(f"recording release probe path already exists: {probe_path}")
+    deadline = time.monotonic() + timeout
+    last_error: OSError | None = None
+    while time.monotonic() < deadline:
+        try:
+            path.rename(probe_path)
+            try:
+                probe_path.rename(path)
+            except OSError:
+                if probe_path.exists() and not path.exists():
+                    probe_path.rename(path)
+                raise
+            return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.1)
+    raise ProbeFailure(
+        f"recording handle remained locked after {timeout:.1f}s: {path} ({last_error})"
+    )
 
 
 def _paeth(a: int, b: int, c: int) -> int:
@@ -3436,6 +3522,22 @@ async def wait_for_eligible_resource_samples(
         await asyncio.sleep(0.25)
 
 
+def resource_sample_timeout_budget(minimum_samples: int, interval_ms: int) -> float:
+    """Return a finite sampler budget with host scheduling margin.
+
+    The native sampler still must emit ``minimum_samples`` eligible records;
+    this only avoids deriving the wall-clock deadline from an idealized cadence.
+    """
+
+    if minimum_samples < 1 or interval_ms < 100:
+        raise ProbeFailure("resource sample budget requires positive samples and interval >= 100ms")
+    requested_window = minimum_samples * interval_ms / 1000.0
+    return max(
+        30.0,
+        requested_window * RESOURCE_SAMPLE_TIMEOUT_MULTIPLIER + RESOURCE_SAMPLE_TIMEOUT_GRACE_S,
+    )
+
+
 async def assert_distinct_selected_scenes(
     inbox: Inbox,
     ws: Any,
@@ -4280,27 +4382,30 @@ def run(args: argparse.Namespace) -> int:
                 + (f" resource_mode={args.resource_mode}" if args.resource_mode else "")
             )
             if args.resource_only:
+                resource_timeout = resource_sample_timeout_budget(
+                    args.resource_samples, args.resource_interval_ms
+                )
                 count = asyncio.run(
                     collect_resource_samples(
                         process,
                         args.resource_mode,
                         args.resource_samples,
-                        timeout=max(30.0, args.resource_samples * args.resource_interval_ms / 1000.0 + 15.0),
+                        timeout=resource_timeout,
                     )
                 )
                 print(f"PASS: collected {count} native {args.resource_mode} resource samples")
                 result = 0
             else:
+                resource_timeout = resource_sample_timeout_budget(
+                    args.resource_samples, args.resource_interval_ms
+                )
                 commits = asyncio.run(
                     drive(
                         process,
                         args.takes,
                         warmup_takes=warmup_takes,
                         minimum_resource_samples=args.resource_samples,
-                        resource_sample_timeout=max(
-                            30.0,
-                            args.resource_samples * args.resource_interval_ms / 1000.0 + 15.0,
-                        ),
+                        resource_sample_timeout=resource_timeout,
                     )
                 )
                 print(
