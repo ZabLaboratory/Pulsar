@@ -123,8 +123,10 @@ static Utils::Obs::OutputHelper::ActionVerdict settle(obs_output_t *output,
 
 	// Poll a short, bounded window -- never an open-ended wait for the
 	// output to activate.
-	for (uint32_t waited = 0; waited < timeoutMs; waited += POLL_STEP_MS) {
-		os_sleep_ms(POLL_STEP_MS);
+	for (uint32_t waited = 0; waited < timeoutMs;) {
+		const uint32_t sleep_ms = std::min(POLL_STEP_MS, timeoutMs - waited);
+		os_sleep_ms(sleep_ms);
+		waited += sleep_ms;
 		if (reached())
 			return Verdict::Landed;
 	}
