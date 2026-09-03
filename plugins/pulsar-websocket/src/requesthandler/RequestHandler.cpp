@@ -64,9 +64,10 @@ bool IsSafetyStopRequest(const std::string &requestType)
 // state, but must reach that adapter to cancel a frozen, pre-boundary Take.
 // This is the sole controlled bypass of the generic dual-lane mutation lease.
 // GetState is included because it is the adapter's explicit observation API.
-// Take is also allowed here so a retry can reach the vendor's idempotence
-// cache while the Preview freeze is pending. Prepare and Dispatch remain
-// gated; only the exact fixed vendor and nested command below may bypass.
+// A retry of Take must remain gated: once the frontend has frozen, admitting
+// it to the vendor would let the adapter mutate state (and report success)
+// through the legacy CallVendorRequest ingress.  Only Abort (to cancel an
+// already admitted operation) and GetState (observation) may bypass.
 bool IsControlledSceneSwitchPendingBypass(const Request &request)
 {
 	if (request.RequestType != "CallVendorRequest" || !request.RequestData.is_object())
@@ -84,7 +85,7 @@ bool IsControlledSceneSwitchPendingBypass(const Request &request)
 	if (vendor->get<std::string>() != "pulsar-scene-switch")
 		return false;
 	const std::string nested = nestedRequest->get<std::string>();
-	return nested == "Abort" || nested == "GetState" || nested == "Take";
+	return nested == "Abort" || nested == "GetState";
 }
 
 // The public scene/transition request shape remains unchanged.  A latency

@@ -668,7 +668,7 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "IsControlledSceneSwitchPendingBypass" in handler
     assert 'request.RequestType != "CallVendorRequest"' in handler
     assert 'vendor->get<std::string>() != "pulsar-scene-switch"' in handler
-    assert 'return nested == "Abort" || nested == "GetState" || nested == "Take"' in handler
+    assert 'return nested == "Abort" || nested == "GetState"' in handler
     assert "vendor->is_string() || !nestedRequest->is_string()" in handler
     assert "json::value() here" in handler
     assert "const bool controlledSceneSwitchBypass" in handler
@@ -684,12 +684,12 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "PREVIEW_FROZEN" in handler
     assert "after the dual-lane rollback freeze" in handler
     # The gate is central and acquired before handler lookup. The only scene
-    # switch pending bypass is the exact vendor Abort/GetState/Take trio; the
+    # switch pending bypass is the exact vendor Abort/GetState pair; the
     # finite output-stop allowlist is unrelated to Preview mutations.
-    # Prepare/Dispatch, malformed CallVendorRequest data, and every other
-    # vendor remain gated. Take is admitted only for vendor idempotence replay.
+    # Prepare/Take/Dispatch, malformed CallVendorRequest data, and every other
+    # vendor remain gated. A post-freeze Take must fail closed at the gateway.
     assert 'nested == "Prepare"' not in handler
-    assert 'nested == "Take"' in handler
+    assert 'nested == "Take"' not in handler
     assert 'nested == "Dispatch"' not in handler
     assert handler.index("const bool controlledSceneSwitchBypass") < handler.index("_handlerMap.at")
 
