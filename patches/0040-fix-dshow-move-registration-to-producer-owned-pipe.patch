@@ -1,24 +1,24 @@
-From 328cd3ef974a95f0a20471945bad0ba80f6de48a Mon Sep 17 00:00:00 2001
+From cf902a52686e75b92e791274e26544d0ef516873 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
-Date: Thu, 3 Sep 2026 20:06:05 +0200
+Date: Thu, 3 Sep 2026 20:18:11 +0200
 Subject: [PATCH] fix(dshow): move registration to producer-owned pipe
 
-Require a kernel-bound named-pipe client and live process before publishing a return consumer. Keep the queue mapping read-only for consumers and rearm the channel after stale clients.
+Require a kernel-bound named-pipe client and live process before publishing a return consumer. Keep the queue mapping read-only for consumers, rearm after stale clients, and return explicitly on every rejected path.
 
 Agent-Role: forge
 Agent-Thread: 01a06821-2c9c-7ab3-b107-96fe0178b65a
 Work-Unit: ZabLaboratory/Pulsar#254
 Issue: 254
 ADR-Revision: N/A
-Evidence: F-02 producer-owned pipe and F-04 fail-closed watcher
+Evidence: F-02 producer-owned pipe, F-04 fail-closed watcher, CI 33789066200 C4715 fix
 ---
  .../virtualcam-module/virtualcam-filter.cpp   | 28 ++++++
  .../virtualcam-module/virtualcam-filter.hpp   |  3 +
- plugins/win-dshow/virtualcam.c                | 87 ++++++++++++++++++-
+ plugins/win-dshow/virtualcam.c                | 90 ++++++++++++++++++-
  .../shared-memory-queue.c                     | 27 +++++-
  .../shared-memory-queue.h                     |  1 +
- 5 files changed, 143 insertions(+), 3 deletions(-)
+ 5 files changed, 146 insertions(+), 3 deletions(-)
 
 diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
 index a6f88a57d..ab2c314df 100644
@@ -109,7 +109,7 @@ index c27bf31eb..0b128710f 100644
  	const int GetOutputBufferSize(void);
  
 diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
-index f4dd39ef7..0c481e33a 100644
+index f4dd39ef7..f8cb3bf76 100644
 --- a/plugins/win-dshow/virtualcam.c
 +++ b/plugins/win-dshow/virtualcam.c
 @@ -1,4 +1,5 @@
@@ -127,7 +127,7 @@ index f4dd39ef7..0c481e33a 100644
  	bool queue_namespace_rejected;
  	bool program_return;
  	bool preview_return;
-@@ -84,14 +87,84 @@ static void return_lease_log_state(struct virtualcam_data *vcam, enum return_lea
+@@ -84,14 +87,87 @@ static void return_lease_log_state(struct virtualcam_data *vcam, enum return_lea
  		     return_lease_state_name(state), vcam->consumer_lease_name);
  }
  
@@ -177,13 +177,15 @@ index f4dd39ef7..0c481e33a 100644
 +		const DWORD error = GetLastError();
 +		if (error != ERROR_PIPE_CONNECTED && error != ERROR_PIPE_LISTENING) {
 +			return_consumer_registration_pipe_close(vcam);
-+			return_consumer_registration_pipe_start(vcam);
++			(void)return_consumer_registration_pipe_start(vcam);
++			return false;
 +		}
 +	}
 +	ULONG pid = 0;
 +	if (!GetNamedPipeClientProcessId(vcam->consumer_registration_pipe, &pid) || !pid) {
 +		return_consumer_registration_pipe_close(vcam);
-+		return_consumer_registration_pipe_start(vcam);
++		(void)return_consumer_registration_pipe_start(vcam);
++		return false;
 +	}
 +	HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
 +	DWORD observed_session = 0;
@@ -196,7 +198,8 @@ index f4dd39ef7..0c481e33a 100644
 +	if (live)
 +		return true;
 +	return_consumer_registration_pipe_close(vcam);
-+	return_consumer_registration_pipe_start(vcam);
++	(void)return_consumer_registration_pipe_start(vcam);
++	return false;
 +}
 +
  static bool return_lease_probe_once(struct virtualcam_data *vcam)
@@ -214,7 +217,7 @@ index f4dd39ef7..0c481e33a 100644
  
  	if (active) {
  		InterlockedIncrement(&vcam->lease_hits);
-@@ -328,6 +401,7 @@ static void virtualcam_destroy(void *data)
+@@ -328,6 +404,7 @@ static void virtualcam_destroy(void *data)
  {
  	struct virtualcam_data *vcam = (struct virtualcam_data *)data;
  	return_lease_watcher_stop(vcam);
@@ -222,7 +225,7 @@ index f4dd39ef7..0c481e33a 100644
  	pulsar_d3d11_return_producer_close(vcam->d3d11);
  	video_queue_close(vcam->vq);
  	bfree(data);
-@@ -342,6 +416,7 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+@@ -342,6 +419,7 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
  	vcam->preview_return = obs_output_get_id(output) &&
  				       strcmp(obs_output_get_id(output), "preview_return_output") == 0;
  	vcam->consumer_gated = vcam->program_return || vcam->preview_return;
@@ -230,7 +233,7 @@ index f4dd39ef7..0c481e33a 100644
  	vcam->lease_telemetry_enabled = return_lease_telemetry_enabled();
  	const char *transport = getenv("PULSAR_RETURN_TRANSPORT");
  	vcam->d3d11_requested = vcam->consumer_gated && transport && strcmp(transport, "d3d11") == 0;
-@@ -387,6 +462,13 @@ static bool virtualcam_start(void *data)
+@@ -387,6 +465,13 @@ static bool virtualcam_start(void *data)
  		     vcam->queue_name, runtime_id ? runtime_id : "");
  		return false;
  	}
@@ -244,7 +247,7 @@ index f4dd39ef7..0c481e33a 100644
  
  	struct video_scale_info vsi = {0};
  	vsi.format = VIDEO_FORMAT_NV12;
-@@ -417,6 +499,7 @@ static void virtualcam_deactive(struct virtualcam_data *vcam)
+@@ -417,6 +502,7 @@ static void virtualcam_deactive(struct virtualcam_data *vcam)
  {
  	os_atomic_set_bool(&vcam->active, false);
  	obs_output_end_data_capture(vcam->output);
