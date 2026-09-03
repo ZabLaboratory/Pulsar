@@ -57,8 +57,10 @@ def test_consumer_mapping_is_read_only_and_challenge_is_non_authoritative() -> N
     assert "the 80-byte header ABI is unchanged" in text
 
 
-def test_same_user_helper_cannot_pass_process_owner_gate() -> None:
+def test_unknown_same_user_helper_is_rejected_by_process_identity_gate() -> None:
     text = _patch_text()
+    # Static contract only: a runtime hostile-helper proof needs the Windows
+    # DirectShow device and is deliberately not claimed by this test.
     assert "QueryFullProcessImageNameW(process" in text
     assert "return_consumer_process_image_allowed(process)" in text
     for image in ("obs64.exe", "obs32.exe", "ffmpeg.exe", "pulsar.exe"):
