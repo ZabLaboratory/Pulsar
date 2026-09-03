@@ -370,8 +370,8 @@ RequestResult RequestHandler::GetLastReplayBufferReplay(const Request &)
 		if (procHandler) {
 			calldata_t data = {0};
 			if (proc_handler_call(procHandler, "get_last_replay", &data)) {
-				const char *path = calldata_string(&data, "path");
-				if (path)
+				const char *path = nullptr;
+				if (calldata_get_string(&data, "path", &path) && path && *path)
 					savedPath = path;
 			}
 			calldata_free(&data);
