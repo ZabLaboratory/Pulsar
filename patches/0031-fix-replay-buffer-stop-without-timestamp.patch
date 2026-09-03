@@ -1,11 +1,13 @@
-From f6ae180d0eb6bd9390d0dcd966eecb04d3e8fdd6 Mon Sep 17 00:00:00 2001
+From 0c31ca09c6037790d2c486276626910f27812449 Mon Sep 17 00:00:00 2001
 From: Forge <forge@example.invalid>
-Date: Thu, 3 Sep 2026 14:52:51 +0200
+Date: Thu, 3 Sep 2026 14:59:30 +0200
 Subject: [PATCH] fix(replay): stop buffer on next packet deterministically
 
 Agent-Role: forge
 
 Work-Unit: ZabLaboratory/Pulsar#254
+
+Issue: 254
 ---
  plugins/obs-ffmpeg/obs-ffmpeg-mux.c | 19 ++++++++++++++-----
  1 file changed, 14 insertions(+), 5 deletions(-)
@@ -32,11 +34,12 @@ index f152b2849..f55814407 100644
  static void signal_failure(struct ffmpeg_muxer *stream)
  {
  	char error[1024];
-@@ -868,7 +879,6 @@ struct obs_output_info ffmpeg_muxer = {
+@@ -868,7 +879,7 @@ struct obs_output_info ffmpeg_muxer = {
  	.create = ffmpeg_mux_create,
  	.destroy = ffmpeg_mux_destroy,
  	.start = ffmpeg_mux_start,
-	.stop = ffmpeg_mux_stop,
+-	.stop = ffmpeg_mux_stop,
++	.stop = replay_buffer_stop,
  	.encoded_packet = ffmpeg_mux_data,
  	.get_total_bytes = ffmpeg_mux_total_bytes,
  	.get_properties = ffmpeg_mux_properties,
@@ -53,13 +56,6 @@ index f152b2849..f55814407 100644
  	}
  
  	obs_encoder_packet_ref(&pkt, packet);
-@@ -1260,7 +1271,7 @@ struct obs_output_info replay_buffer = {
- 	.create = replay_buffer_create,
- 	.destroy = replay_buffer_destroy,
- 	.start = replay_buffer_start,
--	.stop = ffmpeg_mux_stop,
-+	.stop = replay_buffer_stop,
- 	.encoded_packet = replay_buffer_data,
- -- 
+-- 
 2.54.0.windows.1
 
