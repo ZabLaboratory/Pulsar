@@ -140,6 +140,79 @@ async def vendor_set_capture_source(inbox: Inbox, ws, request_id: str,
     return rd.get("responseData") or {}
 
 
+def scene_request_data(scene: dict[str, str]) -> dict[str, str]:
+    """Address a scene by its public Main-canvas UUID when available."""
+    if "sceneUuid" in scene:
+        return {"sceneUuid": scene["sceneUuid"]}
+    return {"sceneName": scene["sceneName"]}
+
+
+async def resolve_main_canvas_scene(inbox: Inbox, ws) -> dict[str, str]:
+    """Resolve a scene that is registered on the public Main canvas.
+
+    A failed dual-lane setup can expose its private physical root through
+    ``GetCurrentProgramScene`` even though that root is not addressable on Main.
+    ``GetSceneList`` is the authoritative public inventory.  If the reported
+    selection is absent, select the first public scene and verify the frontend
+    accepted it before using it for the drift assertions.
+    """
+    current = await request(inbox, ws, "GetCurrentProgramScene", "gcps", {})
+    if not current["requestStatus"]["result"]:
+        raise RuntimeError(f"GetCurrentProgramScene failed: {current['requestStatus']}")
+    current_data = current["responseData"]
+    reported_name = current_data.get("currentProgramSceneName") or current_data.get("sceneName")
+    reported_uuid = current_data.get("currentProgramSceneUuid") or current_data.get("sceneUuid")
+
+    listing = await request(inbox, ws, "GetSceneList", "gsl", {})
+    if not listing["requestStatus"]["result"]:
+        raise RuntimeError(f"GetSceneList failed: {listing['requestStatus']}")
+    refs: list[dict[str, str]] = []
+    for entry in listing["responseData"].get("scenes") or []:
+        name = entry.get("sceneName") or entry.get("name")
+        uuid = entry.get("sceneUuid") or entry.get("uuid")
+        if name:
+            ref = {"sceneName": str(name)}
+            if uuid:
+                ref["sceneUuid"] = str(uuid)
+            refs.append(ref)
+
+    selected = next(
+        (ref for ref in refs if (reported_uuid and ref.get("sceneUuid") == reported_uuid)
+         or (reported_name and ref.get("sceneName") == reported_name)),
+        None,
+    )
+    if selected is None:
+        if not refs:
+            raise RuntimeError(
+                "GetSceneList returned no Main-canvas scenes while GetCurrentProgramScene "
+                f"reported {reported_name or reported_uuid!r}")
+        selected = refs[0]
+        print(
+            "note: current program selection is not registered on Main canvas "
+            f"({reported_name or reported_uuid!r}); selecting public scene "
+            f"{selected['sceneName']!r}")
+        selected_request = await request(
+            inbox, ws, "SetCurrentProgramScene", "scs-main", scene_request_data(selected))
+        if not selected_request["requestStatus"]["result"]:
+            raise RuntimeError(
+                f"SetCurrentProgramScene failed: {selected_request['requestStatus']}")
+
+        refreshed = await request(inbox, ws, "GetCurrentProgramScene", "gcps-main", {})
+        if not refreshed["requestStatus"]["result"]:
+            raise RuntimeError(
+                f"GetCurrentProgramScene after repair failed: {refreshed['requestStatus']}")
+        refreshed_data = refreshed["responseData"]
+        refreshed_name = refreshed_data.get("currentProgramSceneName") or refreshed_data.get("sceneName")
+        refreshed_uuid = refreshed_data.get("currentProgramSceneUuid") or refreshed_data.get("sceneUuid")
+        if (("sceneUuid" in selected and refreshed_uuid != selected["sceneUuid"])
+                or ("sceneUuid" not in selected and refreshed_name != selected["sceneName"])):
+            raise RuntimeError(
+                "SetCurrentProgramScene did not select the Main-canvas scene "
+                f"{selected['sceneName']!r}: got {refreshed_name or refreshed_uuid!r}")
+
+    return selected
+
+
 def is_managed_variant(name: str) -> bool:
     """Mirror of the C++ is_managed_variant: base, or 'base <digits>'."""
     if name == CANONICAL_NAME:
@@ -150,9 +223,8 @@ def is_managed_variant(name: str) -> bool:
     return suffix.isdigit()
 
 
-async def managed_browser_items(inbox: Inbox, ws, scene_name: str) -> list[str]:
-    r = await request(inbox, ws, "GetSceneItemList", "gsil",
-                      {"sceneName": scene_name})
+async def managed_browser_items(inbox: Inbox, ws, scene: dict[str, str]) -> list[str]:
+    r = await request(inbox, ws, "GetSceneItemList", "gsil", scene_request_data(scene))
     if not r["requestStatus"]["result"]:
         raise RuntimeError(f"GetSceneItemList failed: {r['requestStatus']}")
     items = r["responseData"]["sceneItems"]
@@ -181,15 +253,12 @@ async def probe(url: str, password: str) -> int:
 
         inbox = Inbox()
 
-        r = await request(inbox, ws, "GetCurrentProgramScene", "gcps", {})
-        if not r["requestStatus"]["result"]:
-            print(f"FAIL GetCurrentProgramScene: {r['requestStatus']}",
-                  file=sys.stderr)
+        try:
+            scene = await resolve_main_canvas_scene(inbox, ws)
+        except RuntimeError as exc:
+            print(f"FAIL Main-canvas scene setup: {exc}", file=sys.stderr)
             return 1
-        # v5 renamed the field currentProgramSceneName; keep a fallback.
-        rd = r["responseData"]
-        scene_name = rd.get("currentProgramSceneName") or rd.get("sceneName")
-        print(f"program scene: {scene_name!r}")
+        print(f"program scene: {scene['sceneName']!r}")
 
         # First call also tells us whether obs-browser is present at all.
         first = await vendor_set_capture_source(inbox, ws, "scs-0", {
@@ -225,7 +294,7 @@ async def probe(url: str, password: str) -> int:
                           file=sys.stderr)
                     return 1
 
-            managed = await managed_browser_items(inbox, ws, scene_name)
+            managed = await managed_browser_items(inbox, ws, scene)
             print(f"  after call {i}: managed browser_source(s) = {managed}")
             if len(managed) != 1:
                 print(f"FAIL: expected exactly 1 managed browser_source "
