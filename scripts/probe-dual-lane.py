@@ -861,14 +861,6 @@ class RtmpReceiver:
             "-loglevel",
             "verbose",
             "-debug_ts",
-            # Keep the receiver at the same live-input latency policy as the
-            # DirectShow probe.  These flags only remove demux-side buffering;
-            # packet identity, PTS/DTS correlation, and the receiver timestamp
-            # remain authoritative for AC-12a.
-            "-fflags",
-            "nobuffer",
-            "-flags",
-            "low_delay",
             "-listen",
             "1",
             "-i",

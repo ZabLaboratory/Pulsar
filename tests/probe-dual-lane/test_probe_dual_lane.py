@@ -48,16 +48,22 @@ def test_receiver_separates_server_url_and_stream_key():
     assert metadata["stream_key"] == receiver.stream_key
 
 
-def test_rtmp_receiver_uses_bounded_live_input_flags():
+def test_rtmp_receiver_preserves_default_live_input_buffering():
     source = SCRIPT.read_text(encoding="utf-8")
     receiver_start = source.index("class RtmpReceiver:")
     receiver_end = source.index("class PulsarProcess:", receiver_start)
     receiver_source = source[receiver_start:receiver_end]
-    assert '"-fflags",\n            "nobuffer"' in receiver_source
-    assert '"-flags",\n            "low_delay"' in receiver_source
-    # The flags must stay adjacent to the receiver's input options; do not
-    # silently move them to the output/null sink where they would be inert.
-    assert receiver_source.index('"-fflags"') < receiver_source.index('"-listen"')
+    # Keep the RTMP receiver's established default buffering policy.  The
+    # DirectShow consumer has a separate low-latency path; applying those
+    # input flags here changes FLV packet timing/correlation and can turn a
+    # live packet into a fixed multi-hundred-millisecond offset.
+    command_start = receiver_source.index("command = [")
+    command_end = receiver_source.index("self.proc = subprocess.Popen", command_start)
+    command_source = receiver_source[command_start:command_end]
+    assert '"-debug_ts"' in command_source
+    assert '"-listen"' in command_source
+    assert '"-fflags"' not in command_source
+    assert '"-flags"' not in command_source
 
 
 def test_inbox_consumes_out_of_order_buffered_response_without_socket_read():
