@@ -71,7 +71,7 @@ new file mode 100644
 index 000000000..f99a5307d
 --- /dev/null
 +++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
-@@ -0,0 +1,649 @@
+@@ -0,0 +1,647 @@
 +#include "d3d11-return-transport.hpp"
 +
 +#include "../../../shared/obs-shared-memory-queue/shared-memory-queue.h"
@@ -719,8 +719,6 @@ index 000000000..f99a5307d
 +{
 +	return consumer ? consumer->control : nullptr;
 +}
-+
-+} // namespace
 diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
 new file mode 100644
 index 000000000..65efe46ed
