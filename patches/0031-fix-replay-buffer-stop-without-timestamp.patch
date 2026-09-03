@@ -54,6 +54,6 @@ index f152b2849..f55814407 100644
 -	.stop = ffmpeg_mux_stop,
 +	.stop = replay_buffer_stop,
  	.encoded_packet = replay_buffer_data,
- -- 
+-- 
 2.54.0.windows.1
 
