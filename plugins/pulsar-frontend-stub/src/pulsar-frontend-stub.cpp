@@ -413,6 +413,13 @@ class PulsarRuntimeTelemetry {
     };
 
     static constexpr size_t kSignalQueueCapacity = 1024;
+    // Formatted records are produced by callbacks and the resource sampler
+    // faster than the file writer can drain them on a contended host.  Keep
+    // this queue bounded so telemetry cannot become the source of an
+    // unbounded resident-set growth.  Overflow is an integrity fault, never
+    // a silent drop: the trace is fail-stopped and callers cannot admit a
+    // subsequent Take.
+    static constexpr size_t kWriterQueueCapacity = 4096;
     struct SignalQueueSlot {
         std::atomic<uint64_t> sequence{0};
         SignalEvent event;
@@ -458,6 +465,7 @@ public:
         signalMask_.store(0, std::memory_order_release);
         stopResourceSampler();
         stopTraceWriter();
+        traceIntegrityFault_.store(false, std::memory_order_release);
 
         contextWriteIndex_.store(0, std::memory_order_relaxed);
         resetSignalQueue();
@@ -715,7 +723,7 @@ public:
     bool integrityFaulted()
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
-        return degraded_;
+        return degraded_ || traceIntegrityFault_.load(std::memory_order_acquire);
     }
 
     bool environmentTruthy(const char *value) const { return truthy(value); }
@@ -2042,11 +2050,29 @@ private:
     {
         if (line.empty())
             return true;
+        bool overflow = false;
         {
             std::lock_guard<std::mutex> lock(writerMutex_);
             if (!writerAccepting_)
                 return false;
-            writerQueue_.push_back(line);
+            if (writerQueue_.size() >= kWriterQueueCapacity) {
+                writerAccepting_ = false;
+                writerStopping_ = true;
+                overflow = true;
+            } else {
+                writerQueue_.push_back(line);
+            }
+        }
+        if (overflow) {
+            bool expected = false;
+            if (traceIntegrityFault_.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel))
+                blog(LOG_ERROR,
+                     "[pulsar-runtime-telemetry] integrity_fault=1 reason=trace_queue_overflow "
+                     "capacity=%zu",
+                     kWriterQueueCapacity);
+            writerCv_.notify_all();
+            return false;
         }
         writerCv_.notify_one();
         return true;

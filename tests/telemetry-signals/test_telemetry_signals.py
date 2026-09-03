@@ -168,3 +168,18 @@ def test_trace_writer_surfaces_io_fault_and_stops_accepting_evidence():
     assert "writerAccepting_ = false;" in writer
     assert "writerQueue_.clear();" in writer
     assert "signalMask_.store(0, std::memory_order_release);" in writer
+
+
+def test_trace_writer_queue_is_bounded_and_overflow_fails_closed():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "kWriterQueueCapacity = 4096" in source
+    enqueue = source[source.index("bool enqueueLine"):source.index("void writeLine", source.index("bool enqueueLine"))]
+    assert "writerQueue_.size() >= kWriterQueueCapacity" in enqueue
+    assert "traceIntegrityFault_.compare_exchange_strong" in enqueue
+    assert "reason=trace_queue_overflow" in enqueue
+    assert "writerAccepting_ = false;" in enqueue
+    assert "writerStopping_ = true;" in enqueue
+    assert "return false;" in enqueue
+    assert "traceIntegrityFault_.store(false, std::memory_order_release);" in source

@@ -152,7 +152,7 @@ index f4dd39ef7..f8cb3bf76 100644
 +			     return_lease_role(vcam), (unsigned long long)challenge);
 +	vcam->consumer_registration_pipe = CreateNamedPipeW(
 +		vcam->consumer_registration_pipe_name, PIPE_ACCESS_INBOUND,
-+		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 0, 0, 0, NULL);
++		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | FILE_FLAG_FIRST_PIPE_INSTANCE, 1, 0, 0, 0, NULL);
 +	return vcam->consumer_registration_pipe != INVALID_HANDLE_VALUE;
 +}
 +
@@ -321,4 +321,3 @@ index a48db9f63..629bd1867 100644
  extern void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp);
 -- 
 2.54.0.windows.1
-

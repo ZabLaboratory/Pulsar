@@ -37,6 +37,7 @@ def test_registration_claim_is_owner_and_session_bound() -> None:
     assert "consumer_challenge_low" in text
     assert "consumer_challenge_high" in text
     assert "CreateNamedPipeW" in text
+    assert "FILE_FLAG_FIRST_PIPE_INSTANCE" in text
     assert "CreateFileW(pipe_name, GENERIC_WRITE" in text
 
 
