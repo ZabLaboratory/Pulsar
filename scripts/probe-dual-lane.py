@@ -858,8 +858,12 @@ class RtmpReceiver:
         command = [
             self.ffmpeg,
             "-hide_banner",
+            # ``-debug_ts`` emits the demuxer packet records needed for the
+            # receiver boundary at INFO.  VERBOSE adds unrelated per-stream
+            # diagnostics and can make the loopback consumer fall behind a
+            # live producer on a loaded host, without adding evidence.
             "-loglevel",
-            "verbose",
+            "info",
             "-debug_ts",
             "-listen",
             "1",

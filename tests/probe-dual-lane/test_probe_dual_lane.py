@@ -60,6 +60,8 @@ def test_rtmp_receiver_preserves_default_live_input_buffering():
     command_start = receiver_source.index("command = [")
     command_end = receiver_source.index("self.proc = subprocess.Popen", command_start)
     command_source = receiver_source[command_start:command_end]
+    assert '"-loglevel",\n            "info"' in command_source
+    assert '"-loglevel",\n            "verbose"' not in command_source
     assert '"-debug_ts"' in command_source
     assert '"-listen"' in command_source
     assert '"-fflags"' not in command_source
