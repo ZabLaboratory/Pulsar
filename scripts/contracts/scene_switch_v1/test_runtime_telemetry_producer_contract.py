@@ -146,7 +146,10 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "previousRawFrames" in frontend
     assert "previousPacketFrames" in frontend
     assert "previousLaggedFrames" in frontend
-    assert "const uint64_t rawDelta = rawFrames >= previousRawFrames" in frontend
+    assert "bool previousCounterSampleEligible = false;" in frontend
+    assert "const bool counterSampleEligible = encoderActive && rtmpLoadActive;" in frontend
+    assert "counterSampleEligible && previousCounterSampleEligible" in frontend
+    assert frontend.index("const bool counterSampleEligible = encoderActive && rtmpLoadActive;") < frontend.index("const uint64_t rawDelta")
     assert "const uint64_t callbackBacklog = rawDelta > packetDelta" in frontend
     assert "const uint64_t missedFrames = laggedFrames >= previousLaggedFrames" in frontend
     assert "not a lifetime queue depth" in frontend
