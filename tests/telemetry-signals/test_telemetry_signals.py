@@ -183,3 +183,5 @@ def test_trace_writer_queue_is_bounded_and_overflow_fails_closed():
     assert "writerStopping_ = true;" in enqueue
     assert "return false;" in enqueue
     assert "traceIntegrityFault_.store(false, std::memory_order_release);" in source
+    integrity = source[source.index("bool integrityFaulted()"):source.index("bool environmentTruthy", source.index("bool integrityFaulted()"))]
+    assert "degraded_ || traceIntegrityFault_.load(std::memory_order_acquire)" in integrity
