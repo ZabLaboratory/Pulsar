@@ -1788,10 +1788,11 @@ class PulsarProcess:
         return None
 
     def _close_directshow_stdout(self) -> None:
-        if self.directshow_proc is None or self.directshow_proc.stdout is None:
+        stdout = getattr(self.directshow_proc, "stdout", None)
+        if self.directshow_proc is None or stdout is None:
             return
         try:
-            self.directshow_proc.stdout.close()
+            stdout.close()
         except (OSError, ValueError):
             return
 
@@ -2039,10 +2040,11 @@ class PulsarProcess:
         return None
 
     def _close_process_stdout(self) -> None:
-        if self.proc is None or self.proc.stdout is None:
+        stdout = getattr(self.proc, "stdout", None)
+        if self.proc is None or stdout is None:
             return
         try:
-            self.proc.stdout.close()
+            stdout.close()
         except (OSError, ValueError):
             return
 

@@ -317,7 +317,9 @@ index 000000000..f99a5307d
 +		delete producer;
 +		return nullptr;
 +	}
-+	if (existed && producer->control->producer_pid != 0) {
++	// Reject every pre-existing mapping. producer_pid is not authoritative:
++	// a squatter can win the CreateFileMappingW race with a zeroed block.
++	if (existed) {
 +		UnmapViewOfFile(producer->control);
 +		CloseHandle(producer->mapping);
 +		delete producer;
