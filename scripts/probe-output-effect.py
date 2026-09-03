@@ -611,17 +611,20 @@ async def case_generic_nominal(c: Client) -> None:
     # and the effect must be real on BOTH views.
     ok, code, comment, _, ms = await c.req("StopOutput", {"outputName": GENERIC_RECORD_OUTPUT})
     note_latency("StopOutput(nominal)", ms)
-    if not ok:
+    if not ok and code != STOP_PENDING_CODE:
         raise Failure(
             f"StopOutput failed on a genuinely running output: {code} {comment}\n"
             "This is the false-negative the verification must NEVER produce."
         )
 
-    # A Pending verdict is a legitimate Success (ffmpeg_muxer flushes and
+    if not ok:
+        print("   StopOutput accepted (702 Pending); waiting for the terminal STOPPED state")
+    # A Pending verdict is a legitimate success (ffmpeg_muxer flushes and
     # finalises the mp4 asynchronously), so give the effect a bounded window
     # to become observable -- but demand that it DOES become observable.
     await wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopOutput(nominal)")
-    print("   OK  StopOutput succeeded AND both views agree the output really stopped")
+    outcome = "succeeded" if ok else "accepted as Pending 702"
+    print(f"   OK  StopOutput {outcome} AND both views agree the output really stopped")
 
 
 def assert_bounded() -> None:

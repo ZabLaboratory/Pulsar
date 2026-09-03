@@ -1193,6 +1193,8 @@ def test_output_effect_probe_settles_record_stop_before_next_case() -> None:
     assert "if not ok and code != STOP_PENDING_CODE" in nominal_record
     assert "StopRecord accepted (702 Pending)" in nominal_record
     assert 'wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopOutput(nominal)")' in nominal_generic
+    assert "if not ok and code != STOP_PENDING_CODE" in nominal_generic
+    assert "StopOutput accepted (702 Pending)" in nominal_generic
 
 
 def test_core_swap_is_frame_boundary_and_rejects_concurrent_requests() -> None:
