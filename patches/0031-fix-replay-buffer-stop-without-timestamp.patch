@@ -34,14 +34,6 @@ index f152b2849..f55814407 100644
  static void signal_failure(struct ffmpeg_muxer *stream)
  {
  	char error[1024];
-@@ -868,7 +879,6 @@ struct obs_output_info ffmpeg_muxer = {
- 	.create = ffmpeg_mux_create,
- 	.destroy = ffmpeg_mux_destroy,
- 	.start = ffmpeg_mux_start,
- 	.stop = ffmpeg_mux_stop,
- 	.encoded_packet = ffmpeg_mux_data,
- 	.get_total_bytes = ffmpeg_mux_total_bytes,
- 	.get_properties = ffmpeg_mux_properties,
 @@ -1215,10 +1226,8 @@ static void replay_buffer_data(void *data, struct encoder_packet *packet)
  	}
  
