@@ -48,6 +48,18 @@ def test_receiver_separates_server_url_and_stream_key():
     assert metadata["stream_key"] == receiver.stream_key
 
 
+def test_rtmp_receiver_uses_bounded_live_input_flags():
+    source = SCRIPT.read_text(encoding="utf-8")
+    receiver_start = source.index("class RtmpReceiver:")
+    receiver_end = source.index("class PulsarProcess:", receiver_start)
+    receiver_source = source[receiver_start:receiver_end]
+    assert '"-fflags",\n            "nobuffer"' in receiver_source
+    assert '"-flags",\n            "low_delay"' in receiver_source
+    # The flags must stay adjacent to the receiver's input options; do not
+    # silently move them to the output/null sink where they would be inert.
+    assert receiver_source.index('"-fflags"') < receiver_source.index('"-listen"')
+
+
 def test_inbox_consumes_out_of_order_buffered_response_without_socket_read():
     class NoReadSocket:
         async def recv(self):

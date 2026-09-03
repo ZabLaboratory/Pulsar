@@ -1349,6 +1349,9 @@ private:
         obs_video_mix_pipeline_stats previousPreview = {};
         obs_raw_output_pipeline_stats previousProgramReturn = {};
         obs_raw_output_pipeline_stats previousPreviewReturn = {};
+        uint64_t previousRawFrames = 0;
+        uint64_t previousPacketFrames = 0;
+        uint64_t previousLaggedFrames = 0;
         bool havePipelineBaseline = false;
         resourceCpuInfo_ = os_cpu_usage_info_start();
         if (!resourceCpuInfo_)
@@ -1379,7 +1382,7 @@ private:
 
             const uint64_t rawFrames = rawFrameCount_.load(std::memory_order_relaxed);
             const uint64_t encodedFrames = packetFrameCount_.load(std::memory_order_relaxed);
-            const uint64_t queueDepth = rawFrames > encodedFrames ? rawFrames - encodedFrames : 0;
+            const uint64_t laggedFrames = static_cast<uint64_t>(obs_get_lagged_frames());
             std::string mode;
             std::string runtime;
             std::string buildRevision;
@@ -1437,9 +1440,21 @@ private:
                 previousPreview = preview;
                 previousProgramReturn = programReturn;
                 previousPreviewReturn = previewReturn;
+                previousRawFrames = rawFrames;
+                previousPacketFrames = encodedFrames;
+                previousLaggedFrames = laggedFrames;
                 havePipelineBaseline = true;
                 continue;
             }
+
+            // These counters are cumulative process/output counters, not an
+            // instantaneous queue length.  Report only the net growth since
+            // the preceding sample; publishing the lifetime difference makes
+            // a healthy long-running phase look increasingly backlogged.
+            const uint64_t rawDelta = rawFrames >= previousRawFrames ? rawFrames - previousRawFrames : 0;
+            const uint64_t packetDelta = encodedFrames >= previousPacketFrames ? encodedFrames - previousPacketFrames : 0;
+            const uint64_t callbackBacklog = rawDelta > packetDelta ? rawDelta - packetDelta : 0;
+            const uint64_t missedFrames = laggedFrames >= previousLaggedFrames ? laggedFrames - previousLaggedFrames : 0;
 
             profiler_result_t programProfile = {};
             profiler_result_t previewProfile = {};
@@ -1452,7 +1467,6 @@ private:
             const int outputDropped = rtmpLoadActive ? obs_output_get_frames_dropped(streamOutput) : 0;
             const uint64_t droppedFrames =
                 outputDropped > 0 ? static_cast<uint64_t>(outputDropped) : 0;
-            const uint64_t missedFrames = static_cast<uint64_t>(obs_get_lagged_frames());
             const uint64_t encodeSamples =
                 encodeTimeSampleCount_.load(std::memory_order_relaxed);
             const uint64_t encodeTimeNs = encodeTimeNsTotal_.load(std::memory_order_relaxed);
@@ -1469,7 +1483,7 @@ private:
                    << ",\"resident_bytes\":" << os_get_proc_resident_size()
                    << ",\"process_cpu_percent\":" << std::setprecision(6) << cpu
                    << ",\"host_gpu_percent\":" << gpu.utilization
-                   << ",\"callback_backlog_estimate\":" << queueDepth
+                   << ",\"callback_backlog_estimate\":" << callbackBacklog
                    << ",\"dropped_frames\":" << droppedFrames
                    << ",\"missed_frames\":" << missedFrames
                    << ",\"encode_time_ms\":" << std::setprecision(9) << encodeTimeMs
@@ -1547,13 +1561,16 @@ private:
                    << "\",\"gpu\":\"" << escape(gpuName)
                    << "\"},\"producer_topology\":\"" << escape(producerTopology)
                    << "\",\"producer_count\":" << producerCount
-                   << ",\"notes\":\"frame time is OBS average; dropped_frames is the active RTMP output counter; missed_frames is OBS render lag; encode_time_ms is cumulative mean FERC-FER and is qualified by encode_time_samples; process CPU is this runtime; host GPU and encoder utilization are nvidia-smi device counters; callback backlog is a producer/packet counter estimate\"}";
+                   << ",\"notes\":\"frame time is OBS average; dropped_frames is the active RTMP output counter; missed_frames is the interval delta of OBS render lag; encode_time_ms is cumulative mean FERC-FER and is qualified by encode_time_samples; process CPU is this runtime; host GPU and encoder utilization are nvidia-smi device counters; callback_backlog_estimate is the non-negative interval delta between raw and encoded producer counters, not a lifetime queue depth\"}";
             writeLine(sample.str());
             previousGraphics = graphics;
             previousProgram = program;
             previousPreview = preview;
             previousProgramReturn = programReturn;
             previousPreviewReturn = previewReturn;
+            previousRawFrames = rawFrames;
+            previousPacketFrames = encodedFrames;
+            previousLaggedFrames = laggedFrames;
         }
     }
 

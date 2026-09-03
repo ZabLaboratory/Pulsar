@@ -257,9 +257,11 @@ Because the acceptance campaign is dual-lane-only, AC-13 is admitted from the
 dual-lane samples alone; a single-lane reference is diagnostic and never a
 required comparator. Each accepted dual-lane sample must carry
 `frame_render_ms`, `resident_bytes`, `process_cpu_percent`,
-`host_gpu_percent`, `gpu_memory_bytes`, `callback_backlog_estimate`, cumulative
-`dropped_frames` from the active RTMP output, cumulative `missed_frames` from
-OBS render lag, cumulative-average `encode_time_ms` (`FERC - FER`) qualified
+`host_gpu_percent`, `gpu_memory_bytes`, `callback_backlog_estimate` and
+`missed_frames` as non-negative deltas from the preceding sample (the native
+source counters are cumulative; these fields are not lifetime queue depth or
+lifetime lag counts), cumulative `dropped_frames` from the active RTMP output,
+cumulative-average `encode_time_ms` (`FERC - FER`) qualified
 by `encode_time_samples`, and `encoder_utilization_percent`, plus strict `encoder_active` and
 `encoder_family` and `rtmp_load_active` fields read from the actual bound
 encoder and native `streamOutput` at sample time. Reference and dual-lane

@@ -143,6 +143,13 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "(std::max)(1, cefVideo.fps_num / cefVideo.fps_den)" not in frontend
     assert "process_cpu_percent" in frontend
     assert "callback_backlog_estimate" in frontend
+    assert "previousRawFrames" in frontend
+    assert "previousPacketFrames" in frontend
+    assert "previousLaggedFrames" in frontend
+    assert "const uint64_t rawDelta = rawFrames >= previousRawFrames" in frontend
+    assert "const uint64_t callbackBacklog = rawDelta > packetDelta" in frontend
+    assert "const uint64_t missedFrames = laggedFrames >= previousLaggedFrames" in frontend
+    assert "not a lifetime queue depth" in frontend
     assert "encoder_active" in frontend
     assert "encoder_family" in frontend
     assert "obs_encoder_active(videoEncoder)" in frontend
