@@ -1189,6 +1189,9 @@ def test_output_effect_probe_settles_record_stop_before_next_case() -> None:
     assert "STOP_SETTLE_S" in helper
     assert "await asyncio.sleep(0.2)" in helper
     assert 'wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopRecord(nominal)")' in nominal_record
+    assert "STOP_PENDING_CODE = 702" in source
+    assert "if not ok and code != STOP_PENDING_CODE" in nominal_record
+    assert "StopRecord accepted (702 Pending)" in nominal_record
     assert 'wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopOutput(nominal)")' in nominal_generic
 
 

@@ -146,6 +146,7 @@ SHUTDOWN_GRACE_S = 8.0
 STATUS_OUTPUT_RUNNING = 500
 STATUS_OUTPUT_NOT_RUNNING = 501
 STATUS_INVALID_RESOURCE_STATE = 604
+STOP_PENDING_CODE = 702
 
 # Outputs the frontend stub creates by name (pulsar-frontend-stub.cpp), which
 # is what the GENERIC by-name requests address.
@@ -525,10 +526,13 @@ async def case_record_nominal(c: Client) -> None:
 
     ok, code, comment, data, ms = await c.req("StopRecord")
     note_latency("StopRecord(nominal)", ms)
-    if not ok:
+    if not ok and code != STOP_PENDING_CODE:
         raise Failure(f"StopRecord failed on an active recording: {code} {comment}")
+    if not ok:
+        print("   StopRecord accepted (702 Pending); waiting for the terminal STOPPED state")
     await wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopRecord(nominal)")
-    print(f"   OK  StopRecord succeeded (outputPath={data.get('outputPath')!r}) and both views agree the output stopped")
+    outcome = "succeeded" if ok else "accepted as Pending 702"
+    print(f"   OK  StopRecord {outcome} (outputPath={data.get('outputPath')!r}) and both views agree the output stopped")
 
 
 async def case_generic_refused(c: Client) -> None:
