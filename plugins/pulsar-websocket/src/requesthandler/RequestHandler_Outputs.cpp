@@ -17,6 +17,9 @@ You should have received a copy of the GNU General Public License along
 with this program. If not, see <https://www.gnu.org/licenses/>
 */
 
+#include <algorithm>
+#include <util/platform.h>
+
 #include "RequestHandler.h"
 #include "OutputEffect.h"
 
@@ -33,6 +36,38 @@ static bool ReplayBufferAvailable()
 {
 	OBSOutputAutoRelease output = obs_frontend_get_replay_buffer_output();
 	return output != nullptr;
+}
+
+// The replay muxer signals "saved" from its worker thread before the
+// frontend callback copies the path into OBS' lastReplay field.  A request
+// that returns Success as soon as the output signal arrives can therefore
+// report an effect which GetLastReplayBufferReplay cannot observe yet.  Keep
+// the request bounded, but settle on the actual public effect (a new path),
+// not merely on the internal signal.
+static std::string WaitForReplayPath(const std::string &previousPath,
+							 bool signalAccepted)
+{
+	constexpr uint32_t pollStepMs = 5;
+	// Replay muxing flushes a complete segment on its worker thread.  Reuse
+	// the bounded recording-finalisation window rather than the short generic
+	// output state window; this remains finite while covering CI/loaded hosts.
+	const uint32_t timeoutMs = Utils::Obs::OutputHelper::RecordStopVerifyTimeoutMs();
+
+	for (uint32_t waited = 0; waited <= timeoutMs; waited += pollStepMs) {
+		const std::string path = Utils::Obs::StringHelper::GetLastReplayBufferFileName();
+		const bool isNewPath = !path.empty() && path != previousPath;
+		// With no previous replay, the first non-empty path is necessarily the
+		// result of this save once the output's saved signal has fired.  When a
+		// previous path exists, require a path transition so a stale result can
+		// never be reported as this save.
+		if (isNewPath || (previousPath.empty() && signalAccepted && !path.empty()))
+			return path;
+		if (waited == timeoutMs)
+			break;
+		os_sleep_ms(std::min(pollStepMs, timeoutMs - waited));
+	}
+
+	return {};
 }
 
 // The generic output requests address an output BY NAME, so a refusal must say
@@ -316,27 +351,30 @@ RequestResult RequestHandler::SaveReplayBuffer(const Request &)
 	if (!obs_frontend_replay_buffer_active())
 		return RequestResult::Error(RequestStatus::OutputNotRunning);
 
+	const std::string previousPath = Utils::Obs::StringHelper::GetLastReplayBufferFileName();
 	OBSOutputAutoRelease output = obs_frontend_get_replay_buffer_output();
 	ActionWatch watch(output, "saved");
 
 	obs_frontend_replay_buffer_save();
 
-	// Writing the segment is asynchronous, so "saved" may legitimately not
-	// have fired yet inside the bounded window. What we can refuse is a save
-	// that is provably going nowhere: the buffer stopped under us, or libobs
-	// recorded a cause. The file itself only becomes observable once the
-	// replay output is wired and lastReplay is populated (issue #117).
+	// The muxer writes on its own thread and the frontend publishes the path
+	// from a queued callback.  Settle both stages before claiming Success.
+	const std::string savedPath = WaitForReplayPath(previousPath, watch.Accepted());
+	if (!savedPath.empty())
+		return RequestResult::Success();
+
 	if (!watch.Accepted() && !obs_output_active(output))
 		return RequestResult::Error(RequestStatus::OutputNotRunning,
-					    "The replay buffer stopped without saving: " +
-						    Utils::Obs::OutputHelper::GetLastError(output));
+						    "The replay buffer stopped without saving: " +
+							    Utils::Obs::OutputHelper::GetLastError(output));
 
 	std::string cause = Utils::Obs::OutputHelper::GetLastError(output);
 	if (!watch.Accepted() && !cause.empty())
 		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
-					    "The replay buffer refused to save: " + cause);
+						    "The replay buffer refused to save: " + cause);
 
-	return RequestResult::Success();
+	return RequestResult::Error(RequestStatus::RequestProcessingFailed,
+						    "The replay buffer save is still pending; no new replay path was published.");
 }
 
 /**
