@@ -1,0 +1,2446 @@
+{
+  "ac12a": {
+    "boundary": "packet_callback_monotonic_ns_to_receiver_observed_normalized_ns",
+    "clock_bound_included": true,
+    "clock_bound_ms": 0.0262,
+    "correlated_packet_count": 105,
+    "correlation_complete": true,
+    "count": 5,
+    "max_ms": 8.3753,
+    "min_ms": 0.266,
+    "p50_ms": 0.3333,
+    "p95_conservative_ms": 6.84244,
+    "p95_ms": 6.81624,
+    "p99_ms": 8.063488,
+    "separate_boundary": true,
+    "slo_p95_ms": 15.0,
+    "status": "UNPROVEN"
+  },
+  "ac12b": {
+    "boundary": "take_accepted_to_receiver",
+    "count": 5,
+    "max_ms": 71.3629,
+    "minimum_measurements_required": 100,
+    "p50_ms": 49.0741,
+    "p95_ms": 68.77098,
+    "p99_ms": 70.844516,
+    "same_packet_count": 5,
+    "stage_distributions": {
+      "callback_to_receiver": {
+        "count": 5,
+        "max_ms": 8.3753,
+        "min_ms": 0.266,
+        "p50_ms": 0.3333,
+        "p95_ms": 6.81624,
+        "p99_ms": 8.063488
+      },
+      "cts_to_fer": {
+        "count": 5,
+        "max_ms": 18.07614,
+        "min_ms": 17.215566,
+        "p50_ms": 17.436478,
+        "p95_ms": 18.041469,
+        "p99_ms": 18.069206
+      },
+      "fer_to_ferc": {
+        "count": 5,
+        "max_ms": 3.7394,
+        "min_ms": 1.4261,
+        "p50_ms": 3.3498,
+        "p95_ms": 3.72116,
+        "p99_ms": 3.735752
+      },
+      "ferc_to_pir": {
+        "count": 5,
+        "max_ms": 15.6362,
+        "min_ms": 0.0043,
+        "p50_ms": 0.0097,
+        "p95_ms": 12.5109,
+        "p99_ms": 15.01114
+      },
+      "pir_to_callback": {
+        "count": 5,
+        "max_ms": 0.0044,
+        "min_ms": 0.0011,
+        "p50_ms": 0.0021,
+        "p95_ms": 0.00408,
+        "p99_ms": 0.004336
+      },
+      "take_accepted_to_cts": {
+        "count": 5,
+        "max_ms": 49.792716,
+        "min_ms": 2.69506,
+        "p50_ms": 27.77883,
+        "p95_ms": 47.41146,
+        "p99_ms": 49.316465
+      }
+    },
+    "status": "UNPROVEN",
+    "threshold": null,
+    "threshold_status": "NOT_APPLICABLE"
+  },
+  "criteria": {
+    "AC-07": {
+      "boundary": "encoder_input_raw",
+      "count": 5,
+      "max_ms": 34.5302,
+      "min_ms": 21.4607,
+      "p50_ms": 26.5334,
+      "p95_ms": 33.4651,
+      "p99_ms": 34.31718,
+      "separate_boundary": false,
+      "slo_p95_ms": 50.0,
+      "status": "UNPROVEN"
+    },
+    "AC-08": {
+      "boundary": "directshow_return",
+      "count": 5,
+      "max_ms": 33.5216,
+      "min_ms": 19.5036,
+      "p50_ms": 26.776,
+      "p95_ms": 32.4183,
+      "p99_ms": 33.30094,
+      "separate_boundary": true,
+      "slo_p95_ms": 75.0,
+      "status": "UNPROVEN"
+    },
+    "AC-11": {
+      "accepted_count": 105,
+      "all_events_contract_validated": true,
+      "event_count": 210,
+      "rejected_count": 0,
+      "status": "PASS",
+      "unsettled_take_count": 0
+    },
+    "AC-12": {
+      "ac12a": {
+        "boundary": "packet_callback_monotonic_ns_to_receiver_observed_normalized_ns",
+        "clock_bound_included": true,
+        "clock_bound_ms": 0.0262,
+        "correlated_packet_count": 105,
+        "correlation_complete": true,
+        "count": 5,
+        "max_ms": 8.3753,
+        "min_ms": 0.266,
+        "p50_ms": 0.3333,
+        "p95_conservative_ms": 6.84244,
+        "p95_ms": 6.81624,
+        "p99_ms": 8.063488,
+        "separate_boundary": true,
+        "slo_p95_ms": 15.0,
+        "status": "UNPROVEN"
+      },
+      "ac12b": {
+        "boundary": "take_accepted_to_receiver",
+        "count": 5,
+        "max_ms": 71.3629,
+        "minimum_measurements_required": 100,
+        "p50_ms": 49.0741,
+        "p95_ms": 68.77098,
+        "p99_ms": 70.844516,
+        "same_packet_count": 5,
+        "stage_distributions": {
+          "callback_to_receiver": {
+            "count": 5,
+            "max_ms": 8.3753,
+            "min_ms": 0.266,
+            "p50_ms": 0.3333,
+            "p95_ms": 6.81624,
+            "p99_ms": 8.063488
+          },
+          "cts_to_fer": {
+            "count": 5,
+            "max_ms": 18.07614,
+            "min_ms": 17.215566,
+            "p50_ms": 17.436478,
+            "p95_ms": 18.041469,
+            "p99_ms": 18.069206
+          },
+          "fer_to_ferc": {
+            "count": 5,
+            "max_ms": 3.7394,
+            "min_ms": 1.4261,
+            "p50_ms": 3.3498,
+            "p95_ms": 3.72116,
+            "p99_ms": 3.735752
+          },
+          "ferc_to_pir": {
+            "count": 5,
+            "max_ms": 15.6362,
+            "min_ms": 0.0043,
+            "p50_ms": 0.0097,
+            "p95_ms": 12.5109,
+            "p99_ms": 15.01114
+          },
+          "pir_to_callback": {
+            "count": 5,
+            "max_ms": 0.0044,
+            "min_ms": 0.0011,
+            "p50_ms": 0.0021,
+            "p95_ms": 0.00408,
+            "p99_ms": 0.004336
+          },
+          "take_accepted_to_cts": {
+            "count": 5,
+            "max_ms": 49.792716,
+            "min_ms": 2.69506,
+            "p50_ms": 27.77883,
+            "p95_ms": 47.41146,
+            "p99_ms": 49.316465
+          }
+        },
+        "status": "UNPROVEN",
+        "threshold": null,
+        "threshold_status": "NOT_APPLICABLE"
+      },
+      "boundary": "rtmp_first_packet",
+      "clock_bound_ms": 0.0262,
+      "correlated_packet_count": 105,
+      "correlations": {
+        "take-001": {
+          "producer_packet_index": 0,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-c3a4650a0b239ad766fbdf9b56d373cb181d771ccfa8750094763a7247ed60f5",
+          "receiver_packet_index": 0
+        },
+        "take-002": {
+          "producer_packet_index": 76,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-40dd9a4e9f886432e41d5e86f623fed5adb32214bcf022c3523be94270a8568e",
+          "receiver_packet_index": 76
+        },
+        "take-003": {
+          "producer_packet_index": 82,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-d8489700bab53508673634060956ea7efb3809071ab13491543a69f8e206e90a",
+          "receiver_packet_index": 82
+        },
+        "take-004": {
+          "producer_packet_index": 88,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-6d190266794d6698ddf8a1e54ca40e7bde98cda82e7c98110f51e98d13372aa2",
+          "receiver_packet_index": 88
+        },
+        "take-005": {
+          "producer_packet_index": 94,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-2936b7141039cc26e493106bcf298e8654ce88e03d9319f8b0f12a78acbdf5ed",
+          "receiver_packet_index": 94
+        },
+        "take-006": {
+          "producer_packet_index": 100,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-f7a7bd492f56bbdd88885eebcce651c14009084cdcba031b1ceb77cdf4c2609a",
+          "receiver_packet_index": 100
+        },
+        "take-007": {
+          "producer_packet_index": 106,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-9dca219e38e8764819c29bec320b1e7fb560df2fe64337455193363faececd00",
+          "receiver_packet_index": 106
+        },
+        "take-008": {
+          "producer_packet_index": 112,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-eb62423b753f145b20b32075cbbc312cbef55a86fd1a0d049cf956ee8121bccd",
+          "receiver_packet_index": 112
+        },
+        "take-009": {
+          "producer_packet_index": 118,
+          "pts_delta_seconds": 0.03266666666666666,
+          "receiver_packet_identity": "rtmp-5a22095dfc5710a87acf031421d5705f0f2611d3c4c5df9b0a851d9fb74c6b81",
+          "receiver_packet_index": 118
+        },
+        "take-010": {
+          "producer_packet_index": 124,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-31eda2635ff3d2222d749d6b67e34e58e5ddb44183fcda47824f046fab02c133",
+          "receiver_packet_index": 124
+        },
+        "take-011": {
+          "producer_packet_index": 130,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-91034b14ef9d7c89724eb317fba7435d97a98a50f496af0790769c5d47c05f3b",
+          "receiver_packet_index": 130
+        },
+        "take-012": {
+          "producer_packet_index": 136,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-8c6daf9453f2ae1b80ef7086ebf7a31e8fc6bbf633f49a22e2b704ea343ca3b0",
+          "receiver_packet_index": 136
+        },
+        "take-013": {
+          "producer_packet_index": 142,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-545bdc611965a7d961dcebe93412d11656cf036d99c6c903d7f11b53ecaeb6a8",
+          "receiver_packet_index": 142
+        },
+        "take-014": {
+          "producer_packet_index": 148,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-fad7154712a90a02dea1ac27b3c84fd2cd6f2dc086bc5f93991dc98113aca9f2",
+          "receiver_packet_index": 148
+        },
+        "take-015": {
+          "producer_packet_index": 154,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-815dd4cb21ccb86b1ee0f8ac6105525134c7ce6d89a8b5f432303f3b660c3bb3",
+          "receiver_packet_index": 154
+        },
+        "take-016": {
+          "producer_packet_index": 160,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-6d7e9549a25309dae60e0da622a6029682b79dd80e86d672fa80aaa5044e1fbc",
+          "receiver_packet_index": 160
+        },
+        "take-017": {
+          "producer_packet_index": 166,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-3a23a2864bd512037c11b7842e9fd366a22113ed8cb54a2fb88bedd2c2fd945b",
+          "receiver_packet_index": 166
+        },
+        "take-018": {
+          "producer_packet_index": 172,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-e7dd4b4dc56b15a59049df110bbfb0e68532ee72f5671a22a9070699221184ba",
+          "receiver_packet_index": 172
+        },
+        "take-019": {
+          "producer_packet_index": 178,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-119b4143ba8ca7d2d52dae97fcf663c5bff92aabc7646883a303e85f9ce6f211",
+          "receiver_packet_index": 178
+        },
+        "take-020": {
+          "producer_packet_index": 184,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-51e0d2b2c64afac24a088912ccc9bc8ece66eb1f60ce5a08ace9b0e2d5b17783",
+          "receiver_packet_index": 184
+        },
+        "take-021": {
+          "producer_packet_index": 190,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-7a07b4dc60c0a06e04c29f9657b36650468b13a323e536b60f4105d160461d14",
+          "receiver_packet_index": 190
+        },
+        "take-022": {
+          "producer_packet_index": 196,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-3873ea965808ecce9d4c4031b96345e699ffbb163dc31edea1dcae3b0d3bda02",
+          "receiver_packet_index": 196
+        },
+        "take-023": {
+          "producer_packet_index": 202,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-51d12003d85932a961c09e1ad50c438d8de6793b13e736a295f303713c87b53f",
+          "receiver_packet_index": 202
+        },
+        "take-024": {
+          "producer_packet_index": 208,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-c46c7aa41a67168a125a240c2253ed9a7ce9c6d15db18725235d8c045c4ad9c3",
+          "receiver_packet_index": 208
+        },
+        "take-025": {
+          "producer_packet_index": 214,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-7757b460fe53fc94dc8e54ab8ab9bd54d1f9e5a7fe037decc0f621eb8932d085",
+          "receiver_packet_index": 214
+        },
+        "take-026": {
+          "producer_packet_index": 220,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-36927c7cfc92532a7f4ff6963a7ca5ac6558810c318c221e2306532e0f6a3051",
+          "receiver_packet_index": 220
+        },
+        "take-027": {
+          "producer_packet_index": 226,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-8483367a3dfc2cbc90e466360e229f9ae7941f7199b1c47d44f73a9c30cf03d8",
+          "receiver_packet_index": 226
+        },
+        "take-028": {
+          "producer_packet_index": 232,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-bf9dc7e766db4ac3b9b1d954aeac8faa43208e78391251a91e6d0889e9f4d60f",
+          "receiver_packet_index": 232
+        },
+        "take-029": {
+          "producer_packet_index": 238,
+          "pts_delta_seconds": 0.03266666666666666,
+          "receiver_packet_identity": "rtmp-54b0f6b6ef514e31408121364715a3c0c96f50674d4d910646bc00c72a7d4471",
+          "receiver_packet_index": 238
+        },
+        "take-030": {
+          "producer_packet_index": 244,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-69cc5fc36b5dd719b5813b73d9fdf6808b5de3a28ab6dcc9d50f5bd94529de93",
+          "receiver_packet_index": 244
+        },
+        "take-031": {
+          "producer_packet_index": 250,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-b256ae2251cb1900545e4a8a0d4e3b7f5837c8cccd5760bd7a835ea4bac8a57c",
+          "receiver_packet_index": 250
+        },
+        "take-032": {
+          "producer_packet_index": 256,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-01422d72045af8bcd1ea44c5dfe09f550cf83ef99530621843e9c122f0fe8fbb",
+          "receiver_packet_index": 256
+        },
+        "take-033": {
+          "producer_packet_index": 262,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-0fe1e843fcb7e5098ca8bfc1f273cb40f258182da583dda7ef05a5c1601167fc",
+          "receiver_packet_index": 262
+        },
+        "take-034": {
+          "producer_packet_index": 268,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-703bf9f7064e1713642ccda8d2f1beb598195a3ebd51c00c2a8ce7112ec85c93",
+          "receiver_packet_index": 268
+        },
+        "take-035": {
+          "producer_packet_index": 274,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-b249e6e56fac305dce20a4f2500afdb93c559593ae2906840e4499bf629f6959",
+          "receiver_packet_index": 274
+        },
+        "take-036": {
+          "producer_packet_index": 280,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-88986048910cc641846aa5e20c42e8a73a641098a7af32ccbf93295f590e1b45",
+          "receiver_packet_index": 280
+        },
+        "take-037": {
+          "producer_packet_index": 286,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-26c34e2958e1d3e8ce9f65215cf0ed01e95d2f21a6e3f0dcacec58be9960b648",
+          "receiver_packet_index": 286
+        },
+        "take-038": {
+          "producer_packet_index": 292,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-95a4b34a32c6262fef1b49e961df5424f8b065a77f219df0db20b74abbd0cc1c",
+          "receiver_packet_index": 292
+        },
+        "take-039": {
+          "producer_packet_index": 298,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-c3ca8a7ee4afabce9e858757d4d59bc2e2a810a3b51aa5905181191ce4972afb",
+          "receiver_packet_index": 298
+        },
+        "take-040": {
+          "producer_packet_index": 304,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-61674a6129670d3bd988d493519559443bf309f8f6d1787acddc66511c3fbe45",
+          "receiver_packet_index": 304
+        },
+        "take-041": {
+          "producer_packet_index": 310,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-f2c40c304b83336a1f1a8f9655c8c3c14ae43c683fcc320ecf3594116cff7084",
+          "receiver_packet_index": 310
+        },
+        "take-042": {
+          "producer_packet_index": 316,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-c4c4276773e2f0f181fcf63b1e3d3e59973b5affc048af247622017bfb4a6e90",
+          "receiver_packet_index": 316
+        },
+        "take-043": {
+          "producer_packet_index": 322,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-7304af59304d7b79675b5f4fa1e3e79bd139f6849aa312a1274ed270b8b66dad",
+          "receiver_packet_index": 322
+        },
+        "take-044": {
+          "producer_packet_index": 328,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-61081192e668beb04f2d9a0ba6d56df3028483ecb5d6edd0755c0e256131a184",
+          "receiver_packet_index": 328
+        },
+        "take-045": {
+          "producer_packet_index": 334,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-13e075009de754eeac57ef07a798ce273ba327334353d931e80008552e3a2f79",
+          "receiver_packet_index": 334
+        },
+        "take-046": {
+          "producer_packet_index": 340,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-05e0a1978271ea40d91e9f47a5bb2a2c02e79c9c1f94deea26e3476d2a6ba6c8",
+          "receiver_packet_index": 340
+        },
+        "take-047": {
+          "producer_packet_index": 352,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-3702aa43ecca0a848b4606aac62abec898fbd941016780f91e58824dcd3f1faf",
+          "receiver_packet_index": 352
+        },
+        "take-048": {
+          "producer_packet_index": 358,
+          "pts_delta_seconds": 0.03266666666666666,
+          "receiver_packet_identity": "rtmp-57f126de15a265802b4b72fa2c8b393ec535ee5da1874d2fee6ad9bfb13b882c",
+          "receiver_packet_index": 358
+        },
+        "take-049": {
+          "producer_packet_index": 364,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-80395ffa21b9397e98a110de389a2997daf3113222ae5aff7d9a173fbcaa2e46",
+          "receiver_packet_index": 364
+        },
+        "take-050": {
+          "producer_packet_index": 370,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-9bb8d356475597c37726cee05dc6283587066ab8c7ae9881a6e1ab4a194cb9b3",
+          "receiver_packet_index": 370
+        },
+        "take-051": {
+          "producer_packet_index": 376,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-aaeabc5e8de3942da659f4724b025e83cf4435374e6d03fde4d83256ddab67af",
+          "receiver_packet_index": 376
+        },
+        "take-052": {
+          "producer_packet_index": 382,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-5b698a72f319fafb6d41dbc4968aa1ba1393fc2b9a0198476849a97c4b5c6968",
+          "receiver_packet_index": 382
+        },
+        "take-053": {
+          "producer_packet_index": 388,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-77b1c926ee01b7c3076baf4229c0511c1d78a323318b57b05ce65c7745adb21b",
+          "receiver_packet_index": 388
+        },
+        "take-054": {
+          "producer_packet_index": 394,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-0d1fa1b2138750f3383ade858b71199498ff7999a20df3f27b08059345239184",
+          "receiver_packet_index": 394
+        },
+        "take-055": {
+          "producer_packet_index": 400,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-0f996b8621cb270d6d45fba14ca5aa11ac379bae4efcc7ada7354c2d3b394758",
+          "receiver_packet_index": 400
+        },
+        "take-056": {
+          "producer_packet_index": 406,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-a9e4eaa6d92005a5c7023f80101997f34f70777efff9ccc80b973b53e5e29d57",
+          "receiver_packet_index": 406
+        },
+        "take-057": {
+          "producer_packet_index": 415,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-26a037bc2b6cfc17ecdbc09fb7865a12944dfaa203d57afdc0f594208c53f285",
+          "receiver_packet_index": 415
+        },
+        "take-058": {
+          "producer_packet_index": 421,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-f8d141108a590ff676854f718744505e95b667d4353f6aaef73959b1efe4c8f1",
+          "receiver_packet_index": 421
+        },
+        "take-059": {
+          "producer_packet_index": 427,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-65ae6fef2b82b1459bbbb6017f60076600296fb800bf5af549bcb002ff606857",
+          "receiver_packet_index": 427
+        },
+        "take-060": {
+          "producer_packet_index": 433,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-d41f4a0785b10cdbd58d78e2b6c50628f70132c8cfc724caf15b93188613ba6a",
+          "receiver_packet_index": 433
+        },
+        "take-061": {
+          "producer_packet_index": 439,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-1111e4870d49f551791ad10a453424cdcc6dad125146d98ac796d445017d1973",
+          "receiver_packet_index": 439
+        },
+        "take-062": {
+          "producer_packet_index": 445,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-e332806445369a7a207d5e00421dce5b85353dbbdf83624c537140b2f024d84b",
+          "receiver_packet_index": 445
+        },
+        "take-063": {
+          "producer_packet_index": 451,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-de6bd8fe909dcce86d4dcff5827fa3a6eb0d555e2d873f72d6b43ab961ab56d4",
+          "receiver_packet_index": 451
+        },
+        "take-064": {
+          "producer_packet_index": 457,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-c4d6c8769ea7fc959fa5c9e0278b76d56629a5f3074a7b69e08a1835bee77f99",
+          "receiver_packet_index": 457
+        },
+        "take-065": {
+          "producer_packet_index": 463,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-d0b534e904c5d071c996ed44c7508438604d4d9a161f63e6be185f9b04b54efd",
+          "receiver_packet_index": 463
+        },
+        "take-066": {
+          "producer_packet_index": 472,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-1b40d2958ff1914b6e2e22af10944871ba4bff9f9da3f7def005c7462e7f4e0b",
+          "receiver_packet_index": 472
+        },
+        "take-067": {
+          "producer_packet_index": 478,
+          "pts_delta_seconds": 0.03266666666666666,
+          "receiver_packet_identity": "rtmp-f13d69c2909e085976c89327374ed101c0d2cdcfcd87fc04d9b51a652164925f",
+          "receiver_packet_index": 478
+        },
+        "take-068": {
+          "producer_packet_index": 484,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-5d40231bd4ad3f22d405f72cb57b24530802049ef24106535d02c8e78d9e2976",
+          "receiver_packet_index": 484
+        },
+        "take-069": {
+          "producer_packet_index": 490,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-3896dbb4eb66e302afad368c4caae60cf80f36743d74f52b3e8210acb6e56481",
+          "receiver_packet_index": 490
+        },
+        "take-070": {
+          "producer_packet_index": 496,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-aa0d0f71248ec3ad4c729de1eaebb403c075b9a5223fdbd5ff652c3b6b872d5b",
+          "receiver_packet_index": 496
+        },
+        "take-071": {
+          "producer_packet_index": 502,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-77432b7c1c56d5f92cf6c32a5abfc848e311266f0373e1e0d350f81d8b7daa75",
+          "receiver_packet_index": 502
+        },
+        "take-072": {
+          "producer_packet_index": 511,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-59bd6078a6c448988e40814f401bc364acf52fa1d25987b5682df180fe84d6e4",
+          "receiver_packet_index": 511
+        },
+        "take-073": {
+          "producer_packet_index": 517,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-0735be75df3c40b31e5543306f00d628d7e58084c48a5bad51426c8df0115231",
+          "receiver_packet_index": 517
+        },
+        "take-074": {
+          "producer_packet_index": 523,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-d2c7cd055b042f221ec4cac3a648e8846ba08c24179eb7dfcd79723c6cf2b449",
+          "receiver_packet_index": 523
+        },
+        "take-075": {
+          "producer_packet_index": 529,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-3c322a0070382a7dc0d5cbaf27be73b4fa407e103cd33ff2b3f3ffd3bc77f1a2",
+          "receiver_packet_index": 529
+        },
+        "take-076": {
+          "producer_packet_index": 538,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-5bcd52f0df8efcdcf7e0601af1011e887e9a18ac942adea571668f65c1a8cf31",
+          "receiver_packet_index": 538
+        },
+        "take-077": {
+          "producer_packet_index": 544,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-8f9443fc273453ab0d12cf940cc4d4810c87d8fc201dfbdbf4dbbaf3676b7d35",
+          "receiver_packet_index": 544
+        },
+        "take-078": {
+          "producer_packet_index": 550,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-25e7fdd66cc09dbf5df56aee3b76a5a1b06541b0ecee97ee86ee2e727d02811a",
+          "receiver_packet_index": 550
+        },
+        "take-079": {
+          "producer_packet_index": 556,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-8a0efb47c9e8b850940270c2243e6b975fba333c6ff56f10b229b61841f61890",
+          "receiver_packet_index": 556
+        },
+        "take-080": {
+          "producer_packet_index": 562,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-ca55058545f5e28bfb05041c21183727bb96a0ad883fbd898254978428f814c5",
+          "receiver_packet_index": 562
+        },
+        "take-081": {
+          "producer_packet_index": 568,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-ec01c80ce7a11215b1f21e9060406f70ff0d9cc32e52c0b58d65ed0a24ddf3f0",
+          "receiver_packet_index": 568
+        },
+        "take-082": {
+          "producer_packet_index": 577,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-f14f8b52d35277b08be33cc7fa01f50002bd055f60bd407598e7e0ab33a9433e",
+          "receiver_packet_index": 577
+        },
+        "take-083": {
+          "producer_packet_index": 583,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-61e722d098b11b46c31aff83b7e7731305de27f3930746ae0044dfff75f18c75",
+          "receiver_packet_index": 583
+        },
+        "take-084": {
+          "producer_packet_index": 589,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-ce12e28d9c556bfb72333065605818d79e2b05f7052bc2dd8f1c4bf71a097724",
+          "receiver_packet_index": 589
+        },
+        "take-085": {
+          "producer_packet_index": 595,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-16805f510c86124bc2ce5ffdcff717cde1602773dd423fc38ddcc844e83c9efa",
+          "receiver_packet_index": 595
+        },
+        "take-086": {
+          "producer_packet_index": 604,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-956e7142dc7daf39a9c3b5ed3676f46b51dbb3d97dda7fd665a3853bd244ae71",
+          "receiver_packet_index": 604
+        },
+        "take-087": {
+          "producer_packet_index": 610,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-ee720f3f98e6d5c20a2e3efc11060748d09532084105b6169c3c0df0e30bfa34",
+          "receiver_packet_index": 610
+        },
+        "take-088": {
+          "producer_packet_index": 616,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-f7ee909339cc8260fc5b6a3a5233f24d5a4a30230b210bfb0ca54f041ab9fa31",
+          "receiver_packet_index": 616
+        },
+        "take-089": {
+          "producer_packet_index": 622,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-f93ff6ad1d6c863ce3ad988f489560e5577b9614427cf6f06af8028f30ba5349",
+          "receiver_packet_index": 622
+        },
+        "take-090": {
+          "producer_packet_index": 628,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-d6cdf3ca401ad9a3b58c8f746a276ee2073af42f81f8778473ea1e06ae22d07e",
+          "receiver_packet_index": 628
+        },
+        "take-091": {
+          "producer_packet_index": 637,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-e0017cfb8ec2898dc4a924c54519b9aa44d12284df37d1d3c173082c4ae3a6ab",
+          "receiver_packet_index": 637
+        },
+        "take-092": {
+          "producer_packet_index": 643,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-64933838a1fd414a926fb81493d2c359d1ab5c524bb235b5552d91318dbba0d1",
+          "receiver_packet_index": 643
+        },
+        "take-093": {
+          "producer_packet_index": 649,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-e971dd8872df06188691d4c35cc03221a905b220817f2ddf2eff197d81f3b9b6",
+          "receiver_packet_index": 649
+        },
+        "take-094": {
+          "producer_packet_index": 655,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-9bc6eefb61cb390b86633c9df8e987de482155e32805072741dcd5eccf453f10",
+          "receiver_packet_index": 655
+        },
+        "take-095": {
+          "producer_packet_index": 667,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-0ed96cf3504d7e3262f6809a70450a0c22f2003adc57e08347165b2a12adfdc5",
+          "receiver_packet_index": 667
+        },
+        "take-096": {
+          "producer_packet_index": 673,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-a2d8d824563b54297872eb097d739cb72647da7b763c7eb51eee7ad81a6f4d55",
+          "receiver_packet_index": 673
+        },
+        "take-097": {
+          "producer_packet_index": 679,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-864dac333dbed84f611ec5e5df2c9eab756f0537c24b9fd8c630b9bbdf5b5218",
+          "receiver_packet_index": 679
+        },
+        "take-098": {
+          "producer_packet_index": 685,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-5c6b74f110ddb923bc0ade1dae2b4464033201318436ed07731301c9914d7099",
+          "receiver_packet_index": 685
+        },
+        "take-099": {
+          "producer_packet_index": 691,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-efb2b5327b72036dc6976e433bee363b3a4c090a153d672d23c3854e4313cf7e",
+          "receiver_packet_index": 691
+        },
+        "take-100": {
+          "producer_packet_index": 700,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-05ecd898779f5bdf2cb9c5bc2b3c7f8e45b281bc8da2504881cd0db7706c06a4",
+          "receiver_packet_index": 700
+        },
+        "take-101": {
+          "producer_packet_index": 706,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-0681244bd5e32d9866fd24914ea94d2bcb241beefc1fe1396d8b92bf7a33d180",
+          "receiver_packet_index": 706
+        },
+        "take-102": {
+          "producer_packet_index": 712,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-65a9e3b6e47512df4093a40173c42dff8320ef7bcfd1665978dbedd534850933",
+          "receiver_packet_index": 712
+        },
+        "take-103": {
+          "producer_packet_index": 718,
+          "pts_delta_seconds": 0.03266666666666666,
+          "receiver_packet_identity": "rtmp-2a68346c1e5045075e0fd77154c21b612116b6263fd3a1a57799ba3eb8213625",
+          "receiver_packet_index": 718
+        },
+        "take-104": {
+          "producer_packet_index": 724,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-2ecef6ca1ca06df9b3a5fe277f6db8bed015c72c7a2675cf111583f285997f90",
+          "receiver_packet_index": 724
+        },
+        "take-105": {
+          "producer_packet_index": 733,
+          "pts_delta_seconds": 0.033,
+          "receiver_packet_identity": "rtmp-9edffdbb1d5f5e0c926d4d90bed67f3cf1442e91369f38704f2fc38364fd16c0",
+          "receiver_packet_index": 733
+        }
+      },
+      "count": 5,
+      "encoder_callback_auxiliary": {
+        "count": 5,
+        "max_ms": 71.0496,
+        "min_ms": 29.7969,
+        "p50_ms": 48.7397,
+        "p95_ms": 68.46658,
+        "p99_ms": 70.532996,
+        "separate_boundary": true,
+        "slo_p95_ms": null,
+        "status": "PASS"
+      },
+      "encoder_pipeline_auxiliary": {
+        "acceptance_boundary_unchanged": true,
+        "composition_to_encode_request": {
+          "count": 5,
+          "max_ms": 18.07614,
+          "min_ms": 17.215566,
+          "p50_ms": 17.436478,
+          "p95_ms": 18.041469,
+          "p99_ms": 18.069206
+        },
+        "composition_to_interleave": {
+          "count": 5,
+          "max_ms": 35.13844,
+          "min_ms": 20.248066,
+          "p50_ms": 21.094378,
+          "p95_ms": 32.362129,
+          "p99_ms": 34.583178
+        },
+        "encode_complete_to_interleave": {
+          "count": 5,
+          "max_ms": 15.6362,
+          "min_ms": 0.0043,
+          "p50_ms": 0.0097,
+          "p95_ms": 12.5109,
+          "p99_ms": 15.01114
+        },
+        "encode_request_to_complete": {
+          "count": 5,
+          "max_ms": 3.7394,
+          "min_ms": 1.4261,
+          "p50_ms": 3.3498,
+          "p95_ms": 3.72116,
+          "p99_ms": 3.735752
+        },
+        "interleave_to_callback": {
+          "count": 5,
+          "max_ms": 0.0044,
+          "min_ms": 0.0011,
+          "p50_ms": 0.0021,
+          "p95_ms": 0.00408,
+          "p99_ms": 0.004336
+        },
+        "sample_count": 5,
+        "status": "MEASURED"
+      },
+      "max_ms": 8.3753,
+      "min_ms": 0.266,
+      "p50_ms": 0.3333,
+      "p95_conservative_ms": 6.84244,
+      "p95_ms": 6.81624,
+      "p99_ms": 8.063488,
+      "separate_boundary": true,
+      "slo_p95_ms": 15.0,
+      "status": "UNPROVEN"
+    },
+    "AC-12a": {
+      "boundary": "packet_callback_monotonic_ns_to_receiver_observed_normalized_ns",
+      "clock_bound_included": true,
+      "clock_bound_ms": 0.0262,
+      "correlated_packet_count": 105,
+      "correlation_complete": true,
+      "count": 5,
+      "max_ms": 8.3753,
+      "min_ms": 0.266,
+      "p50_ms": 0.3333,
+      "p95_conservative_ms": 6.84244,
+      "p95_ms": 6.81624,
+      "p99_ms": 8.063488,
+      "separate_boundary": true,
+      "slo_p95_ms": 15.0,
+      "status": "UNPROVEN"
+    },
+    "AC-12b": {
+      "boundary": "take_accepted_to_receiver",
+      "count": 5,
+      "max_ms": 71.3629,
+      "minimum_measurements_required": 100,
+      "p50_ms": 49.0741,
+      "p95_ms": 68.77098,
+      "p99_ms": 70.844516,
+      "same_packet_count": 5,
+      "stage_distributions": {
+        "callback_to_receiver": {
+          "count": 5,
+          "max_ms": 8.3753,
+          "min_ms": 0.266,
+          "p50_ms": 0.3333,
+          "p95_ms": 6.81624,
+          "p99_ms": 8.063488
+        },
+        "cts_to_fer": {
+          "count": 5,
+          "max_ms": 18.07614,
+          "min_ms": 17.215566,
+          "p50_ms": 17.436478,
+          "p95_ms": 18.041469,
+          "p99_ms": 18.069206
+        },
+        "fer_to_ferc": {
+          "count": 5,
+          "max_ms": 3.7394,
+          "min_ms": 1.4261,
+          "p50_ms": 3.3498,
+          "p95_ms": 3.72116,
+          "p99_ms": 3.735752
+        },
+        "ferc_to_pir": {
+          "count": 5,
+          "max_ms": 15.6362,
+          "min_ms": 0.0043,
+          "p50_ms": 0.0097,
+          "p95_ms": 12.5109,
+          "p99_ms": 15.01114
+        },
+        "pir_to_callback": {
+          "count": 5,
+          "max_ms": 0.0044,
+          "min_ms": 0.0011,
+          "p50_ms": 0.0021,
+          "p95_ms": 0.00408,
+          "p99_ms": 0.004336
+        },
+        "take_accepted_to_cts": {
+          "count": 5,
+          "max_ms": 49.792716,
+          "min_ms": 2.69506,
+          "p50_ms": 27.77883,
+          "p95_ms": 47.41146,
+          "p99_ms": 49.316465
+        }
+      },
+      "status": "UNPROVEN",
+      "threshold": null,
+      "threshold_status": "NOT_APPLICABLE"
+    },
+    "AC-13": {
+      "applicable": true,
+      "capacity_not_declared_from_reference": true,
+      "resource": {
+        "accounting": {
+          "dual_lane": {
+            "preview_mix": {
+              "max_absolute_residual_ms": 0.002532,
+              "p95_absolute_residual_ms": 0.002053,
+              "sample_count": 20,
+              "status": "COMPLETE",
+              "tolerance_ms": 0.1
+            },
+            "program_mix": {
+              "max_absolute_residual_ms": 0.003833,
+              "p95_absolute_residual_ms": 0.002797,
+              "sample_count": 20,
+              "status": "COMPLETE",
+              "tolerance_ms": 0.1
+            }
+          },
+          "reference": {
+            "preview_mix": {
+              "max_absolute_residual_ms": null,
+              "p95_absolute_residual_ms": null,
+              "sample_count": 0,
+              "status": "INCOMPLETE",
+              "tolerance_ms": 0.1
+            },
+            "program_mix": {
+              "max_absolute_residual_ms": null,
+              "p95_absolute_residual_ms": null,
+              "sample_count": 0,
+              "status": "INCOMPLETE",
+              "tolerance_ms": 0.1
+            }
+          }
+        },
+        "active_sample_counts": {
+          "dual_lane": 21,
+          "reference": 0
+        },
+        "comparison": {},
+        "eligible_sample_counts": {
+          "dual_lane": 20,
+          "reference": 0
+        },
+        "inactive_sample_counts": {
+          "dual_lane": 13,
+          "reference": 0
+        },
+        "metrics": {
+          "dual_lane": {
+            "callback_backlog_estimate": {
+              "count": 20,
+              "p50": 646.0,
+              "p95": 646.1,
+              "p99": 647.62
+            },
+            "dropped_frames": {
+              "count": 20,
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0
+            },
+            "encode_time_ms": {
+              "count": 20,
+              "p50": 2.175114,
+              "p95": 2.33494,
+              "p99": 2.357038
+            },
+            "encoder_utilization_percent": {
+              "count": 20,
+              "p50": 8.0,
+              "p95": 18.0,
+              "p99": 18.0
+            },
+            "frame_render_ms": {
+              "count": 20,
+              "p50": 2.195075,
+              "p95": 2.847234,
+              "p99": 3.051716
+            },
+            "host_gpu_percent": {
+              "count": 20,
+              "p50": 15.0,
+              "p95": 25.05,
+              "p99": 25.81
+            },
+            "missed_frames": {
+              "count": 20,
+              "p50": 8.0,
+              "p95": 8.0,
+              "p99": 8.0
+            },
+            "process_cpu_percent": {
+              "count": 20,
+              "p50": 3.096495,
+              "p95": 4.1479,
+              "p99": 4.238644
+            },
+            "resident_bytes": {
+              "count": 20,
+              "p50": 373690368.0,
+              "p95": 383713075.2,
+              "p99": 384519331.84
+            }
+          },
+          "reference": {
+            "callback_backlog_estimate": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "p99": null
+            },
+            "dropped_frames": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "p99": null
+            },
+            "encode_time_ms": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "p99": null
+            },
+            "encoder_utilization_percent": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "p99": null
+            },
+            "frame_render_ms": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "p99": null
+            },
+            "host_gpu_percent": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "p99": null
+            },
+            "missed_frames": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "p99": null
+            },
+            "process_cpu_percent": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "p99": null
+            },
+            "resident_bytes": {
+              "count": 0,
+              "p50": null,
+              "p95": null,
+              "p99": null
+            }
+          }
+        },
+        "mix_formats": {
+          "dual_lane": {
+            "preview": {
+              "active": true,
+              "fps_den": 1,
+              "fps_num": 60,
+              "height": 1080,
+              "width": 1920
+            },
+            "program": {
+              "fps_den": 1,
+              "fps_num": 60,
+              "height": 1080,
+              "width": 1920
+            },
+            "sample_count": 20
+          }
+        },
+        "reason": "requires both resource modes, minimum active NVENC-encoder samples, WGC+CEF+NVENC workload flags, and symmetric active RTMP receiver load",
+        "rtmp_eligible_sample_counts": {
+          "dual_lane": 20,
+          "reference": 0
+        },
+        "rtmp_load_active_sample_counts": {
+          "dual_lane": 20,
+          "reference": 0
+        },
+        "sample_counts": {
+          "dual_lane": 34,
+          "reference": 0
+        },
+        "stage_metrics": {
+          "dual_lane": {
+            "pipeline": {
+              "frame_total_ms": {
+                "count": 20,
+                "p50": 2.203213,
+                "p95": 2.95083,
+                "p99": 3.051389
+              },
+              "graphics_tasks_ms": {
+                "count": 20,
+                "p50": 0.000315,
+                "p95": 0.00041,
+                "p99": 0.000562
+              },
+              "output_frames_ms": {
+                "count": 20,
+                "p50": 2.090571,
+                "p95": 2.753824,
+                "p99": 2.899989
+              },
+              "render_displays_ms": {
+                "count": 20,
+                "p50": 0.000973,
+                "p95": 0.002236,
+                "p99": 0.002252
+              },
+              "sample_count": 20,
+              "tick_sources_ms": {
+                "count": 20,
+                "p50": 0.073487,
+                "p95": 0.121773,
+                "p99": 0.223107
+              }
+            },
+            "preview_mix": {
+              "borrowed_publish_ms": {
+                "count": 20,
+                "p50": 0.047106,
+                "p95": 0.084801,
+                "p99": 0.123593
+              },
+              "borrowed_schedule_ms": {
+                "count": 20,
+                "p50": 0.006765,
+                "p95": 0.0081,
+                "p99": 0.009187
+              },
+              "borrowed_wait_ms": {
+                "count": 20,
+                "p50": 0.000198,
+                "p95": 0.000249,
+                "p99": 0.000255
+              },
+              "download_ms": {
+                "count": 20,
+                "p50": 0.002827,
+                "p95": 0.003416,
+                "p99": 0.00357
+              },
+              "flush_ms": {
+                "count": 20,
+                "p50": 0.073261,
+                "p95": 0.111355,
+                "p99": 0.118654
+              },
+              "frame_total_ms": {
+                "count": 20,
+                "p50": 0.254604,
+                "p95": 0.362572,
+                "p99": 0.388048
+              },
+              "frame_unattributed_ms": {
+                "count": 20,
+                "p50": 0.001768,
+                "p95": 0.002091,
+                "p99": 0.002444
+              },
+              "gpu_encode_submit_ms": {
+                "count": 20,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0
+              },
+              "gpu_flush_ms": {
+                "count": 20,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0
+              },
+              "output_copy_ms": {
+                "count": 20,
+                "p50": 0.000246,
+                "p95": 0.000292,
+                "p99": 0.00031
+              },
+              "raw_stage_ms": {
+                "count": 20,
+                "p50": 0.004742,
+                "p95": 0.005697,
+                "p99": 0.005969
+              },
+              "render_convert_ms": {
+                "count": 20,
+                "p50": 0.012031,
+                "p95": 0.017958,
+                "p99": 0.018316
+              },
+              "render_main_ms": {
+                "count": 20,
+                "p50": 0.151982,
+                "p95": 0.218203,
+                "p99": 0.238003
+              },
+              "render_scale_ms": {
+                "count": 20,
+                "p50": 0.000182,
+                "p95": 0.000232,
+                "p99": 0.000237
+              },
+              "render_setup_ms": {
+                "count": 20,
+                "p50": 0.001384,
+                "p95": 0.001659,
+                "p99": 0.001762
+              },
+              "render_submit_ms": {
+                "count": 20,
+                "p50": 0.171288,
+                "p95": 0.240715,
+                "p99": 0.26311
+              },
+              "render_teardown_ms": {
+                "count": 20,
+                "p50": 0.000116,
+                "p95": 0.000129,
+                "p99": 0.000133
+              },
+              "render_unattributed_ms": {
+                "count": 20,
+                "p50": 0.000506,
+                "p95": 0.00065,
+                "p99": 0.000721
+              },
+              "return_output_callback_ms": {
+                "count": 20,
+                "p50": 0.038453,
+                "p95": 0.049369,
+                "p99": 0.052075
+              },
+              "sample_count": 20
+            },
+            "program_mix": {
+              "borrowed_publish_ms": {
+                "count": 20,
+                "p50": 1.004521,
+                "p95": 1.284599,
+                "p99": 1.286071
+              },
+              "borrowed_schedule_ms": {
+                "count": 20,
+                "p50": 0.007684,
+                "p95": 0.009613,
+                "p99": 0.009812
+              },
+              "borrowed_wait_ms": {
+                "count": 20,
+                "p50": 0.000295,
+                "p95": 0.000961,
+                "p99": 0.003004
+              },
+              "download_ms": {
+                "count": 20,
+                "p50": 0.695774,
+                "p95": 0.818724,
+                "p99": 0.825455
+              },
+              "flush_ms": {
+                "count": 20,
+                "p50": 0.025765,
+                "p95": 0.041948,
+                "p99": 0.042087
+              },
+              "frame_total_ms": {
+                "count": 20,
+                "p50": 1.488395,
+                "p95": 1.734048,
+                "p99": 1.762784
+              },
+              "frame_unattributed_ms": {
+                "count": 20,
+                "p50": 0.002257,
+                "p95": 0.002893,
+                "p99": 0.003645
+              },
+              "gpu_encode_submit_ms": {
+                "count": 20,
+                "p50": 0.164141,
+                "p95": 0.207592,
+                "p99": 0.210442
+              },
+              "gpu_flush_ms": {
+                "count": 20,
+                "p50": 0.210627,
+                "p95": 0.266835,
+                "p99": 0.287308
+              },
+              "output_copy_ms": {
+                "count": 20,
+                "p50": 0.000355,
+                "p95": 0.000388,
+                "p99": 0.000395
+              },
+              "raw_stage_ms": {
+                "count": 20,
+                "p50": 0.018691,
+                "p95": 0.026901,
+                "p99": 0.03075
+              },
+              "render_convert_ms": {
+                "count": 20,
+                "p50": 0.027777,
+                "p95": 0.03488,
+                "p99": 0.035312
+              },
+              "render_main_ms": {
+                "count": 20,
+                "p50": 0.293989,
+                "p95": 0.369051,
+                "p99": 0.414883
+              },
+              "render_scale_ms": {
+                "count": 20,
+                "p50": 0.000228,
+                "p95": 0.000286,
+                "p99": 0.000301
+              },
+              "render_setup_ms": {
+                "count": 20,
+                "p50": 0.004105,
+                "p95": 0.006013,
+                "p99": 0.007918
+              },
+              "render_submit_ms": {
+                "count": 20,
+                "p50": 0.72344,
+                "p95": 0.914721,
+                "p99": 0.935479
+              },
+              "render_teardown_ms": {
+                "count": 20,
+                "p50": 0.000729,
+                "p95": 0.00094,
+                "p99": 0.001605
+              },
+              "render_unattributed_ms": {
+                "count": 20,
+                "p50": 0.000741,
+                "p95": 0.000871,
+                "p99": 0.001077
+              },
+              "return_output_callback_ms": {
+                "count": 20,
+                "p50": 0.999923,
+                "p95": 1.278169,
+                "p99": 1.278235
+              },
+              "sample_count": 20
+            },
+            "source_profile": {
+              "preview_render_cpu_ms": {
+                "count": 20,
+                "p50": 0.181735,
+                "p95": 0.21536,
+                "p99": 0.219368
+              },
+              "preview_render_gpu_ms": {
+                "count": 20,
+                "p50": 0.075318,
+                "p95": 0.087754,
+                "p99": 0.087983
+              },
+              "preview_tick_cpu_ms": {
+                "count": 20,
+                "p50": 0.001364,
+                "p95": 0.002103,
+                "p99": 0.002213
+              },
+              "program_render_cpu_ms": {
+                "count": 20,
+                "p50": 0.168747,
+                "p95": 0.213371,
+                "p99": 0.21403
+              },
+              "program_render_gpu_ms": {
+                "count": 20,
+                "p50": 0.076777,
+                "p95": 0.087912,
+                "p99": 0.0882
+              },
+              "program_tick_cpu_ms": {
+                "count": 20,
+                "p50": 0.001254,
+                "p95": 0.002291,
+                "p99": 0.002344
+              },
+              "sample_count": 20
+            }
+          },
+          "reference": {}
+        },
+        "status": "UNPROVEN"
+      },
+      "status": "UNPROVEN"
+    }
+  },
+  "encoder_pipeline": {
+    "acceptance_boundary_unchanged": true,
+    "composition_to_encode_request": {
+      "count": 5,
+      "max_ms": 18.07614,
+      "min_ms": 17.215566,
+      "p50_ms": 17.436478,
+      "p95_ms": 18.041469,
+      "p99_ms": 18.069206
+    },
+    "composition_to_interleave": {
+      "count": 5,
+      "max_ms": 35.13844,
+      "min_ms": 20.248066,
+      "p50_ms": 21.094378,
+      "p95_ms": 32.362129,
+      "p99_ms": 34.583178
+    },
+    "encode_complete_to_interleave": {
+      "count": 5,
+      "max_ms": 15.6362,
+      "min_ms": 0.0043,
+      "p50_ms": 0.0097,
+      "p95_ms": 12.5109,
+      "p99_ms": 15.01114
+    },
+    "encode_request_to_complete": {
+      "count": 5,
+      "max_ms": 3.7394,
+      "min_ms": 1.4261,
+      "p50_ms": 3.3498,
+      "p95_ms": 3.72116,
+      "p99_ms": 3.735752
+    },
+    "interleave_to_callback": {
+      "count": 5,
+      "max_ms": 0.0044,
+      "min_ms": 0.0011,
+      "p50_ms": 0.0021,
+      "p95_ms": 0.00408,
+      "p99_ms": 0.004336
+    },
+    "sample_count": 5,
+    "status": "MEASURED"
+  },
+  "event_coverage": {
+    "command_rejected": 0,
+    "measured_takes_observed": 5,
+    "server_seq": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      64,
+      65,
+      66,
+      67,
+      68,
+      69,
+      70,
+      71,
+      72,
+      73,
+      74,
+      75,
+      76,
+      77,
+      78,
+      79,
+      80,
+      81,
+      82,
+      83,
+      84,
+      85,
+      86,
+      87,
+      88,
+      89,
+      90,
+      91,
+      92,
+      93,
+      94,
+      95,
+      96,
+      97,
+      98,
+      99,
+      100,
+      101,
+      102,
+      103,
+      104,
+      105,
+      106,
+      107,
+      108,
+      109,
+      110,
+      111,
+      112,
+      113,
+      114,
+      115,
+      116,
+      117,
+      118,
+      119,
+      120,
+      121,
+      122,
+      123,
+      124,
+      125,
+      126,
+      127,
+      128,
+      129,
+      130,
+      131,
+      132,
+      133,
+      134,
+      135,
+      136,
+      137,
+      138,
+      139,
+      140,
+      141,
+      142,
+      143,
+      144,
+      145,
+      146,
+      147,
+      148,
+      149,
+      150,
+      151,
+      152,
+      153,
+      154,
+      155,
+      156,
+      157,
+      158,
+      159,
+      160,
+      161,
+      162,
+      163,
+      164,
+      165,
+      166,
+      167,
+      168,
+      169,
+      170,
+      171,
+      172,
+      173,
+      174,
+      175,
+      176,
+      177,
+      178,
+      179,
+      180,
+      181,
+      182,
+      183,
+      184,
+      185,
+      186,
+      187,
+      188,
+      189,
+      190,
+      191,
+      192,
+      193,
+      194,
+      195,
+      196,
+      197,
+      198,
+      199,
+      200,
+      201,
+      202,
+      203,
+      204,
+      205,
+      206,
+      207,
+      208,
+      209,
+      210
+    ],
+    "take_aborted": 0,
+    "take_accepted": 105,
+    "take_committed": 105,
+    "unsettled_take_ids": [],
+    "validated_event_count": 210,
+    "warmup_takes_observed": 100
+  },
+  "ignored_valid_samples_before_commit": {
+    "antenna_first_frame": 0,
+    "decoded_first_frame": 0,
+    "directshow_return": 0,
+    "encoded_first_packet": 0,
+    "encoder_input_raw": 0,
+    "rtmp_first_packet": 0
+  },
+  "latency": {
+    "antenna_first_frame": {
+      "count": 0,
+      "max_ms": null,
+      "min_ms": null,
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "separate_boundary": true,
+      "slo_p95_ms": null,
+      "status": "NOT_REQUIRED"
+    },
+    "decoded_first_frame": {
+      "count": 0,
+      "max_ms": null,
+      "min_ms": null,
+      "p50_ms": null,
+      "p95_ms": null,
+      "p99_ms": null,
+      "separate_boundary": true,
+      "slo_p95_ms": null,
+      "status": "NOT_REQUIRED"
+    },
+    "directshow_return": {
+      "count": 5,
+      "max_ms": 33.5216,
+      "min_ms": 19.5036,
+      "p50_ms": 26.776,
+      "p95_ms": 32.4183,
+      "p99_ms": 33.30094,
+      "separate_boundary": true,
+      "slo_p95_ms": 75.0,
+      "status": "UNPROVEN"
+    },
+    "encoded_first_packet": {
+      "count": 5,
+      "max_ms": 71.0496,
+      "min_ms": 29.7969,
+      "p50_ms": 48.7397,
+      "p95_ms": 68.46658,
+      "p99_ms": 70.532996,
+      "separate_boundary": true,
+      "slo_p95_ms": null,
+      "status": "PASS"
+    },
+    "encoder_input_raw": {
+      "count": 5,
+      "max_ms": 34.5302,
+      "min_ms": 21.4607,
+      "p50_ms": 26.5334,
+      "p95_ms": 33.4651,
+      "p99_ms": 34.31718,
+      "separate_boundary": false,
+      "slo_p95_ms": 50.0,
+      "status": "UNPROVEN"
+    },
+    "rtmp_first_packet": {
+      "clock_bound_ms": 0.0262,
+      "count": 5,
+      "max_ms": 8.3753,
+      "min_ms": 0.266,
+      "p50_ms": 0.3333,
+      "p95_conservative_ms": 6.84244,
+      "p95_ms": 6.81624,
+      "p99_ms": 8.063488,
+      "separate_boundary": true,
+      "slo_p95_ms": 15.0,
+      "status": "UNPROVEN"
+    }
+  },
+  "notes": [
+    "Latency starts at TakeAccepted.observed_at_monotonic_ns and ends at the first valid post-commit observation for the named boundary.",
+    "DirectShow return and encoder/raw input are separate boundaries; neither is inferred from the other.",
+    "encoded_first_packet is auxiliary pre-network encoder evidence; its callback timestamp participates in AC-12a/b only when the same packet is fully correlated.",
+    "AC-12a measures packet_callback_monotonic_ns to receiver_observed_normalized_ns with the declared clock bound added conservatively to p95; it requires p95_conservative_ms <= 15.",
+    "AC-12b measures the same packets from TakeAccepted to the normalized receiver and publishes all six causal stage distributions without imposing an additional threshold.",
+    "rtmp_first_packet is the first video packet observed by the loopback receiver/demux; it is not wire-level or decoded-frame evidence.",
+    "Each valid RTMP packet must match the producer packet index and preserve one constant PTS/DTS mux offset within half a receiver tick.",
+    "Decoded and antenna timings are diagnostic only and carry no acceptance SLO.",
+    "The first session.warmup_takes committed Takes are excluded from latency percentiles; measured counts are the observed committed suffix.",
+    "Resource sample counts include all records; AC-13 uses only samples with encoder_active=true and encoder_family=nvenc.",
+    "AC-13 admits only the conjunction encoder_active=true, encoder_family=nvenc, and observed rtmp_load_active=true in both phases; early pre-stream samples remain diagnostic.",
+    "A fixture report is never a runtime acceptance; run the same command against a runtime trace with evidence_kind=runtime."
+  ],
+  "resources": {
+    "accounting": {
+      "dual_lane": {
+        "preview_mix": {
+          "max_absolute_residual_ms": 0.002532,
+          "p95_absolute_residual_ms": 0.002053,
+          "sample_count": 20,
+          "status": "COMPLETE",
+          "tolerance_ms": 0.1
+        },
+        "program_mix": {
+          "max_absolute_residual_ms": 0.003833,
+          "p95_absolute_residual_ms": 0.002797,
+          "sample_count": 20,
+          "status": "COMPLETE",
+          "tolerance_ms": 0.1
+        }
+      },
+      "reference": {
+        "preview_mix": {
+          "max_absolute_residual_ms": null,
+          "p95_absolute_residual_ms": null,
+          "sample_count": 0,
+          "status": "INCOMPLETE",
+          "tolerance_ms": 0.1
+        },
+        "program_mix": {
+          "max_absolute_residual_ms": null,
+          "p95_absolute_residual_ms": null,
+          "sample_count": 0,
+          "status": "INCOMPLETE",
+          "tolerance_ms": 0.1
+        }
+      }
+    },
+    "active_sample_counts": {
+      "dual_lane": 21,
+      "reference": 0
+    },
+    "comparison": {},
+    "eligible_sample_counts": {
+      "dual_lane": 20,
+      "reference": 0
+    },
+    "inactive_sample_counts": {
+      "dual_lane": 13,
+      "reference": 0
+    },
+    "metrics": {
+      "dual_lane": {
+        "callback_backlog_estimate": {
+          "count": 20,
+          "p50": 646.0,
+          "p95": 646.1,
+          "p99": 647.62
+        },
+        "dropped_frames": {
+          "count": 20,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "encode_time_ms": {
+          "count": 20,
+          "p50": 2.175114,
+          "p95": 2.33494,
+          "p99": 2.357038
+        },
+        "encoder_utilization_percent": {
+          "count": 20,
+          "p50": 8.0,
+          "p95": 18.0,
+          "p99": 18.0
+        },
+        "frame_render_ms": {
+          "count": 20,
+          "p50": 2.195075,
+          "p95": 2.847234,
+          "p99": 3.051716
+        },
+        "host_gpu_percent": {
+          "count": 20,
+          "p50": 15.0,
+          "p95": 25.05,
+          "p99": 25.81
+        },
+        "missed_frames": {
+          "count": 20,
+          "p50": 8.0,
+          "p95": 8.0,
+          "p99": 8.0
+        },
+        "process_cpu_percent": {
+          "count": 20,
+          "p50": 3.096495,
+          "p95": 4.1479,
+          "p99": 4.238644
+        },
+        "resident_bytes": {
+          "count": 20,
+          "p50": 373690368.0,
+          "p95": 383713075.2,
+          "p99": 384519331.84
+        }
+      },
+      "reference": {
+        "callback_backlog_estimate": {
+          "count": 0,
+          "p50": null,
+          "p95": null,
+          "p99": null
+        },
+        "dropped_frames": {
+          "count": 0,
+          "p50": null,
+          "p95": null,
+          "p99": null
+        },
+        "encode_time_ms": {
+          "count": 0,
+          "p50": null,
+          "p95": null,
+          "p99": null
+        },
+        "encoder_utilization_percent": {
+          "count": 0,
+          "p50": null,
+          "p95": null,
+          "p99": null
+        },
+        "frame_render_ms": {
+          "count": 0,
+          "p50": null,
+          "p95": null,
+          "p99": null
+        },
+        "host_gpu_percent": {
+          "count": 0,
+          "p50": null,
+          "p95": null,
+          "p99": null
+        },
+        "missed_frames": {
+          "count": 0,
+          "p50": null,
+          "p95": null,
+          "p99": null
+        },
+        "process_cpu_percent": {
+          "count": 0,
+          "p50": null,
+          "p95": null,
+          "p99": null
+        },
+        "resident_bytes": {
+          "count": 0,
+          "p50": null,
+          "p95": null,
+          "p99": null
+        }
+      }
+    },
+    "mix_formats": {
+      "dual_lane": {
+        "preview": {
+          "active": true,
+          "fps_den": 1,
+          "fps_num": 60,
+          "height": 1080,
+          "width": 1920
+        },
+        "program": {
+          "fps_den": 1,
+          "fps_num": 60,
+          "height": 1080,
+          "width": 1920
+        },
+        "sample_count": 20
+      }
+    },
+    "reason": "requires both resource modes, minimum active NVENC-encoder samples, WGC+CEF+NVENC workload flags, and symmetric active RTMP receiver load",
+    "rtmp_eligible_sample_counts": {
+      "dual_lane": 20,
+      "reference": 0
+    },
+    "rtmp_load_active_sample_counts": {
+      "dual_lane": 20,
+      "reference": 0
+    },
+    "sample_counts": {
+      "dual_lane": 34,
+      "reference": 0
+    },
+    "stage_metrics": {
+      "dual_lane": {
+        "pipeline": {
+          "frame_total_ms": {
+            "count": 20,
+            "p50": 2.203213,
+            "p95": 2.95083,
+            "p99": 3.051389
+          },
+          "graphics_tasks_ms": {
+            "count": 20,
+            "p50": 0.000315,
+            "p95": 0.00041,
+            "p99": 0.000562
+          },
+          "output_frames_ms": {
+            "count": 20,
+            "p50": 2.090571,
+            "p95": 2.753824,
+            "p99": 2.899989
+          },
+          "render_displays_ms": {
+            "count": 20,
+            "p50": 0.000973,
+            "p95": 0.002236,
+            "p99": 0.002252
+          },
+          "sample_count": 20,
+          "tick_sources_ms": {
+            "count": 20,
+            "p50": 0.073487,
+            "p95": 0.121773,
+            "p99": 0.223107
+          }
+        },
+        "preview_mix": {
+          "borrowed_publish_ms": {
+            "count": 20,
+            "p50": 0.047106,
+            "p95": 0.084801,
+            "p99": 0.123593
+          },
+          "borrowed_schedule_ms": {
+            "count": 20,
+            "p50": 0.006765,
+            "p95": 0.0081,
+            "p99": 0.009187
+          },
+          "borrowed_wait_ms": {
+            "count": 20,
+            "p50": 0.000198,
+            "p95": 0.000249,
+            "p99": 0.000255
+          },
+          "download_ms": {
+            "count": 20,
+            "p50": 0.002827,
+            "p95": 0.003416,
+            "p99": 0.00357
+          },
+          "flush_ms": {
+            "count": 20,
+            "p50": 0.073261,
+            "p95": 0.111355,
+            "p99": 0.118654
+          },
+          "frame_total_ms": {
+            "count": 20,
+            "p50": 0.254604,
+            "p95": 0.362572,
+            "p99": 0.388048
+          },
+          "frame_unattributed_ms": {
+            "count": 20,
+            "p50": 0.001768,
+            "p95": 0.002091,
+            "p99": 0.002444
+          },
+          "gpu_encode_submit_ms": {
+            "count": 20,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0
+          },
+          "gpu_flush_ms": {
+            "count": 20,
+            "p50": 0.0,
+            "p95": 0.0,
+            "p99": 0.0
+          },
+          "output_copy_ms": {
+            "count": 20,
+            "p50": 0.000246,
+            "p95": 0.000292,
+            "p99": 0.00031
+          },
+          "raw_stage_ms": {
+            "count": 20,
+            "p50": 0.004742,
+            "p95": 0.005697,
+            "p99": 0.005969
+          },
+          "render_convert_ms": {
+            "count": 20,
+            "p50": 0.012031,
+            "p95": 0.017958,
+            "p99": 0.018316
+          },
+          "render_main_ms": {
+            "count": 20,
+            "p50": 0.151982,
+            "p95": 0.218203,
+            "p99": 0.238003
+          },
+          "render_scale_ms": {
+            "count": 20,
+            "p50": 0.000182,
+            "p95": 0.000232,
+            "p99": 0.000237
+          },
+          "render_setup_ms": {
+            "count": 20,
+            "p50": 0.001384,
+            "p95": 0.001659,
+            "p99": 0.001762
+          },
+          "render_submit_ms": {
+            "count": 20,
+            "p50": 0.171288,
+            "p95": 0.240715,
+            "p99": 0.26311
+          },
+          "render_teardown_ms": {
+            "count": 20,
+            "p50": 0.000116,
+            "p95": 0.000129,
+            "p99": 0.000133
+          },
+          "render_unattributed_ms": {
+            "count": 20,
+            "p50": 0.000506,
+            "p95": 0.00065,
+            "p99": 0.000721
+          },
+          "return_output_callback_ms": {
+            "count": 20,
+            "p50": 0.038453,
+            "p95": 0.049369,
+            "p99": 0.052075
+          },
+          "sample_count": 20
+        },
+        "program_mix": {
+          "borrowed_publish_ms": {
+            "count": 20,
+            "p50": 1.004521,
+            "p95": 1.284599,
+            "p99": 1.286071
+          },
+          "borrowed_schedule_ms": {
+            "count": 20,
+            "p50": 0.007684,
+            "p95": 0.009613,
+            "p99": 0.009812
+          },
+          "borrowed_wait_ms": {
+            "count": 20,
+            "p50": 0.000295,
+            "p95": 0.000961,
+            "p99": 0.003004
+          },
+          "download_ms": {
+            "count": 20,
+            "p50": 0.695774,
+            "p95": 0.818724,
+            "p99": 0.825455
+          },
+          "flush_ms": {
+            "count": 20,
+            "p50": 0.025765,
+            "p95": 0.041948,
+            "p99": 0.042087
+          },
+          "frame_total_ms": {
+            "count": 20,
+            "p50": 1.488395,
+            "p95": 1.734048,
+            "p99": 1.762784
+          },
+          "frame_unattributed_ms": {
+            "count": 20,
+            "p50": 0.002257,
+            "p95": 0.002893,
+            "p99": 0.003645
+          },
+          "gpu_encode_submit_ms": {
+            "count": 20,
+            "p50": 0.164141,
+            "p95": 0.207592,
+            "p99": 0.210442
+          },
+          "gpu_flush_ms": {
+            "count": 20,
+            "p50": 0.210627,
+            "p95": 0.266835,
+            "p99": 0.287308
+          },
+          "output_copy_ms": {
+            "count": 20,
+            "p50": 0.000355,
+            "p95": 0.000388,
+            "p99": 0.000395
+          },
+          "raw_stage_ms": {
+            "count": 20,
+            "p50": 0.018691,
+            "p95": 0.026901,
+            "p99": 0.03075
+          },
+          "render_convert_ms": {
+            "count": 20,
+            "p50": 0.027777,
+            "p95": 0.03488,
+            "p99": 0.035312
+          },
+          "render_main_ms": {
+            "count": 20,
+            "p50": 0.293989,
+            "p95": 0.369051,
+            "p99": 0.414883
+          },
+          "render_scale_ms": {
+            "count": 20,
+            "p50": 0.000228,
+            "p95": 0.000286,
+            "p99": 0.000301
+          },
+          "render_setup_ms": {
+            "count": 20,
+            "p50": 0.004105,
+            "p95": 0.006013,
+            "p99": 0.007918
+          },
+          "render_submit_ms": {
+            "count": 20,
+            "p50": 0.72344,
+            "p95": 0.914721,
+            "p99": 0.935479
+          },
+          "render_teardown_ms": {
+            "count": 20,
+            "p50": 0.000729,
+            "p95": 0.00094,
+            "p99": 0.001605
+          },
+          "render_unattributed_ms": {
+            "count": 20,
+            "p50": 0.000741,
+            "p95": 0.000871,
+            "p99": 0.001077
+          },
+          "return_output_callback_ms": {
+            "count": 20,
+            "p50": 0.999923,
+            "p95": 1.278169,
+            "p99": 1.278235
+          },
+          "sample_count": 20
+        },
+        "source_profile": {
+          "preview_render_cpu_ms": {
+            "count": 20,
+            "p50": 0.181735,
+            "p95": 0.21536,
+            "p99": 0.219368
+          },
+          "preview_render_gpu_ms": {
+            "count": 20,
+            "p50": 0.075318,
+            "p95": 0.087754,
+            "p99": 0.087983
+          },
+          "preview_tick_cpu_ms": {
+            "count": 20,
+            "p50": 0.001364,
+            "p95": 0.002103,
+            "p99": 0.002213
+          },
+          "program_render_cpu_ms": {
+            "count": 20,
+            "p50": 0.168747,
+            "p95": 0.213371,
+            "p99": 0.21403
+          },
+          "program_render_gpu_ms": {
+            "count": 20,
+            "p50": 0.076777,
+            "p95": 0.087912,
+            "p99": 0.0882
+          },
+          "program_tick_cpu_ms": {
+            "count": 20,
+            "p50": 0.001254,
+            "p95": 0.002291,
+            "p99": 0.002344
+          },
+          "sample_count": 20
+        }
+      },
+      "reference": {}
+    },
+    "status": "UNPROVEN"
+  },
+  "schema": "pulsar.take-latency-report.v1",
+  "session": {
+    "build_revision": "8930b2a9498d2fd36986e452482957c3bd87a742",
+    "capture_paths": [
+      "encoder_input_raw",
+      "directshow_return",
+      "encoded_first_packet",
+      "decoded_first_frame",
+      "antenna_first_frame",
+      "rtmp_first_packet"
+    ],
+    "codec": "nvenc",
+    "command_line": "scripts/probe-dual-lane.py --trace",
+    "evidence_kind": "runtime",
+    "hardware": {
+      "gpu": "RTX-3070",
+      "host": "win-keeper-01"
+    },
+    "producer_count": 2,
+    "producer_topology": "dual_lane_ab",
+    "record_type": "session",
+    "resource_reference": {
+      "extra_frame_render_ms": 0.091,
+      "extra_resident_bytes": 3130000
+    },
+    "rtmp_load_requested": true,
+    "rtmp_receiver": {
+      "clock_bound_ns": 26200,
+      "clock_offset_ns": -12500,
+      "clock_source": "perf_counter_ns/qpc",
+      "correlated_packet_count": 105,
+      "correlation_method": "packet_index_constant_mux_offset_v1",
+      "endpoint": "rtmp://127.0.0.1:50082/pulsar/keeper254-smoke-20260903-nvenc",
+      "mux_offset_max_den": 6000,
+      "mux_offset_max_num": 199,
+      "mux_offset_min_den": 6000,
+      "mux_offset_min_num": 197,
+      "packet_timebase_den": 1000,
+      "packet_timebase_num": 1,
+      "receiver_id": "ffmpeg-rtmp-receiver",
+      "server_url": "rtmp://127.0.0.1:50082/pulsar",
+      "stream_id": "keeper254-smoke-20260903-nvenc",
+      "stream_key": "keeper254-smoke-20260903-nvenc"
+    },
+    "runtime_instance_id": "keeper254-smoke-20260903",
+    "schema": "pulsar.take-latency.v1",
+    "session_id": "keeper254-smoke-20260903-nvenc",
+    "source_types": [
+      "window_capture",
+      "browser_source"
+    ],
+    "telemetry_signals": [
+      "program",
+      "preview",
+      "raw",
+      "borrowed",
+      "gpu",
+      "queues",
+      "encoder_frame_ready",
+      "program_return_readback",
+      "encode_callback_enqueue",
+      "output_mux_enqueue",
+      "interleaver_mutex_wait",
+      "socket_send"
+    ],
+    "video": {
+      "fps_den": 1,
+      "fps_num": 60,
+      "height": 1080,
+      "width": 1920
+    },
+    "warmup_takes": 100,
+    "workload": {
+      "cef": true,
+      "nvenc": true,
+      "wgc": true
+    }
+  },
+  "source": "D:\\Documents\\Zab\\.worktrees\\keeper-254-soak\\docs\\evidence\\254\\smoke.jsonl",
+  "status": "UNPROVEN",
+  "takes": {
+    "aborted": 0,
+    "accepted": 105,
+    "committed": 105,
+    "measured_takes_observed": 5,
+    "minimum_measurements_required": 100,
+    "minimum_warmup_required": 100,
+    "total_committed_takes": 105,
+    "warmup_takes_declared": 100,
+    "warmup_takes_observed": 100
+  }
+}

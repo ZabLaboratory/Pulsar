@@ -1,0 +1,94 @@
+{
+  "work_unit": "ZabLaboratory/Pulsar#254",
+  "adr_revision": "ADR-PULSAR-DUAL-LANE-001@draft-r2-dual-lane-20260828",
+  "artifact": {
+    "head": "8930b2a9498d2fd36986e452482957c3bd87a742",
+    "pulsar_exe_sha256": "D3AEBCF7CFADA2F08D90680762ED25695CEEC965155A322B3AAA48562DE95863",
+    "obs_dll_sha256": "64C74858E5CEF38DA560530919B72A51693B28AA96619555C725C9F4D3682C7A",
+    "browser_helper_sha256": "35FFF7269F985EEDFE2466149E242E6F32F2CF8CF77F57953C2CD46BA8FC2765"
+  },
+  "constraints": {
+    "dual_lane_only": true,
+    "wgc_cef_nvenc": true,
+    "obs_gui": false,
+    "live_twitch": false,
+    "product_code_changed": false
+  },
+  "runs": [
+    {
+      "runtime_id": "keeper254-smoke-20260903",
+      "status": "PASS_SMOKE",
+      "trace": "D:/Documents/Zab/.tmp/keeper254-traces-20260903/smoke.jsonl",
+      "trace_sha256": "1F1B13D0D5B1F8573E5BF7643B3FA0001F5B8ABF0E892F26581447DE3D60CDE6",
+      "takes": 105,
+      "measured_takes": 5,
+      "topology": "dual_lane_ab",
+      "resource_samples": 34,
+      "eligible_nvenc_rtmp_samples": 20
+    },
+    {
+      "runtime_id": "keeper254-nvenc-soak-20260903",
+      "status": "FAIL_RESOURCE_DEADLINE",
+      "trace": "D:/Documents/Zab/.tmp/keeper254-traces-20260903/.nvenc-soak.jsonl.33008.producer.jsonl",
+      "trace_sha256": "3DE38007DA48F6550771E72768C9F86A6465256BB0FF947A0BC0C9F827FEB0DF",
+      "takes": 200,
+      "measured_takes": 100,
+      "resource_samples": 423,
+      "eligible_nvenc_rtmp_samples": 414,
+      "resource_deadline_seconds": 315
+    },
+    {
+      "runtime_id": "keeper254-nvenc-soak300-20260903",
+      "status": "FAIL_RESOURCE_DEADLINE",
+      "trace": "D:/Documents/Zab/.tmp/keeper254-traces-20260903/.nvenc-soak-300.jsonl.31548.producer.jsonl",
+      "trace_sha256": "D14AB15FB1AB744DC57B30E53CB097885FB3B98FAD62F5D347D92C49EF4A0EF9",
+      "takes": 200,
+      "measured_takes": 100,
+      "resource_samples": 145,
+      "resource_deadline_seconds": 165
+    },
+    {
+      "runtime_id": "keeper254-nvenc-boundaries-20260903",
+      "status": "FAIL_NON_PROGRESS",
+      "trace": "D:/Documents/Zab/.tmp/keeper254-traces-20260903/.nvenc-boundaries.jsonl.41820.producer.jsonl",
+      "trace_sha256": "1567BCBD243D243D8B788042D13DB86C306DD27C7CC40267E80A2FAF944537E7",
+      "takes_observed": 19,
+      "forced_kill": true
+    },
+    {
+      "runtime_id": "keeper254-recovery-20260903",
+      "status": "FAIL_CLEANUP",
+      "trace": "D:/Documents/Zab/.tmp/keeper254-traces-20260903/.recovery.jsonl.40336.producer.jsonl",
+      "trace_sha256": "AF55DB6879F938FCA59E565C9B48EA2045D32C68AF13BA0DDCA1DC5FDD307B04",
+      "source_ready": true,
+      "cleanup_failure": "Pulsar log reader thread did not exit"
+    },
+    {
+      "runtime_id": "keeper254-nvenc-full20-20260903",
+      "status": "FAIL_WGC_SOURCE_GATE",
+      "trace": "D:/Documents/Zab/.tmp/keeper254-traces-20260903/.nvenc-full20.jsonl.44604.producer.jsonl",
+      "trace_sha256": "0CFA353AAA82DFBAEE1004C759B4E3BFF304B5C05343EE7D5019F939B6CB073D",
+      "source_ready": false,
+      "failure": "WGC A remained blank"
+    }
+  ],
+  "observations": {
+    "smoke_latency_json": "docs/evidence/254/smoke-latency.json",
+    "smoke_latency_sha256": "B74705860787A55B88DAEBBB92196B2B83AA5396F6560C0E75D2EF6005B48200",
+    "smoke_raw_p50_ms": 26.5334,
+    "smoke_directshow_return_p50_ms": 26.776,
+    "smoke_encoded_first_packet_p50_ms": 48.7397,
+    "smoke_rtmp_first_packet_p50_ms": 0.3333,
+    "resource_resident_first_bytes": 154112000,
+    "resource_resident_last_bytes": 299061248,
+    "long_soak_resident_first_bytes": 220405760,
+    "long_soak_resident_last_bytes": 585232384,
+    "long_soak_resident_peak_bytes": 639221760,
+    "long_soak_callback_backlog_peak": 656,
+    "long_soak_dropped_peak": 0,
+    "resource_sampler_cadence_seconds_soak300_avg": 1.388,
+    "no_active_video_t_hot_rebind": "partial_probe_assertion_only"
+  },
+  "verdict": "NOT_READY",
+  "closure": "NOT_CLOSABLE"
+}
