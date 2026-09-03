@@ -425,6 +425,7 @@ public:
         signalMask_.store(0, std::memory_order_release);
         stopResourceSampler();
         stopTraceWriter();
+        traceIntegrityFault_.store(false, std::memory_order_release);
     }
 
     void install()
@@ -1999,7 +2000,17 @@ private:
                 line = std::move(writerQueue_.front());
                 writerQueue_.pop_front();
             }
-            writeLineFile(line);
+            if (!writeLineFile(line)) {
+                // Trace output is evidence, not a best-effort diagnostic. Stop
+                // accepting more records after the first I/O fault so a
+                // truncated artifact cannot be mistaken for a complete run.
+                std::lock_guard<std::mutex> lock(writerMutex_);
+                writerAccepting_ = false;
+                writerStopping_ = true;
+                writerQueue_.clear();
+                signalMask_.store(0, std::memory_order_release);
+                return;
+            }
         }
     }
 
@@ -2022,23 +2033,36 @@ private:
         (void)enqueueLine(line);
     }
 
-    void writeLineFile(const std::string &line)
+    bool writeLineFile(const std::string &line)
     {
         if (line.empty() || tracePath_.empty())
-            return;
+            return true;
         std::lock_guard<std::mutex> lock(fileMutex_);
 #ifdef _WIN32
         if (traceMutex_)
             WaitForSingleObject(traceMutex_, INFINITE);
 #endif
         std::ofstream output(tracePath_, std::ios::binary | std::ios::app);
-        if (output.good())
+        bool success = output.is_open();
+        if (success) {
             output << line << '\n';
+            output.flush();
+            success = output.good();
+        }
         output.close();
+        success = success && !output.fail();
 #ifdef _WIN32
         if (traceMutex_)
             ReleaseMutex(traceMutex_);
 #endif
+        if (!success) {
+            bool expected = false;
+            if (traceIntegrityFault_.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel))
+                blog(LOG_ERROR,
+                     "[pulsar-runtime-telemetry] integrity_fault=1 reason=trace_write_failed");
+        }
+        return success;
     }
 
     static void BeginTake(void *param, calldata_t *cd)
@@ -2170,6 +2194,7 @@ private:
     std::atomic<uint64_t> encodeTimeNsTotal_{0};
     std::atomic<uint64_t> encodeTimeSampleCount_{0};
     std::atomic<uint32_t> signalMask_{0};
+    std::atomic<bool> traceIntegrityFault_{false};
     std::vector<std::string> traceSignals_;
     // Snapshots are write-once for the lifetime of this telemetry object.  A
     // slot is never reused, so a callback that acquired an old pointer cannot

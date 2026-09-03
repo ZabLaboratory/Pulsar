@@ -78,6 +78,8 @@ parse_ready = base.parse_ready
 validate_commit = base.validate_commit
 find_ffprobe = base.find_ffprobe
 verify_recording = base.verify_recording
+ensure_recording_output_owned = base.ensure_recording_output_owned
+wait_for_recording_release = base.wait_for_recording_release
 READY_RE = base.READY_RE
 DUAL_READY_RE = base.DUAL_READY_RE
 ENCODER_RE = base.ENCODER_RE
@@ -526,7 +528,14 @@ async def drive(process: Any, takes: int, evidence_path: pathlib.Path | None) ->
                 f"expected exactly {takes} contiguous TakeCommitted logs, got "
                 f"{[commit.count for commit in all_commits]}"
             )
+        process.recording_output_path = ensure_recording_output_owned(
+            output_path, process.record_dir
+        )
         verify_program_audio_recording(output_path, ffprobe)
+        # StopRecord is asynchronous with respect to encoder child teardown.
+        # Keep the temporary directory alive until the MP4 handle is confirmed
+        # released; a lock timeout remains a cleanup failure.
+        wait_for_recording_release(process.recording_output_path)
 
     if preview_mutation_key != expected_key:
         raise ProbeFailure("Preview video mutation changed the Program audio route key")

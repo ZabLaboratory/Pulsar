@@ -155,3 +155,16 @@ def test_callback_selector_cases_are_fail_closed_and_stage_specific():
     assert "result.mask = all_signal_mask();" in header
     assert "if (rawCallbackRequired)" in source
     assert "if (packetCallbackRequired && streamOutput)" in source
+
+
+def test_trace_writer_surfaces_io_fault_and_stops_accepting_evidence():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "integrity_fault=1 reason=trace_write_failed" in source
+    assert "output.flush();" in source
+    assert "success = success && !output.fail();" in source
+    writer = source[source.index("void traceWriterLoop()"):source.index("bool enqueueLine", source.index("void traceWriterLoop()"))]
+    assert "writerAccepting_ = false;" in writer
+    assert "writerQueue_.clear();" in writer
+    assert "signalMask_.store(0, std::memory_order_release);" in writer
