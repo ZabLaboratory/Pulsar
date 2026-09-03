@@ -288,6 +288,9 @@ RequestResult RequestHandler::StopReplayBuffer(const Request &)
 
 	if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
 		return OutputStopFailure(output, "The replay buffer");
+	if (obs_output_active(output))
+		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
+			"The replay buffer stop was accepted but outputActive remains true; stop is not settled.");
 
 	return RequestResult::Success();
 }
