@@ -324,6 +324,7 @@ def _take_records(
                         "resident_bytes": resident + sample_index * 1000,
                         "process_cpu_percent": 15.0 + sample_index,
                         "host_gpu_percent": 25.0 + sample_index,
+                        "gpu_memory_bytes": 2_000_000_000 + sample_index * 1_000_000,
                         "callback_backlog_estimate": sample_index,
                         "dropped_frames": sample_index,
                         "missed_frames": sample_index,
@@ -454,6 +455,36 @@ def test_runtime_report_can_pass_only_with_explicit_complete_evidence():
     assert all(report["criteria"][criterion]["status"] in ("PASS", "MEASURED") for criterion in ("AC-07", "AC-08", "AC-11", "AC-12", "AC-13"))
 
 
+def test_ac13_dual_lane_only_passes_without_single_lane_reference():
+    records = [
+        record
+        for record in _take_records(3, evidence_kind="runtime", codec="nvenc")
+        if record.get("record_type") != "resource_sample" or record.get("sample_mode") == "dual_lane"
+    ]
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    assert report["criteria"]["AC-13"]["status"] == "MEASURED"
+    assert report["resources"]["dual_only"]["mode"] == "dual_lane_only"
+    assert report["resources"]["dual_only"]["active_sample_count"] == 2
+    assert report["resources"]["comparison"] == {}
+
+
+def test_ac13_dual_lane_requires_minimum_active_samples_and_absolute_limits():
+    records = [
+        record
+        for record in _take_records(3, evidence_kind="runtime", codec="nvenc")
+        if record.get("record_type") != "resource_sample" or record.get("sample_mode") == "dual_lane"
+    ]
+    dual_lane = next(record for record in records if record.get("record_type") == "resource_sample")
+    dual_lane["resident_bytes"] = 1_500_000_001
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
+    assert "resident_bytes exceeds" in report["resources"]["dual_only"]["reason"]
+
+
 def test_stage_accounting_surfaces_large_positive_residual_as_incomplete():
     trace = _trace(3, evidence_kind="runtime")
     for sample in trace.resources:
@@ -533,20 +564,20 @@ def test_runtime_nvenc_resource_samples_without_active_encoder_are_not_evidence(
     assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
 
 
-def test_ac13_requires_symmetric_active_rtmp_load_in_reference_and_dual_phases():
+def test_ac13_requires_active_rtmp_load_in_dual_lane_phase():
     records = _take_records(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-asym-rtmp")
-    reference = next(
+    dual_lane = next(
         record
         for record in records
-        if record.get("record_type") == "resource_sample" and record.get("sample_mode") == "reference"
+        if record.get("record_type") == "resource_sample" and record.get("sample_mode") == "dual_lane"
     )
-    reference["rtmp_load_active"] = False
+    dual_lane["rtmp_load_active"] = False
     report = probe.analyze_trace(
         probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
     )
     assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
-    assert report["resources"]["rtmp_load_active_sample_counts"]["reference"] == 1
-    assert report["resources"]["rtmp_load_active_sample_counts"]["dual_lane"] == 2
+    assert report["resources"]["rtmp_load_active_sample_counts"]["reference"] == 2
+    assert report["resources"]["rtmp_load_active_sample_counts"]["dual_lane"] == 1
 
 
 def test_ac13_uses_conjoint_active_rtmp_samples_and_keeps_early_false_diagnostic():

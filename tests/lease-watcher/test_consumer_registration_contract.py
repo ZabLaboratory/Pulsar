@@ -4,11 +4,13 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PATCH = ROOT / "patches" / "0040-fix-dshow-require-producer-issued-consumer-challenge.patch"
+PATCHES = sorted(ROOT.glob("patches/00[3-4][0-9]-*.patch"))
 
 
 def _patch_text() -> str:
-    return PATCH.read_text(encoding="utf-8")
+    if not PATCHES:
+        raise AssertionError("the upstream registration patch chain is missing")
+    return "\n".join(patch.read_text(encoding="utf-8") for patch in PATCHES)
 
 
 def test_precreated_event_cannot_attach_without_registration() -> None:
@@ -45,13 +47,12 @@ def test_release_cannot_clear_a_new_owner_registration() -> None:
     assert "return_consumer_process_image_allowed(process)" in text
 
 
-def test_modern_queue_mapping_is_writable_but_legacy_remains_read_only() -> None:
+def test_consumer_mapping_is_read_only_and_challenge_is_non_authoritative() -> None:
     text = _patch_text()
-    assert "const DWORD mapping_access = queue_uses_metadata(name) ? FILE_MAP_ALL_ACCESS : FILE_MAP_READ;" in text
-    assert "vq.header = (struct queue_header *)MapViewOfFile(vq.handle, mapping_access" in text
-    assert "consumer_pid" in text and "consumer_session" in text
     assert "consumer_challenge_low" in text and "consumer_challenge_high" in text
-    assert "FILE_MAP_READ, false, name" in text
+    assert "FILE_MAP_READ" in text
+    assert "CreateNamedPipeW" in text
+    assert "GetNamedPipeClientProcessId" in text
     assert "if (!(uint32_t)challenge)" in text
     assert "the 80-byte header ABI is unchanged" in text
 
