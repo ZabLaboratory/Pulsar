@@ -147,9 +147,9 @@ Utils::Obs::OutputHelper::ActionVerdict Utils::Obs::OutputHelper::SettleStart(ob
 }
 
 Utils::Obs::OutputHelper::ActionVerdict Utils::Obs::OutputHelper::SettleStop(obs_output_t *output,
-									    const ActionWatch &watch)
+									    const ActionWatch &watch, uint32_t timeoutMs)
 {
-	return settle(output, watch, false, false, Utils::Obs::OutputHelper::VerifyTimeoutMs());
+	return settle(output, watch, false, false, timeoutMs);
 }
 
 Utils::Obs::OutputHelper::ActionVerdict Utils::Obs::OutputHelper::SettleRecordStop(

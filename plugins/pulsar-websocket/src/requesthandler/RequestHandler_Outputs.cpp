@@ -550,7 +550,7 @@ RequestResult RequestHandler::StopOutput(const Request &request)
 	obs_output_stop(output);
 
 	const std::string label = OutputLabel(output);
-	if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
+	if (Utils::Obs::OutputHelper::SettleStop(output, watch, 5000) == ActionVerdict::Refused)
 		return OutputStopFailure(output, label.c_str());
 	if (obs_output_active(output))
 		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
