@@ -1,23 +1,21 @@
-From 0c31ca09c6037790d2c486276626910f27812449 Mon Sep 17 00:00:00 2001
+From c1b36551d7768d88adcfd06a28b5c365cc68ed02 Mon Sep 17 00:00:00 2001
 From: Forge <forge@example.invalid>
-Date: Thu, 3 Sep 2026 14:59:30 +0200
+Date: Thu, 3 Sep 2026 15:03:56 +0200
 Subject: [PATCH] fix(replay): stop buffer on next packet deterministically
 
 Agent-Role: forge
 
 Work-Unit: ZabLaboratory/Pulsar#254
-
-Issue: 254
 ---
  plugins/obs-ffmpeg/obs-ffmpeg-mux.c | 19 ++++++++++++++-----
  1 file changed, 14 insertions(+), 5 deletions(-)
 
 diff --git a/plugins/obs-ffmpeg/obs-ffmpeg-mux.c b/plugins/obs-ffmpeg/obs-ffmpeg-mux.c
-index f152b2849..f55814407 100644
+index f152b2849..6f9aae72e 100644
 --- a/plugins/obs-ffmpeg/obs-ffmpeg-mux.c
 +++ b/plugins/obs-ffmpeg/obs-ffmpeg-mux.c
-@@ -510,6 +510,17 @@ void ffmpeg_mux_stop(void *data, uint64_t ts)
- 	}
+@@ -1200,6 +1200,17 @@ static void deactivate_replay_buffer(struct ffmpeg_muxer *stream, int code)
+ 	replay_buffer_clear(stream);
  }
  
 +static void replay_buffer_stop(void *data, uint64_t ts)
@@ -31,9 +29,9 @@ index f152b2849..f55814407 100644
 +	}
 +}
 +
- static void signal_failure(struct ffmpeg_muxer *stream)
+ static void replay_buffer_data(void *data, struct encoder_packet *packet)
  {
- 	char error[1024];
+ 	struct ffmpeg_muxer *stream = data;
 @@ -1215,10 +1226,8 @@ static void replay_buffer_data(void *data, struct encoder_packet *packet)
  	}
  
@@ -47,13 +45,15 @@ index f152b2849..f55814407 100644
  	}
  
  	obs_encoder_packet_ref(&pkt, packet);
-@@ -1260,7 +1271,7 @@ struct obs_output_info replay_buffer = {
+@@ -1263,7 +1272,7 @@ struct obs_output_info replay_buffer = {
  	.create = replay_buffer_create,
  	.destroy = replay_buffer_destroy,
  	.start = replay_buffer_start,
 -	.stop = ffmpeg_mux_stop,
 +	.stop = replay_buffer_stop,
  	.encoded_packet = replay_buffer_data,
+ 	.get_total_bytes = ffmpeg_mux_total_bytes,
+ 	.get_defaults = replay_buffer_defaults,
 -- 
 2.54.0.windows.1
 
