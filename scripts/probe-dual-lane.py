@@ -3887,6 +3887,7 @@ async def drive(
         if not output_path:
             raise ProbeFailure("RecordStateChanged STOPPED did not include outputPath")
         process.recording_output_path = ensure_recording_output_owned(output_path, process.record_dir)
+        wait_for_recording_release(process.recording_output_path)
 
         all_commits = [
             parse_commit(match)
