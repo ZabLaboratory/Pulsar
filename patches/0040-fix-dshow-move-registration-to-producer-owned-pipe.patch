@@ -127,7 +127,7 @@ index f4dd39ef7..f8cb3bf76 100644
  	bool queue_namespace_rejected;
  	bool program_return;
  	bool preview_return;
-@@ -84,14 +87,87 @@ static void return_lease_log_state(struct virtualcam_data *vcam, enum return_lea
+@@ -84,14 +87,95 @@ static void return_lease_log_state(struct virtualcam_data *vcam, enum return_lea
  		     return_lease_state_name(state), vcam->consumer_lease_name);
  }
  
@@ -175,7 +175,15 @@ index f4dd39ef7..f8cb3bf76 100644
 +	BOOL connected = ConnectNamedPipe(vcam->consumer_registration_pipe, NULL);
 +	if (!connected) {
 +		const DWORD error = GetLastError();
-+		if (error != ERROR_PIPE_CONNECTED && error != ERROR_PIPE_LISTENING) {
++		/* PIPE_NOWAIT deliberately keeps the lease watcher off the video
++		 * callback.  ERROR_PIPE_LISTENING is the normal, healthy state while
++		 * the DirectShow graph is still inside CreateFileW; do not close and
++		 * recreate the server here or the client can be stranded between
++		 * attempts.  A later poll will observe ERROR_PIPE_CONNECTED once the
++		 * kernel completes the rendezvous. */
++		if (error == ERROR_PIPE_LISTENING)
++			return false;
++		if (error != ERROR_PIPE_CONNECTED) {
 +			return_consumer_registration_pipe_close(vcam);
 +			(void)return_consumer_registration_pipe_start(vcam);
 +			return false;

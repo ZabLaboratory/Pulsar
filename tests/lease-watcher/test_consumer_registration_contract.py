@@ -61,6 +61,14 @@ def test_release_cannot_clear_a_new_owner_registration() -> None:
     assert "return_consumer_process_image_allowed(process)" in text
 
 
+def test_listening_registration_pipe_is_preserved_until_client_connects() -> None:
+    text = _patch_text()
+    # A nonblocking ConnectNamedPipe reports LISTENING while FFmpeg's
+    # CreateFileW is still waiting.  Closing/rearming here loses the only
+    # rendezvous and leaves ProgramReturn permanently empty.
+    assert "if (error == ERROR_PIPE_LISTENING)\n+\t\t\treturn false;" in text
+
+
 def test_consumer_mapping_is_read_only_and_challenge_is_non_authoritative() -> None:
     text = _patch_text()
     assert "consumer_challenge_low" in text and "consumer_challenge_high" in text

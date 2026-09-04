@@ -2239,7 +2239,13 @@ private:
     {
 #ifdef _WIN32
         const std::wstring path = std::filesystem::path(tracePath_).wstring();
-        traceFileHandle_ = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+        // DirectShow's producer-owned filter appends its correlated return
+        // observation through the same named trace mutex.  Keep the runtime
+        // handle shareable for writes; FILE_SHARE_READ alone makes every
+        // legitimate filter append fail with ERROR_SHARING_VIOLATION while
+        // the trace writer is alive.
+        traceFileHandle_ = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
                                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
         return traceFileHandle_ != INVALID_HANDLE_VALUE;
 #else

@@ -191,6 +191,21 @@ def test_trace_writer_has_external_mac_footer_and_append_anchor():
     assert 'prepareTraceFile(append && hasExisting)' in source
 
 
+def test_trace_writer_allows_directshow_append_while_runtime_handle_is_open():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    open_trace = source[source.index("bool openTraceOutput()"):source.index("bool closeTraceOutput()", source.index("bool openTraceOutput()"))]
+    assert "FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE" in open_trace
+    assert "FILE_SHARE_READ, nullptr, OPEN_ALWAYS" not in open_trace
+
+
+def test_directshow_observations_use_an_out_of_band_sidecar_before_fusion():
+    patch = (ROOT / "patches" / "0044-fix-dshow-trace-sidecar.patch").read_text(encoding="utf-8")
+    assert "static bool append_trace_line" in patch
+    assert '+\tconst char *path = getenv("PULSAR_DIRECTSHOW_TRACE_PATH");' in patch
+
+
 def test_named_mapping_race_closes_existing_handles_in_both_producers():
     shared_patch = (ROOT / "patches" / "0035-fix-modern-cpu-queue-mapping-collision.patch").read_text(
         encoding="utf-8"

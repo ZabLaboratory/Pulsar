@@ -1218,12 +1218,57 @@ class RtmpReceiver:
             )
         self._install_fused_records([session, *records[1:]], output_path)
 
-    def fuse_trace(self, producer_path: pathlib.Path, output_path: pathlib.Path) -> None:
+    def fuse_trace(
+        self,
+        producer_path: pathlib.Path,
+        output_path: pathlib.Path,
+        *,
+        directshow_path: pathlib.Path | None = None,
+    ) -> None:
         """Create a deterministic post-stop trace with receiver observations."""
 
         if self.failure:
             raise ProbeFailure(self.failure)
         records, session = self._read_producer_records(producer_path)
+        if directshow_path is None or not directshow_path.is_file():
+            raise ProbeFailure("DirectShow trace sidecar is missing; cannot establish the consumer boundary")
+        try:
+            directshow_records = [
+                json.loads(line)
+                for line in directshow_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ProbeFailure(f"DirectShow trace sidecar is unreadable: {exc}") from exc
+        encoded_takes = {
+            str(record.get("take_command_id")): record
+            for record in records
+            if record.get("record_type") == "observation"
+            and record.get("boundary") == "encoded_first_packet"
+            and record.get("valid") is True
+        }
+        if not encoded_takes:
+            raise ProbeFailure("producer trace contains no encoded packet observations for DirectShow correlation")
+        if len(directshow_records) != len(encoded_takes):
+            raise ProbeFailure(
+                "DirectShow trace sidecar count does not match encoded Takes: "
+                f"{len(directshow_records)} != {len(encoded_takes)}"
+            )
+        for observation in directshow_records:
+            if not isinstance(observation, dict) or observation.get("record_type") != "observation" or observation.get("boundary") != "directshow_return":
+                raise ProbeFailure("DirectShow trace sidecar contains a non-DirectShow observation")
+            if "trace_integrity" in observation or observation.get("valid") is not True:
+                raise ProbeFailure("DirectShow trace sidecar must contain unsigned valid observations only")
+            take_id = str(observation.get("take_command_id", ""))
+            producer = encoded_takes.get(take_id)
+            if producer is None:
+                raise ProbeFailure(f"DirectShow observation has no encoded producer for {take_id!r}")
+            for identity_field in ("runtime_instance_id", "command_id", "intent_id", "frame_id", "pts_ns", "revisions"):
+                if observation.get(identity_field) != producer.get(identity_field):
+                    raise ProbeFailure(
+                        f"DirectShow observation identity mismatch for {take_id!r}: {identity_field}"
+                    )
+        records.extend(directshow_records)
         session["rtmp_receiver"] = self.metadata()
         session["rtmp_load_requested"] = True
         raw_paths = session.get("capture_paths")
@@ -1425,6 +1470,7 @@ class PulsarProcess:
         self.password = secrets.token_urlsafe(24)
         self.proc: subprocess.Popen[str] | None = None
         self.directshow_proc: subprocess.Popen[str] | None = None
+        self.directshow_trace_path: pathlib.Path | None = None
         self.directshow_command: list[str] | None = None
         self.directshow_startup_output = ""
         self.directshow_lines: list[str] = []
@@ -1761,6 +1807,8 @@ class PulsarProcess:
         env = dict(os.environ)
         env["PULSAR_RUNTIME_INSTANCE_ID"] = self.runtime_id
         env["PULSAR_TRACE_PATH"] = str(self.trace_path)
+        self.directshow_trace_path = self.trace_path.with_name(self.trace_path.name + ".directshow.jsonl")
+        env["PULSAR_DIRECTSHOW_TRACE_PATH"] = str(self.directshow_trace_path)
         env["PULSAR_DIRECTSHOW_LEGACY_ALIAS"] = "0"
         if self.return_transport is not None:
             env["PULSAR_RETURN_TRANSPORT"] = self.return_transport
@@ -1920,7 +1968,11 @@ class PulsarProcess:
                 minimum_samples=minimum_samples,
             )
         else:
-            self.rtmp_receiver.fuse_trace(self.rtmp_producer_trace_path, self.rtmp_final_trace_path)
+            self.rtmp_receiver.fuse_trace(
+                self.rtmp_producer_trace_path,
+                self.rtmp_final_trace_path,
+                directshow_path=self.directshow_trace_path,
+            )
 
     def _join_directshow_reader(self) -> str | None:
         """Join the bounded stdout pump, retaining state on failure."""
@@ -3199,10 +3251,15 @@ def wait_for_trace_record(
         raise ProbeFailure("trace record check requested without --trace")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        try:
-            lines = process.trace_path.read_text(encoding="utf-8").splitlines()
-        except FileNotFoundError:
-            lines = []
+        trace_paths = [process.trace_path]
+        if boundary == "directshow_return" and process.directshow_trace_path is not None:
+            trace_paths.append(process.directshow_trace_path)
+        lines: list[str] = []
+        for trace_path in trace_paths:
+            try:
+                lines.extend(trace_path.read_text(encoding="utf-8").splitlines())
+            except FileNotFoundError:
+                continue
         for line_number, line in enumerate(lines, start=1):
             try:
                 record = json.loads(line)
@@ -3276,6 +3333,15 @@ async def wait_for_take_boundaries(
             lines = process.trace_path.read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
             lines = []
+        directshow_trace_path = getattr(process, "directshow_trace_path", None)
+        if directshow_trace_path is not None:
+            try:
+                # DirectShow is a consumer-owned writer.  Its observations are
+                # intentionally unsigned and live in the sidecar until the
+                # post-stop fusion re-authenticates the complete trace.
+                lines.extend(directshow_trace_path.read_text(encoding="utf-8").splitlines())
+            except FileNotFoundError:
+                pass
         records: list[dict[str, Any]] = []
         for line in lines:
             if not line.strip():

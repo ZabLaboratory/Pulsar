@@ -36,6 +36,33 @@ def _latency_fixture_records():
     return module._take_records(1)
 
 
+def _write_directshow_sidecar(tmp_path, records):
+    sidecar = tmp_path / "producer.jsonl.directshow.jsonl"
+    encoded = {
+        record.get("take_command_id"): record
+        for record in records
+        if record.get("record_type") == "observation"
+        and record.get("boundary") == "encoded_first_packet"
+    }
+    directshow = [
+        record
+        for record in records
+        if record.get("record_type") == "observation"
+        and record.get("boundary") == "directshow_return"
+    ]
+    # The fixture models a return frame with a deliberate +1 frame/PTS offset;
+    # a valid sidecar must carry the producer identity that fusion correlates.
+    normalized = []
+    for record in directshow:
+        item = dict(record)
+        producer = encoded[record["take_command_id"]]
+        for field in ("runtime_instance_id", "command_id", "intent_id", "take_command_id", "frame_id", "pts_ns", "revisions"):
+            item[field] = producer[field]
+        normalized.append(item)
+    sidecar.write_text("".join(json.dumps(record) + "\n" for record in normalized), encoding="utf-8")
+    return sidecar
+
+
 def test_receiver_separates_server_url_and_stream_key():
     receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id="runtime-001", stream_id="runtime-001-x264")
     assert receiver.server_url.endswith("/pulsar")
@@ -663,10 +690,14 @@ def test_resource_wait_reports_process_exit_as_failure(tmp_path):
 
 
 def test_fusion_is_atomic_and_keeps_existing_reference_on_validation_failure(tmp_path):
+    all_records = _latency_fixture_records()
     records = [
         record
-        for record in _latency_fixture_records()
-        if not (record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet")
+        for record in all_records
+        if not (
+            record.get("record_type") == "observation"
+            and record.get("boundary") in {"rtmp_first_packet", "directshow_return"}
+        )
     ]
     producer = tmp_path / "producer.jsonl"
     producer.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
@@ -677,17 +708,22 @@ def test_fusion_is_atomic_and_keeps_existing_reference_on_validation_failure(tmp
     receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id="runtime-fixture-001", stream_id="runtime-fixture-001-nvenc")
     receiver.calibration = {"source": "perf_counter_ns/qpc", "qpc_delta_ns": 0, "qpc_bound_ns": 42}
     receiver.packets = []
+    sidecar = _write_directshow_sidecar(tmp_path, all_records)
     with pytest.raises(probe.ProbeFailure, match="no demuxed video packet"):
-        receiver.fuse_trace(producer, final)
+        receiver.fuse_trace(producer, final, directshow_path=sidecar)
     assert hashlib.sha256(final.read_bytes()).hexdigest() == expected_hash
     assert not list(tmp_path.glob("*.fused.tmp"))
 
 
 def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path):
+    all_records = _latency_fixture_records()
     records = [
         record
-        for record in _latency_fixture_records()
-        if not (record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet")
+        for record in all_records
+        if not (
+            record.get("record_type") == "observation"
+            and record.get("boundary") in {"rtmp_first_packet", "directshow_return"}
+        )
     ]
     producer = tmp_path / "producer.jsonl"
     producer.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
@@ -705,7 +741,8 @@ def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path)
             "packet_identity": "runtime-fixture-001-nvenc-video-0-1500-1500",
         }
     ]
-    receiver.fuse_trace(producer, final)
+    sidecar = _write_directshow_sidecar(tmp_path, all_records)
+    receiver.fuse_trace(producer, final, directshow_path=sidecar)
     fused = [json.loads(line) for line in final.read_text(encoding="utf-8").splitlines()]
     rtmp = [record for record in fused if record.get("boundary") == "rtmp_first_packet"]
     assert len(rtmp) == 1
@@ -716,10 +753,14 @@ def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path)
 
 
 def test_fusion_parser_failure_keeps_existing_final_byte_for_byte(tmp_path):
+    all_records = _latency_fixture_records()
     records = [
         record
-        for record in _latency_fixture_records()
-        if not (record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet")
+        for record in all_records
+        if not (
+            record.get("record_type") == "observation"
+            and record.get("boundary") in {"rtmp_first_packet", "directshow_return"}
+        )
     ]
     # Keep the encoded producer record but remove its declaration.  The
     # fusion writer can build the sibling temp, while parser validation must
@@ -745,8 +786,9 @@ def test_fusion_parser_failure_keeps_existing_final_byte_for_byte(tmp_path):
             "packet_identity": "runtime-fixture-001-nvenc-video-0-1500-1500",
         }
     ]
+    sidecar = _write_directshow_sidecar(tmp_path, all_records)
     with pytest.raises(probe.ProbeFailure, match="parser validation failed"):
-        receiver.fuse_trace(producer, final)
+        receiver.fuse_trace(producer, final, directshow_path=sidecar)
     assert final.read_bytes() == expected
     assert not list(tmp_path.glob("*.fused.tmp"))
 
