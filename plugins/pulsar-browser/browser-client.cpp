@@ -46,6 +46,13 @@ inline bool BrowserClient::valid() const
 	return !!bs && !bs->destroying;
 }
 
+BrowserRenderCallbackGate::Lease BrowserClient::acquire_render_callback() const
+{
+	if (!render_callbacks)
+		return {};
+	return render_callbacks->try_acquire();
+}
+
 bool BrowserClient::begin_audio_callback()
 {
 	return audio_callbacks.try_acquire();
@@ -413,13 +420,14 @@ void BrowserClient::OnPaint(CefRefPtr<CefBrowser>, PaintElementType type, const 
 	}
 #endif
 
-	if (!valid()) {
+	auto render_callback = acquire_render_callback();
+	if (!render_callback || !valid()) {
 		return;
 	}
 
 	if (bs->width != width || bs->height != height) {
 		obs_enter_graphics();
-		bs->DestroyTextures();
+		bs->DestroyTextures(true);
 		obs_leave_graphics();
 	}
 
@@ -483,7 +491,8 @@ void BrowserClient::OnAcceleratedPaint(CefRefPtr<CefBrowser>, PaintElementType t
 	if (!sharing_available)
 		return;
 
-	if (!valid()) {
+	auto render_callback = acquire_render_callback();
+	if (!render_callback || !valid()) {
 		return;
 	}
 
@@ -617,7 +626,8 @@ void BrowserClient::OnAcceleratedPaint2(CefRefPtr<CefBrowser>, PaintElementType 
 	if (!sharing_available)
 		return;
 
-	if (!valid()) {
+	auto render_callback = acquire_render_callback();
+	if (!render_callback || !valid()) {
 		return;
 	}
 
