@@ -205,6 +205,7 @@ std::atomic<PulsarSceneSwitchVendor *> g_sceneSwitchVendor{nullptr};
 struct CounterBacklogBaseline {
     uint64_t rawFrames = 0;
     uint64_t encodedFrames = 0;
+    uint32_t eligibleSamples = 0;
     bool valid = false;
 };
 
@@ -212,17 +213,28 @@ struct CounterBacklogBaseline {
 // backlog estimate scoped to consecutive active samples instead of exposing
 // work accumulated before the current resource session. A counter reset is
 // also a new baseline; never turn it into a synthetic backlog spike.
-static uint64_t callbackBacklogEstimate(uint64_t rawFrames, uint64_t encodedFrames, bool sampleEligible,
+static uint64_t callbackBacklogEstimate(uint64_t rawFrames, uint64_t encodedFrames,
+                                        uint64_t encodeSamples, bool sampleEligible,
                                         CounterBacklogBaseline &baseline)
 {
-    if (!sampleEligible) {
+    // Do not turn encoder/packet warm-up into a queue-depth spike.  The first
+    // two active samples with both counters started establish a stable
+    // baseline; only the following sample is an interval measurement.
+    if (!sampleEligible || encodedFrames == 0 || encodeSamples == 0) {
         baseline = {};
         return 0;
     }
     if (!baseline.valid || rawFrames < baseline.rawFrames || encodedFrames < baseline.encodedFrames) {
         baseline.rawFrames = rawFrames;
         baseline.encodedFrames = encodedFrames;
+        baseline.eligibleSamples = 1;
         baseline.valid = true;
+        return 0;
+    }
+    if (baseline.eligibleSamples < 2) {
+        baseline.rawFrames = rawFrames;
+        baseline.encodedFrames = encodedFrames;
+        ++baseline.eligibleSamples;
         return 0;
     }
     const uint64_t rawDelta = rawFrames - baseline.rawFrames;
@@ -1481,8 +1493,9 @@ private:
                 counterBaselineRuntime = runtime;
                 counterBaselineMode = mode;
             }
+            const uint64_t encodeSamples = encodeTimeSampleCount_.load(std::memory_order_relaxed);
             const uint64_t callbackBacklog = callbackBacklogEstimate(
-                rawFrames, encodedFrames, counterSampleEligible, counterBacklogBaseline);
+                rawFrames, encodedFrames, encodeSamples, counterSampleEligible, counterBacklogBaseline);
             if (!havePipelineBaseline) {
                 previousGraphics = graphics;
                 previousProgram = program;
@@ -1505,8 +1518,6 @@ private:
             const int outputDropped = rtmpLoadActive ? obs_output_get_frames_dropped(streamOutput) : 0;
             const uint64_t droppedFrames =
                 outputDropped > 0 ? static_cast<uint64_t>(outputDropped) : 0;
-            const uint64_t encodeSamples =
-                encodeTimeSampleCount_.load(std::memory_order_relaxed);
             const uint64_t encodeTimeNs = encodeTimeNsTotal_.load(std::memory_order_relaxed);
             const double encodeTimeMs = encodeSamples > 0
                 ? static_cast<double>(encodeTimeNs) /
