@@ -324,6 +324,7 @@ def _take_records(
                         "resident_bytes": resident + sample_index * 1000,
                         "process_cpu_percent": 15.0 + sample_index,
                         "host_gpu_percent": 25.0 + sample_index,
+                        "gpu_memory_bytes": 2_000_000_000 + sample_index * 1_000_000,
                         "callback_backlog_estimate": sample_index,
                         "dropped_frames": sample_index,
                         "missed_frames": sample_index,
@@ -454,6 +455,36 @@ def test_runtime_report_can_pass_only_with_explicit_complete_evidence():
     assert all(report["criteria"][criterion]["status"] in ("PASS", "MEASURED") for criterion in ("AC-07", "AC-08", "AC-11", "AC-12", "AC-13"))
 
 
+def test_ac13_dual_lane_only_passes_without_single_lane_reference():
+    records = [
+        record
+        for record in _take_records(3, evidence_kind="runtime", codec="nvenc")
+        if record.get("record_type") != "resource_sample" or record.get("sample_mode") == "dual_lane"
+    ]
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    assert report["criteria"]["AC-13"]["status"] == "MEASURED"
+    assert report["resources"]["dual_only"]["mode"] == "dual_lane_only"
+    assert report["resources"]["dual_only"]["active_sample_count"] == 2
+    assert report["resources"]["comparison"] == {}
+
+
+def test_ac13_dual_lane_requires_minimum_active_samples_and_absolute_limits():
+    records = [
+        record
+        for record in _take_records(3, evidence_kind="runtime", codec="nvenc")
+        if record.get("record_type") != "resource_sample" or record.get("sample_mode") == "dual_lane"
+    ]
+    dual_lane = next(record for record in records if record.get("record_type") == "resource_sample")
+    dual_lane["resident_bytes"] = 1_500_000_001
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+    assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
+    assert "resident_bytes exceeds" in report["resources"]["dual_only"]["reason"]
+
+
 def test_stage_accounting_surfaces_large_positive_residual_as_incomplete():
     trace = _trace(3, evidence_kind="runtime")
     for sample in trace.resources:
@@ -533,20 +564,94 @@ def test_runtime_nvenc_resource_samples_without_active_encoder_are_not_evidence(
     assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
 
 
-def test_ac13_requires_symmetric_active_rtmp_load_in_reference_and_dual_phases():
+def test_ac13_requires_active_rtmp_load_in_dual_lane_phase():
     records = _take_records(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-asym-rtmp")
-    reference = next(
+    dual_lane = next(
         record
         for record in records
-        if record.get("record_type") == "resource_sample" and record.get("sample_mode") == "reference"
+        if record.get("record_type") == "resource_sample" and record.get("sample_mode") == "dual_lane"
     )
-    reference["rtmp_load_active"] = False
+    dual_lane["rtmp_load_active"] = False
     report = probe.analyze_trace(
         probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
     )
     assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
-    assert report["resources"]["rtmp_load_active_sample_counts"]["reference"] == 1
-    assert report["resources"]["rtmp_load_active_sample_counts"]["dual_lane"] == 2
+    assert report["resources"]["rtmp_load_active_sample_counts"]["reference"] == 2
+    assert report["resources"]["rtmp_load_active_sample_counts"]["dual_lane"] == 1
+
+
+def test_ac13_active_sample_without_encode_timing_after_warmup_is_unproven():
+    records = _take_records(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-no-encode-timing")
+    seen_dual_lane_sample = False
+    for record in records:
+        if (
+            record.get("record_type") == "resource_sample"
+            and record.get("sample_mode") == "dual_lane"
+            and seen_dual_lane_sample
+        ):
+            record.pop("encode_time_samples", None)
+            record["callback_backlog_estimate"] = 9
+        elif record.get("record_type") == "resource_sample" and record.get("sample_mode") == "dual_lane":
+            seen_dual_lane_sample = True
+
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+
+    assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
+    assert report["resources"]["dual_only"]["active_sample_count"] == 1
+    assert report["resources"]["dual_only"]["missing_encode_timing"] is True
+    assert "encode_time_samples > 0" in report["resources"]["dual_only"]["reason"]
+    assert report["resources"]["metrics"]["dual_lane"]["callback_backlog_estimate"]["count"] == 1
+
+
+def test_ac13_leading_zero_timing_is_warmup_and_positive_samples_are_measured():
+    records = _take_records(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-leading-warmup")
+    dual_samples = [
+        record
+        for record in records
+        if record.get("record_type") == "resource_sample" and record.get("sample_mode") == "dual_lane"
+    ]
+    assert len(dual_samples) == 2
+    leading_warmup = deepcopy(dual_samples[0])
+    leading_warmup["observed_at_monotonic_ns"] -= 1_000_000
+    leading_warmup["encode_time_samples"] = 0
+    leading_warmup["encode_time_ms"] = 0.0
+    gate = probe._dual_only_resource_gate(
+        [leading_warmup, dual_samples[0], dual_samples[1]], minimum_samples=2
+    )
+
+    assert gate["status"] == "MEASURED"
+    assert gate["missing_encode_timing"] is False
+    assert gate["warmup_sample_count"] == 1
+    assert gate["active_sample_count"] == 2
+
+
+def test_ac13_timing_gap_after_warmup_is_unproven_even_with_enough_positive_samples():
+    records = _take_records(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-timing-gap")
+    dual_samples = [
+        record
+        for record in records
+        if record.get("record_type") == "resource_sample" and record.get("sample_mode") == "dual_lane"
+    ]
+    assert len(dual_samples) == 2
+    first_positive = deepcopy(dual_samples[0])
+    first_positive["observed_at_monotonic_ns"] = 1_000_000_000
+    gap = deepcopy(dual_samples[0])
+    gap["observed_at_monotonic_ns"] = 2_000_000_000
+    gap["encode_time_samples"] = 0
+    gap["encode_time_ms"] = 0.0
+    last_positive = deepcopy(dual_samples[1])
+    last_positive["observed_at_monotonic_ns"] = 3_000_000_000
+    gate = probe._dual_only_resource_gate(
+        [last_positive, gap, first_positive], minimum_samples=2
+    )
+
+    assert gate["status"] == "UNPROVEN"
+    assert gate["active_sample_count"] == 2
+    assert gate["missing_encode_timing"] is True
+    assert gate["warmup_sample_count"] == 0
+    assert "encode_time_samples > 0" in gate["reason"]
 
 
 def test_ac13_uses_conjoint_active_rtmp_samples_and_keeps_early_false_diagnostic():

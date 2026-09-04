@@ -1,0 +1,55 @@
+From 24d36de598b162befae9a44cb76b16065ec049bb Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Thu, 3 Sep 2026 18:24:07 +0200
+Subject: [PATCH] fix(d3d11): invalidate stale consumer registration
+
+Agent-Role: forge
+
+Agent-Thread: 01a045e2-996f-7913-99f0-2cd237d3a6f8
+
+Work-Unit: ZabLaboratory/Pulsar#254
+
+Issue: 254
+
+ADR-Revision: draft-r2-dual-lane-20260828
+
+Evidence: Bastion F-04; stale PID registration invalidation
+---
+ .../virtualcam-module/d3d11-return-transport.cpp     | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+index bf9f20048..e420a40db 100644
+--- a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+@@ -323,6 +323,12 @@ static bool producer_prepare_ring(pulsar_d3d11_return_producer *producer)
+ 		/* The consumer disappeared (or the liveness query failed). Do not
+ 		 * keep publishing into a stale ring or attempt a hot rebind. */
+ 		InterlockedExchange((volatile LONG *)&producer->control->consumer_ready, 0);
++		/* Invalidate the published registration as well. A later consumer must
++		 * explicitly register again; a recycled PID must never inherit the old
++		 * D3D11 sink. */
++		if (InterlockedCompareExchange((volatile LONG *)&producer->control->consumer_pid, 0, (LONG)pid) ==
++		    (LONG)pid)
++			InterlockedExchange((volatile LONG *)&producer->control->consumer_session, 0);
+ 		producer_release_ring(producer);
+ 		return false;
+ 	}
+@@ -579,8 +585,12 @@ extern "C" void pulsar_d3d11_return_consumer_close(pulsar_d3d11_return_consumer_
+ 		return;
+ 	if (consumer->consumer_process)
+ 		CloseHandle(consumer->consumer_process);
+-	if (consumer->control)
++	if (consumer->control) {
+ 		InterlockedExchange((volatile LONG *)&consumer->control->consumer_ready, 0);
++		const LONG pid = (LONG)GetCurrentProcessId();
++		if (InterlockedCompareExchange((volatile LONG *)&consumer->control->consumer_pid, 0, pid) == pid)
++			InterlockedExchange((volatile LONG *)&consumer->control->consumer_session, 0);
++	}
+ 	consumer->active = false;
+ 	if (consumer->control)
+ 		UnmapViewOfFile(consumer->control);
+-- 
+2.54.0.windows.1
+

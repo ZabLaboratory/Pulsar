@@ -67,6 +67,72 @@ def test_headless_fences_browser_audio_before_obs_shutdown() -> None:
     assert browser_fence < frontend_shutdown < obs_shutdown
 
 
+def test_accelerated_paint_copies_callback_texture_into_owned_texture() -> None:
+    source = (ROOT / "plugins" / "pulsar-browser" / "browser-client.cpp").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("void BrowserClient::OnAcceleratedPaint(")
+    end = source.index("#ifdef CEF_ON_ACCELERATED_PAINT2", start)
+    callback = source[start:end]
+
+    assert "gs_texture_t *shared_texture = nullptr" in callback
+    direct_copy = callback.index("gs_copy_texture_from_nt_shared")
+    assert "gs_texture_open_nt_shared" in callback
+    assert direct_copy < callback.index("gs_texture_open_nt_shared")
+    assert "gs_texture_create(width, height, color_format" in callback
+    copy = callback.index("gs_copy_texture(bs->texture, shared_texture)")
+    release = callback.rindex("gs_texture_destroy(shared_texture)")
+    assert copy < release
+    assert "bs->texture = shared_texture" not in callback
+    assert "last_handle = info.shared_texture_handle" not in callback
+
+
+def test_legacy_accelerated_paint_copies_callback_texture_into_owned_texture() -> None:
+    source = (ROOT / "plugins" / "pulsar-browser" / "browser-client.cpp").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("void BrowserClient::OnAcceleratedPaint2(")
+    end = source.index("static speaker_layout", start)
+    callback = source[start:end]
+
+    assert "if (!new_texture)" in callback
+    assert "gs_texture_t *shared_texture = nullptr" in callback
+    direct_copy = callback.index("gs_copy_texture_from_nt_shared")
+    assert "gs_texture_open_nt_shared" in callback
+    assert direct_copy < callback.index("gs_texture_open_nt_shared")
+    assert "gs_texture_create(width, height, color_format" in callback
+    copy = callback.index("gs_copy_texture(bs->texture, shared_texture)")
+    release = callback.rindex("gs_texture_destroy(shared_texture)")
+    assert copy < release
+    assert "bs->texture = shared_texture" not in callback
+
+
+def test_d3d11_direct_shared_copy_api_is_optional_and_validated() -> None:
+    graphics_header = (ROOT / "upstream" / "libobs" / "graphics" / "graphics.h").read_text(
+        encoding="utf-8"
+    )
+    graphics_source = (ROOT / "upstream" / "libobs" / "graphics" / "graphics.c").read_text(
+        encoding="utf-8"
+    )
+    graphics_imports = (ROOT / "upstream" / "libobs" / "graphics" / "graphics-imports.c").read_text(
+        encoding="utf-8"
+    )
+    d3d11_source = (ROOT / "upstream" / "libobs-d3d11" / "d3d11-subsystem.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "EXPORT bool gs_copy_texture_from_nt_shared(gs_texture_t *dst, uint32_t handle);"
+        in graphics_header
+    )
+    assert "device_copy_texture_from_nt_shared" in graphics_source
+    assert "GRAPHICS_IMPORT_OPTIONAL(device_copy_texture_from_nt_shared)" in graphics_imports
+    assert "return false;" in graphics_source[graphics_source.index("gs_copy_texture_from_nt_shared") :]
+    assert "OpenSharedResource1" in d3d11_source
+    assert "source_desc.Width != dst2d->width" in d3d11_source
+    assert "source_desc.ArraySize != 1" in d3d11_source
+    assert "return false;" in d3d11_source[d3d11_source.index("device_copy_texture_from_nt_shared") :]
+
+
 def test_create_remove_rendezvous_is_bounded_and_test_only() -> None:
     source = (ROOT / "plugins" / "pulsar-browser" / "obs-browser-source.cpp").read_text(
         encoding="utf-8"

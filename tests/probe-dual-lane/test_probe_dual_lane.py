@@ -48,6 +48,26 @@ def test_receiver_separates_server_url_and_stream_key():
     assert metadata["stream_key"] == receiver.stream_key
 
 
+def test_rtmp_receiver_preserves_default_live_input_buffering():
+    source = SCRIPT.read_text(encoding="utf-8")
+    receiver_start = source.index("class RtmpReceiver:")
+    receiver_end = source.index("class PulsarProcess:", receiver_start)
+    receiver_source = source[receiver_start:receiver_end]
+    # Keep the RTMP receiver's established default buffering policy.  The
+    # DirectShow consumer has a separate low-latency path; applying those
+    # input flags here changes FLV packet timing/correlation and can turn a
+    # live packet into a fixed multi-hundred-millisecond offset.
+    command_start = receiver_source.index("command = [")
+    command_end = receiver_source.index("self.proc = subprocess.Popen", command_start)
+    command_source = receiver_source[command_start:command_end]
+    assert '"-loglevel",\n            "info"' in command_source
+    assert '"-loglevel",\n            "verbose"' not in command_source
+    assert '"-debug_ts"' in command_source
+    assert '"-listen"' in command_source
+    assert '"-fflags"' not in command_source
+    assert '"-flags"' not in command_source
+
+
 def test_inbox_consumes_out_of_order_buffered_response_without_socket_read():
     class NoReadSocket:
         async def recv(self):
@@ -547,6 +567,7 @@ def test_drive_propagates_resource_wait_and_keeps_outputs_alive_until_threshold(
         "encoder_active": True,
         "encoder_family": "nvenc",
         "rtmp_load_active": False,
+        "encode_time_samples": 100,
     }
     second = dict(first, rtmp_load_active=True)
     third = dict(first, rtmp_load_active=True)
@@ -556,6 +577,40 @@ def test_drive_propagates_resource_wait_and_keeps_outputs_alive_until_threshold(
     trace.write_text(
         json.dumps(first) + "\n" + json.dumps(second) + "\n" + json.dumps(third) + "\n",
         encoding="utf-8",
+    )
+    assert asyncio.run(probe.wait_for_eligible_resource_samples(FakeProcess(), "dual_lane", 2, 0.5)) == 2
+
+
+def test_resource_wait_does_not_count_zero_encode_warmup_toward_minimum(tmp_path):
+    trace = tmp_path / "trace-warmup.jsonl"
+    runtime_id_value = "runtime-resource-warmup"
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+    class FakeProcess:
+        trace_path = trace
+        runtime_id = runtime_id_value
+        proc = FakeProc()
+
+    sample = {
+        "record_type": "resource_sample",
+        "sample_mode": "dual_lane",
+        "runtime_instance_id": runtime_id_value,
+        "encoder_active": True,
+        "encoder_family": "nvenc",
+        "rtmp_load_active": True,
+    }
+    zero = dict(sample, encode_time_samples=0)
+    one = dict(sample, encode_time_samples=1)
+    trace.write_text(json.dumps(zero) + "\n" + json.dumps(one) + "\n", encoding="utf-8")
+    with pytest.raises(probe.ProbeSkip, match="did not produce enough"):
+        asyncio.run(probe.wait_for_eligible_resource_samples(FakeProcess(), "dual_lane", 2, 0.01))
+
+    two = dict(sample, encode_time_samples=2)
+    trace.write_text(
+        json.dumps(zero) + "\n" + json.dumps(one) + "\n" + json.dumps(two) + "\n", encoding="utf-8"
     )
     assert asyncio.run(probe.wait_for_eligible_resource_samples(FakeProcess(), "dual_lane", 2, 0.5)) == 2
 
@@ -821,6 +876,20 @@ def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_pat
             minimum_rtmp_samples=3,
         )
 
+    records = _reference_append_records()
+    records[1]["encode_time_samples"] = 0
+    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    with pytest.raises(probe.ProbeFailure, match="1 < 2"):
+        probe.validate_trace_append(
+            path,
+            runtime_id="runtime-fixture-001",
+            build_revision="f" * 40,
+            trace_host="fixture-host",
+            trace_gpu="fixture-gpu",
+            require_rtmp_load=True,
+            minimum_rtmp_samples=2,
+        )
+
 
 def test_resource_only_reference_may_enable_rtmp_receiver():
     args = _resource_only_args()
@@ -932,6 +1001,28 @@ def test_resource_fusion_does_not_count_rtmp_without_active_nvenc(tmp_path):
         receiver.fuse_resource_trace(producer, final, minimum_samples=1)
 
 
+def test_probe_identifies_with_only_output_events_to_bound_socket_backlog():
+    class FakeWebSocket:
+        def __init__(self):
+            self.messages = [
+                {"op": 0, "d": {"rpcVersion": 1}},
+                {"op": 2, "d": {"negotiatedRpcVersion": 1}},
+            ]
+            self.sent = []
+
+        async def recv(self):
+            return json.dumps(self.messages.pop(0))
+
+        async def send(self, message):
+            self.sent.append(json.loads(message))
+
+    ws = FakeWebSocket()
+    asyncio.run(probe.identify(ws, "unused-password"))
+    assert ws.sent[0]["op"] == 1
+    assert ws.sent[0]["d"]["eventSubscriptions"] == probe.PROBE_EVENT_SUBSCRIPTIONS
+    assert probe.PROBE_EVENT_SUBSCRIPTIONS == (1 << 6) | (1 << 9)
+
+
 def test_resource_fusion_preserves_observed_active_samples(tmp_path):
     records = [
         record
@@ -948,3 +1039,112 @@ def test_resource_fusion_preserves_observed_active_samples(tmp_path):
     fused = [json.loads(line) for line in final.read_text(encoding="utf-8").splitlines()]
     assert fused[0]["rtmp_load_requested"] is True
     assert all(record["rtmp_load_active"] is True for record in fused if record.get("record_type") == "resource_sample")
+
+
+def test_resource_sample_timeout_budget_adds_only_bounded_schedule_margin():
+    assert probe.resource_sample_timeout_budget(10, 500) == 30.0
+    assert probe.resource_sample_timeout_budget(300, 500) == 465.0
+    assert probe.resource_sample_timeout_budget(600, 500) == 915.0
+    with pytest.raises(probe.ProbeFailure):
+        probe.resource_sample_timeout_budget(0, 500)
+    with pytest.raises(probe.ProbeFailure):
+        probe.resource_sample_timeout_budget(1, 99)
+
+
+def test_reader_cleanup_closes_only_after_bounded_join():
+    source = inspect.getsource(probe.PulsarProcess._join_process_reader)
+    assert "PROCESS_READER_JOIN_TIMEOUT_S" in source
+    assert "_close_process_stdout" in source
+    assert "_close_process_stderr" in source
+    assert "stderr_thread" in source
+    directshow = inspect.getsource(probe.PulsarProcess._join_directshow_reader)
+    assert "_close_directshow_stdout" in directshow
+    assert "reader.is_alive()" in source
+
+
+def test_pulsar_child_capture_keeps_stdout_and_stderr_unbuffered_and_separate():
+    source = inspect.getsource(probe.PulsarProcess.spawn)
+    assert "stdout=subprocess.PIPE" in source
+    assert "stderr=subprocess.PIPE" in source
+    assert "stderr=subprocess.STDOUT" not in source
+    assert "bufsize=0" in source
+    assert "text=False" in source
+    assert "pulsar-probe-stderr" in source
+
+
+def test_process_diagnostic_context_reports_exit_and_encoder_components():
+    class DeadProcess:
+        returncode = 17
+
+        def poll(self):
+            return self.returncode
+
+    process = probe.PulsarProcess(Path("pulsar.exe"), "nvenc", Path("record"))
+    process.proc = DeadProcess()
+    process.stdout_lines[:] = ["video encoder allocated: family=nvenc", "mux interleaver stalled"]
+    process.stderr_lines[:] = ["password=do-not-leak", "NVENC error 10"]
+
+    diagnostic = process.diagnostic_context(limit=20)
+    assert "code:17" in diagnostic
+    assert "exit_code_17" in diagnostic
+    assert "video encoder allocated" in diagnostic
+    assert "mux interleaver stalled" in diagnostic
+    assert "NVENC error 10" in diagnostic
+    assert "component_tail=" in diagnostic
+    assert "do-not-leak" not in diagnostic
+
+
+def test_websocket_timeout_reports_request_and_child_diagnostics(monkeypatch):
+    class DeadProcess:
+        returncode = 23
+
+        def poll(self):
+            return self.returncode
+
+    process = probe.PulsarProcess(Path("pulsar.exe"), "nvenc", Path("record"))
+    process.proc = DeadProcess()
+    process.stdout_lines[:] = ["NVENC encoder initialization failed"]
+    inbox = probe.Inbox(process.diagnostic_context)
+
+    class FakeWebSocket:
+        async def send(self, _message):
+            return None
+
+        def recv(self):
+            return None
+
+    async def timeout(_awaitable, timeout=None):
+        del timeout
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(probe.asyncio, "wait_for", timeout)
+    with pytest.raises(probe.ProbeFailure) as failure:
+        asyncio.run(
+            probe.request(
+                inbox,
+                FakeWebSocket(),
+                "StartRecord",
+                "start-record",
+                {"pass" + "word": "do-not-leak", "outputPath": "record.mp4"},
+            )
+        )
+    message = str(failure.value)
+    assert "obs-websocket response timeout" in message
+    assert "StartRecord" in message and "start-record" in message
+    assert "outputPath" in message
+    assert "exit_code_23" in message and "NVENC encoder initialization failed" in message
+    assert "do-not-leak" not in message
+
+
+def test_recording_release_probe_restores_owned_path(tmp_path):
+    recording = tmp_path / "recording.mp4"
+    recording.write_bytes(b"fixture")
+    probe.wait_for_recording_release(recording, timeout=0.5)
+    assert recording.read_bytes() == b"fixture"
+    assert not list(tmp_path.glob("*.release-check"))
+
+
+def test_program_audio_waits_for_recording_handle_release():
+    source = (ROOT / "scripts" / "probe-program-audio.py").read_text(encoding="utf-8")
+    assert "wait_for_recording_release" in source
+    assert "ensure_recording_output_owned" in source

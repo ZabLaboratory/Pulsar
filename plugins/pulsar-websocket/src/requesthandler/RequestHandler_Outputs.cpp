@@ -224,6 +224,9 @@ RequestResult RequestHandler::ToggleReplayBuffer(const Request &)
 	if (wasActive) {
 		if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
 			return OutputStopFailure(output, "The replay buffer");
+		if (obs_output_active(output))
+			return RequestResult::Error(RequestStatus::RequestProcessingFailed,
+				"Replay buffer stop remains active; toggle is not settled.");
 	} else {
 		if (Utils::Obs::OutputHelper::SettleStart(output, watch) == ActionVerdict::Refused)
 			return OutputStartFailure(output, "The replay buffer");
@@ -288,6 +291,9 @@ RequestResult RequestHandler::StopReplayBuffer(const Request &)
 
 	if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
 		return OutputStopFailure(output, "The replay buffer");
+	if (obs_output_active(output))
+		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
+			"The replay buffer stop was accepted but outputActive remains true; stop is not settled.");
 
 	return RequestResult::Success();
 }
@@ -319,7 +325,7 @@ RequestResult RequestHandler::SaveReplayBuffer(const Request &)
 	// have fired yet inside the bounded window. What we can refuse is a save
 	// that is provably going nowhere: the buffer stopped under us, or libobs
 	// recorded a cause. The file itself only becomes observable once the
-	// replay output is wired and lastReplay is populated (issue #117).
+	// replay output is wired and the last-replay path is populated.
 	if (!watch.Accepted() && !obs_output_active(output))
 		return RequestResult::Error(RequestStatus::OutputNotRunning,
 					    "The replay buffer stopped without saving: " +
@@ -353,8 +359,29 @@ RequestResult RequestHandler::GetLastReplayBufferReplay(const Request &)
 	if (!obs_frontend_replay_buffer_active())
 		return RequestResult::Error(RequestStatus::OutputNotRunning);
 
+	OBSOutputAutoRelease output = obs_frontend_get_replay_buffer_output();
+	std::string savedPath;
+	// The frontend's lastReplay field is populated by a queued UI callback,
+	// while the replay muxer already owns the authoritative path as soon as
+	// its worker finishes.  Read the output procedure first so headless
+	// consumers do not lose a valid save to that callback scheduling gap.
+	if (output) {
+		proc_handler_t *procHandler = obs_output_get_proc_handler(output);
+		if (procHandler) {
+			calldata_t data = {0};
+			if (proc_handler_call(procHandler, "get_last_replay", &data)) {
+				const char *path = nullptr;
+				if (calldata_get_string(&data, "path", &path) && path && *path)
+					savedPath = path;
+			}
+			calldata_free(&data);
+		}
+	}
+	if (savedPath.empty())
+		savedPath = Utils::Obs::StringHelper::GetLastReplayBufferFileName();
+
 	json responseData;
-	responseData["savedReplayPath"] = Utils::Obs::StringHelper::GetLastReplayBufferFileName();
+	responseData["savedReplayPath"] = savedPath;
 	return RequestResult::Success(responseData);
 }
 
@@ -544,8 +571,11 @@ RequestResult RequestHandler::StopOutput(const Request &request)
 	obs_output_stop(output);
 
 	const std::string label = OutputLabel(output);
-	if (Utils::Obs::OutputHelper::SettleStop(output, watch) == ActionVerdict::Refused)
+	if (Utils::Obs::OutputHelper::SettleStop(output, watch, 5000) == ActionVerdict::Refused)
 		return OutputStopFailure(output, label.c_str());
+	if (obs_output_active(output))
+		return RequestResult::Error(RequestStatus::RequestProcessingFailed,
+			"Output stop was accepted but outputActive remains true; stop is not settled.");
 
 	return RequestResult::Success();
 }

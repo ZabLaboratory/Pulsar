@@ -71,7 +71,7 @@ new file mode 100644
 index 000000000..f99a5307d
 --- /dev/null
 +++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
-@@ -0,0 +1,645 @@
+@@ -0,0 +1,647 @@
 +#include "d3d11-return-transport.hpp"
 +
 +#include "../../../shared/obs-shared-memory-queue/shared-memory-queue.h"
@@ -317,7 +317,9 @@ index 000000000..f99a5307d
 +		delete producer;
 +		return nullptr;
 +	}
-+	if (existed && producer->control->producer_pid != 0) {
++	// Reject every pre-existing mapping. producer_pid is not authoritative:
++	// a squatter can win the CreateFileMappingW race with a zeroed block.
++	if (existed) {
 +		UnmapViewOfFile(producer->control);
 +		CloseHandle(producer->mapping);
 +		delete producer;

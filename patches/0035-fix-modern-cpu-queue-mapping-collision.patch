@@ -1,0 +1,37 @@
+From e1fb331e93192dd4a75cd0b41442fae086206eb6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Thu, 3 Sep 2026 17:42:04 +0200
+Subject: [PATCH] fix(queue): reject raced existing mapping
+
+Agent-Role: eleven
+Agent-Thread: 01a045e2-996f-7913-99f0-2cd237d3a6f8
+Work-Unit: ZabLaboratory/Pulsar#254
+Issue: 254
+ADR-Revision: draft-r2-dual-lane-20260828
+---
+ shared/obs-shared-memory-queue/shared-memory-queue.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.c b/shared/obs-shared-memory-queue/shared-memory-queue.c
+index b0f2662aa..e484f322f 100644
+--- a/shared/obs-shared-memory-queue/shared-memory-queue.c
++++ b/shared/obs-shared-memory-queue/shared-memory-queue.c
+@@ -87,6 +87,14 @@ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t inter
+ 	if (!vq.handle) {
+ 		return NULL;
+ 	}
++	// OpenFileMappingW above is only a best-effort preflight.  Another
++	// producer can win the race before CreateFileMappingW; reject that case
++	// instead of attaching to a mapping owned by a different runtime.
++	if (GetLastError() == ERROR_ALREADY_EXISTS) {
++		CloseHandle(vq.handle);
++		vq.handle = NULL;
++		return NULL;
++	}
+ 
+ 	vq.header = (struct queue_header *)MapViewOfFile(vq.handle, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+ 	if (!vq.header) {
+-- 
+2.54.0.windows.1
+
