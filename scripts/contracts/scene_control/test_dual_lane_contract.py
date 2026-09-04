@@ -257,7 +257,7 @@ def test_encoder_and_stable_surfaces_are_bound_only_during_setup() -> None:
     )
     assert "PreviewView producer started for frame-backed readiness" in setup
     assert "failed to start PreviewView producer" in setup
-    assert setup.count("obs_view_create()") == 1
+    assert setup.count("obs_view_create_active()") == 1
     assert "programView = obs_get_main_view();" in setup
     assert "programVideo = obs_get_video();" in setup
     assert "obs_view_add(programView)" not in setup

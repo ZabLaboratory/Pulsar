@@ -1,0 +1,159 @@
+From 4a632e9d6c84f63998c61bcebcfbf2eff90d088c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Fri, 4 Sep 2026 22:59:19 +0200
+Subject: [PATCH] perf(libobs): preserve activation across dual-lane swaps
+
+Keep the Preview view permanently active and transfer only MAIN_VIEW activation when the frame-boundary primitive exchanges two visible roots. Generic swaps retain their existing show and activation semantics.
+
+Agent-Role: Eleven
+Agent-Thread: local-hot-swap-254
+Work-Unit: Pulsar#254
+ADR-Revision: amendment-1-draft-r1-ac12-boundaries-20260831
+Evidence: static-invariant-review
+---
+ libobs/obs-internal.h |  2 ++
+ libobs/obs-source.c   | 18 ++++++++++++++++++
+ libobs/obs-view.c     | 41 +++++++++++++++++++++++++++++++++--------
+ libobs/obs.h          |  3 +++
+ 4 files changed, 56 insertions(+), 8 deletions(-)
+
+diff --git a/libobs/obs-internal.h b/libobs/obs-internal.h
+index d9a913727..f1a7f1ea5 100644
+--- a/libobs/obs-internal.h
++++ b/libobs/obs-internal.h
+@@ -1189,6 +1189,8 @@ static inline enum gs_color_space convert_video_space(enum video_format format,
+ extern void obs_source_set_texcoords_centered(obs_source_t *source, bool centered);
+ extern void obs_source_activate(obs_source_t *source, enum view_type type);
+ extern void obs_source_deactivate(obs_source_t *source, enum view_type type);
++/* Transfer only MAIN_VIEW activation between two already-visible sources. */
++extern void obs_source_transfer_main_activation(obs_source_t *old_source, obs_source_t *new_source);
+ extern void obs_source_video_tick(obs_source_t *source, float seconds);
+ extern float obs_source_get_target_volume(obs_source_t *source, obs_source_t *target);
+ extern uint64_t obs_source_get_last_async_ts(const obs_source_t *source);
+diff --git a/libobs/obs-source.c b/libobs/obs-source.c
+index e5ef1304f..ce60dff37 100644
+--- a/libobs/obs-source.c
++++ b/libobs/obs-source.c
+@@ -1260,6 +1260,24 @@ void obs_source_deactivate(obs_source_t *source, enum view_type type)
+ 	}
+ }
+ 
++void obs_source_transfer_main_activation(obs_source_t *old_source, obs_source_t *new_source)
++{
++	if (!obs_source_valid(old_source, "obs_source_transfer_main_activation") ||
++	    !obs_source_valid(new_source, "obs_source_transfer_main_activation") || old_source == new_source)
++		return;
++
++	/* A pure dual-lane cut leaves both roots visible in exactly one view.  Only
++	 * MAIN_VIEW activation ownership changes, so show_refs and visibility
++	 * callbacks remain untouched. */
++	if (os_atomic_load_long(&old_source->activate_refs) > 0) {
++		os_atomic_dec_long(&old_source->activate_refs);
++		obs_source_enum_active_tree(old_source, deactivate_tree, NULL);
++	}
++
++	os_atomic_inc_long(&new_source->activate_refs);
++	obs_source_enum_active_tree(new_source, activate_tree, NULL);
++}
++
+ static inline struct obs_source_frame *get_closest_frame(obs_source_t *source, uint64_t sys_time);
+ 
+ static void filter_frame(obs_source_t *source, struct obs_source_frame **ref_frame)
+diff --git a/libobs/obs-view.c b/libobs/obs-view.c
+index 59742d77f..7e6d6cbda 100644
+--- a/libobs/obs-view.c
++++ b/libobs/obs-view.c
+@@ -34,11 +34,11 @@ bool obs_view_init(struct obs_view *view, enum view_type type)
+ 	return true;
+ }
+ 
+-obs_view_t *obs_view_create(void)
++static obs_view_t *obs_view_create_with_type(enum view_type type)
+ {
+ 	struct obs_view *view = bzalloc(sizeof(struct obs_view));
+ 
+-	if (!obs_view_init(view, AUX_VIEW)) {
++	if (!obs_view_init(view, type)) {
+ 		bfree(view);
+ 		view = NULL;
+ 	}
+@@ -46,6 +46,16 @@ obs_view_t *obs_view_create(void)
+ 	return view;
+ }
+ 
++obs_view_t *obs_view_create(void)
++{
++	return obs_view_create_with_type(AUX_VIEW);
++}
++
++obs_view_t *obs_view_create_active(void)
++{
++	return obs_view_create_with_type(MAIN_VIEW);
++}
++
+ void obs_view_free(struct obs_view *view)
+ {
+ 	if (!view)
+@@ -245,6 +255,15 @@ void obs_view_apply_pending_atomic_swap(uint64_t frame_id, uint64_t pts_ns)
+ 	struct obs_source *old_second = swap->second_view->channels[swap->second_channel];
+ 	struct obs_source *new_first = swap->first_source;
+ 	struct obs_source *new_second = swap->second_source;
++	/* A dual-lane cut exchanges two already-visible roots: ProgramView is the
++	 * MAIN_VIEW and PreviewView is AUX_VIEW.  The visibility ownership remains
++	 * one view per source, so skip show_refs churn and transfer only the MAIN
++	 * activation ownership.  Generic swaps, including Fade/Stinger, retain the
++	 * original activate/deactivate path below. */
++	const bool preserve_active_pair =
++		old_first && old_second && new_first && new_second && old_first != old_second &&
++		new_first == old_second && new_second == old_first &&
++		swap->first_view->type == MAIN_VIEW && swap->second_view->type == AUX_VIEW;
+ 	/* The references acquired by queue_atomic_swap now belong to the views. */
+ 	swap->first_source = NULL;
+ 	swap->second_source = NULL;
+@@ -254,16 +273,22 @@ void obs_view_apply_pending_atomic_swap(uint64_t frame_id, uint64_t pts_ns)
+ 	pthread_mutex_unlock(&swap->first_view->channels_mutex);
+ 	pthread_mutex_unlock(&swap->second_view->channels_mutex);
+ 
+-	if (new_first)
+-		obs_source_activate(new_first, swap->first_view->type);
+-	if (new_second)
+-		obs_source_activate(new_second, swap->second_view->type);
++	if (preserve_active_pair) {
++		obs_source_transfer_main_activation(old_first, new_first);
++	} else {
++		if (new_first)
++			obs_source_activate(new_first, swap->first_view->type);
++		if (new_second)
++			obs_source_activate(new_second, swap->second_view->type);
++	}
+ 	if (old_first) {
+-		obs_source_deactivate(old_first, swap->first_view->type);
++		if (!preserve_active_pair)
++			obs_source_deactivate(old_first, swap->first_view->type);
+ 		obs_source_release(old_first);
+ 	}
+ 	if (old_second) {
+-		obs_source_deactivate(old_second, swap->second_view->type);
++		if (!preserve_active_pair)
++			obs_source_deactivate(old_second, swap->second_view->type);
+ 		obs_source_release(old_second);
+ 	}
+ 
+diff --git a/libobs/obs.h b/libobs/obs.h
+index 2cb13a593..99bcb1953 100644
+--- a/libobs/obs.h
++++ b/libobs/obs.h
+@@ -1011,6 +1011,9 @@ EXPORT bool obs_weak_object_references_object(obs_weak_object_t *weak, obs_objec
+  */
+ EXPORT obs_view_t *obs_view_create(void);
+ 
++/** Creates a view whose sources stay active as a main-program view. */
++EXPORT obs_view_t *obs_view_create_active(void);
++
+ /** Destroys this view context */
+ EXPORT void obs_view_destroy(obs_view_t *view);
+ 
+-- 
+2.54.0.windows.1
+
