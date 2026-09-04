@@ -202,6 +202,36 @@ PulsarFrontendAPI *g_api = nullptr;
 class PulsarSceneSwitchVendor;
 std::atomic<PulsarSceneSwitchVendor *> g_sceneSwitchVendor{nullptr};
 
+struct CounterBacklogBaseline {
+    uint64_t rawFrames = 0;
+    uint64_t encodedFrames = 0;
+    bool valid = false;
+};
+
+// rawFrameCount_ and packetFrameCount_ are lifetime counters. Keep their
+// backlog estimate scoped to consecutive active samples instead of exposing
+// work accumulated before the current resource session. A counter reset is
+// also a new baseline; never turn it into a synthetic backlog spike.
+static uint64_t callbackBacklogEstimate(uint64_t rawFrames, uint64_t encodedFrames, bool sampleEligible,
+                                        CounterBacklogBaseline &baseline)
+{
+    if (!sampleEligible) {
+        baseline = {};
+        return 0;
+    }
+    if (!baseline.valid || rawFrames < baseline.rawFrames || encodedFrames < baseline.encodedFrames) {
+        baseline.rawFrames = rawFrames;
+        baseline.encodedFrames = encodedFrames;
+        baseline.valid = true;
+        return 0;
+    }
+    const uint64_t rawDelta = rawFrames - baseline.rawFrames;
+    const uint64_t encodedDelta = encodedFrames - baseline.encodedFrames;
+    baseline.rawFrames = rawFrames;
+    baseline.encodedFrames = encodedFrames;
+    return rawDelta > encodedDelta ? rawDelta - encodedDelta : 0;
+}
+
 template <typename T> struct StubCallback {
     T cb;
     void *priv;
@@ -1357,11 +1387,11 @@ private:
         obs_video_mix_pipeline_stats previousPreview = {};
         obs_raw_output_pipeline_stats previousProgramReturn = {};
         obs_raw_output_pipeline_stats previousPreviewReturn = {};
-        uint64_t previousRawFrames = 0;
-        uint64_t previousPacketFrames = 0;
         uint64_t previousLaggedFrames = 0;
         bool havePipelineBaseline = false;
-        bool previousCounterSampleEligible = false;
+        CounterBacklogBaseline counterBacklogBaseline;
+        std::string counterBaselineRuntime;
+        std::string counterBaselineMode;
         resourceCpuInfo_ = os_cpu_usage_info_start();
         if (!resourceCpuInfo_)
             blog(LOG_WARNING, "[pulsar-runtime-telemetry] process CPU sampler unavailable");
@@ -1446,30 +1476,24 @@ private:
             const bool encoderActive = videoEncoder && obs_encoder_active(videoEncoder);
             const bool rtmpLoadActive = streamOutput && obs_output_active(streamOutput);
             const bool counterSampleEligible = encoderActive && rtmpLoadActive;
+            if (counterBaselineRuntime != runtime || counterBaselineMode != mode) {
+                counterBacklogBaseline = {};
+                counterBaselineRuntime = runtime;
+                counterBaselineMode = mode;
+            }
+            const uint64_t callbackBacklog = callbackBacklogEstimate(
+                rawFrames, encodedFrames, counterSampleEligible, counterBacklogBaseline);
             if (!havePipelineBaseline) {
                 previousGraphics = graphics;
                 previousProgram = program;
                 previousPreview = preview;
                 previousProgramReturn = programReturn;
                 previousPreviewReturn = previewReturn;
-                previousRawFrames = rawFrames;
-                previousPacketFrames = encodedFrames;
                 previousLaggedFrames = laggedFrames;
-                previousCounterSampleEligible = counterSampleEligible;
                 havePipelineBaseline = true;
                 continue;
             }
 
-            // These counters are cumulative process/output counters, not an
-            // instantaneous queue length.  Report only the net growth since
-            // the preceding eligible sample; inactive-to-active transitions
-            // establish a fresh baseline instead of reporting work accumulated
-            // before the encoder/RTMP pipeline was active.
-            const uint64_t rawDelta = counterSampleEligible && previousCounterSampleEligible &&
-                rawFrames >= previousRawFrames ? rawFrames - previousRawFrames : 0;
-            const uint64_t packetDelta = counterSampleEligible && previousCounterSampleEligible &&
-                encodedFrames >= previousPacketFrames ? encodedFrames - previousPacketFrames : 0;
-            const uint64_t callbackBacklog = rawDelta > packetDelta ? rawDelta - packetDelta : 0;
             const uint64_t missedFrames = laggedFrames >= previousLaggedFrames ? laggedFrames - previousLaggedFrames : 0;
 
             profiler_result_t programProfile = {};
@@ -1582,10 +1606,7 @@ private:
             previousPreview = preview;
             previousProgramReturn = programReturn;
             previousPreviewReturn = previewReturn;
-            previousRawFrames = rawFrames;
-            previousPacketFrames = encodedFrames;
             previousLaggedFrames = laggedFrames;
-            previousCounterSampleEligible = counterSampleEligible;
         }
     }
 

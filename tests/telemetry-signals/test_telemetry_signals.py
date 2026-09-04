@@ -185,3 +185,41 @@ def test_trace_writer_queue_is_bounded_and_overflow_fails_closed():
     assert "traceIntegrityFault_.store(false, std::memory_order_release);" in source
     integrity = source[source.index("bool integrityFaulted()"):source.index("bool environmentTruthy", source.index("bool integrityFaulted()"))]
     assert "degraded_ || traceIntegrityFault_.load(std::memory_order_acquire)" in integrity
+
+
+def test_callback_backlog_is_an_interval_baseline_with_session_reset():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    helper_start = source.index("static uint64_t callbackBacklogEstimate")
+    helper_end = source.index("template <typename T> struct StubCallback", helper_start)
+    helper = source[helper_start:helper_end]
+    assert "CounterBacklogBaseline" in helper
+    assert "if (!sampleEligible)" in helper
+    assert "baseline = {};" in helper
+    assert "if (!baseline.valid || rawFrames < baseline.rawFrames || encodedFrames < baseline.encodedFrames)" in helper
+    assert "return rawDelta > encodedDelta ? rawDelta - encodedDelta : 0;" in helper
+    assert "counterBacklogBaseline = {};" in source
+    assert "counterBaselineRuntime != runtime || counterBaselineMode != mode" in source
+    assert "callbackBacklogEstimate(" in source
+
+    # Contract model: first active sample and every inactive/counter-reset
+    # transition are unmeasured (zero); only monotone consecutive active
+    # counters contribute, with encoded work faster than raw clamped to zero.
+    baseline = None
+
+    def estimate(raw, encoded, active):
+        nonlocal baseline
+        if not active or baseline is None or raw < baseline[0] or encoded < baseline[1]:
+            baseline = (raw, encoded) if active else None
+            return 0
+        result = max((raw - baseline[0]) - (encoded - baseline[1]), 0)
+        baseline = (raw, encoded)
+        return result
+
+    assert estimate(100, 100, True) == 0
+    assert estimate(160, 140, True) == 20
+    assert estimate(220, 260, True) == 0
+    assert estimate(0, 0, False) == 0
+    assert estimate(9, 4, True) == 0
+    assert estimate(14, 7, True) == 2
