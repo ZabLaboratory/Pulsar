@@ -1395,6 +1395,13 @@ def _resource_stats(values: Sequence[float | int]) -> dict[str, Any]:
     }
 
 
+def _resource_encode_timing_present(sample: Mapping[str, Any]) -> bool:
+    """Return whether an active resource sample has measured encode timing."""
+
+    value = sample.get("encode_time_samples")
+    return type(value) is int and value > 0
+
+
 def _dual_only_resource_gate(
     samples: Sequence[Mapping[str, Any]], minimum_samples: int
 ) -> dict[str, Any]:
@@ -1407,7 +1414,17 @@ def _dual_only_resource_gate(
         and sample.get("encoder_family") == "nvenc"
         and sample.get("rtmp_load_active") is True
         and sample.get("preview_mix", {}).get("active") is True
+        and _resource_encode_timing_present(sample)
     ]
+    active_nvenc_samples = [
+        sample
+        for sample in samples
+        if sample.get("encoder_active") is True
+        and sample.get("encoder_family") == "nvenc"
+        and sample.get("rtmp_load_active") is True
+        and sample.get("preview_mix", {}).get("active") is True
+    ]
+    missing_encode_timing = any(not _resource_encode_timing_present(sample) for sample in active_nvenc_samples)
     missing = [key for key in required if any(key not in sample for sample in eligible)]
     admitted = [sample for sample in eligible if not any(key not in sample for key in required)]
     maxima = {
@@ -1439,6 +1456,8 @@ def _dual_only_resource_gate(
             reasons.append(f"requires {minimum_samples} active dual-lane samples (observed {len(admitted)})")
         if missing:
             reasons.append(f"missing absolute-limit metrics: {', '.join(sorted(set(missing)))}")
+        if missing_encode_timing:
+            reasons.append("active NVENC sample missing encode_time_samples > 0")
         if violations:
             reasons.append("; ".join(violations))
         reason = ", ".join(reasons)
@@ -1452,6 +1471,7 @@ def _dual_only_resource_gate(
         "max_values": maxima,
         "growth": growth,
         "violations": violations,
+        "missing_encode_timing": missing_encode_timing,
         "reason": reason,
     }
 
@@ -1942,6 +1962,7 @@ def analyze_trace(
             for sample in active_samples
             if sample.get("encoder_family") == "nvenc"
             and sample.get("rtmp_load_active") is True
+            and (session["codec"] != "nvenc" or _resource_encode_timing_present(sample))
         ]
         resource_report["sample_counts"][mode] = len(samples)
         resource_report["active_sample_counts"][mode] = len(active_samples)
@@ -2024,6 +2045,7 @@ def analyze_trace(
             and sample.get("encoder_active") is True
             and sample.get("encoder_family") == "nvenc"
             and sample.get("rtmp_load_active") is True
+            and _resource_encode_timing_present(sample)
         ]
         dual_samples = [
             sample
@@ -2032,6 +2054,7 @@ def analyze_trace(
             and sample.get("encoder_active") is True
             and sample.get("encoder_family") == "nvenc"
             and sample.get("rtmp_load_active") is True
+            and _resource_encode_timing_present(sample)
         ]
         if (
             dual_only["status"] == "MEASURED"

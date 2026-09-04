@@ -580,6 +580,24 @@ def test_ac13_requires_active_rtmp_load_in_dual_lane_phase():
     assert report["resources"]["rtmp_load_active_sample_counts"]["dual_lane"] == 1
 
 
+def test_ac13_active_sample_without_encode_timing_is_unproven_not_zeroed():
+    records = _take_records(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-no-encode-timing")
+    for record in records:
+        if record.get("record_type") == "resource_sample" and record.get("sample_mode") == "dual_lane":
+            record.pop("encode_time_samples", None)
+            record["callback_backlog_estimate"] = 9
+
+    report = probe.analyze_trace(
+        probe.parse_records(records), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2
+    )
+
+    assert report["criteria"]["AC-13"]["status"] == "UNPROVEN"
+    assert report["resources"]["dual_only"]["active_sample_count"] == 0
+    assert report["resources"]["dual_only"]["missing_encode_timing"] is True
+    assert "encode_time_samples > 0" in report["resources"]["dual_only"]["reason"]
+    assert report["resources"]["metrics"]["dual_lane"]["callback_backlog_estimate"]["count"] == 0
+
+
 def test_ac13_uses_conjoint_active_rtmp_samples_and_keeps_early_false_diagnostic():
     records = _take_records(3, evidence_kind="runtime", codec="nvenc", runtime_id="runtime-nvenc-early-rtmp")
     first_by_mode = set()
