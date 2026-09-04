@@ -228,4 +228,4 @@ def test_callback_backlog_is_an_interval_baseline_with_session_reset():
     assert estimate(9, 4, True) == 0
     assert estimate(14, 7, True) == 2
     assert estimate(20, 9, True, "session-b") == 0
-    assert estimate(30, 14, True, "session-b") == 1
+    assert estimate(30, 14, True, "session-b") == 5
