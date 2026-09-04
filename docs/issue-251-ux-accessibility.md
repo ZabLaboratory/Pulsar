@@ -82,6 +82,39 @@ commit. A committed change is confirmed only by the correlated
 `TakeCommitted` event. If the product later chooses “reach 100% to Take”, the
 same pending/commit states and event guard remain mandatory.
 
+### 2.1 Controller hand-off to Prism (observed consumer boundary)
+
+The available Prism cockpit evidence gives the consumer a useful visual grammar:
+the central stage already distinguishes `Préparation` from `À l’antenne`, the
+scene rail is on the left, the pilot rail is on the right, and the target chip
+uses explicit copy (`Cible : préparation, les gestes restent locaux` versus
+`Cible : ANTENNE, les gestes partent en direct`). This is observed Prism
+evidence outside this repository, not proof that Pulsar v1 is integrated.
+
+Prism’s current `pilotage-cockpit.tsx` is explicitly `PREVIEW ONLY` and its
+operator calls use the existing Orion/HTTP path; no Pulsar scene-switch
+controller or T-bar is present in that consumer at this revision. The
+implementation hand-off is therefore a controller adapter, not a second
+cockpit lifecycle:
+
+- Main process owns one `PulsarSceneSwitchController` (v1 `GetState` snapshot
+  plus ordered event subscription) and remains the only source of On-Air truth.
+- Preload exposes a normalized view model and typed commands; the renderer
+  maps it into Prism’s existing stage, scene rail, pilot rail, mode tabs, and
+  target chip. It must not infer commit from HTTP `202`, slider position, or a
+  local scene selection.
+- Add the T-bar, pending/commit status, and commit ledger beside the existing
+  transport actions or in the pilot rail. If the stage remains tabbed, the
+  `Preview`/`On-Air` labels and current On-Air scene remain persistent while a
+  Take is pending; a tab must not hide the safety-critical state.
+- Preserve Prism’s preview-first guard: live actions are explicit and target
+  `ANTENNE`; Preview remains usable for preparation, while a pending Take
+  freezes Preview mutation until Commit/Abort/reconciliation.
+
+No Prism files are changed by this work unit. The actual adapter, browser AX
+tree, and keyboard/contrast evidence belong to a Prism UI work unit and must
+consume the component and scenario contract below.
+
 ## 3. Observable state model and exact copy
 
 The v1 lifecycle is `Prepare → PrepareAccepted → PreviewReady → Take →
@@ -291,7 +324,8 @@ assigned. Preserve this contract exactly:
 
 - Components: `RuntimeStatus`, `PreviewPane`, `OnAirPane`, `ScenePrepare`,
   `TBarSlider`, `TakeAction`, `AbortPendingTake`, `TransitionStatus`,
-  `CommitLedger`, `DiagnosticsDisclosure`.
+  `CommitLedger`, `DiagnosticsDisclosure`, and the main/preload
+  `PulsarSceneSwitchController` adapter.
 - Data: v1 event envelope and `GetState`; no parsing of diagnostic message
   text; dedupe by runtime/command/payload and unique terminal commit.
 - Interactions: no optimistic role swap; freeze controls on `TakeAccepted`;
