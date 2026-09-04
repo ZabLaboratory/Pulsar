@@ -77,6 +77,7 @@
 #include <iomanip>
 #include <iterator>
 #include <limits>
+#include <locale>
 #include <memory>
 #include <map>
 #include <mutex>
@@ -462,31 +463,62 @@ static std::string traceHmacSha256(const std::vector<unsigned char> &key, const 
 
 // nlohmann::json uses a shortest-round-trip spelling when dumping a parsed
 // double.  Python's verifier can choose a different, but numerically
-// equivalent, spelling for the same IEEE-754 value.  Normalize telemetry
-// numbers before hashing and writing so both implementations share one
-// deterministic canonical boundary.  Twelve decimal places in seconds is
-// materially below the timing resolution of this probe and does not alter the
-// media path or its quality.
-static void normalizeTraceNumbers(json &value)
+// equivalent, spelling for the same IEEE-754 value.  The trace boundary uses
+// one explicit JSON serializer instead: floats are rendered with twelve fixed
+// decimal places and trailing zeroes are removed.  Twelve decimal places in
+// seconds is materially below the timing resolution of this probe and does
+// not alter the media path or its quality.
+static std::string traceCanonicalDump(const json &value)
 {
-    constexpr double scale = 1000000000000.0; // 10^12, sub-nanosecond in seconds
+    if (value.is_null())
+        return "null";
+    if (value.is_boolean())
+        return value.get<bool>() ? "true" : "false";
+    if (value.is_number_unsigned() || value.is_number_integer())
+        return value.dump();
     if (value.is_number_float()) {
         const double number = value.get<double>();
         if (!std::isfinite(number))
             throw std::runtime_error("non-finite trace number");
-        const double rounded = std::round(number * scale) / scale;
-        value = rounded == 0.0 ? 0.0 : rounded;
-        return;
+        std::ostringstream out;
+        out.imbue(std::locale::classic());
+        out << std::fixed << std::setprecision(12) << (number == 0.0 ? 0.0 : number);
+        std::string text = out.str();
+        while (!text.empty() && text.back() == '0')
+            text.pop_back();
+        if (!text.empty() && text.back() == '.')
+            text.pop_back();
+        return text.empty() || text == "-0" ? "0" : text;
     }
+    if (value.is_string())
+        return json(value.get<std::string>()).dump(-1, ' ', false);
     if (value.is_array()) {
-        for (auto &item : value)
-            normalizeTraceNumbers(item);
-        return;
+        std::string text = "[";
+        bool first = true;
+        for (const auto &item : value) {
+            if (!first)
+                text.push_back(',');
+            first = false;
+            text += traceCanonicalDump(item);
+        }
+        text.push_back(']');
+        return text;
     }
     if (value.is_object()) {
-        for (auto &item : value.items())
-            normalizeTraceNumbers(item.value());
+        std::string text = "{";
+        bool first = true;
+        for (const auto &item : value.items()) {
+            if (!first)
+                text.push_back(',');
+            first = false;
+            text += json(item.key()).dump(-1, ' ', false);
+            text.push_back(':');
+            text += traceCanonicalDump(item.value());
+        }
+        text.push_back('}');
+        return text;
     }
+    throw std::runtime_error("unsupported trace JSON value");
 }
 
 static bool readTraceKey(const char *value, std::vector<unsigned char> &key)
@@ -2551,7 +2583,6 @@ private:
         json record;
         try {
             record = json::parse(line);
-            normalizeTraceNumbers(record);
         } catch (...) {
             markTraceIntegrityFault("trace_record_json_failed");
             return false;
@@ -2561,7 +2592,7 @@ private:
             return false;
         }
         const uint64_t sequence = traceRecordCount_ + 1;
-        const std::string canonical = record.dump();
+        const std::string canonical = traceCanonicalDump(record);
         const std::string digest = traceSha256(traceChainHead_ + "\n" + canonical);
         if (digest.empty()) {
             markTraceIntegrityFault("trace_record_hash_failed");
@@ -2579,7 +2610,7 @@ private:
                                        {"previous", traceChainHead_},
                                        {"schema", "pulsar.trace-integrity.v1"},
                                        {"sequence", sequence} };
-        const std::string serialized = record.dump() + "\n";
+        const std::string serialized = traceCanonicalDump(record) + "\n";
 #ifdef _WIN32
         if (traceMutex_) {
             const DWORD waitResult = WaitForSingleObject(traceMutex_, INFINITE);

@@ -25,29 +25,53 @@ GENESIS = "0" * 64
 MANIFEST_SUFFIX = ".manifest.json"
 KEY_ENV = "PULSAR_TRACE_HMAC_KEY"
 # JSON numbers are parsed as IEEE-754 doubles by both the C++ runtime and the
-# Python verifier.  Canonicalizing to a fixed decimal precision before hashing
-# removes implementation-specific shortest-round-trip spellings (for example
-# 0.0058934782600000004 versus 0.00589347826) without affecting any measurable
+# Python verifier.  A fixed-decimal serializer (rather than each implementation's
+# shortest-round-trip spelling) removes representations such as
+# 0.39212452800000003 versus 0.392124528 without affecting any measurable
 # video/audio timing budget (12 decimal places of seconds is sub-nanosecond).
 TRACE_FLOAT_DECIMAL_PLACES = 12
 
 
 def _normalize_numbers(value: Any) -> Any:
-    """Return a JSON-compatible value with deterministic floating-point form."""
+    """Validate nested JSON numbers before they cross the integrity boundary."""
 
     if isinstance(value, bool):
         return value
     if isinstance(value, float):
         if not math.isfinite(value):
             raise TraceIntegrityError("trace contains a non-finite JSON number")
-        rounded = round(value, TRACE_FLOAT_DECIMAL_PLACES)
-        # Avoid platform-dependent ``-0.0`` spellings at the canonical boundary.
-        return 0.0 if rounded == 0.0 else rounded
+        return value
     if isinstance(value, dict):
         return {key: _normalize_numbers(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_normalize_numbers(item) for item in value]
     return value
+
+
+def _canonical_json(value: Any) -> str:
+    """Serialize JSON with the same fixed-decimal rules as the C++ runtime."""
+
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise TraceIntegrityError("trace contains a non-finite JSON number")
+        text = f"{0.0 if value == 0.0 else value:.{TRACE_FLOAT_DECIMAL_PLACES}f}".rstrip("0").rstrip(".")
+        return text or "0"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(value, list):
+        return "[" + ",".join(_canonical_json(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ",".join(
+            f"{_canonical_json(str(key))}:{_canonical_json(item)}"
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        ) + "}"
+    raise TraceIntegrityError(f"unsupported trace JSON value: {type(value).__name__}")
 
 
 class TraceIntegrityError(ValueError):
@@ -143,7 +167,7 @@ def _canonical(record: dict[str, Any]) -> str:
     payload = dict(record)
     payload.pop("trace_integrity", None)
     payload = _normalize_numbers(payload)
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return _canonical_json(payload)
 
 
 def _mac(key: bytes, domain: str, canonical: str) -> str:
@@ -155,7 +179,7 @@ def _record_hash(previous: str, canonical: str) -> str:
 
 
 def _json_line(record: dict[str, Any]) -> bytes:
-    text = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    text = _canonical_json(record)
     return (text + "\n").encode("utf-8")
 
 

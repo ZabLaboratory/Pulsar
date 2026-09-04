@@ -114,5 +114,5 @@ def test_runtime_source_declares_float_canonicalization() -> None:
     source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
         encoding="utf-8"
     )
-    assert "normalizeTraceNumbers(record)" in source
-    assert "sub-nanosecond in seconds" in source
+    assert "traceCanonicalDump(record)" in source
+    assert "twelve fixed" in source
