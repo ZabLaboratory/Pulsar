@@ -1,0 +1,58 @@
+From 69c1ed925df8d3c83a1ac226ffa981c549948995 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Thu, 3 Sep 2026 18:01:37 +0200
+Subject: [PATCH] fix(d3d11): validate consumer session and cleanup
+
+Agent-Role: forge
+
+Agent-Thread: 01a045e2-996f-7913-99f0-2cd237d3a6f8
+
+Work-Unit: ZabLaboratory/Pulsar#254
+
+Issue: 254
+
+ADR-Revision: draft-r2-dual-lane-20260828
+
+Evidence: Bastion F-04 audit; PID-session guard and failure cleanup
+---
+ .../virtualcam-module/d3d11-return-transport.cpp  | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+index fc99ce317..bf9f20048 100644
+--- a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+@@ -311,6 +311,13 @@ static bool producer_prepare_ring(pulsar_d3d11_return_producer *producer)
+ 	const uint32_t pid = producer->control->consumer_pid;
+ 	if (!pid)
+ 		return false;
++	const uint32_t consumer_session = process_session(pid);
++	if (consumer_session == UINT32_MAX || producer->control->consumer_session != consumer_session) {
++		/* A recycled PID from another Windows session is not the consumer that
++		 * published this control block.  Reject it before duplicating handles. */
++		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_INTEROP, E_ACCESSDENIED);
++		return false;
++	}
+ 	if (producer->consumer_pid == pid && producer->consumer_process &&
+ 		WaitForSingleObject(producer->consumer_process, 0) != WAIT_TIMEOUT) {
+ 		/* The consumer disappeared (or the liveness query failed). Do not
+@@ -549,7 +556,15 @@ extern "C" pulsar_d3d11_return_consumer_t *pulsar_d3d11_return_consumer_open(
+ 	consumer->control->consumer_session = process_session(consumer->control->consumer_pid);
+ 	consumer->consumer_process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE,
+ 		consumer->control->consumer_pid);
++	if (!consumer->consumer_process) {
++		UnmapViewOfFile(consumer->control);
++		CloseHandle(consumer->mapping);
++		delete consumer;
++		return nullptr;
++	}
+ 	if (!consumer_open_ring(consumer) && consumer->control->selected_path != PULSAR_D3D11_PATH_CPU) {
++		CloseHandle(consumer->consumer_process);
++		consumer->consumer_process = nullptr;
+ 		UnmapViewOfFile(consumer->control);
+ 		CloseHandle(consumer->mapping);
+ 		delete consumer;
+-- 
+2.54.0.windows.1
+

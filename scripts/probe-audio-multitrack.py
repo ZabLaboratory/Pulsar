@@ -396,13 +396,86 @@ async def measure(s: Session) -> dict[int, float]:
     return peaks_by_track(flow)
 
 
+def track_route_is_settled(
+    peaks: dict[int, float], selected_track: int, previous_track: int
+) -> bool:
+    """Return true only after a reroute is observable on both sides.
+
+    ``SetInputAudioTracks`` updates the source immediately, while the audio
+    callback observes the mixer on subsequent audio blocks.  Seeing the new
+    track first is therefore only a transition state; accepting it before the
+    previous track is silent can report a false move.  This helper deliberately
+    keeps the existing absolute gates and never treats a missing peak as proof
+    that the old route was disabled unless the selected track is present too.
+    """
+    return (
+        peaks.get(selected_track, 0.0) >= FLOW_PRESENT
+        and peaks.get(previous_track, 0.0) <= FLOW_SILENT
+    )
+
+
+async def resolve_main_canvas_scene(s: Session) -> dict[str, str]:
+    """Return a scene reference that is actually registered on the Main canvas.
+
+    The dual-lane compatibility path can briefly expose a private physical lane
+    root through ``GetCurrentProgramScene`` while falling back to the legacy
+    canvas.  That root is intentionally not a Main-canvas scene, so passing its
+    name to ``CreateInput`` produces a misleading resource-not-found error.
+    ``GetSceneList`` is the authoritative public-canvas inventory; if the
+    reported selection is not in it, select its first public scene and verify
+    the frontend reports that selection before mutating the scene graph.
+    """
+    program = await s.ok("GetCurrentProgramScene")
+    reported_name = program.get("currentProgramSceneName") or program.get("sceneName")
+    reported_uuid = program.get("currentProgramSceneUuid") or program.get("sceneUuid")
+
+    listing = await s.ok("GetSceneList")
+    public_scenes = listing.get("scenes") or []
+    refs: list[dict[str, str]] = []
+    for entry in public_scenes:
+        name = entry.get("sceneName") or entry.get("name")
+        uuid = entry.get("sceneUuid") or entry.get("uuid")
+        if name:
+            ref = {"sceneName": str(name)}
+            if uuid:
+                ref["sceneUuid"] = str(uuid)
+            refs.append(ref)
+
+    selected = next(
+        (ref for ref in refs if (reported_uuid and ref.get("sceneUuid") == reported_uuid)
+         or (reported_name and ref.get("sceneName") == reported_name)),
+        None,
+    )
+    if selected is None:
+        if not refs:
+            raise Failure(
+                "GetSceneList returned no Main-canvas scenes while GetCurrentProgramScene "
+                f"reported {reported_name or reported_uuid!r}")
+        selected = refs[0]
+        print(
+            "   note: current program selection is not registered on Main canvas "
+            f"({reported_name or reported_uuid!r}); selecting public scene "
+            f"{selected['sceneName']!r} for the probe")
+        await s.ok("SetCurrentProgramScene", {
+            "sceneUuid": selected["sceneUuid"]
+        } if "sceneUuid" in selected else {"sceneName": selected["sceneName"]})
+
+        refreshed = await s.ok("GetCurrentProgramScene")
+        refreshed_name = refreshed.get("currentProgramSceneName") or refreshed.get("sceneName")
+        refreshed_uuid = refreshed.get("currentProgramSceneUuid") or refreshed.get("sceneUuid")
+        if (("sceneUuid" in selected and refreshed_uuid != selected["sceneUuid"])
+                or ("sceneUuid" not in selected and refreshed_name != selected["sceneName"])):
+            raise Failure(
+                "SetCurrentProgramScene did not select the Main-canvas scene "
+                f"{selected['sceneName']!r}: got {refreshed_name or refreshed_uuid!r}")
+
+    return selected
+
+
 async def assert_flow(s: Session, tone_path: pathlib.Path) -> None:
     print("-- M2. an input routed to track N is CONSUMED by track N (flow, not mixer bits)")
 
-    program = await s.ok("GetCurrentProgramScene")
-    scene = program.get("currentProgramSceneName") or program.get("sceneName")
-    if not scene:
-        raise Failure("GetCurrentProgramScene named no scene")
+    scene = await resolve_main_canvas_scene(s)
 
     # The boot desktop-audio source carries libobs' 0xFF default and would feed
     # every mix. Take it off the buses so what is measured is the tone alone.
@@ -413,7 +486,8 @@ async def assert_flow(s: Session, tone_path: pathlib.Path) -> None:
               f"assertions below still hold")
 
     await s.ok("CreateInput", {
-        "sceneName": scene,
+        **({"sceneUuid": scene["sceneUuid"]} if "sceneUuid" in scene
+           else {"sceneName": scene["sceneName"]}),
         "inputName": INPUT_NAME,
         "inputKind": INPUT_KIND,
         "inputSettings": {
@@ -478,7 +552,7 @@ async def assert_flow(s: Session, tone_path: pathlib.Path) -> None:
         deadline = time.monotonic() + TONE_SETTLE_TIMEOUT_S
         while time.monotonic() < deadline:
             peaks = await measure(s)
-            if peaks.get(1, 0.0) >= FLOW_PRESENT:
+            if track_route_is_settled(peaks, selected_track=1, previous_track=3):
                 break
             await asyncio.sleep(0.5)
         print(f"   re-routed to track 1 -> peaks {peaks}")

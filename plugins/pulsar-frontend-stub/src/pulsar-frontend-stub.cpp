@@ -202,6 +202,48 @@ PulsarFrontendAPI *g_api = nullptr;
 class PulsarSceneSwitchVendor;
 std::atomic<PulsarSceneSwitchVendor *> g_sceneSwitchVendor{nullptr};
 
+struct CounterBacklogBaseline {
+    uint64_t rawFrames = 0;
+    uint64_t encodedFrames = 0;
+    uint32_t eligibleSamples = 0;
+    bool valid = false;
+};
+
+// rawFrameCount_ and packetFrameCount_ are lifetime counters. Keep their
+// backlog estimate scoped to consecutive active samples instead of exposing
+// work accumulated before the current resource session. A counter reset is
+// also a new baseline; never turn it into a synthetic backlog spike.
+static uint64_t callbackBacklogEstimate(uint64_t rawFrames, uint64_t encodedFrames,
+                                        uint64_t encodeSamples, bool sampleEligible,
+                                        CounterBacklogBaseline &baseline)
+{
+    // Do not turn encoder/packet warm-up into a queue-depth spike.  The first
+    // two active samples with both counters started establish a stable
+    // baseline; only the following sample is an interval measurement.
+    if (!sampleEligible || encodedFrames == 0 || encodeSamples == 0) {
+        baseline = {};
+        return 0;
+    }
+    if (!baseline.valid || rawFrames < baseline.rawFrames || encodedFrames < baseline.encodedFrames) {
+        baseline.rawFrames = rawFrames;
+        baseline.encodedFrames = encodedFrames;
+        baseline.eligibleSamples = 1;
+        baseline.valid = true;
+        return 0;
+    }
+    if (baseline.eligibleSamples < 2) {
+        baseline.rawFrames = rawFrames;
+        baseline.encodedFrames = encodedFrames;
+        ++baseline.eligibleSamples;
+        return 0;
+    }
+    const uint64_t rawDelta = rawFrames - baseline.rawFrames;
+    const uint64_t encodedDelta = encodedFrames - baseline.encodedFrames;
+    baseline.rawFrames = rawFrames;
+    baseline.encodedFrames = encodedFrames;
+    return rawDelta > encodedDelta ? rawDelta - encodedDelta : 0;
+}
+
 template <typename T> struct StubCallback {
     T cb;
     void *priv;
@@ -413,6 +455,13 @@ class PulsarRuntimeTelemetry {
     };
 
     static constexpr size_t kSignalQueueCapacity = 1024;
+    // Formatted records are produced by callbacks and the resource sampler
+    // faster than the file writer can drain them on a contended host.  Keep
+    // this queue bounded so telemetry cannot become the source of an
+    // unbounded resident-set growth.  Overflow is an integrity fault, never
+    // a silent drop: the trace is fail-stopped and callers cannot admit a
+    // subsequent Take.
+    static constexpr size_t kWriterQueueCapacity = 4096;
     struct SignalQueueSlot {
         std::atomic<uint64_t> sequence{0};
         SignalEvent event;
@@ -425,6 +474,7 @@ public:
         signalMask_.store(0, std::memory_order_release);
         stopResourceSampler();
         stopTraceWriter();
+        traceIntegrityFault_.store(false, std::memory_order_release);
     }
 
     void install()
@@ -457,6 +507,7 @@ public:
         signalMask_.store(0, std::memory_order_release);
         stopResourceSampler();
         stopTraceWriter();
+        traceIntegrityFault_.store(false, std::memory_order_release);
 
         contextWriteIndex_.store(0, std::memory_order_relaxed);
         resetSignalQueue();
@@ -714,7 +765,7 @@ public:
     bool integrityFaulted()
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
-        return degraded_;
+        return degraded_ || traceIntegrityFault_.load(std::memory_order_acquire);
     }
 
     bool environmentTruthy(const char *value) const { return truthy(value); }
@@ -1348,7 +1399,11 @@ private:
         obs_video_mix_pipeline_stats previousPreview = {};
         obs_raw_output_pipeline_stats previousProgramReturn = {};
         obs_raw_output_pipeline_stats previousPreviewReturn = {};
+        uint64_t previousLaggedFrames = 0;
         bool havePipelineBaseline = false;
+        CounterBacklogBaseline counterBacklogBaseline;
+        std::string counterBaselineRuntime;
+        std::string counterBaselineMode;
         resourceCpuInfo_ = os_cpu_usage_info_start();
         if (!resourceCpuInfo_)
             blog(LOG_WARNING, "[pulsar-runtime-telemetry] process CPU sampler unavailable");
@@ -1378,7 +1433,7 @@ private:
 
             const uint64_t rawFrames = rawFrameCount_.load(std::memory_order_relaxed);
             const uint64_t encodedFrames = packetFrameCount_.load(std::memory_order_relaxed);
-            const uint64_t queueDepth = rawFrames > encodedFrames ? rawFrames - encodedFrames : 0;
+            const uint64_t laggedFrames = static_cast<uint64_t>(obs_get_lagged_frames());
             std::string mode;
             std::string runtime;
             std::string buildRevision;
@@ -1430,15 +1485,29 @@ private:
                 (producerCount == 2 && previewReturnOutput &&
                  !obs_output_get_raw_pipeline_stats(previewReturnOutput, &previewReturn)))
                 continue;
+            const bool encoderActive = videoEncoder && obs_encoder_active(videoEncoder);
+            const bool rtmpLoadActive = streamOutput && obs_output_active(streamOutput);
+            const bool counterSampleEligible = encoderActive && rtmpLoadActive;
+            if (counterBaselineRuntime != runtime || counterBaselineMode != mode) {
+                counterBacklogBaseline = {};
+                counterBaselineRuntime = runtime;
+                counterBaselineMode = mode;
+            }
+            const uint64_t encodeSamples = encodeTimeSampleCount_.load(std::memory_order_relaxed);
+            const uint64_t callbackBacklog = callbackBacklogEstimate(
+                rawFrames, encodedFrames, encodeSamples, counterSampleEligible, counterBacklogBaseline);
             if (!havePipelineBaseline) {
                 previousGraphics = graphics;
                 previousProgram = program;
                 previousPreview = preview;
                 previousProgramReturn = programReturn;
                 previousPreviewReturn = previewReturn;
+                previousLaggedFrames = laggedFrames;
                 havePipelineBaseline = true;
                 continue;
             }
+
+            const uint64_t missedFrames = laggedFrames >= previousLaggedFrames ? laggedFrames - previousLaggedFrames : 0;
 
             profiler_result_t programProfile = {};
             profiler_result_t previewProfile = {};
@@ -1446,14 +1515,9 @@ private:
                                              source_profiler_fill_result(programRoot, &programProfile);
             const bool previewProfileValid = producerCount == 2 && previewRoot &&
                                              source_profiler_fill_result(previewRoot, &previewProfile);
-            const bool encoderActive = videoEncoder && obs_encoder_active(videoEncoder);
-            const bool rtmpLoadActive = streamOutput && obs_output_active(streamOutput);
             const int outputDropped = rtmpLoadActive ? obs_output_get_frames_dropped(streamOutput) : 0;
             const uint64_t droppedFrames =
                 outputDropped > 0 ? static_cast<uint64_t>(outputDropped) : 0;
-            const uint64_t missedFrames = static_cast<uint64_t>(obs_get_lagged_frames());
-            const uint64_t encodeSamples =
-                encodeTimeSampleCount_.load(std::memory_order_relaxed);
             const uint64_t encodeTimeNs = encodeTimeNsTotal_.load(std::memory_order_relaxed);
             const double encodeTimeMs = encodeSamples > 0
                 ? static_cast<double>(encodeTimeNs) /
@@ -1468,7 +1532,7 @@ private:
                    << ",\"resident_bytes\":" << os_get_proc_resident_size()
                    << ",\"process_cpu_percent\":" << std::setprecision(6) << cpu
                    << ",\"host_gpu_percent\":" << gpu.utilization
-                   << ",\"callback_backlog_estimate\":" << queueDepth
+                   << ",\"callback_backlog_estimate\":" << callbackBacklog
                    << ",\"dropped_frames\":" << droppedFrames
                    << ",\"missed_frames\":" << missedFrames
                    << ",\"encode_time_ms\":" << std::setprecision(9) << encodeTimeMs
@@ -1546,13 +1610,14 @@ private:
                    << "\",\"gpu\":\"" << escape(gpuName)
                    << "\"},\"producer_topology\":\"" << escape(producerTopology)
                    << "\",\"producer_count\":" << producerCount
-                   << ",\"notes\":\"frame time is OBS average; dropped_frames is the active RTMP output counter; missed_frames is OBS render lag; encode_time_ms is cumulative mean FERC-FER and is qualified by encode_time_samples; process CPU is this runtime; host GPU and encoder utilization are nvidia-smi device counters; callback backlog is a producer/packet counter estimate\"}";
+                   << ",\"notes\":\"frame time is OBS average; dropped_frames is the active RTMP output counter; missed_frames is the interval delta of OBS render lag; encode_time_ms is cumulative mean FERC-FER and is qualified by encode_time_samples; process CPU is this runtime; host GPU and encoder utilization are nvidia-smi device counters; callback_backlog_estimate is the non-negative interval delta between raw and encoded producer counters within consecutive encoder+RTMP-active samples, not a lifetime queue depth\"}";
             writeLine(sample.str());
             previousGraphics = graphics;
             previousProgram = program;
             previousPreview = preview;
             previousProgramReturn = programReturn;
             previousPreviewReturn = previewReturn;
+            previousLaggedFrames = laggedFrames;
         }
     }
 
@@ -1999,7 +2064,17 @@ private:
                 line = std::move(writerQueue_.front());
                 writerQueue_.pop_front();
             }
-            writeLineFile(line);
+            if (!writeLineFile(line)) {
+                // Trace output is evidence, not a best-effort diagnostic. Stop
+                // accepting more records after the first I/O fault so a
+                // truncated artifact cannot be mistaken for a complete run.
+                std::lock_guard<std::mutex> lock(writerMutex_);
+                writerAccepting_ = false;
+                writerStopping_ = true;
+                writerQueue_.clear();
+                signalMask_.store(0, std::memory_order_release);
+                return;
+            }
         }
     }
 
@@ -2007,11 +2082,29 @@ private:
     {
         if (line.empty())
             return true;
+        bool overflow = false;
         {
             std::lock_guard<std::mutex> lock(writerMutex_);
             if (!writerAccepting_)
                 return false;
-            writerQueue_.push_back(line);
+            if (writerQueue_.size() >= kWriterQueueCapacity) {
+                writerAccepting_ = false;
+                writerStopping_ = true;
+                overflow = true;
+            } else {
+                writerQueue_.push_back(line);
+            }
+        }
+        if (overflow) {
+            bool expected = false;
+            if (traceIntegrityFault_.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel))
+                blog(LOG_ERROR,
+                     "[pulsar-runtime-telemetry] integrity_fault=1 reason=trace_queue_overflow "
+                     "capacity=%zu",
+                     kWriterQueueCapacity);
+            writerCv_.notify_all();
+            return false;
         }
         writerCv_.notify_one();
         return true;
@@ -2022,23 +2115,36 @@ private:
         (void)enqueueLine(line);
     }
 
-    void writeLineFile(const std::string &line)
+    bool writeLineFile(const std::string &line)
     {
         if (line.empty() || tracePath_.empty())
-            return;
+            return true;
         std::lock_guard<std::mutex> lock(fileMutex_);
 #ifdef _WIN32
         if (traceMutex_)
             WaitForSingleObject(traceMutex_, INFINITE);
 #endif
         std::ofstream output(tracePath_, std::ios::binary | std::ios::app);
-        if (output.good())
+        bool success = output.is_open();
+        if (success) {
             output << line << '\n';
+            output.flush();
+            success = output.good();
+        }
         output.close();
+        success = success && !output.fail();
 #ifdef _WIN32
         if (traceMutex_)
             ReleaseMutex(traceMutex_);
 #endif
+        if (!success) {
+            bool expected = false;
+            if (traceIntegrityFault_.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel))
+                blog(LOG_ERROR,
+                     "[pulsar-runtime-telemetry] integrity_fault=1 reason=trace_write_failed");
+        }
+        return success;
     }
 
     static void BeginTake(void *param, calldata_t *cd)
@@ -2170,6 +2276,7 @@ private:
     std::atomic<uint64_t> encodeTimeNsTotal_{0};
     std::atomic<uint64_t> encodeTimeSampleCount_{0};
     std::atomic<uint32_t> signalMask_{0};
+    std::atomic<bool> traceIntegrityFault_{false};
     std::vector<std::string> traceSignals_;
     // Snapshots are write-once for the lifetime of this telemetry object.  A
     // slot is never reused, so a callback that acquired an old pointer cannot
@@ -3140,6 +3247,12 @@ private:
     int previewLane = 1;
     obs_source_t *laneSources[2] = {};
     obs_sceneitem_t *laneItems[2] = {};
+    // Opt-in diagnostics for repeated composition replacement.  These
+    // counters are intentionally outside acceptance telemetry so the normal
+    // Take path has no additional trace allocation or serialization work.
+    bool sceneChurnDiagnostics = false;
+    uint64_t sceneCompositionAdds[2] = {};
+    uint64_t sceneCompositionRemoves[2] = {};
 
     // Physical role roots remain stable for the lifetime of the frontend.
     // These references point at the roots bound to ProgramView/PreviewView;
@@ -3943,8 +4056,29 @@ bool PulsarFrontendAPI::replaceLaneCompositionLocked(int lane, obs_source_t *sce
     }
     obs_sceneitem_t *oldItem = laneItems[lane];
     laneItems[lane] = newItem;
-    if (oldItem)
+    if (oldItem) {
         obs_sceneitem_remove(oldItem);
+    }
+    if (sceneChurnDiagnostics) {
+        ++sceneCompositionAdds[lane];
+        if (oldItem)
+            ++sceneCompositionRemoves[lane];
+        size_t activeItems = 0;
+        obs_scene_enum_items(
+            laneScene,
+            [](obs_scene_t *, obs_sceneitem_t *, void *param) {
+                ++*static_cast<size_t *>(param);
+                return true;
+            },
+            &activeItems);
+        const bool activeBinding = obs_sceneitem_get_source(laneItems[lane]) == scene;
+        blog(LOG_INFO,
+             "[pulsar-dual-lane] scene_composition_churn lane=%d add_count=%llu "
+             "remove_count=%llu active_items=%zu active_binding=%d",
+             lane, static_cast<unsigned long long>(sceneCompositionAdds[lane]),
+             static_cast<unsigned long long>(sceneCompositionRemoves[lane]), activeItems,
+             activeBinding ? 1 : 0);
+    }
     return true;
 }
 
@@ -3952,6 +4086,8 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
 {
     if (!templateScene)
         return false;
+
+    sceneChurnDiagnostics = parse_env_bool(std::getenv("PULSAR_SCENE_CHURN_DIAGNOSTICS")) == EnvBool::Enabled;
 
     // The lane roots are private wrappers, not aliases for the user's scene.
     // Their single child is a live scene source.  Program starts on the

@@ -1,0 +1,59 @@
+From 3fe8dfd762595f7e895c9adc0b716e99257ede16 Mon Sep 17 00:00:00 2001
+From: Forge <forge@example.invalid>
+Date: Thu, 3 Sep 2026 16:08:02 +0200
+Subject: [PATCH] fix(d3d11): track consumer process liveness
+
+Agent-Role: forge
+
+Work-Unit: ZabLaboratory/Pulsar#254
+
+Issue: 254
+---
+ .../virtualcam-module/d3d11-return-transport.cpp       | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+index 7afb56374..acd1d5b01 100644
+--- a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+@@ -216,6 +216,7 @@ struct pulsar_d3d11_return_consumer {
+ 	uint32_t width = 0;
+ 	uint32_t height = 0;
+ 	bool active = false;
++	HANDLE consumer_process = nullptr;
+ };
+ 
+ extern "C" pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
+@@ -525,6 +526,8 @@ extern "C" pulsar_d3d11_return_consumer_t *pulsar_d3d11_return_consumer_open(
+ 	consumer->height = height;
+ 	consumer->control->consumer_pid = GetCurrentProcessId();
+ 	consumer->control->consumer_session = process_session(consumer->control->consumer_pid);
++	consumer->consumer_process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE,
++		consumer->control->consumer_pid);
+ 	if (!consumer_open_ring(consumer) && consumer->control->selected_path != PULSAR_D3D11_PATH_CPU) {
+ 		UnmapViewOfFile(consumer->control);
+ 		CloseHandle(consumer->mapping);
+@@ -538,6 +541,8 @@ extern "C" void pulsar_d3d11_return_consumer_close(pulsar_d3d11_return_consumer_
+ {
+ 	if (!consumer)
+ 		return;
++	if (consumer->consumer_process)
++		CloseHandle(consumer->consumer_process);
+ 	if (consumer->control)
+ 		InterlockedExchange((volatile LONG *)&consumer->control->consumer_ready, 0);
+ 	consumer->active = false;
+@@ -554,6 +559,11 @@ extern "C" bool pulsar_d3d11_return_consumer_read(pulsar_d3d11_return_consumer_t
+ {
+ 	if (!d3d11_transport_requested() || !consumer || !dst || !consumer->control)
+ 		return false;
++	if (consumer->consumer_process && WaitForSingleObject(consumer->consumer_process, 0) != WAIT_TIMEOUT) {
++		InterlockedExchange((volatile LONG *)&consumer->control->consumer_ready, 0);
++		consumer->active = false;
++		return false;
++	}
+ 	if (!consumer->active && !consumer_open_ring(consumer))
+ 		return false;
+ 	if (consumer->control->selected_path != PULSAR_D3D11_PATH_SHARED_TEXTURE)
+-- 
+2.54.0.windows.1
+
