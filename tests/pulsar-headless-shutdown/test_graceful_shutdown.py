@@ -123,20 +123,20 @@ def test_render_callback_gate_fences_texture_destroy() -> None:
     )
     assert "BrowserRenderCallbackGate::Lease BrowserClient::acquire_render_callback() const" in client
     assert client.count("auto render_callback = acquire_render_callback();") == 3
-    assert "bs->DestroyTextures(true);" in client
-    destroy = source_header[source_header.index("inline void DestroyTextures") :]
-    assert "render_callbacks->pause_for_current_callback();" in destroy
+    assert "DestroyTextures(true)" in client
+    destroy = source_header[source_header.index("inline bool DestroyTextures") :]
+    assert "render_callbacks->try_pause_for_current_callback();" in destroy
     assert "render_callbacks->pause_for_texture_destroy();" in destroy
     assert "CallbackPause callback_pause;" in destroy
     assert "render_callbacks->close_and_wait();" in source
     assert "close_and_wait()" in gate
-    assert "wait_for_idle()" in gate
-    assert "pause_for_current_callback()" in gate
+    assert "try_pause_for_current_callback()" in gate
     assert "pause_for_texture_destroy()" in gate
     assert "admission_paused_" in gate
+    assert "if (!bs->DestroyTextures(true))" in client
 
     resize_start = client.index("if (bs->width != width")
-    assert client.index("bs->DestroyTextures(true);", resize_start) < client.index(
+    assert client.index("DestroyTextures(true)", resize_start) < client.index(
         "obs_enter_graphics();", resize_start
     )
 
@@ -167,10 +167,13 @@ def test_render_callback_gate_two_callback_resize_interleaving_does_not_deadlock
                 self.in_flight -= 1
                 self.condition.notify_all()
 
-        def pause_for_current(self) -> None:
+        def try_pause_for_current(self) -> bool:
             with self.condition:
+                if self.paused:
+                    return False
                 self.paused = True
                 self.condition.wait_for(lambda: self.in_flight <= 1)
+                return True
 
         def resume(self) -> None:
             with self.condition:
@@ -191,7 +194,7 @@ def test_render_callback_gate_two_callback_resize_interleaving_does_not_deadlock
     worker = threading.Thread(target=release_other)
     worker.start()
     started = time.monotonic()
-    gate.pause_for_current()
+    assert gate.try_pause_for_current()
     elapsed = time.monotonic() - started
     assert other_released
     assert elapsed >= 0.01
@@ -213,6 +216,36 @@ def test_render_callback_gate_two_callback_resize_interleaving_does_not_deadlock
     assert gate.in_flight == 0
     assert gate.acquire()  # admission reopens after texture replacement
     gate.release()
+
+    # Two already-admitted resize callbacks must serialize ownership. The
+    # loser releases its lease immediately; the winner drains it and proceeds.
+    gate = GateModel()
+    assert gate.acquire()
+    assert gate.acquire()
+    barrier = threading.Barrier(3)
+    resize_results: list[bool] = []
+
+    def resize_callback() -> None:
+        barrier.wait()
+        owns_pause = gate.try_pause_for_current()
+        resize_results.append(owns_pause)
+        if not owns_pause:
+            gate.release()
+            return
+        gate.resume()
+        gate.release()
+
+    first = threading.Thread(target=resize_callback)
+    second = threading.Thread(target=resize_callback)
+    first.start()
+    second.start()
+    barrier.wait()
+    first.join(timeout=1.0)
+    second.join(timeout=1.0)
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert sorted(resize_results) == [False, True]
+    assert gate.in_flight == 0
 
 
 def test_d3d11_direct_shared_copy_api_is_optional_and_validated() -> None:

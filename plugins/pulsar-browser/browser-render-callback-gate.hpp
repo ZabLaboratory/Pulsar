@@ -83,6 +83,8 @@ public:
 
 		~CallbackPause() { resume(); }
 
+		explicit operator bool() const { return gate_ != nullptr; }
+
 	private:
 		explicit CallbackPause(BrowserRenderCallbackGate *gate) : gate_(gate) {}
 
@@ -116,30 +118,26 @@ public:
 		idle_.wait(lock, [this]() { return in_flight_ == 0; });
 	}
 
-	/* Serialize ordinary texture teardown with callbacks without closing
-	 * admission; this is used for browser reload/resize paths. */
-	void wait_for_idle()
-	{
-		std::unique_lock<std::mutex> lock(mutex_);
-		idle_.wait(lock, [this]() { return in_flight_ == 0; });
-	}
-
 	/* Temporarily block new callbacks while the current callback replaces its
 	 * textures. The caller owns one lease, so waiting for <= 1 drains every
-	 * other callback without self-deadlocking; the RAII token reopens admission
-	 * after the replacement is complete. */
-	CallbackPause pause_for_current_callback()
+	 * other callback without self-deadlocking. If another callback already owns
+	 * the pause, fail immediately so two resizers cannot wait on each other. */
+	CallbackPause try_pause_for_current_callback()
 	{
 		std::unique_lock<std::mutex> lock(mutex_);
+		if (admission_paused_)
+			return {};
 		admission_paused_ = true;
 		idle_.wait(lock, [this]() { return in_flight_ <= 1; });
 		return CallbackPause(this);
 	}
 
-	/* Temporarily block new callbacks for ordinary texture teardown. */
+	/* Temporarily block new callbacks for ordinary texture teardown. Wait for a
+	 * callback-owned pause to finish instead of joining its in-flight lease. */
 	CallbackPause pause_for_texture_destroy()
 	{
 		std::unique_lock<std::mutex> lock(mutex_);
+		idle_.wait(lock, [this]() { return !admission_paused_; });
 		admission_paused_ = true;
 		idle_.wait(lock, [this]() { return in_flight_ == 0; });
 		return CallbackPause(this);

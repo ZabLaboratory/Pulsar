@@ -144,14 +144,16 @@ struct BrowserSource {
 #endif
 	bool is_showing = false;
 
-	inline void DestroyTextures(bool render_callback_active = false)
+	inline bool DestroyTextures(bool render_callback_active = false)
 	{
 		BrowserRenderCallbackGate::CallbackPause callback_pause;
 		if (render_callbacks) {
 			if (render_callback_active)
-				callback_pause = render_callbacks->pause_for_current_callback();
+				callback_pause = render_callbacks->try_pause_for_current_callback();
 			else
 				callback_pause = render_callbacks->pause_for_texture_destroy();
+			if (!callback_pause)
+				return false;
 		}
 		obs_enter_graphics();
 		if (extra_texture) {
@@ -166,6 +168,7 @@ struct BrowserSource {
 			texture = nullptr;
 		}
 		obs_leave_graphics();
+		return true;
 	}
 
 	/* ---------------------------- */
