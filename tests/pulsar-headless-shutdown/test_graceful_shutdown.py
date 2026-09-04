@@ -67,6 +67,24 @@ def test_headless_fences_browser_audio_before_obs_shutdown() -> None:
     assert browser_fence < frontend_shutdown < obs_shutdown
 
 
+def test_accelerated_paint_copies_callback_texture_into_owned_texture() -> None:
+    source = (ROOT / "plugins" / "pulsar-browser" / "browser-client.cpp").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("void BrowserClient::OnAcceleratedPaint(")
+    end = source.index("#ifdef CEF_ON_ACCELERATED_PAINT2", start)
+    callback = source[start:end]
+
+    assert "gs_texture_t *shared_texture = nullptr" in callback
+    assert "gs_texture_open_nt_shared" in callback
+    assert "gs_texture_create(width, height, color_format" in callback
+    copy = callback.index("gs_copy_texture(bs->texture, shared_texture)")
+    release = callback.rindex("gs_texture_destroy(shared_texture)")
+    assert copy < release
+    assert "bs->texture = shared_texture" not in callback
+    assert "last_handle = info.shared_texture_handle" not in callback
+
+
 def test_create_remove_rendezvous_is_bounded_and_test_only() -> None:
     source = (ROOT / "plugins" / "pulsar-browser" / "obs-browser-source.cpp").read_text(
         encoding="utf-8"
