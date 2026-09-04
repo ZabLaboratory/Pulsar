@@ -524,7 +524,8 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert "validate_trace_append" in probe
     assert "--trace-append requires --runtime-id matching the reference session" in probe
     assert "--resource-mode is supported only with --encoder nvenc" in probe
-    assert 'sample.get("encoder_family") == "nvenc"' in probe
+    assert "def _resource_sample_has_encode_timing" in probe
+    assert "_resource_sample_has_encode_timing(record)" in probe
 
 
 def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: Path) -> None:
@@ -565,6 +566,8 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
         "producer_count": 1,
         "encoder_active": True,
         "encoder_family": "nvenc",
+        "rtmp_load_active": True,
+        "encode_time_samples": 1,
     }
     trace_path = tmp_path / "reference.jsonl"
     trace_path.write_text(
@@ -668,7 +671,7 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "IsControlledSceneSwitchPendingBypass" in handler
     assert 'request.RequestType != "CallVendorRequest"' in handler
     assert 'vendor->get<std::string>() != "pulsar-scene-switch"' in handler
-    assert 'return nested == "Abort" || nested == "GetState" || nested == "Take"' in handler
+    assert 'return nested == "Abort" || nested == "GetState"' in handler
     assert "vendor->is_string() || !nestedRequest->is_string()" in handler
     assert "json::value() here" in handler
     assert "const bool controlledSceneSwitchBypass" in handler
@@ -684,12 +687,12 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "PREVIEW_FROZEN" in handler
     assert "after the dual-lane rollback freeze" in handler
     # The gate is central and acquired before handler lookup. The only scene
-    # switch pending bypass is the exact vendor Abort/GetState/Take trio; the
+    # switch pending bypass is the exact vendor Abort/GetState pair; the
     # finite output-stop allowlist is unrelated to Preview mutations.
-    # Prepare/Dispatch, malformed CallVendorRequest data, and every other
-    # vendor remain gated. Take is admitted only for vendor idempotence replay.
+    # Prepare/Take/Dispatch, malformed CallVendorRequest data, and every other
+    # vendor remain gated. A post-freeze Take must fail closed at the gateway.
     assert 'nested == "Prepare"' not in handler
-    assert 'nested == "Take"' in handler
+    assert 'nested == "Take"' not in handler
     assert 'nested == "Dispatch"' not in handler
     assert handler.index("const bool controlledSceneSwitchBypass") < handler.index("_handlerMap.at")
 
@@ -1189,7 +1192,18 @@ def test_output_effect_probe_settles_record_stop_before_next_case() -> None:
     assert "STOP_SETTLE_S" in helper
     assert "await asyncio.sleep(0.2)" in helper
     assert 'wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopRecord(nominal)")' in nominal_record
-    assert 'wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopOutput(nominal)")' in nominal_generic
+    assert "STOP_PENDING_CODE = 702" in source
+    assert "if not ok and code != STOP_PENDING_CODE" in nominal_record
+    assert "StopRecord accepted (702 Pending)" in nominal_record
+    # Generic latency/effect coverage must use the raw virtual-camera output;
+    # PulsarRecord is a ffmpeg_muxer and its asynchronous flush belongs only to
+    # the separate record case above.
+    assert 'GENERIC_RAW_OUTPUT = "PulsarVCam"' in source
+    assert 'c.req("StartVirtualCam")' in nominal_generic
+    assert "wait_record_and_output_inactive" not in nominal_generic
+    assert 'c.req("StopOutput", {"outputName": GENERIC_RAW_OUTPUT})' in nominal_generic
+    assert "if not ok and code != STOP_PENDING_CODE" not in nominal_generic
+    assert "StopOutput accepted (702 Pending)" not in nominal_generic
 
 
 def test_core_swap_is_frame_boundary_and_rejects_concurrent_requests() -> None:

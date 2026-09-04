@@ -194,6 +194,9 @@ ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 ENCODER_BIND_RE = re.compile(
     DUAL_LANE_LOG_PREFIX + r"\s*encoder video_t bound once to ProgramView"
 )
+TRACE_INTEGRITY_FAULT_RE = re.compile(
+    r"\[pulsar-runtime-telemetry\] integrity_fault=1 reason=trace_write_failed"
+)
 COMMIT_RE = re.compile(
     DUAL_LANE_LOG_PREFIX
     + r"\s*TakeCommitted count=(\d+) frame_id=(\d+) "
@@ -224,6 +227,21 @@ LANE_SOURCE_NAMES = {
 }
 SOURCE_SCREENSHOT_DEADLINE_S = 20.0
 SOURCE_SCREENSHOT_INTERVAL_S = 0.5
+# Native resource sampling is scheduled by the runtime, not by this probe. On
+# a loaded Windows host it can run slower than the requested interval. Keep
+# the sample-count gate unchanged, but give the bounded wait a scheduling
+# margin; this is never a retry or acceptance relaxation.
+RESOURCE_SAMPLE_TIMEOUT_MULTIPLIER = 3.0
+RESOURCE_SAMPLE_TIMEOUT_GRACE_S = 15.0
+PROCESS_READER_JOIN_TIMEOUT_S = 2.0
+RECORDING_RELEASE_TIMEOUT_S = 8.0
+# The probe waits for RecordStateChanged and StreamStateChanged (Outputs), and
+# retains the scene-switch VendorEvent stream as the protocol-level transition
+# diagnostic.  Subscribing to every ordinary category makes the client
+# accumulate scene/input/transition events while it waits on native trace
+# boundaries; on a loaded x264 host that can back up the websocket connection
+# without adding evidence to this probe.
+PROBE_EVENT_SUBSCRIPTIONS = (1 << 6) | (1 << 9)
 # The trace contract's warm-up count is an observed partition of the same
 # process: the first 100 committed Takes are discarded from latency
 # percentiles, and the following --takes commits are the measured sample.
@@ -612,6 +630,37 @@ def failure_tail(lines: list[str], limit: int) -> str:
     return "\n".join(f"  | {redact_log_line(line)}" for line in lines[-limit:])
 
 
+def _safe_request_context(
+    request_type: str, request_id: str, data: Mapping[str, object] | None
+) -> dict[str, object]:
+    """Return request identity plus redacted data for timeout diagnostics."""
+
+    encoded_data = json.dumps(data or {}, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    encoded_data = re.sub(
+        r'(?i)("?(?:password|token|secret|stream[-_ ]?key)"?\s*:\s*)'
+        r'("(?:\\.|[^"\\])*"|[^,}]+)',
+        r'\1"[redacted]"',
+        encoded_data,
+    )
+    return {
+        "request_type": request_type,
+        "request_id": request_id,
+        "request_data": redact_log_line(encoded_data),
+    }
+
+
+def _process_diagnostic_context(process: Any, *, limit: int = 120) -> str:
+    """Use rich child diagnostics while keeping small test doubles compatible."""
+
+    diagnostic = getattr(process, "diagnostic_context", None)
+    if callable(diagnostic):
+        return diagnostic(limit=limit)
+    child = getattr(process, "proc", None)
+    code = child.poll() if child is not None and hasattr(child, "poll") else None
+    snapshot = process.snapshot() if callable(getattr(process, "snapshot", None)) else []
+    return f"process_exit={{code:{code!r}}}; combined_tail={failure_tail(snapshot, limit)!r}"
+
+
 def assert_dual_lane_activation(
     process: "PulsarProcess", expected: bool, required_source: str | None = None
 ) -> tuple[str, str, int]:
@@ -847,8 +896,12 @@ class RtmpReceiver:
         command = [
             self.ffmpeg,
             "-hide_banner",
+            # ``-debug_ts`` emits the demuxer packet records needed for the
+            # receiver boundary at INFO.  VERBOSE adds unrelated per-stream
+            # diagnostics and can make the loopback consumer fall behind a
+            # live producer on a loaded host, without adding evidence.
             "-loglevel",
-            "verbose",
+            "info",
             "-debug_ts",
             "-listen",
             "1",
@@ -1013,7 +1066,13 @@ class RtmpReceiver:
         if process.poll() is None:
             failure = failure or "RTMP receiver remained alive after cleanup"
         if self.thread is not None:
-            self.thread.join(timeout=2)
+            self.thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
+            if self.thread.is_alive() and process.stdout is not None:
+                try:
+                    process.stdout.close()
+                except (OSError, ValueError):
+                    pass
+                self.thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
             if self.thread.is_alive():
                 failure = failure or "RTMP receiver reader thread did not exit"
         if failure is not None:
@@ -1108,12 +1167,7 @@ class RtmpReceiver:
         # contains no Take and therefore no rtmp_first_packet correlation.
         session["capture_paths"] = [path for path in raw_paths if path != "rtmp_first_packet"]
         resource_records = [record for record in records if record.get("record_type") == "resource_sample"]
-        eligible = sum(
-            record.get("encoder_active") is True
-            and record.get("encoder_family") == "nvenc"
-            and record.get("rtmp_load_active") is True
-            for record in resource_records
-        )
+        eligible = sum(_resource_sample_has_encode_timing(record) for record in resource_records)
         if eligible < minimum_samples:
             raise ProbeFailure(
                 "resource-only RTMP load did not produce enough observed-active samples: "
@@ -1340,8 +1394,14 @@ class PulsarProcess:
         self.rtmp_final_trace_path: pathlib.Path | None = None
         self.recording_output_path: pathlib.Path | None = None
         self.lines: list[str] = []
-        self.condition = threading.Condition()
+        self.stdout_lines: list[str] = []
+        self.stderr_lines: list[str] = []
+        # A timeout diagnostic can be assembled while a wait holds this
+        # condition; use an RLock so the stream-tail snapshot cannot deadlock
+        # the failure path.
+        self.condition = threading.Condition(threading.RLock())
         self.thread: threading.Thread | None = None
+        self.stderr_thread: threading.Thread | None = None
         self.shutdown_event_handle: int | None = None
         self.shutdown_control_expected = False
         self.graceful_shutdown_requested = False
@@ -1472,12 +1532,14 @@ class PulsarProcess:
                 cwd=str(self.exe.parent),
                 env=env,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
-                bufsize=1,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+                # Keep both child streams as unbuffered binary pipes.  The
+                # probe's reader threads decode complete lines, so a verbose
+                # encoder/muxer diagnostic cannot fill one merged pipe while
+                # the other stream is waiting to be drained.
+                bufsize=0,
+                text=False,
                 creationflags=creationflags,
                 startupinfo=startupinfo,
                 close_fds=startupinfo is not None,
@@ -1493,8 +1555,12 @@ class PulsarProcess:
             except ProbeFailure as exc:
                 self.graceful_shutdown_error = str(exc)
                 raise
-        self.thread = threading.Thread(target=self._pump, name="pulsar-probe-log", daemon=True)
+        self.thread = threading.Thread(target=self._pump, name="pulsar-probe-stdout", daemon=True)
         self.thread.start()
+        self.stderr_thread = threading.Thread(
+            target=self._pump_stderr, name="pulsar-probe-stderr", daemon=True
+        )
+        self.stderr_thread.start()
 
     def cef_url_for_lane(self, lane: str) -> str:
         if lane not in ("A", "B") or not self.cef_url:
@@ -1510,14 +1576,70 @@ class PulsarProcess:
 
     def _pump(self) -> None:
         assert self.proc is not None and self.proc.stdout is not None
-        for line in self.proc.stdout:
-            with self.condition:
-                self.lines.append(line.rstrip("\r\n"))
-                self.condition.notify_all()
+        self._pump_stream(self.proc.stdout, self.stdout_lines)
+
+    def _pump_stderr(self) -> None:
+        assert self.proc is not None and self.proc.stderr is not None
+        self._pump_stream(self.proc.stderr, self.stderr_lines)
+
+    def _pump_stream(self, stream: Any, target: list[str]) -> None:
+        pending = b""
+        try:
+            while True:
+                chunk = stream.readline()
+                if not chunk:
+                    break
+                pending += chunk
+                while b"\n" in pending:
+                    raw_line, pending = pending.split(b"\n", 1)
+                    self._store_process_line(raw_line, target)
+            if pending:
+                self._store_process_line(pending, target)
+        except (OSError, ValueError):
+            # A descendant can inherit the pipe writer after the owner exits.
+            # The bounded join below closes the parent's read end to unblock it.
+            return
+
+    def _store_process_line(self, raw_line: bytes, target: list[str]) -> None:
+        line = raw_line.rstrip(b"\r").decode("utf-8", errors="replace")
+        with self.condition:
+            target.append(line)
+            self.lines.append(line)
+            self.condition.notify_all()
 
     def snapshot(self) -> list[str]:
         with self.condition:
             return list(self.lines)
+
+    def diagnostic_context(self, *, limit: int = 120) -> str:
+        """Return bounded child/process diagnostics for a failed probe step."""
+
+        with self.condition:
+            stdout = list(self.stdout_lines[-limit:])
+            stderr = list(self.stderr_lines[-limit:])
+            combined = list(self.lines[-limit:])
+        process = self.proc
+        returncode = process.poll() if process is not None else None
+        if returncode is None:
+            exit_state = "running"
+        elif returncode < 0:
+            exit_state = f"signal_{-returncode}"
+        elif returncode == 0:
+            exit_state = "normal_exit"
+        else:
+            exit_state = f"exit_code_{returncode}"
+        component_lines = [
+            line
+            for line in stdout + stderr
+            if re.search(r"(?i)(nvenc|encoder|mux|interleav)", line)
+        ][-limit:]
+        return (
+            f"process_exit={{code:{returncode!r},state:{exit_state!r}}}; "
+            f"stdout_tail={failure_tail(stdout, limit)!r}; "
+            f"stderr_tail={failure_tail(stderr, limit)!r}; "
+            f"component_tail={failure_tail(component_lines, limit)!r}; "
+            f"combined_tail={failure_tail(combined, limit)!r}"
+        )
 
     def wait_for(self, pattern: re.Pattern[str], timeout: float) -> re.Match[str]:
         deadline = time.monotonic() + timeout
@@ -1532,7 +1654,8 @@ class PulsarProcess:
                     status = self.proc.poll() if self.proc is not None else None
                     tail = failure_tail(self.lines, 40)
                     raise ProbeFailure(
-                        f"timeout waiting for {pattern.pattern!r}; exit={status}\n{tail}"
+                        f"timeout waiting for {pattern.pattern!r}; exit={status}\n{tail}\n"
+                        f"diagnostic={self.diagnostic_context(limit=40)}"
                     )
                 self.condition.wait(timeout=min(0.25, remaining))
 
@@ -1574,7 +1697,10 @@ class PulsarProcess:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     tail = failure_tail(self.lines, 60)
-                    raise ProbeFailure(f"TakeCommitted count={count} not observed\n{tail}")
+                    raise ProbeFailure(
+                        f"TakeCommitted count={count} not observed\n{tail}\n"
+                        f"diagnostic={self.diagnostic_context(limit=60)}"
+                    )
                 self.condition.wait(timeout=min(0.25, remaining))
 
     def start_directshow_consumer(self) -> None:
@@ -1756,11 +1882,23 @@ class PulsarProcess:
 
         if self.directshow_thread is None:
             return None
-        self.directshow_thread.join(timeout=2)
+        self.directshow_thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
+        if self.directshow_thread.is_alive():
+            self._close_directshow_stdout()
+            self.directshow_thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
         if self.directshow_thread.is_alive():
             return "ProgramReturn DirectShow reader thread did not exit"
         self.directshow_thread = None
         return None
+
+    def _close_directshow_stdout(self) -> None:
+        stdout = getattr(self.directshow_proc, "stdout", None)
+        if self.directshow_proc is None or stdout is None:
+            return
+        try:
+            stdout.close()
+        except (OSError, ValueError):
+            return
 
     def assert_directshow_consumer_alive(self) -> None:
         if self.directshow_proc is None:
@@ -1824,8 +1962,11 @@ class PulsarProcess:
     def _pump_directshow(self, process: subprocess.Popen[str]) -> None:
         if process.stdout is None:
             return
-        for line in process.stdout:
-            self.directshow_lines.append(line.rstrip("\r\n"))
+        try:
+            for line in process.stdout:
+                self.directshow_lines.append(line.rstrip("\r\n"))
+        except (OSError, ValueError):
+            return
 
     def shutdown(self) -> None:
         # Release the external DirectShow reader before the producer so the
@@ -1913,6 +2054,8 @@ class PulsarProcess:
     def assert_shutdown_clean(self, *, require_runtime_lease: bool = False) -> None:
         """Fail a campaign if an owned process, reader, or lease survived."""
 
+        if any(TRACE_INTEGRITY_FAULT_RE.search(line) for line in self.snapshot()):
+            raise ProbeFailure("runtime reported trace integrity fault")
         if self.directshow_cleanup_failure is not None:
             raise ProbeFailure(self.directshow_cleanup_failure)
         if self.rtmp_cleanup_failure is not None:
@@ -1934,7 +2077,10 @@ class PulsarProcess:
             and self.proc.returncode is not None
             and self.proc.returncode != 0
         ):
-            raise ProbeFailure(f"Pulsar exited with non-zero status {self.proc.returncode}")
+            raise ProbeFailure(
+                f"Pulsar exited with non-zero status {self.proc.returncode}; "
+                f"diagnostic={self.diagnostic_context()}"
+            )
         reader_failure = self._join_process_reader()
         if reader_failure is not None:
             raise ProbeFailure(reader_failure)
@@ -1987,23 +2133,64 @@ class PulsarProcess:
                 raise ProbeFailure("Pulsar graceful shutdown log line was not observed")
 
     def _join_process_reader(self) -> str | None:
-        """Join Pulsar's stdout pump after child exit, with a hard bound."""
+        """Join both unbuffered Pulsar stream pumps after child exit."""
 
-        if self.thread is None:
-            return None
-        self.thread.join(timeout=2)
-        if self.thread.is_alive():
-            return "Pulsar log reader thread did not exit"
-        self.thread = None
-        return None
+        failures: list[str] = []
+        for attr, close, label in (
+            ("thread", self._close_process_stdout, "stdout"),
+            ("stderr_thread", self._close_process_stderr, "stderr"),
+        ):
+            reader = getattr(self, attr)
+            if reader is None:
+                continue
+            reader.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
+            if reader.is_alive():
+                close()
+                reader.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
+            if reader.is_alive():
+                failures.append(
+                    "Pulsar log reader thread did not exit"
+                    if label == "stdout"
+                    else "Pulsar stderr log reader thread did not exit"
+                )
+            else:
+                setattr(self, attr, None)
+        return "; ".join(failures) if failures else None
+
+    def _close_process_stdout(self) -> None:
+        stdout = getattr(self.proc, "stdout", None)
+        if self.proc is None or stdout is None:
+            return
+        try:
+            stdout.close()
+        except (OSError, ValueError):
+            return
+
+    def _close_process_stderr(self) -> None:
+        stderr = getattr(self.proc, "stderr", None)
+        if self.proc is None or stderr is None:
+            return
+        try:
+            stderr.close()
+        except (OSError, ValueError):
+            return
 
 
 class Inbox:
     """Small v5 response/event collector for one WebSocket connection."""
 
-    def __init__(self) -> None:
+    def __init__(self, diagnostic_provider: Any = None) -> None:
         self.responses: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
+        self.last_request: dict[str, object] | None = None
+        self.last_event_wait: dict[str, object] | None = None
+        self.diagnostic_provider = diagnostic_provider
+
+    def timeout_context(self) -> str:
+        context = f"last_request={self.last_request!r}; last_event_wait={self.last_event_wait!r}"
+        if self.diagnostic_provider is None:
+            return context
+        return f"{context}; child={self.diagnostic_provider()}"
 
     def store(self, message: dict[str, Any]) -> None:
         if message.get("op") == 7:
@@ -2055,8 +2242,14 @@ async def request(
     }
     if data is not None:
         request_body["requestData"] = data
-    await ws.send(json.dumps({"op": 6, "d": request_body}))
-    return await inbox.receive_until_response(ws, request_id)
+    inbox.last_request = _safe_request_context(request_type, request_id, data)
+    try:
+        await ws.send(json.dumps({"op": 6, "d": request_body}))
+        return await inbox.receive_until_response(ws, request_id)
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        raise ProbeFailure(
+            f"obs-websocket response timeout: {inbox.timeout_context()}"
+        ) from exc
 
 
 async def request_batch(
@@ -2075,8 +2268,18 @@ async def request_batch(
             "requests": requests,
         },
     }
-    await ws.send(json.dumps(payload))
-    return await inbox.receive_until_batch_response(ws, request_id)
+    inbox.last_request = {
+        "request_type": "BatchRequest",
+        "request_id": request_id,
+        "request_data": f"count={len(requests)} execution_type={execution_type}",
+    }
+    try:
+        await ws.send(json.dumps(payload))
+        return await inbox.receive_until_batch_response(ws, request_id)
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        raise ProbeFailure(
+            f"obs-websocket batch response timeout: {inbox.timeout_context()}"
+        ) from exc
 
 
 def assert_success(response: dict[str, Any], operation: str) -> None:
@@ -2117,6 +2320,7 @@ async def wait_event(
                 return inbox.events.pop(index)
         return None
 
+    inbox.last_event_wait = {"event_type": event_type, "timeout_s": timeout}
     event = take_matching()
     if event is not None:
         return event
@@ -2125,8 +2329,15 @@ async def wait_event(
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise ProbeFailure(f"timeout waiting for event {event_type!r}")
-        message = json.loads(await asyncio.wait_for(ws.recv(), timeout=remaining))
+            raise ProbeFailure(
+                f"obs-websocket event timeout: {inbox.timeout_context()}"
+            )
+        try:
+            message = json.loads(await asyncio.wait_for(ws.recv(), timeout=remaining))
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            raise ProbeFailure(
+                f"obs-websocket event timeout: {inbox.timeout_context()}"
+            ) from exc
         if message.get("op") == 5:
             inbox.events.append(message.get("d", {}))
         elif message.get("op") == 7:
@@ -2143,7 +2354,7 @@ async def identify(ws: Any, password: str) -> None:
     hello_data = hello.get("d") or {}
     identify_data: dict[str, Any] = {
         "rpcVersion": hello_data.get("rpcVersion", 1),
-        "eventSubscriptions": 0x7FF,
+        "eventSubscriptions": PROBE_EVENT_SUBSCRIPTIONS,
     }
     auth = hello_data.get("authentication")
     if auth:
@@ -2405,6 +2616,43 @@ def ensure_recording_output_owned(path_text: str, record_dir: pathlib.Path) -> p
     return output
 
 
+def wait_for_recording_release(
+    path: pathlib.Path, *, timeout: float = RECORDING_RELEASE_TIMEOUT_S
+) -> None:
+    """Require a stopped recording to release its filesystem handle.
+
+    Windows can report StopRecord before an encoder child releases the MP4
+    handle. A reversible rename probe detects that condition without deleting,
+    truncating, or accepting a still-locked recording.
+    """
+
+    if timeout <= 0:
+        raise ProbeFailure("recording release timeout must be positive")
+    if not path.exists():
+        return
+    probe_path = path.with_name(f".{path.name}.{os.getpid()}.release-check")
+    if probe_path.exists():
+        raise ProbeFailure(f"recording release probe path already exists: {probe_path}")
+    deadline = time.monotonic() + timeout
+    last_error: OSError | None = None
+    while time.monotonic() < deadline:
+        try:
+            path.rename(probe_path)
+            try:
+                probe_path.rename(path)
+            except OSError:
+                if probe_path.exists() and not path.exists():
+                    probe_path.rename(path)
+                raise
+            return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.1)
+    raise ProbeFailure(
+        f"recording handle remained locked after {timeout:.1f}s: {path} ({last_error})"
+    )
+
+
 def _paeth(a: int, b: int, c: int) -> int:
     p = a + b - c
     pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
@@ -2591,7 +2839,8 @@ async def wait_for_nonblack_source(
         await asyncio.sleep(SOURCE_SCREENSHOT_INTERVAL_S)
     raise ProbeFailure(
         f"source {source_name!r} never produced a non-black frame within "
-        f"{SOURCE_SCREENSHOT_DEADLINE_S:.0f}s ({last_failure})"
+        f"{SOURCE_SCREENSHOT_DEADLINE_S:.0f}s ({last_failure}); "
+        f"diagnostic={inbox.timeout_context()}"
     )
 
 
@@ -2963,7 +3212,8 @@ async def wait_for_take_boundaries(
     while True:
         if process.proc is not None and process.proc.poll() is not None:
             raise ProbeFailure(
-                f"runtime exited before complete boundary correlation for {take_id}"
+                f"runtime exited before complete boundary correlation for {take_id}; "
+                f"diagnostic={_process_diagnostic_context(process, limit=60)}"
             )
         try:
             lines = process.trace_path.read_text(encoding="utf-8").splitlines()
@@ -3092,7 +3342,8 @@ async def wait_for_take_boundaries(
             counts += f", rtmp_candidates={len(packet_candidates)}, rtmp_packets={len(receiver_packets)}"
             tail = failure_tail(process.snapshot(), 8)
             raise ProbeFailure(
-                f"{take_id} boundary correlation incomplete before {timeout:.1f}s: {counts}\n{tail}"
+                f"{take_id} boundary correlation incomplete before {timeout:.1f}s: {counts}\n{tail}\n"
+                f"diagnostic={_process_diagnostic_context(process, limit=60)}"
             )
         await asyncio.sleep(0.05)
 
@@ -3177,6 +3428,16 @@ async def stop_resource_recording(
     return output_path
 
 
+def _resource_sample_has_encode_timing(record: Mapping[str, object]) -> bool:
+    return (
+        record.get("encoder_active") is True
+        and record.get("encoder_family") == "nvenc"
+        and record.get("rtmp_load_active") is True
+        and type(record.get("encode_time_samples")) is int
+        and record.get("encode_time_samples") > 0
+    )
+
+
 async def collect_resource_samples(
     process: PulsarProcess, mode: str, minimum_samples: int, timeout: float
 ) -> int:
@@ -3213,7 +3474,7 @@ async def collect_resource_samples(
         ws_url, subprotocols=["obswebsocket.json"], open_timeout=15, max_size=2**24
     ) as ws:
         await identify(ws, process.password)
-        inbox = Inbox()
+        inbox = Inbox(process.diagnostic_context)
         lanes = ("A",) if mode == "reference" else ("A", "B")
         await create_public_lane_scenes(inbox, ws, process, lanes=lanes)
         response = await request(
@@ -3317,7 +3578,7 @@ async def collect_resource_samples(
                                 count += 1
                                 if record.get("encoder_active") is True:
                                     active_count += 1
-                                    if record.get("rtmp_load_active") is True:
+                                    if _resource_sample_has_encode_timing(record):
                                         rtmp_active_count += 1
                 except FileNotFoundError:
                     count = 0
@@ -3332,7 +3593,8 @@ async def collect_resource_samples(
                             "verify nvidia-smi, platform counters and the recording output on this host"
                         )
                     raise ProbeFailure(
-                        f"runtime exited before collecting {minimum_samples} active {mode} resource samples"
+                        f"runtime exited before collecting {minimum_samples} active {mode} resource samples; "
+                        f"diagnostic={_process_diagnostic_context(process, limit=60)}"
                     )
                 await asyncio.sleep(0.25)
 
@@ -3386,7 +3648,7 @@ async def wait_for_eligible_resource_samples(
         if process.proc is not None and process.proc.poll() is not None:
             raise ProbeFailure(
                 f"runtime exited before collecting {minimum_samples} active NVENC+RTMP "
-                f"{mode} resource samples"
+                f"{mode} resource samples; diagnostic={_process_diagnostic_context(process, limit=60)}"
             )
         total = 0
         active = 0
@@ -3409,11 +3671,7 @@ async def wait_for_eligible_resource_samples(
                     total += 1
                     if record.get("encoder_active") is True:
                         active += 1
-                    if (
-                        record.get("encoder_active") is True
-                        and record.get("encoder_family") == "nvenc"
-                        and record.get("rtmp_load_active") is True
-                    ):
+                    if _resource_sample_has_encode_timing(record):
                         eligible += 1
         except FileNotFoundError:
             total = active = eligible = 0
@@ -3431,9 +3689,25 @@ async def wait_for_eligible_resource_samples(
                 )
             raise ProbeFailure(
                 f"runtime exited before collecting {minimum_samples} active NVENC+RTMP "
-                f"{mode} resource samples"
+                f"{mode} resource samples; diagnostic={_process_diagnostic_context(process, limit=60)}"
             )
         await asyncio.sleep(0.25)
+
+
+def resource_sample_timeout_budget(minimum_samples: int, interval_ms: int) -> float:
+    """Return a finite sampler budget with host scheduling margin.
+
+    The native sampler still must emit ``minimum_samples`` eligible records;
+    this only avoids deriving the wall-clock deadline from an idealized cadence.
+    """
+
+    if minimum_samples < 1 or interval_ms < 100:
+        raise ProbeFailure("resource sample budget requires positive samples and interval >= 100ms")
+    requested_window = minimum_samples * interval_ms / 1000.0
+    return max(
+        30.0,
+        requested_window * RESOURCE_SAMPLE_TIMEOUT_MULTIPLIER + RESOURCE_SAMPLE_TIMEOUT_GRACE_S,
+    )
 
 
 async def assert_distinct_selected_scenes(
@@ -3527,7 +3801,7 @@ async def drive(
         ws_url, subprotocols=["obswebsocket.json"], open_timeout=15, max_size=2**24
     ) as ws:
         await identify(ws, process.password)
-        inbox = Inbox()
+        inbox = Inbox(process.diagnostic_context)
         await create_public_lane_scenes(inbox, ws, process, lanes=("A", "B"))
 
         # Establish a known program before studio mode.  The non-studio path
@@ -3783,6 +4057,7 @@ async def drive(
         if not output_path:
             raise ProbeFailure("RecordStateChanged STOPPED did not include outputPath")
         process.recording_output_path = ensure_recording_output_owned(output_path, process.record_dir)
+        wait_for_recording_release(process.recording_output_path)
 
         all_commits = [
             parse_commit(match)
@@ -3928,10 +4203,7 @@ def validate_trace_append(
             raise ProbeFailure(
                 "--trace-append reference contains an active sample without the NVENC encoder identity"
             )
-    if not any(
-        sample.get("encoder_active") is True and sample.get("encoder_family") == "nvenc"
-        for sample in reference_samples
-    ):
+    if not any(_resource_sample_has_encode_timing(sample) for sample in reference_samples):
         raise ProbeFailure(
             "--trace-append reference phase lacks an active NVENC encoder attestation"
         )
@@ -3987,9 +4259,7 @@ def validate_trace_append(
         ):
             raise ProbeFailure("--trace-append reference RTMP receiver clock/timebase is invalid")
         eligible_reference_samples = sum(
-            sample.get("encoder_active") is True
-            and sample.get("encoder_family") == "nvenc"
-            and sample.get("rtmp_load_active") is True
+            _resource_sample_has_encode_timing(sample)
             for sample in reference_samples
         )
         if eligible_reference_samples < minimum_rtmp_samples:
@@ -4280,27 +4550,30 @@ def run(args: argparse.Namespace) -> int:
                 + (f" resource_mode={args.resource_mode}" if args.resource_mode else "")
             )
             if args.resource_only:
+                resource_timeout = resource_sample_timeout_budget(
+                    args.resource_samples, args.resource_interval_ms
+                )
                 count = asyncio.run(
                     collect_resource_samples(
                         process,
                         args.resource_mode,
                         args.resource_samples,
-                        timeout=max(30.0, args.resource_samples * args.resource_interval_ms / 1000.0 + 15.0),
+                        timeout=resource_timeout,
                     )
                 )
                 print(f"PASS: collected {count} native {args.resource_mode} resource samples")
                 result = 0
             else:
+                resource_timeout = resource_sample_timeout_budget(
+                    args.resource_samples, args.resource_interval_ms
+                )
                 commits = asyncio.run(
                     drive(
                         process,
                         args.takes,
                         warmup_takes=warmup_takes,
                         minimum_resource_samples=args.resource_samples,
-                        resource_sample_timeout=max(
-                            30.0,
-                            args.resource_samples * args.resource_interval_ms / 1000.0 + 15.0,
-                        ),
+                        resource_sample_timeout=resource_timeout,
                     )
                 )
                 print(

@@ -198,6 +198,26 @@ async def wait_first_byte(inbox: Inbox, ws) -> bool:
     return False
 
 
+async def cleanup_recording(inbox: Inbox, ws, reason: str) -> bool:
+    """Best-effort bounded cleanup after a failed recording assertion.
+
+    A failed first-byte/split assertion must not leave the next probe attached
+    to a recording from this run.  Cleanup still requires the normal terminal
+    STOPPED event and inactive status; it never turns an incomplete stop into a
+    pass.
+    """
+    status = await request(inbox, ws, "GetRecordStatus", f"cleanup-status-{reason}")
+    if not (status.get("responseData") or {}).get("outputActive"):
+        return True
+    print(f"   cleanup: recording remains active after {reason}; requesting StopRecord")
+    stopped = await wait_record_stop(
+        inbox, ws, await request(inbox, ws, "StopRecord", f"cleanup-stop-{reason}")
+    )
+    if not stopped:
+        print(f"error: cleanup after {reason} did not reach the terminal STOPPED/inactive state")
+    return stopped
+
+
 async def probe(url: str, password: str) -> int:
     print(f"connecting: {url}")
     async with websockets.connect(url, subprotocols=["obswebsocket.json"]) as ws:
@@ -242,15 +262,20 @@ async def probe(url: str, password: str) -> int:
         if not resp["requestStatus"]["result"]:
             print(f"error: StartRecord declined: {resp['requestStatus']}")
             return 1
-        await expect_event(
-            inbox, ws, "RecordStateChanged",
-            predicate=lambda d: d.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STARTED",
-            timeout=10.0,
-        )
+        try:
+            await expect_event(
+                inbox, ws, "RecordStateChanged",
+                predicate=lambda d: d.get("outputState") == "OBS_WEBSOCKET_OUTPUT_STARTED",
+                timeout=10.0,
+            )
+        except Exception:
+            await cleanup_recording(inbox, ws, "start-event-timeout")
+            raise
 
         if not await wait_first_byte(inbox, ws):
             print("error: the muxer wrote no byte within "
                   f"{FIRST_BYTE_TIMEOUT_SEC}s -- nothing to split")
+            await cleanup_recording(inbox, ws, "first-byte-timeout")
             return 1
         print(f"   recording for {PRE_SPLIT_SEC}s before the split ...")
         await asyncio.sleep(PRE_SPLIT_SEC)
