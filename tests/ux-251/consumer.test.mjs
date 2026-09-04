@@ -19,6 +19,9 @@ import {
 const html = await readFile(new URL("./consumer.html", import.meta.url), "utf8");
 const source = `${html}\n${await readFile(new URL("./consumer.mjs", import.meta.url), "utf8")}`;
 const manifest = JSON.parse(await readFile(new URL("../../docs/evidence/251/manifest.json", import.meta.url), "utf8"));
+const browserObservation = JSON.parse(await readFile(new URL("../../docs/evidence/251/browser-dom-capture.observed.json", import.meta.url), "utf8"));
+const browserAxObservation = JSON.parse(await readFile(new URL("../../docs/evidence/251/browser-ax-capture.observed.json", import.meta.url), "utf8"));
+const browserScreenshot = await readFile(new URL("../../docs/evidence/251/browser-ax-capture.png", import.meta.url));
 
 test("SHA-256 and canonical payloads are stable across runtimes", () => {
   // This is the public SHA-256 test vector for "abc". Short fragments keep a
@@ -50,6 +53,8 @@ test("consumer HTML exposes landmarks, role labels, diagnostics, slider semantic
     'capture=keyboard',
     'scenario=UX-09',
     'new KeyboardEvent',
+    'captureTab',
+    'key: "Tab"',
     'commit_count_before',
     'aria_disabled',
     'prefers-reduced-motion: reduce',
@@ -185,7 +190,25 @@ test("evidence manifest keeps mock and real WebSocket claims separate", () => {
   assert.equal(manifest.browser_dom_capture.production, false);
   assert.ok(manifest.browser_dom_capture.excludes.includes("AX-tree"));
   assert.equal(manifest.browser_observation, "docs/evidence/251/browser-dom-capture.observed.json");
+  assert.equal(manifest.browser_ax_observation, "docs/evidence/251/browser-ax-capture.observed.json");
+  assert.equal(manifest.browser_screenshot, "docs/evidence/251/browser-ax-capture.png");
   assert.deepEqual(manifest.scenarios, UX_SCENARIO_IDS);
   assert.ok(manifest.limitations.some((item) => /real authenticated WebSocket/i.test(item)));
-  assert.ok(manifest.limitations.some((item) => /AX-tree|screenshot/i.test(item)));
+  assert.ok(manifest.limitations.some((item) => /screen-reader|axe/i.test(item)));
+});
+
+test("committed Chrome observation stays scoped to browser AX/render and mock transport", () => {
+  assert.equal(browserObservation.production, false);
+  assert.equal(browserObservation.capture.action_count, 16);
+  assert.equal(browserObservation.browser_runtime.ax_tree_nodes, 1347);
+  assert.equal(browserObservation.browser_runtime.screenshot_captured_in_memory, true);
+  assert.equal(browserObservation.browser_runtime.screenshot_format, "png");
+  assert.equal(browserObservation.browser_runtime.dom_runtime.commit_count, 1);
+  assert.equal(browserObservation.transport.mode, "mock");
+  assert.equal(browserObservation.transport.real_websocket_capture, false);
+  assert.ok(browserObservation.limitations.some((item) => /screen-reader/i.test(item)));
+  assert.equal(browserAxObservation.ax_tree.captured, true);
+  assert.equal(browserAxObservation.ax_tree.node_count, 1347);
+  assert.equal(browserAxObservation.screenshot.file, "docs/evidence/251/browser-ax-capture.png");
+  assert.ok(browserScreenshot.byteLength > 0);
 });

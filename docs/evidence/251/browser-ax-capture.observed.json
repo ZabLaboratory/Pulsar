@@ -1,0 +1,310 @@
+{
+  "schema": "pulsar.ux-251.browser-ax-observation.v1",
+  "issue": "ZabLaboratory/Pulsar#251",
+  "production": false,
+  "source": {
+    "browser": "Chrome headless via CDP",
+    "url": "http://127.0.0.1:8765/consumer.html?capture=keyboard",
+    "command": "chrome --headless=new --disable-gpu --dump-dom --virtual-time-budget=2500 http://127.0.0.1:8765/consumer.html?capture=keyboard",
+    "capture_method": "Accessibility.getFullAXTree + Page.captureScreenshot + DOM Runtime.evaluate"
+  },
+  "ax_tree": {
+    "captured": true,
+    "prior_chrome_observation": {
+      "node_count": 843,
+      "context": "Initial DOM capture before the required Tab/Shift+Tab trace was added"
+    },
+    "node_count": 1347,
+    "ignored_node_count": 17,
+    "selected_nodes": [
+      {
+        "node_id": "602",
+        "role": "link",
+        "name": "Aller au contenu principal",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "603",
+        "role": "banner",
+        "name": "État du runtime",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "607",
+        "role": "heading",
+        "name": "Pulsar operator surface",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "618",
+        "role": "region",
+        "name": "Surfaces Preview et On-Air",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "637",
+        "role": "region",
+        "name": "T-bar",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "651",
+        "role": "region",
+        "name": "Transition status",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "662",
+        "role": "region",
+        "name": "Capture navigateur DOM",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "638",
+        "role": "heading",
+        "name": "T-bar",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "448",
+        "role": "slider",
+        "name": "T-bar",
+        "description": "Transition input uniquement: la position n’est jamais une preuve de commit. Utilisez les flèches, Home/End et PageUp/PageDown.",
+        "ignored": false,
+        "disabled": true,
+        "focused": null,
+        "valuetext": "0",
+        "valuemin": 0,
+        "valuemax": 100,
+        "valuenow": null
+      },
+      {
+        "node_id": "647",
+        "role": "status",
+        "name": "",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "594",
+        "role": "button",
+        "name": "Take / confirmer la Preview",
+        "description": null,
+        "ignored": false,
+        "disabled": true,
+        "focused": true,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "652",
+        "role": "heading",
+        "name": "Transition status",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "653",
+        "role": "status",
+        "name": "",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "663",
+        "role": "heading",
+        "name": "Capture navigateur DOM",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "667",
+        "role": "link",
+        "name": "Télécharger l’évidence JSON DOM",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "620",
+        "role": "heading",
+        "name": "On-Air",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "631",
+        "role": "heading",
+        "name": "Preview",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "516",
+        "role": "textbox",
+        "name": "Nom de la scène à préparer",
+        "description": "256 caractères maximum. Préparer ne change jamais On-Air.",
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      },
+      {
+        "node_id": "636",
+        "role": "button",
+        "name": "Préparer la Preview",
+        "description": null,
+        "ignored": false,
+        "disabled": null,
+        "focused": null,
+        "valuetext": null,
+        "valuemin": null,
+        "valuemax": null,
+        "valuenow": null
+      }
+    ]
+  },
+  "dom_runtime": {
+    "marker": "browser_dom_capture=true",
+    "capture_mode": "keyboard",
+    "scenario": "UX-09",
+    "action_count": 16,
+    "focus_trace_count": 11,
+    "active_id": "take-button",
+    "active_role": null,
+    "active_aria_disabled": "true",
+    "live_status": "Commit confirmé à la frame 20",
+    "live_status_aria_live": "polite",
+    "commit_count": 1,
+    "role_map": {
+      "on_air_lane_id": "lane-b",
+      "preview_lane_id": "lane-a"
+    },
+    "tbar_space_commit_count_before": 0,
+    "tbar_space_commit_count_after": 0,
+    "take_commit_count_before": 0,
+    "take_commit_count_after": 1,
+    "transport": {
+      "mode": "mock",
+      "real_websocket_attempted": false,
+      "real_websocket_capture": false
+    }
+  },
+  "screenshot": {
+    "captured": true,
+    "file": "docs/evidence/251/browser-ax-capture.png",
+    "format": "png",
+    "bytes": 20622
+  },
+  "transport": {
+    "mode": "mock",
+    "real_websocket_attempted": false,
+    "real_websocket_capture": false
+  },
+  "limitations": [
+    "Browser AX tree and rendered screenshot only; not a screen-reader or assistive-technology assertion.",
+    "Mock feed only; no authenticated or real WebSocket/on-air result is claimed."
+  ]
+}

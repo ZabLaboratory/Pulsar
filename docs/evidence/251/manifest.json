@@ -8,6 +8,8 @@
   "tests": "tests/ux-251/consumer.test.mjs",
   "evidence": "docs/evidence/251/ux-scenarios.mock.json",
   "browser_observation": "docs/evidence/251/browser-dom-capture.observed.json",
+  "browser_ax_observation": "docs/evidence/251/browser-ax-capture.observed.json",
+  "browser_screenshot": "docs/evidence/251/browser-ax-capture.png",
   "transport": {
     "mode": "mock",
     "real_websocket_attempted": false,
@@ -38,7 +40,7 @@
   },
   "limitations": [
     "No real authenticated WebSocket capture is included.",
-    "No browser AX-tree, screenshot, axe, or deployed-runtime result is represented as PASS.",
+    "No screen-reader, assistive-technology, axe, or deployed-runtime result is represented as PASS.",
     "Mock reducer evidence does not prove libobs or on-air output behavior."
   ]
 }

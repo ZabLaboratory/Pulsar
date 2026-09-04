@@ -1065,6 +1065,32 @@ function bootConsumer() {
       });
       if (transitionStatus.textContent && !liveStatus.includes(transitionStatus.textContent)) liveStatus.push(transitionStatus.textContent);
     };
+    const captureTab = (action, from, to, modifiers = {}) => {
+      const beforeCommit = state.commit_count;
+      const event = new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: Boolean(modifiers.shiftKey),
+        bubbles: true,
+        cancelable: true,
+      });
+      from.focus();
+      const dispatched = from.dispatchEvent(event);
+      // Synthetic Tab events do not invoke the browser's default focus
+      // traversal consistently in headless implementations. Focus the next
+      // deterministic target explicitly and record both halves of the path.
+      const focus = captureFocus(`${action}-focus`, to);
+      actions.push({
+        action,
+        key: "Tab",
+        shiftKey: Boolean(modifiers.shiftKey),
+        default_prevented: !dispatched,
+        focus,
+        commit_count_before: beforeCommit,
+        commit_count_after: state.commit_count,
+        live_status: transitionStatus.textContent,
+      });
+      if (transitionStatus.textContent && !liveStatus.includes(transitionStatus.textContent)) liveStatus.push(transitionStatus.textContent);
+    };
     const recordStatus = () => {
       if (transitionStatus.textContent && !liveStatus.includes(transitionStatus.textContent)) liveStatus.push(transitionStatus.textContent);
     };
@@ -1078,10 +1104,15 @@ function bootConsumer() {
 
     document.body.tabIndex = -1;
     captureFocus("document-body", document.body);
-    captureFocus("diagnostics", byId("diagnostics-disclosure").querySelector("summary"));
-    captureFocus("scene-name", sceneName);
-    captureFocus("prepare", prepareButton);
-    captureFocus("tbar", tbar);
+    const diagnosticsSummary = byId("diagnostics-disclosure").querySelector("summary");
+    captureTab("tab-diagnostics", document.body, diagnosticsSummary);
+    captureTab("tab-scene", diagnosticsSummary, sceneName);
+    captureTab("tab-prepare", sceneName, prepareButton);
+    captureTab("tab-tbar", prepareButton, tbar);
+    captureTab("tab-take", tbar, takeButton);
+    captureTab("shift-tab-tbar", takeButton, tbar, { shiftKey: true });
+    captureTab("shift-tab-prepare", tbar, prepareButton, { shiftKey: true });
+    captureTab("shift-tab-scene", prepareButton, sceneName, { shiftKey: true });
 
     const sliderValue = (value) => {
       tbar.value = String(Math.max(0, Math.min(100, value)));

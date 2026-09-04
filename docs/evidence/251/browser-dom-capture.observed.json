@@ -30,5 +30,45 @@
   "limitations": [
     "DOM/focus/KeyboardEvent observation only; not an AX-tree, screenshot or screen-reader capture.",
     "Mock feed only; no authenticated or real WebSocket result is claimed."
-  ]
+  ],
+  "browser_runtime": {
+    "browser": "Chrome headless via CDP",
+    "capture_method": "Accessibility.getFullAXTree + Page.captureScreenshot + DOM Runtime.evaluate",
+    "prior_chrome_observation": {
+      "ax_tree_nodes": 843,
+      "context": "Initial DOM capture before the required Tab/Shift+Tab trace was added"
+    },
+    "ax_tree_nodes": 1347,
+    "ax_landmarks_labels_captured": true,
+    "screenshot_captured_in_memory": true,
+    "screenshot_format": "png",
+    "screenshot_bytes": 20622,
+    "dom_runtime": {
+      "marker": "browser_dom_capture=true",
+      "capture_mode": "keyboard",
+      "scenario": "UX-09",
+      "action_count": 16,
+      "focus_trace_count": 11,
+      "active_id": "take-button",
+      "active_role": null,
+      "active_aria_disabled": "true",
+      "live_status": "Commit confirmé à la frame 20",
+      "live_status_aria_live": "polite",
+      "commit_count": 1,
+      "role_map": {
+        "on_air_lane_id": "lane-b",
+        "preview_lane_id": "lane-a"
+      },
+      "tbar_space_commit_count_before": 0,
+      "tbar_space_commit_count_after": 0,
+      "take_commit_count_before": 0,
+      "take_commit_count_after": 1,
+      "transport": {
+        "mode": "mock",
+        "real_websocket_attempted": false,
+        "real_websocket_capture": false
+      }
+    },
+    "artifact": "docs/evidence/251/browser-ax-capture.observed.json"
+  }
 }

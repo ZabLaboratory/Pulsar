@@ -44,9 +44,16 @@ focus trace and 16 actions. T-bar keyboard/Space actions kept
 `commit_count_before: 0` and `commit_count_after: 0`; the explicit Take Enter
 path was the only commit (`commit_count_after: 1`), followed by the role-map
 swap and visible `Commit confirmé` status. The compact observation is stored
-in `browser-dom-capture.observed.json`; it is still mock transport evidence.
+in [`browser-dom-capture.observed.json`](./browser-dom-capture.observed.json);
+it is still mock transport evidence. A paired CDP inspection captured the
+browser AX tree (1,347 nodes, including landmarks, labels, slider, buttons and
+status regions) and a 20,622-byte PNG render in memory; the compact record is
+[`browser-ax-capture.observed.json`](./browser-ax-capture.observed.json) and
+the image is [`browser-ax-capture.png`](./browser-ax-capture.png). The initial
+pre-Tab capture observed 843 AX nodes; the current count is larger because the
+required 16-action Tab/Shift+Tab trace is serialized in the visible evidence.
 
-## Reproducible browser AX/screenshot follow-up plan (not executed here)
+## Reproducible screen-reader/axe follow-up plan (not executed here)
 
 The repository checkout is a headless Pulsar build and this unit adds no
 browser automation or axe dependency. To produce a separate browser evidence
@@ -69,9 +76,9 @@ bundle, use a browser runner that can save a screenshot and accessibility tree:
    and only call a commit PASS when the actual `TakeCommitted` event is
    captured. Never merge the mock JSON with a real-WS result.
 
-This plan is intentionally a hand-off: no browser AX-tree, screenshot or
-screen-reader result is represented as PASS in the committed manifest or
-mock evidence.
+This plan is intentionally a hand-off for screen-reader/assistive-technology
+and axe validation. The committed CDP record is browser AX-tree and screenshot
+evidence for the mock consumer only; it is not a screen-reader result.
 
 ## Contract covered
 
@@ -91,16 +98,16 @@ before/after state snapshot. It is explicitly marked `production: false`,
 ## Evidence boundary and limitations
 
 The event feed is deterministic and local. Together with the opt-in Chrome DOM
-dump, it proves the consumer reducer and the exercised DOM/focus/keyboard
-contract; it does not prove libobs, a deployed Pulsar runtime, an authenticated
-WebSocket, a browser AX-tree, a screenshot, a screen reader, or a real on-air
-output.
+dump and paired CDP record, it proves the consumer reducer and the exercised
+DOM/focus/keyboard/browser-AX/render contract for this mock page; it does not
+prove libobs, a deployed Pulsar runtime, an authenticated WebSocket, a screen
+reader, assistive-technology behavior, or a real on-air output.
 
 This worktree does not include a browser automation/axe dependency. A human or
 a separate browser harness can serve `consumer.html`, exercise the documented
-keyboard path, and record AX/screenshot artifacts without changing the reducer
-contract. The page itself never treats T-bar position, a request response, a
-spinner, a timeout, or a changed surface as commit evidence.
+keyboard path, and record screen-reader/axe artifacts without changing the
+reducer contract. The page itself never treats T-bar position, a request
+response, a spinner, a timeout, or a changed surface as commit evidence.
 
 Rollback is deleting this non-production harness path or reverting its signed
 commit; no runtime or production UI files are changed.
