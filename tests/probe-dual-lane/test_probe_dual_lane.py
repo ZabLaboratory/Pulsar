@@ -984,9 +984,85 @@ def test_reader_cleanup_closes_only_after_bounded_join():
     source = inspect.getsource(probe.PulsarProcess._join_process_reader)
     assert "PROCESS_READER_JOIN_TIMEOUT_S" in source
     assert "_close_process_stdout" in source
+    assert "_close_process_stderr" in source
+    assert "stderr_thread" in source
     directshow = inspect.getsource(probe.PulsarProcess._join_directshow_reader)
     assert "_close_directshow_stdout" in directshow
-    assert "thread.is_alive()" in source
+    assert "reader.is_alive()" in source
+
+
+def test_pulsar_child_capture_keeps_stdout_and_stderr_unbuffered_and_separate():
+    source = inspect.getsource(probe.PulsarProcess.spawn)
+    assert "stdout=subprocess.PIPE" in source
+    assert "stderr=subprocess.PIPE" in source
+    assert "stderr=subprocess.STDOUT" not in source
+    assert "bufsize=0" in source
+    assert "text=False" in source
+    assert "pulsar-probe-stderr" in source
+
+
+def test_process_diagnostic_context_reports_exit_and_encoder_components():
+    class DeadProcess:
+        returncode = 17
+
+        def poll(self):
+            return self.returncode
+
+    process = probe.PulsarProcess(Path("pulsar.exe"), "nvenc", Path("record"))
+    process.proc = DeadProcess()
+    process.stdout_lines[:] = ["video encoder allocated: family=nvenc", "mux interleaver stalled"]
+    process.stderr_lines[:] = ["password=do-not-leak", "NVENC error 10"]
+
+    diagnostic = process.diagnostic_context(limit=20)
+    assert "code:17" in diagnostic
+    assert "exit_code_17" in diagnostic
+    assert "video encoder allocated" in diagnostic
+    assert "mux interleaver stalled" in diagnostic
+    assert "NVENC error 10" in diagnostic
+    assert "component_tail=" in diagnostic
+    assert "do-not-leak" not in diagnostic
+
+
+def test_websocket_timeout_reports_request_and_child_diagnostics(monkeypatch):
+    class DeadProcess:
+        returncode = 23
+
+        def poll(self):
+            return self.returncode
+
+    process = probe.PulsarProcess(Path("pulsar.exe"), "nvenc", Path("record"))
+    process.proc = DeadProcess()
+    process.stdout_lines[:] = ["NVENC encoder initialization failed"]
+    inbox = probe.Inbox(process.diagnostic_context)
+
+    class FakeWebSocket:
+        async def send(self, _message):
+            return None
+
+        def recv(self):
+            return None
+
+    async def timeout(_awaitable, timeout=None):
+        del timeout
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(probe.asyncio, "wait_for", timeout)
+    with pytest.raises(probe.ProbeFailure) as failure:
+        asyncio.run(
+            probe.request(
+                inbox,
+                FakeWebSocket(),
+                "StartRecord",
+                "start-record",
+                {"password": "do-not-leak", "outputPath": "record.mp4"},
+            )
+        )
+    message = str(failure.value)
+    assert "obs-websocket response timeout" in message
+    assert "StartRecord" in message and "start-record" in message
+    assert "outputPath" in message
+    assert "exit_code_23" in message and "NVENC encoder initialization failed" in message
+    assert "do-not-leak" not in message
 
 
 def test_recording_release_probe_restores_owned_path(tmp_path):

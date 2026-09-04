@@ -623,6 +623,37 @@ def failure_tail(lines: list[str], limit: int) -> str:
     return "\n".join(f"  | {redact_log_line(line)}" for line in lines[-limit:])
 
 
+def _safe_request_context(
+    request_type: str, request_id: str, data: Mapping[str, object] | None
+) -> dict[str, object]:
+    """Return request identity plus redacted data for timeout diagnostics."""
+
+    encoded_data = json.dumps(data or {}, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    encoded_data = re.sub(
+        r'(?i)("?(?:password|token|secret|stream[-_ ]?key)"?\s*:\s*)'
+        r'("(?:\\.|[^"\\])*"|[^,}]+)',
+        r'\1"[redacted]"',
+        encoded_data,
+    )
+    return {
+        "request_type": request_type,
+        "request_id": request_id,
+        "request_data": redact_log_line(encoded_data),
+    }
+
+
+def _process_diagnostic_context(process: Any, *, limit: int = 120) -> str:
+    """Use rich child diagnostics while keeping small test doubles compatible."""
+
+    diagnostic = getattr(process, "diagnostic_context", None)
+    if callable(diagnostic):
+        return diagnostic(limit=limit)
+    child = getattr(process, "proc", None)
+    code = child.poll() if child is not None and hasattr(child, "poll") else None
+    snapshot = process.snapshot() if callable(getattr(process, "snapshot", None)) else []
+    return f"process_exit={{code:{code!r}}}; combined_tail={failure_tail(snapshot, limit)!r}"
+
+
 def assert_dual_lane_activation(
     process: "PulsarProcess", expected: bool, required_source: str | None = None
 ) -> tuple[str, str, int]:
@@ -1361,8 +1392,14 @@ class PulsarProcess:
         self.rtmp_final_trace_path: pathlib.Path | None = None
         self.recording_output_path: pathlib.Path | None = None
         self.lines: list[str] = []
-        self.condition = threading.Condition()
+        self.stdout_lines: list[str] = []
+        self.stderr_lines: list[str] = []
+        # A timeout diagnostic can be assembled while a wait holds this
+        # condition; use an RLock so the stream-tail snapshot cannot deadlock
+        # the failure path.
+        self.condition = threading.Condition(threading.RLock())
         self.thread: threading.Thread | None = None
+        self.stderr_thread: threading.Thread | None = None
         self.shutdown_event_handle: int | None = None
         self.shutdown_control_expected = False
         self.graceful_shutdown_requested = False
@@ -1493,12 +1530,14 @@ class PulsarProcess:
                 cwd=str(self.exe.parent),
                 env=env,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
-                bufsize=1,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+                # Keep both child streams as unbuffered binary pipes.  The
+                # probe's reader threads decode complete lines, so a verbose
+                # encoder/muxer diagnostic cannot fill one merged pipe while
+                # the other stream is waiting to be drained.
+                bufsize=0,
+                text=False,
                 creationflags=creationflags,
                 startupinfo=startupinfo,
                 close_fds=startupinfo is not None,
@@ -1514,8 +1553,12 @@ class PulsarProcess:
             except ProbeFailure as exc:
                 self.graceful_shutdown_error = str(exc)
                 raise
-        self.thread = threading.Thread(target=self._pump, name="pulsar-probe-log", daemon=True)
+        self.thread = threading.Thread(target=self._pump, name="pulsar-probe-stdout", daemon=True)
         self.thread.start()
+        self.stderr_thread = threading.Thread(
+            target=self._pump_stderr, name="pulsar-probe-stderr", daemon=True
+        )
+        self.stderr_thread.start()
 
     def cef_url_for_lane(self, lane: str) -> str:
         if lane not in ("A", "B") or not self.cef_url:
@@ -1531,19 +1574,70 @@ class PulsarProcess:
 
     def _pump(self) -> None:
         assert self.proc is not None and self.proc.stdout is not None
+        self._pump_stream(self.proc.stdout, self.stdout_lines)
+
+    def _pump_stderr(self) -> None:
+        assert self.proc is not None and self.proc.stderr is not None
+        self._pump_stream(self.proc.stderr, self.stderr_lines)
+
+    def _pump_stream(self, stream: Any, target: list[str]) -> None:
+        pending = b""
         try:
-            for line in self.proc.stdout:
-                with self.condition:
-                    self.lines.append(line.rstrip("\r\n"))
-                    self.condition.notify_all()
+            while True:
+                chunk = stream.readline()
+                if not chunk:
+                    break
+                pending += chunk
+                while b"\n" in pending:
+                    raw_line, pending = pending.split(b"\n", 1)
+                    self._store_process_line(raw_line, target)
+            if pending:
+                self._store_process_line(pending, target)
         except (OSError, ValueError):
             # A descendant can inherit the pipe writer after the owner exits.
             # The bounded join below closes the parent's read end to unblock it.
             return
 
+    def _store_process_line(self, raw_line: bytes, target: list[str]) -> None:
+        line = raw_line.rstrip(b"\r").decode("utf-8", errors="replace")
+        with self.condition:
+            target.append(line)
+            self.lines.append(line)
+            self.condition.notify_all()
+
     def snapshot(self) -> list[str]:
         with self.condition:
             return list(self.lines)
+
+    def diagnostic_context(self, *, limit: int = 120) -> str:
+        """Return bounded child/process diagnostics for a failed probe step."""
+
+        with self.condition:
+            stdout = list(self.stdout_lines[-limit:])
+            stderr = list(self.stderr_lines[-limit:])
+            combined = list(self.lines[-limit:])
+        process = self.proc
+        returncode = process.poll() if process is not None else None
+        if returncode is None:
+            exit_state = "running"
+        elif returncode < 0:
+            exit_state = f"signal_{-returncode}"
+        elif returncode == 0:
+            exit_state = "normal_exit"
+        else:
+            exit_state = f"exit_code_{returncode}"
+        component_lines = [
+            line
+            for line in stdout + stderr
+            if re.search(r"(?i)(nvenc|encoder|mux|interleav)", line)
+        ][-limit:]
+        return (
+            f"process_exit={{code:{returncode!r},state:{exit_state!r}}}; "
+            f"stdout_tail={failure_tail(stdout, limit)!r}; "
+            f"stderr_tail={failure_tail(stderr, limit)!r}; "
+            f"component_tail={failure_tail(component_lines, limit)!r}; "
+            f"combined_tail={failure_tail(combined, limit)!r}"
+        )
 
     def wait_for(self, pattern: re.Pattern[str], timeout: float) -> re.Match[str]:
         deadline = time.monotonic() + timeout
@@ -1558,7 +1652,8 @@ class PulsarProcess:
                     status = self.proc.poll() if self.proc is not None else None
                     tail = failure_tail(self.lines, 40)
                     raise ProbeFailure(
-                        f"timeout waiting for {pattern.pattern!r}; exit={status}\n{tail}"
+                        f"timeout waiting for {pattern.pattern!r}; exit={status}\n{tail}\n"
+                        f"diagnostic={self.diagnostic_context(limit=40)}"
                     )
                 self.condition.wait(timeout=min(0.25, remaining))
 
@@ -1600,7 +1695,10 @@ class PulsarProcess:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     tail = failure_tail(self.lines, 60)
-                    raise ProbeFailure(f"TakeCommitted count={count} not observed\n{tail}")
+                    raise ProbeFailure(
+                        f"TakeCommitted count={count} not observed\n{tail}\n"
+                        f"diagnostic={self.diagnostic_context(limit=60)}"
+                    )
                 self.condition.wait(timeout=min(0.25, remaining))
 
     def start_directshow_consumer(self) -> None:
@@ -1977,7 +2075,10 @@ class PulsarProcess:
             and self.proc.returncode is not None
             and self.proc.returncode != 0
         ):
-            raise ProbeFailure(f"Pulsar exited with non-zero status {self.proc.returncode}")
+            raise ProbeFailure(
+                f"Pulsar exited with non-zero status {self.proc.returncode}; "
+                f"diagnostic={self.diagnostic_context()}"
+            )
         reader_failure = self._join_process_reader()
         if reader_failure is not None:
             raise ProbeFailure(reader_failure)
@@ -2030,18 +2131,29 @@ class PulsarProcess:
                 raise ProbeFailure("Pulsar graceful shutdown log line was not observed")
 
     def _join_process_reader(self) -> str | None:
-        """Join Pulsar's stdout pump after child exit, with a hard bound."""
+        """Join both unbuffered Pulsar stream pumps after child exit."""
 
-        if self.thread is None:
-            return None
-        self.thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
-        if self.thread.is_alive():
-            self._close_process_stdout()
-            self.thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
-        if self.thread.is_alive():
-            return "Pulsar log reader thread did not exit"
-        self.thread = None
-        return None
+        failures: list[str] = []
+        for attr, close, label in (
+            ("thread", self._close_process_stdout, "stdout"),
+            ("stderr_thread", self._close_process_stderr, "stderr"),
+        ):
+            reader = getattr(self, attr)
+            if reader is None:
+                continue
+            reader.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
+            if reader.is_alive():
+                close()
+                reader.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
+            if reader.is_alive():
+                failures.append(
+                    "Pulsar log reader thread did not exit"
+                    if label == "stdout"
+                    else "Pulsar stderr log reader thread did not exit"
+                )
+            else:
+                setattr(self, attr, None)
+        return "; ".join(failures) if failures else None
 
     def _close_process_stdout(self) -> None:
         stdout = getattr(self.proc, "stdout", None)
@@ -2052,13 +2164,31 @@ class PulsarProcess:
         except (OSError, ValueError):
             return
 
+    def _close_process_stderr(self) -> None:
+        stderr = getattr(self.proc, "stderr", None)
+        if self.proc is None or stderr is None:
+            return
+        try:
+            stderr.close()
+        except (OSError, ValueError):
+            return
+
 
 class Inbox:
     """Small v5 response/event collector for one WebSocket connection."""
 
-    def __init__(self) -> None:
+    def __init__(self, diagnostic_provider: Any = None) -> None:
         self.responses: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
+        self.last_request: dict[str, object] | None = None
+        self.last_event_wait: dict[str, object] | None = None
+        self.diagnostic_provider = diagnostic_provider
+
+    def timeout_context(self) -> str:
+        context = f"last_request={self.last_request!r}; last_event_wait={self.last_event_wait!r}"
+        if self.diagnostic_provider is None:
+            return context
+        return f"{context}; child={self.diagnostic_provider()}"
 
     def store(self, message: dict[str, Any]) -> None:
         if message.get("op") == 7:
@@ -2110,8 +2240,14 @@ async def request(
     }
     if data is not None:
         request_body["requestData"] = data
-    await ws.send(json.dumps({"op": 6, "d": request_body}))
-    return await inbox.receive_until_response(ws, request_id)
+    inbox.last_request = _safe_request_context(request_type, request_id, data)
+    try:
+        await ws.send(json.dumps({"op": 6, "d": request_body}))
+        return await inbox.receive_until_response(ws, request_id)
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        raise ProbeFailure(
+            f"obs-websocket response timeout: {inbox.timeout_context()}"
+        ) from exc
 
 
 async def request_batch(
@@ -2130,8 +2266,18 @@ async def request_batch(
             "requests": requests,
         },
     }
-    await ws.send(json.dumps(payload))
-    return await inbox.receive_until_batch_response(ws, request_id)
+    inbox.last_request = {
+        "request_type": "BatchRequest",
+        "request_id": request_id,
+        "request_data": f"count={len(requests)} execution_type={execution_type}",
+    }
+    try:
+        await ws.send(json.dumps(payload))
+        return await inbox.receive_until_batch_response(ws, request_id)
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        raise ProbeFailure(
+            f"obs-websocket batch response timeout: {inbox.timeout_context()}"
+        ) from exc
 
 
 def assert_success(response: dict[str, Any], operation: str) -> None:
@@ -2172,6 +2318,7 @@ async def wait_event(
                 return inbox.events.pop(index)
         return None
 
+    inbox.last_event_wait = {"event_type": event_type, "timeout_s": timeout}
     event = take_matching()
     if event is not None:
         return event
@@ -2180,8 +2327,15 @@ async def wait_event(
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise ProbeFailure(f"timeout waiting for event {event_type!r}")
-        message = json.loads(await asyncio.wait_for(ws.recv(), timeout=remaining))
+            raise ProbeFailure(
+                f"obs-websocket event timeout: {inbox.timeout_context()}"
+            )
+        try:
+            message = json.loads(await asyncio.wait_for(ws.recv(), timeout=remaining))
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            raise ProbeFailure(
+                f"obs-websocket event timeout: {inbox.timeout_context()}"
+            ) from exc
         if message.get("op") == 5:
             inbox.events.append(message.get("d", {}))
         elif message.get("op") == 7:
@@ -2683,7 +2837,8 @@ async def wait_for_nonblack_source(
         await asyncio.sleep(SOURCE_SCREENSHOT_INTERVAL_S)
     raise ProbeFailure(
         f"source {source_name!r} never produced a non-black frame within "
-        f"{SOURCE_SCREENSHOT_DEADLINE_S:.0f}s ({last_failure})"
+        f"{SOURCE_SCREENSHOT_DEADLINE_S:.0f}s ({last_failure}); "
+        f"diagnostic={inbox.timeout_context()}"
     )
 
 
@@ -3055,7 +3210,8 @@ async def wait_for_take_boundaries(
     while True:
         if process.proc is not None and process.proc.poll() is not None:
             raise ProbeFailure(
-                f"runtime exited before complete boundary correlation for {take_id}"
+                f"runtime exited before complete boundary correlation for {take_id}; "
+                f"diagnostic={_process_diagnostic_context(process, limit=60)}"
             )
         try:
             lines = process.trace_path.read_text(encoding="utf-8").splitlines()
@@ -3184,7 +3340,8 @@ async def wait_for_take_boundaries(
             counts += f", rtmp_candidates={len(packet_candidates)}, rtmp_packets={len(receiver_packets)}"
             tail = failure_tail(process.snapshot(), 8)
             raise ProbeFailure(
-                f"{take_id} boundary correlation incomplete before {timeout:.1f}s: {counts}\n{tail}"
+                f"{take_id} boundary correlation incomplete before {timeout:.1f}s: {counts}\n{tail}\n"
+                f"diagnostic={_process_diagnostic_context(process, limit=60)}"
             )
         await asyncio.sleep(0.05)
 
@@ -3305,7 +3462,7 @@ async def collect_resource_samples(
         ws_url, subprotocols=["obswebsocket.json"], open_timeout=15, max_size=2**24
     ) as ws:
         await identify(ws, process.password)
-        inbox = Inbox()
+        inbox = Inbox(process.diagnostic_context)
         lanes = ("A",) if mode == "reference" else ("A", "B")
         await create_public_lane_scenes(inbox, ws, process, lanes=lanes)
         response = await request(
@@ -3424,7 +3581,8 @@ async def collect_resource_samples(
                             "verify nvidia-smi, platform counters and the recording output on this host"
                         )
                     raise ProbeFailure(
-                        f"runtime exited before collecting {minimum_samples} active {mode} resource samples"
+                        f"runtime exited before collecting {minimum_samples} active {mode} resource samples; "
+                        f"diagnostic={_process_diagnostic_context(process, limit=60)}"
                     )
                 await asyncio.sleep(0.25)
 
@@ -3478,7 +3636,7 @@ async def wait_for_eligible_resource_samples(
         if process.proc is not None and process.proc.poll() is not None:
             raise ProbeFailure(
                 f"runtime exited before collecting {minimum_samples} active NVENC+RTMP "
-                f"{mode} resource samples"
+                f"{mode} resource samples; diagnostic={_process_diagnostic_context(process, limit=60)}"
             )
         total = 0
         active = 0
@@ -3523,7 +3681,7 @@ async def wait_for_eligible_resource_samples(
                 )
             raise ProbeFailure(
                 f"runtime exited before collecting {minimum_samples} active NVENC+RTMP "
-                f"{mode} resource samples"
+                f"{mode} resource samples; diagnostic={_process_diagnostic_context(process, limit=60)}"
             )
         await asyncio.sleep(0.25)
 
@@ -3635,7 +3793,7 @@ async def drive(
         ws_url, subprotocols=["obswebsocket.json"], open_timeout=15, max_size=2**24
     ) as ws:
         await identify(ws, process.password)
-        inbox = Inbox()
+        inbox = Inbox(process.diagnostic_context)
         await create_public_lane_scenes(inbox, ws, process, lanes=("A", "B"))
 
         # Establish a known program before studio mode.  The non-studio path
