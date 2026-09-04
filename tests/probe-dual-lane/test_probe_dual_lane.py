@@ -859,6 +859,7 @@ def _reference_append_records():
     session["hardware"] = {"host": "fixture-host", "gpu": "fixture-gpu"}
     session["producer_topology"] = "single_lane_reference"
     session["producer_count"] = 1
+    session["evidence_kind"] = "runtime"
     for record in records[1:]:
         record["runtime_instance_id"] = session["runtime_instance_id"]
         record["build_revision"] = session["build_revision"]
@@ -868,10 +869,19 @@ def _reference_append_records():
     return records
 
 
-def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_path):
+def _write_signed_trace(path, records, monkeypatch):
+    key_path = probe.trace_integrity.ensure_key(path)
+    monkeypatch.setenv(
+        probe.trace_integrity.KEY_ENV,
+        key_path.read_text(encoding="ascii").strip(),
+    )
+    probe.trace_integrity.write_trace(path, records, key_path)
+
+
+def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_path, monkeypatch):
     records = _reference_append_records()
     path = tmp_path / "reference.jsonl"
-    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    _write_signed_trace(path, records, monkeypatch)
     probe.validate_trace_append(
         path,
         runtime_id="runtime-fixture-001",
@@ -882,7 +892,7 @@ def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_pat
     )
 
     records[0].pop("rtmp_load_requested")
-    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    _write_signed_trace(path, records, monkeypatch)
     with pytest.raises(probe.ProbeFailure, match="requires reference rtmp_load_requested"):
         probe.validate_trace_append(
             path,
@@ -894,7 +904,7 @@ def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_pat
         )
 
     records = _reference_append_records()
-    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    _write_signed_trace(path, records, monkeypatch)
     with pytest.raises(probe.ProbeFailure, match="lacks enough active NVENC samples"):
         probe.validate_trace_append(
             path,
@@ -908,7 +918,7 @@ def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_pat
 
     records = _reference_append_records()
     records[1]["encode_time_samples"] = 0
-    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    _write_signed_trace(path, records, monkeypatch)
     with pytest.raises(probe.ProbeFailure, match="1 < 2"):
         probe.validate_trace_append(
             path,

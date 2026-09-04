@@ -161,13 +161,48 @@ def test_trace_writer_surfaces_io_fault_and_stops_accepting_evidence():
     source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
         encoding="utf-8"
     )
-    assert "integrity_fault=1 reason=trace_write_failed" in source
-    assert "output.flush();" in source
-    assert "success = success && !output.fail();" in source
+    assert "trace_write_failed" in source
+    assert "FlushFileBuffers(traceFileHandle_)" in source
+    assert "trace_close_failed" in source
+    assert "trace_footer_write_failed" in source
+    assert "trace_manifest_open_failed" in source
+    assert "trace_manifest_write_failed" in source
+    assert "trace_manifest_flush_failed" in source
+    assert "trace_manifest_install_failed" in source
     writer = source[source.index("void traceWriterLoop()"):source.index("bool enqueueLine", source.index("void traceWriterLoop()"))]
     assert "writerAccepting_ = false;" in writer
     assert "writerQueue_.clear();" in writer
     assert "signalMask_.store(0, std::memory_order_release);" in writer
+
+
+def test_trace_writer_has_external_mac_footer_and_append_anchor():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert 'PULSAR_TRACE_HMAC_KEY' in source
+    assert 'PULSAR_TRACE_HMAC_KEY_PATH' not in source
+    assert 'pulsar.trace-integrity.v1' in source
+    assert 'traceChainHead_' in source
+    assert 'record_mac' in source
+    assert 'manifestMac' in source
+    assert 'trace_sha256' in source
+    assert 'MoveFileExW' in source
+    assert 'trace_footer' in source
+    assert 'prepareTraceFile(append && hasExisting)' in source
+
+
+def test_named_mapping_race_closes_existing_handles_in_both_producers():
+    shared_patch = (ROOT / "patches" / "0035-fix-modern-cpu-queue-mapping-collision.patch").read_text(
+        encoding="utf-8"
+    )
+    dshow_patch = (ROOT / "patches" / "0032-fix-cpu-queue-mapping-collision.patch").read_text(
+        encoding="utf-8"
+    )
+    for patch in (shared_patch, dshow_patch):
+        assert "GetLastError() == ERROR_ALREADY_EXISTS" in patch
+        assert "CloseHandle(vq.handle);" in patch
+        assert "vq.handle = NULL;" in patch
+        assert "return NULL;" in patch
 
 
 def test_trace_writer_queue_is_bounded_and_overflow_fails_closed():

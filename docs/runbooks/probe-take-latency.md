@@ -51,6 +51,13 @@ ambiguous AC-12b evidence leaves AC-12 `UNPROVEN`.
 One file describes one runtime/session. The first JSONL record is the session
 metadata:
 
+Runtime traces also require the operator-held, out-of-band environment secret
+`PULSAR_TRACE_HMAC_KEY`: exactly 64 lowercase hexadecimal characters. Keep it
+in the host secret store and export it for both the producer run and any later
+verification. The runtime never writes this key beside the trace. Each trace
+has a terminal authenticated footer and an external MAC'd manifest; missing or
+altered key, record, footer, manifest, or file bytes is non-acceptance evidence.
+
 ```json
 {
   "record_type": "session",

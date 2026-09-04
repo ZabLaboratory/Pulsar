@@ -69,6 +69,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from fractions import Fraction
+import importlib.util
 import json
 import math
 from pathlib import Path
@@ -84,6 +85,15 @@ from typing import Any, Iterable, Mapping, Sequence
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+
+_TRACE_INTEGRITY_SPEC = importlib.util.spec_from_file_location(
+    "pulsar_trace_integrity", SCRIPT_DIR / "trace-integrity.py"
+)
+if _TRACE_INTEGRITY_SPEC is None or _TRACE_INTEGRITY_SPEC.loader is None:  # pragma: no cover
+    raise RuntimeError("trace integrity verifier is unavailable")
+trace_integrity = importlib.util.module_from_spec(_TRACE_INTEGRITY_SPEC)
+sys.modules[_TRACE_INTEGRITY_SPEC.name] = trace_integrity
+_TRACE_INTEGRITY_SPEC.loader.exec_module(trace_integrity)
 
 try:
     from contracts.scene_switch_v1 import validate_event
@@ -1175,23 +1185,42 @@ def parse_records(records: Iterable[Mapping[str, Any]], *, source: str = "<memor
     return Trace(session, events, observations, resources, signals, source)
 
 
-def parse_trace(path: Path) -> Trace:
-    """Read and validate one UTF-8 JSONL trace."""
+def parse_trace(
+    path: Path, *, key_path: Path | None = None, key_hex: str | None = None
+) -> Trace:
+    """Read and validate one UTF-8 JSONL trace and its external anchor."""
 
     try:
-        handle = path.open("r", encoding="utf-8")
-    except OSError as exc:
+        first_line = next(line for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+        first_record = json.loads(first_line)
+    except StopIteration as exc:
+        raise EvidenceError("TRACE_INTEGRITY", "trace is empty") from exc
+    except (OSError, UnicodeError) as exc:
         raise EvidenceError("TRACE_IO", f"cannot open {path}: {exc}") from exc
-    records: list[dict[str, Any]] = []
-    with handle:
-        for line_number, text in enumerate(handle, start=1):
-            if not text.strip():
-                continue
-            try:
-                value = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise EvidenceError("MALFORMED_JSON", exc.msg, line=line_number) from exc
-            records.append(value)
+    except json.JSONDecodeError as exc:
+        raise EvidenceError("MALFORMED_JSON", exc.msg, line=1) from exc
+
+    # Legacy in-memory/unit fixtures remain explicitly non-runtime evidence.
+    # Every runtime trace, including an append/fused artifact, must carry the
+    # authenticated chain, terminal footer, and external manifest.
+    if isinstance(first_record, dict) and first_record.get("evidence_kind") == "fixture" and not first_record.get(
+        "trace_integrity"
+    ):
+        try:
+            records = [
+                json.loads(text)
+                for text in path.read_text(encoding="utf-8").splitlines()
+                if text.strip()
+            ]
+        except (OSError, UnicodeError) as exc:
+            raise EvidenceError("TRACE_IO", f"cannot open {path}: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise EvidenceError("MALFORMED_JSON", exc.msg) from exc
+    else:
+        try:
+            records, _footer = trace_integrity.read_trace(path, key_path=key_path, key_hex=key_hex)
+        except trace_integrity.TraceIntegrityError as exc:
+            raise EvidenceError("TRACE_INTEGRITY", str(exc)) from exc
     return parse_records(records, source=str(path))
 
 
