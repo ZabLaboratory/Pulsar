@@ -235,6 +235,15 @@ def test_record_probe_pending_timeout_and_refusal_never_fabricate_a_path() -> No
     assert asyncio.run(probe.wait_record_stop(probe.Inbox(), _FakeWs([]), refused)) is None
 
 
+def test_record_split_cleans_up_after_start_or_first_byte_failure() -> None:
+    probe = _load_probe(RECORD_SPLIT_PROBE, "record_split_cleanup_contract")
+    source = RECORD_SPLIT_PROBE.read_text(encoding="utf-8")
+    assert "async def cleanup_recording(inbox: Inbox, ws, reason: str)" in source
+    assert 'await cleanup_recording(inbox, ws, "start-event-timeout")' in source
+    assert 'await cleanup_recording(inbox, ws, "first-byte-timeout")' in source
+    assert "STOPPED/inactive state" in source
+
+
 def test_record_m2_pending_702_requires_stopped_inactive_and_current_path(tmp_path: Path) -> None:
     probe = _load_probe(RECORD_M2_PROBE, "record_m2_stop_contract")
     output = tmp_path / "final.mp4"

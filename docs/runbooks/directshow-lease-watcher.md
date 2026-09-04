@@ -22,6 +22,17 @@ The observable transitions are:
 does not start a watcher. No producer retains a lease handle, so producer
 lifetime cannot keep a DirectShow event alive.
 
+For gated outputs, the event is only a compatibility signal: publication also
+requires a live connection to the producer-owned challenge-derived named pipe.
+The producer obtains the client PID from the kernel, checks the client session,
+opens a liveness handle, and verifies the executable image before setting
+`consumer_active`. A stale or pre-created event therefore remains detached,
+and a rejected pipe client is disconnected and re-armed for legitimate
+reconnection. This is not a cryptographic same-user authorization boundary:
+an attacker who can replace an allowlisted executable or win the pipe-creation
+race can still deny service. Closing that residual requires an authenticated
+broker or producer-duplicated handle and remains outside this patch.
+
 ## Counters and diagnostics
 
 Set `PULSAR_DIRECTSHOW_LEASE_TELEMETRY=1` (or `true`) before OBS starts to log
