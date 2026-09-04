@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pulsar — consumer UX #251</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1220;
+        --panel: #121c2d;
+        --panel-alt: #17253a;
+        --text: #f4f7fb;
+        --muted: #c7d3e3;
+        --border: #7990ad;
+        --accent: #79c9ff;
+        --accent-strong: #b8e5ff;
+        --on-air: #ffce72;
+        --preview: #9ee6bd;
+        --danger: #ff9c9c;
+        --focus: #ffffff;
+        font: 16px/1.45 system-ui, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      html { background: var(--bg); }
+      body { margin: 0; min-width: 320px; color: var(--text); background: var(--bg); }
+      a { color: var(--accent-strong); }
+      button, input { font: inherit; }
+      button { min-height: 44px; padding: .65rem 1rem; border: 2px solid var(--accent); border-radius: .5rem; color: var(--bg); background: var(--accent-strong); font-weight: 700; cursor: pointer; }
+      button[aria-disabled="true"] { color: var(--muted); border-color: var(--border); background: #2d3a4f; cursor: not-allowed; }
+      button:focus-visible, input:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+      .skip-link { position: absolute; left: 1rem; top: -4rem; z-index: 10; padding: .5rem; background: var(--focus); color: var(--bg); }
+      .skip-link:focus { top: 1rem; }
+      .topbar, main, footer { width: min(1280px, 100%); margin: 0 auto; padding: 1rem; }
+      .topbar { border-bottom: 1px solid var(--border); }
+      .topbar-grid { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+      h1, h2, p { margin-top: 0; }
+      h1 { font-size: clamp(1.25rem, 3vw, 1.75rem); }
+      h2 { font-size: 1.1rem; }
+      .eyebrow { color: var(--muted); font-size: .9rem; letter-spacing: .03em; }
+      .transport { color: var(--preview); }
+      .surfaces { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+      .surface-card { min-width: 0; padding: 1rem; border: 2px solid var(--border); border-radius: .75rem; background: var(--panel); }
+      .surface-card[data-role="on-air"] { border-color: var(--on-air); }
+      .surface-card[data-role="preview"] { border-color: var(--preview); }
+      .surface { display: grid; min-height: 190px; place-items: center; overflow: hidden; padding: 1rem; border-radius: .5rem; background: var(--panel-alt); color: var(--text); text-align: center; overflow-wrap: anywhere; }
+      .surface[data-surface="on-air"] { border-left: .5rem solid var(--on-air); }
+      .surface[data-surface="preview"] { border-left: .5rem solid var(--preview); }
+      .surface-state { color: var(--muted); }
+      label { display: block; margin: 1rem 0 .35rem; color: var(--muted); }
+      input[type="text"] { width: 100%; min-height: 44px; padding: .6rem; border: 2px solid var(--border); border-radius: .5rem; color: var(--text); background: var(--bg); }
+      input[type="range"] { width: 100%; min-height: 44px; accent-color: var(--accent); }
+      input[aria-disabled="true"] { opacity: .65; cursor: not-allowed; }
+      .tbar-section, .status-section { margin-top: 1rem; padding: 1rem; border: 2px solid var(--border); border-radius: .75rem; background: var(--panel); }
+      .tbar-labels, .actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+      .tbar-labels { color: var(--muted); }
+      .tbar-labels strong:first-child { color: var(--preview); }
+      .tbar-labels strong:last-child { color: var(--on-air); }
+      .tbar-value { display: inline-block; min-width: 4rem; color: var(--accent-strong); font-variant-numeric: tabular-nums; }
+      .actions { margin-top: 1rem; }
+      .actions button { flex: 1 1 14rem; }
+      .status-message { min-height: 1.5em; color: var(--accent-strong); font-weight: 700; }
+      .status-recovery, .reason, .details-copy { color: var(--muted); }
+      details { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: .75rem; }
+      summary { cursor: pointer; color: var(--accent-strong); font-weight: 700; }
+      pre { max-height: 18rem; overflow: auto; padding: .75rem; border-radius: .5rem; background: #08101d; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+      footer { color: var(--muted); border-top: 1px solid var(--border); }
+      @media (max-width: 959px) {
+        .surfaces { grid-template-columns: 1fr; }
+        .surface-card[data-role="on-air"] { order: -2; }
+        .surface-card[data-role="preview"] { order: -1; }
+        .tbar-section, .status-section { position: relative; }
+      }
+      @media (max-width: 480px) {
+        .topbar, main, footer { padding: .75rem; }
+        .surface { min-height: 150px; }
+        button, .actions button { width: 100%; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.001ms !important; animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Aller au contenu principal</a>
+    <header class="topbar" aria-label="État du runtime">
+      <div class="topbar-grid">
+        <div>
+          <p class="eyebrow">Consumer non-production — preuve UX #251</p>
+          <h1>Pulsar operator surface</h1>
+        </div>
+        <p id="transport-status" class="transport">Feed local déterministe — aucun serveur connecté</p>
+      </div>
+      <details id="diagnostics-disclosure">
+        <summary>Diagnostics</summary>
+        <p class="details-copy">Les identifiants, révisions et événements servent à la preuve. Aucun secret n’est affiché.</p>
+        <pre id="diagnostics-content">Chargement…</pre>
+      </details>
+    </header>
+    <main id="main-content">
+      <section class="surfaces" aria-label="Surfaces Preview et On-Air">
+        <article class="surface-card" data-role="on-air" aria-labelledby="on-air-heading">
+          <h2 id="on-air-heading">On-Air</h2>
+          <div id="on-air-surface" class="surface" data-surface="on-air" role="img" aria-label="Scène On-Air : Programme principal ; état : en direct, frame 1">Programme principal</div>
+          <p id="on-air-state" class="surface-state">EN DIRECT — Programme principal</p>
+          <details>
+            <summary>Détails On-Air</summary>
+            <p>Le Programme reste stable jusqu’à l’événement corrélé <code>TakeCommitted</code>.</p>
+          </details>
+        </article>
+        <article class="surface-card" data-role="preview" aria-labelledby="preview-heading">
+          <h2 id="preview-heading">Preview</h2>
+          <div id="preview-surface" class="surface" data-surface="preview" role="img" aria-label="Scène Preview : aucune ; état : aucune frame reçue">Aucune frame reçue</div>
+          <p id="preview-state" class="surface-state">Aucune frame reçue</p>
+          <label for="scene-name">Nom de la scène à préparer</label>
+          <input id="scene-name" type="text" maxlength="256" autocomplete="off" value="Lower third" aria-describedby="scene-name-help" />
+          <p id="scene-name-help" class="eyebrow">256 caractères maximum. Préparer ne change jamais On-Air.</p>
+          <button id="prepare-button" type="button" aria-disabled="false" aria-describedby="mutation-reason">Préparer la Preview</button>
+        </article>
+      </section>
+      <section id="tbar-section" class="tbar-section" aria-labelledby="tbar-heading">
+        <h2 id="tbar-heading">T-bar</h2>
+        <p id="tbar-help" class="eyebrow">Transition input uniquement: la position n’est jamais une preuve de commit. Utilisez les flèches, Home/End et PageUp/PageDown.</p>
+        <div class="tbar-labels" aria-hidden="true"><strong>Preview</strong><span>0% → 100%</span><strong>On-Air</strong></div>
+        <input id="tbar-slider" type="range" min="0" max="100" step="1" value="0" role="slider" aria-label="T-bar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="T-bar 0 pour cent" aria-describedby="tbar-help mutation-reason" aria-disabled="true" />
+        <output id="tbar-value" class="tbar-value" for="tbar-slider">0%</output>
+        <div class="actions">
+          <button id="take-button" type="button" aria-disabled="true" aria-describedby="mutation-reason">Take / confirmer la Preview</button>
+          <button id="abort-button" type="button" aria-disabled="true" aria-describedby="mutation-reason" hidden>Annuler le Take en attente</button>
+        </div>
+        <p id="mutation-reason" class="reason">Select a scene and wait for PreviewReady.</p>
+      </section>
+      <section id="transition-status" class="status-section" aria-labelledby="transition-status-heading">
+        <h2 id="transition-status-heading">Transition status</h2>
+        <p id="transition-status-message" class="status-message" role="status" aria-live="polite" aria-atomic="true">Prêt — préparer une Preview</p>
+        <p id="transition-status-recovery" class="status-recovery">Aucune Preview n’est préparée. Sélectionnez une scène, puis Préparer.</p>
+        <details>
+          <summary>Détails du rejet et de la récupération</summary>
+          <p id="status-details" class="details-copy">Aucun détail de rejet ou de récupération</p>
+        </details>
+      </section>
+    </main>
+    <footer><p>Harness local uniquement. Pour un WS réel, fournir explicitement <code>?ws=ws://…</code> ; ce mode n’imite aucun succès serveur.</p></footer>
+    <script type="module" src="./consumer.mjs"></script>
+  </body>
+</html>

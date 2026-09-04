@@ -1,0 +1,36 @@
+{
+  "schema": "pulsar.ux-251.manifest.v1",
+  "issue": "ZabLaboratory/Pulsar#251",
+  "adr": "ADR-PULSAR-DUAL-LANE-001@draft-r2-dual-lane-20260828",
+  "production": false,
+  "consumer": "tests/ux-251/consumer.html",
+  "reducer": "tests/ux-251/consumer.mjs",
+  "tests": "tests/ux-251/consumer.test.mjs",
+  "evidence": "docs/evidence/251/ux-scenarios.mock.json",
+  "transport": {
+    "mode": "mock",
+    "real_websocket_attempted": false,
+    "real_websocket_capture": false,
+    "statement": "The committed JSON is a deterministic local feed only; no authenticated or real WebSocket success is claimed."
+  },
+  "scenarios": [
+    "UX-01", "UX-02", "UX-03", "UX-04", "UX-05", "UX-06",
+    "UX-07", "UX-08", "UX-09", "UX-10", "UX-11"
+  ],
+  "commands": [
+    "node --check tests/ux-251/consumer.mjs",
+    "node --test tests/ux-251/consumer.test.mjs",
+    "node tests/ux-251/consumer.mjs --export docs/evidence/251/ux-scenarios.mock.json"
+  ],
+  "criteria": {
+    "preview_on_air_states": "UX-01,UX-02,UX-03,UX-06 snapshots and consumer DOM labels",
+    "no_duplicate_commit": "UX-04,UX-05,UX-06 reducer snapshots and commit ledger assertions",
+    "recoverable_pending_failed": "UX-02,UX-03,UX-07,UX-08,UX-11 reducer snapshots",
+    "keyboard_accessibility_contract": "consumer.html static contract and UX-09/UX-10 deterministic metadata"
+  },
+  "limitations": [
+    "No real authenticated WebSocket capture is included.",
+    "No browser AX-tree, screenshot, axe, or deployed-runtime result is represented as PASS.",
+    "Mock reducer evidence does not prove libobs or on-air output behavior."
+  ]
+}
