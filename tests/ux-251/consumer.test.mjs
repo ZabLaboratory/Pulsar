@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   applyEvents,
+  browserCaptureConfig,
   createInitialState,
   exportEvidence,
   reduceState,
@@ -43,6 +44,14 @@ test("consumer HTML exposes landmarks, role labels, diagnostics, slider semantic
     'aria-valuetext="T-bar 0 pour cent"',
     'aria-disabled="true"',
     'id="diagnostics-disclosure"',
+    'id="browser-evidence-section"',
+    'id="browser-evidence-json"',
+    'browser_dom_capture=true',
+    'capture=keyboard',
+    'scenario=UX-09',
+    'new KeyboardEvent',
+    'commit_count_before',
+    'aria_disabled',
     'prefers-reduced-motion: reduce',
     'min-height: 44px',
     'max-width: 959px',
@@ -159,11 +168,23 @@ test("WebSocket adapter URL is explicit and only accepts ws/wss", () => {
   assert.throws(() => websocketUrlFromLocation({ href: "https://localhost/consumer.html?ws=https%3A%2F%2Fexample.test" }), /ws: or wss:/);
 });
 
+test("browser DOM capture mode is opt-in and scoped to deterministic UX-09", () => {
+  assert.deepEqual(browserCaptureConfig({ href: "http://127.0.0.1:8765/consumer.html" }), { enabled: false, scenario: null, mode: null });
+  assert.deepEqual(browserCaptureConfig({ href: "http://127.0.0.1:8765/consumer.html?capture=keyboard" }), { enabled: true, scenario: "UX-09", mode: "keyboard" });
+  assert.deepEqual(browserCaptureConfig({ href: "http://127.0.0.1:8765/consumer.html?scenario=UX-09" }), { enabled: true, scenario: "UX-09", mode: "keyboard" });
+  assert.deepEqual(browserCaptureConfig({ href: "http://127.0.0.1:8765/consumer.html?scenario=UX-01" }), { enabled: false, scenario: null, mode: null });
+});
+
 test("evidence manifest keeps mock and real WebSocket claims separate", () => {
   assert.equal(manifest.production, false);
   assert.equal(manifest.transport.mode, "mock");
   assert.equal(manifest.transport.real_websocket_attempted, false);
   assert.equal(manifest.transport.real_websocket_capture, false);
+  assert.deepEqual(manifest.browser_dom_capture.enabled_by, ["?capture=keyboard", "?scenario=UX-09"]);
+  assert.equal(manifest.browser_dom_capture.marker, "browser_dom_capture=true");
+  assert.equal(manifest.browser_dom_capture.production, false);
+  assert.ok(manifest.browser_dom_capture.excludes.includes("AX-tree"));
+  assert.equal(manifest.browser_observation, "docs/evidence/251/browser-dom-capture.observed.json");
   assert.deepEqual(manifest.scenarios, UX_SCENARIO_IDS);
   assert.ok(manifest.limitations.some((item) => /real authenticated WebSocket/i.test(item)));
   assert.ok(manifest.limitations.some((item) => /AX-tree|screenshot/i.test(item)));

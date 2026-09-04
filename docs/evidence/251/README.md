@@ -24,7 +24,29 @@ deterministic local feed and has no authenticated WebSocket claim. A real
 transport is opt-in through `?ws=ws://127.0.0.1:4455`; the adapter waits for
 actual server events and does not synthesize success.
 
-## Reproducible browser-capture plan (not executed here)
+To produce the deterministic browser-DOM capture, add `?capture=keyboard` (or
+`?scenario=UX-09`). The page then executes the DOM/focus/`KeyboardEvent` path,
+reveals a visible JSON block marked `browser_dom_capture=true`, and exposes a
+download link. With Chrome available, a reproducible dump is:
+
+```text
+python -m http.server 8765 --directory tests/ux-251
+chrome --headless=new --disable-gpu --dump-dom --virtual-time-budget=2500 "http://127.0.0.1:8765/consumer.html?capture=keyboard" > browser-dom-evidence.html
+```
+
+The dumped DOM is still only DOM/focus/keyboard evidence. It must not be
+reported as an AX-tree, screenshot, screen-reader, authenticated WebSocket or
+deployed-runtime result.
+
+The command was exercised with Chrome headless on this work unit. The dumped
+DOM contained `browser_dom_capture=true`, `capture_mode: keyboard`, a complete
+focus trace and 16 actions. T-bar keyboard/Space actions kept
+`commit_count_before: 0` and `commit_count_after: 0`; the explicit Take Enter
+path was the only commit (`commit_count_after: 1`), followed by the role-map
+swap and visible `Commit confirmé` status. The compact observation is stored
+in `browser-dom-capture.observed.json`; it is still mock transport evidence.
+
+## Reproducible browser AX/screenshot follow-up plan (not executed here)
 
 The repository checkout is a headless Pulsar build and this unit adds no
 browser automation or axe dependency. To produce a separate browser evidence
@@ -47,8 +69,9 @@ bundle, use a browser runner that can save a screenshot and accessibility tree:
    and only call a commit PASS when the actual `TakeCommitted` event is
    captured. Never merge the mock JSON with a real-WS result.
 
-This plan is intentionally a hand-off: no browser AX-tree or screenshot is
-represented as PASS in the committed manifest or mock evidence.
+This plan is intentionally a hand-off: no browser AX-tree, screenshot or
+screen-reader result is represented as PASS in the committed manifest or
+mock evidence.
 
 ## Contract covered
 
@@ -67,13 +90,14 @@ before/after state snapshot. It is explicitly marked `production: false`,
 
 ## Evidence boundary and limitations
 
-The event feed is deterministic and local. It proves the consumer reducer and
-its accessibility-oriented DOM contract; it does not prove libobs, a deployed
-Pulsar runtime, an authenticated WebSocket, or a real on-air output.
+The event feed is deterministic and local. Together with the opt-in Chrome DOM
+dump, it proves the consumer reducer and the exercised DOM/focus/keyboard
+contract; it does not prove libobs, a deployed Pulsar runtime, an authenticated
+WebSocket, a browser AX-tree, a screenshot, a screen reader, or a real on-air
+output.
 
-This worktree does not include a browser automation/axe dependency and no real
-browser AX-tree or screenshot capture is claimed by the JSON evidence. A human
-or a separate browser harness can serve `consumer.html`, exercise the documented
+This worktree does not include a browser automation/axe dependency. A human or
+a separate browser harness can serve `consumer.html`, exercise the documented
 keyboard path, and record AX/screenshot artifacts without changing the reducer
 contract. The page itself never treats T-bar position, a request response, a
 spinner, a timeout, or a changed surface as commit evidence.

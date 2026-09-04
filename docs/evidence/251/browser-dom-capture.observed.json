@@ -1,0 +1,34 @@
+{
+  "schema": "pulsar.ux-251.browser-dom-observation.v1",
+  "issue": "ZabLaboratory/Pulsar#251",
+  "production": false,
+  "source_command": "chrome --headless=new --disable-gpu --dump-dom --virtual-time-budget=2500 http://127.0.0.1:8765/consumer.html?capture=keyboard",
+  "capture": {
+    "browser_dom_capture": true,
+    "capture_mode": "keyboard",
+    "scenario": "UX-09",
+    "action_count": 16,
+    "focus_trace_present": true
+  },
+  "assertions": {
+    "tbar_keyboard_and_space_do_not_commit": {
+      "commit_count_before": 0,
+      "commit_count_after": 0
+    },
+    "explicit_take_enter_commits_once": {
+      "commit_count_before": 0,
+      "commit_count_after": 1
+    },
+    "role_map_swap_observed": true,
+    "live_status_commit_confirmed_observed": true
+  },
+  "transport": {
+    "mode": "mock",
+    "real_websocket_attempted": false,
+    "real_websocket_capture": false
+  },
+  "limitations": [
+    "DOM/focus/KeyboardEvent observation only; not an AX-tree, screenshot or screen-reader capture.",
+    "Mock feed only; no authenticated or real WebSocket result is claimed."
+  ]
+}

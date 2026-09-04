@@ -786,6 +786,22 @@ export function runScenario(id) {
 
 export const UX_SCENARIO_IDS = Object.freeze(["UX-01", "UX-02", "UX-03", "UX-04", "UX-05", "UX-06", "UX-07", "UX-08", "UX-09", "UX-10", "UX-11"]);
 
+/**
+ * Opt-in browser DOM capture. It deliberately accepts only the keyboard
+ * scenario so a dump cannot be mistaken for a real runtime/AX capture.
+ */
+export function browserCaptureConfig(locationLike = globalThis.location) {
+  if (!locationLike?.href) return { enabled: false, scenario: null, mode: null };
+  const params = new URL(locationLike.href).searchParams;
+  const keyboardCapture = params.get("capture") === "keyboard";
+  const scenarioCapture = params.get("scenario") === "UX-09";
+  return {
+    enabled: keyboardCapture || scenarioCapture,
+    scenario: keyboardCapture || scenarioCapture ? "UX-09" : null,
+    mode: keyboardCapture || scenarioCapture ? "keyboard" : null,
+  };
+}
+
 export function runAllScenarios() {
   return {
     schema: "pulsar.ux-251.evidence.v1",
@@ -900,6 +916,7 @@ const browserApi = {
   applyEvents,
   runScenario,
   runAllScenarios,
+  browserCaptureConfig,
   redactWebSocketUrl,
   websocketUrlFromLocation,
   createWebSocketAdapter,
@@ -975,7 +992,7 @@ function bootConsumer() {
     previewState.textContent = next.preview.ready ? "Preview prête" : (next.preview.scene_name ? "En attente de PreviewReady" : "Aucune frame reçue");
     tbar.value = String(next.tbar);
     tbar.setAttribute("aria-valuenow", String(next.tbar));
-    tbar.setAttribute("aria-valuetext", `T-bar ${next.tbar} percent`);
+    tbar.setAttribute("aria-valuetext", `T-bar ${next.tbar} pour cent`);
     tbarValue.textContent = `${next.tbar}%`;
     const mutationDisabled = next.frozen || next.phase === "outcome_unknown" || !next.operational;
     setDisabled(prepareButton, mutationDisabled || next.phase === "preparing", "mutation-reason");
@@ -1000,6 +1017,137 @@ function bootConsumer() {
     transportStatus.textContent = next.transport.mode === "mock" ? "Feed local déterministe — aucun serveur connecté" : `WebSocket: ${next.transport.status}`;
   }
   function dispatch(event) { render(reduceState(state, event)); }
+  function domFocusSnapshot(element) {
+    return {
+      id: element?.id || null,
+      tag: element?.tagName?.toLowerCase() || null,
+      role: element?.getAttribute?.("role") || null,
+      aria_disabled: element?.getAttribute?.("aria-disabled") || null,
+      aria_live: transitionStatus?.getAttribute("aria-live") || null,
+    };
+  }
+  function runBrowserDomCapture(config) {
+    if (!config.enabled) return;
+    const section = byId("browser-evidence-section");
+    const output = byId("browser-evidence-json");
+    const download = byId("browser-evidence-download");
+    const marker = byId("browser-evidence-marker");
+    const focusTrace = [];
+    const actions = [];
+    const liveStatus = [];
+    const captureFocus = (action, element) => {
+      element.focus();
+      const focus = domFocusSnapshot(element);
+      focus.action = action;
+      focusTrace.push(focus);
+      return focus;
+    };
+    const captureKey = (action, element, key, modifiers = {}) => {
+      const beforeCommit = state.commit_count;
+      const event = new KeyboardEvent("keydown", {
+        key,
+        shiftKey: Boolean(modifiers.shiftKey),
+        bubbles: true,
+        cancelable: true,
+      });
+      element.focus();
+      const dispatched = element.dispatchEvent(event);
+      const focus = domFocusSnapshot(element);
+      actions.push({
+        action,
+        key,
+        shiftKey: Boolean(modifiers.shiftKey),
+        default_prevented: !dispatched,
+        focus,
+        commit_count_before: beforeCommit,
+        commit_count_after: state.commit_count,
+        live_status: transitionStatus.textContent,
+      });
+      if (transitionStatus.textContent && !liveStatus.includes(transitionStatus.textContent)) liveStatus.push(transitionStatus.textContent);
+    };
+    const recordStatus = () => {
+      if (transitionStatus.textContent && !liveStatus.includes(transitionStatus.textContent)) liveStatus.push(transitionStatus.textContent);
+    };
+
+    // Establish a fixed mock PreviewReady state before exercising the real DOM.
+    const payload = { scene_id: "scene-browser-keyboard", scene_name: "Lower third", expected_revisions: { program: 0, preview: 0, role_map: 0 } };
+    dispatch({ type: "PrepareRequested", runtime_instance_id: "runtime-ux-251-mock", command_id: "browser-prepare", server_seq: 1, ...payload, command_payload: payload });
+    dispatch({ type: "PrepareAccepted", runtime_instance_id: "runtime-ux-251-mock", command_id: "browser-prepare", server_seq: 2, ...payload, command_payload: payload });
+    dispatch({ type: "PreviewReady", runtime_instance_id: "runtime-ux-251-mock", command_id: "browser-prepare", server_seq: 3, ...payload, first_frame_id: 10, first_pts_ns: 1000, command_payload: payload });
+    recordStatus();
+
+    document.body.tabIndex = -1;
+    captureFocus("document-body", document.body);
+    captureFocus("diagnostics", byId("diagnostics-disclosure").querySelector("summary"));
+    captureFocus("scene-name", sceneName);
+    captureFocus("prepare", prepareButton);
+    captureFocus("tbar", tbar);
+
+    const sliderValue = (value) => {
+      tbar.value = String(Math.max(0, Math.min(100, value)));
+      tbar.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    captureKey("tbar-step", tbar, "ArrowRight");
+    sliderValue(1);
+    captureKey("tbar-large-step", tbar, "ArrowRight", { shiftKey: true });
+    sliderValue(11);
+    captureKey("tbar-home", tbar, "Home");
+    sliderValue(0);
+    captureKey("tbar-end", tbar, "End");
+    sliderValue(100);
+    captureKey("tbar-page-up", tbar, "PageUp");
+    captureKey("tbar-page-down", tbar, "PageDown");
+    captureKey("tbar-space-no-commit", tbar, " ");
+    // Keep the invariant visible in the dump: Space on the slider is never a
+    // commit affordance.
+    if (state.commit_count !== 0) actions.push({ action: "tbar-space-no-commit-failed", commit_count: state.commit_count });
+    captureFocus("take", takeButton);
+    captureKey("take-explicit", takeButton, "Enter");
+    // Dispatching KeyboardEvent does not invoke a browser's default button
+    // activation in every headless implementation; this explicit click models
+    // the Enter activation while retaining the real event guard.
+    takeButton.click();
+    recordStatus();
+    captureFocus("take-after-commit", takeButton);
+
+    const evidence = {
+      schema: "pulsar.ux-251.browser-dom-evidence.v1",
+      issue: "ZabLaboratory/Pulsar#251",
+      production: false,
+      marker: "browser_dom_capture=true",
+      browser_dom_capture: true,
+      capture_mode: config.mode,
+      scenario: config.scenario,
+      viewport: { width: globalThis.innerWidth || null, height: globalThis.innerHeight || null, zoom: 1 },
+      transport: { mode: state.transport.mode, real_websocket_attempted: state.transport.real_websocket_attempted, real_websocket_capture: false },
+      focus_trace: focusTrace,
+      actions,
+      live_status: liveStatus,
+      final: {
+        focus: domFocusSnapshot(document.activeElement),
+        aria_disabled: {
+          prepare: prepareButton.getAttribute("aria-disabled"),
+          tbar: tbar.getAttribute("aria-disabled"),
+          take: takeButton.getAttribute("aria-disabled"),
+          abort: abortButton.getAttribute("aria-disabled"),
+        },
+        live_status: transitionStatus.textContent,
+        live_status_aria_live: transitionStatus.getAttribute("aria-live"),
+        commit_count: state.commit_count,
+        role_map: clone(state.role_map),
+      },
+      limitations: [
+        "DOM/focus/KeyboardEvent capture only; not an AX-tree, screenshot or screen-reader capture.",
+        "Mock feed only; no authenticated or real WebSocket result is claimed.",
+      ],
+    };
+    const serialized = exportEvidence(evidence);
+    marker.textContent = "browser_dom_capture=true";
+    section.hidden = false;
+    output.textContent = serialized;
+    download.href = `data:application/json;charset=utf-8,${encodeURIComponent(serialized)}`;
+    download.hidden = false;
+  }
   function guard(element, callback) {
     return (event) => {
       if (isDisabled(element)) { event.preventDefault(); event.stopPropagation(); return; }
@@ -1046,6 +1194,7 @@ function bootConsumer() {
   state.transport.configured_url = redactWebSocketUrl(configuredUrl);
   if (configuredUrl) adapter.connect();
   render(state);
+  runBrowserDomCapture(browserCaptureConfig());
 }
 
 bootConsumer();

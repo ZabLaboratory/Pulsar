@@ -139,6 +139,13 @@
           <p id="status-details" class="details-copy">Aucun détail de rejet ou de récupération</p>
         </details>
       </section>
+      <section id="browser-evidence-section" class="status-section" aria-labelledby="browser-evidence-heading" hidden>
+        <h2 id="browser-evidence-heading">Capture navigateur DOM</h2>
+        <p>Capture opt-in de focus, KeyboardEvent, états ARIA et statut visible. Elle ne constitue pas un AX-tree, une capture d’écran ou une preuve de lecteur d’écran.</p>
+        <p id="browser-evidence-marker" class="eyebrow">browser_dom_capture=false</p>
+        <pre id="browser-evidence-json">Capture inactive. Ajoutez <code>?capture=keyboard</code> ou <code>?scenario=UX-09</code>.</pre>
+        <a id="browser-evidence-download" download="pulsar-ux-251-browser-dom.json" hidden>Télécharger l’évidence JSON DOM</a>
+      </section>
     </main>
     <footer><p>Harness local uniquement. Pour un WS réel, fournir explicitement <code>?ws=ws://…</code> ; ce mode n’imite aucun succès serveur.</p></footer>
     <script type="module" src="./consumer.mjs"></script>
