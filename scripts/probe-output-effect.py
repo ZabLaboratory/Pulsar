@@ -71,13 +71,12 @@ Cases (each one is a genuine refusal on the spawned binary, not a mock):
      "success + outputActive:true"), and StopOutput keeps its idle guard.
 
   G. Generic outputs, positive-control leg, in child 2 (writable record dir).
-     StartRecord brings `PulsarRecord` up through the frontend, then the
-     GENERIC requests are driven against that same output by name:
-     GetOutputStatus agrees it is active, StartOutput is refused with the
-     running guard, StopOutput succeeds AND the effect is real (both
-     GetRecordStatus and GetOutputStatus flip to inactive). This is the
-     false-negative fence: the verification must not turn a legitimate
-     generic stop into an error.
+     StartVirtualCam initializes the raw `PulsarVCam` output, then the
+     GENERIC requests are driven against that non-muxer output by name:
+     StartOutput succeeds and becomes active, StartOutput is refused with the
+     running guard, and StopOutput succeeds with an inactive effect. The
+     record path remains independently covered by E, so ffmpeg_muxer flush is
+     not used as a generic latency oracle.
 
   H. outputReconnecting (same audit, GetOutputStatus).
      The field is a straight read of libobs' reconnect atomic
@@ -152,6 +151,10 @@ STOP_PENDING_CODE = 702
 # is what the GENERIC by-name requests address.
 GENERIC_STREAM_OUTPUT = "PulsarStream"
 GENERIC_RECORD_OUTPUT = "PulsarRecord"
+# The generic positive-control leg must exercise a non-muxer output. The
+# record output remains covered separately by case E, while ffmpeg_muxer's
+# asynchronous file flush is not used as a generic request latency oracle.
+GENERIC_RAW_OUTPUT = "PulsarVCam"
 
 # How long the EFFECT of a legitimate stop may take to become observable.
 # StopRecord itself returns a typed 702 when its bounded server settlement is
@@ -583,48 +586,58 @@ async def case_generic_refused(c: Client) -> None:
 
 
 async def case_generic_nominal(c: Client) -> None:
-    print(f"-- G. generic outputs, positive control ({GENERIC_RECORD_OUTPUT} via StartRecord)")
+    print(f"-- G. generic outputs, positive control ({GENERIC_RAW_OUTPUT}, non-muxer)")
 
-    ok, code, comment, _, _ = await c.req("StartRecord")
+    # Frontend virtualcam setup binds the raw output's media and recreates the
+    # output after load-order registration when needed. Stop it before using
+    # the generic by-name API so those requests are the actions under test.
+    ok, code, comment, _, _ = await c.req("StartVirtualCam")
     if not ok:
-        raise Failure(f"StartRecord failed on a writable record dir: {code} {comment}")
+        raise Failure(f"StartVirtualCam setup failed for generic raw output: {code} {comment}")
+    _, _, _, vcam_status, _ = await c.req("GetVirtualCamStatus")
+    if not vcam_status.get("outputActive"):
+        raise Failure("StartVirtualCam setup succeeded but PulsarVCam is inactive")
+    ok, code, comment, _, _ = await c.req("StopVirtualCam")
+    if not ok:
+        raise Failure(f"StopVirtualCam setup failed for generic raw output: {code} {comment}")
 
-    status = await output_status(c, GENERIC_RECORD_OUTPUT)
-    if not status.get("outputActive"):
+    status = await output_status(c, GENERIC_RAW_OUTPUT)
+    if status.get("outputActive") or status.get("outputReconnecting"):
         raise Failure(
-            f"GetOutputStatus({GENERIC_RECORD_OUTPUT}): outputActive=false while StartRecord succeeded "
-            "-- the by-name view disagrees with the frontend view"
+            f"GetOutputStatus({GENERIC_RAW_OUTPUT}): output remains active after setup stop: {status}"
         )
-    if status["outputReconnecting"]:
-        raise Failure(f"GetOutputStatus({GENERIC_RECORD_OUTPUT}): outputReconnecting=true on a local muxer")
-    print("   OK  GetOutputStatus by name agrees the recording is active")
+    print(f"   OK  GetOutputStatus({GENERIC_RAW_OUTPUT}) agrees the raw output is inactive")
 
-    ok, code, _, _, ms = await c.req("StartOutput", {"outputName": GENERIC_RECORD_OUTPUT})
+    ok, code, comment, _, ms = await c.req("StartOutput", {"outputName": GENERIC_RAW_OUTPUT})
+    note_latency("StartOutput(nominal)", ms)
+    if not ok:
+        raise Failure(f"StartOutput on a stopped raw output failed: {code} {comment}")
+    status = await output_status(c, GENERIC_RAW_OUTPUT)
+    if not status.get("outputActive"):
+        raise Failure(f"StartOutput({GENERIC_RAW_OUTPUT}) succeeded but outputActive=false")
+    print(f"   OK  StartOutput({GENERIC_RAW_OUTPUT}) succeeded AND output is active")
+
+    ok, code, _, _, ms = await c.req("StartOutput", {"outputName": GENERIC_RAW_OUTPUT})
     note_latency("StartOutput(running guard)", ms)
     if ok or code != STATUS_OUTPUT_RUNNING:
         raise Failure(f"StartOutput on a running output: ok={ok} code={code}, expected 500")
     print("   OK  StartOutput -> 500 (running guard intact)")
 
-    await asyncio.sleep(1.0)
-
     # The false-negative fence: a legitimate generic stop must still succeed,
-    # and the effect must be real on BOTH views.
-    ok, code, comment, _, ms = await c.req("StopOutput", {"outputName": GENERIC_RECORD_OUTPUT})
+    # and the effect must be real on the raw output itself.
+    ok, code, comment, _, ms = await c.req("StopOutput", {"outputName": GENERIC_RAW_OUTPUT})
     note_latency("StopOutput(nominal)", ms)
-    if not ok and code != STOP_PENDING_CODE:
+    if not ok:
         raise Failure(
-            f"StopOutput failed on a genuinely running output: {code} {comment}\n"
+            f"StopOutput failed on a genuinely running raw output: {code} {comment}\n"
             "This is the false-negative the verification must NEVER produce."
         )
-
-    if not ok:
-        print("   StopOutput accepted (702 Pending); waiting for the terminal STOPPED state")
-    # A Pending verdict is a legitimate success (ffmpeg_muxer flushes and
-    # finalises the mp4 asynchronously), so give the effect a bounded window
-    # to become observable -- but demand that it DOES become observable.
-    await wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopOutput(nominal)")
-    outcome = "succeeded" if ok else "accepted as Pending 702"
-    print(f"   OK  StopOutput {outcome} AND both views agree the output really stopped")
+    status = await output_status(c, GENERIC_RAW_OUTPUT)
+    if status.get("outputActive") or status.get("outputReconnecting"):
+        raise Failure(
+            f"StopOutput({GENERIC_RAW_OUTPUT}) succeeded but raw output remains active: {status}"
+        )
+    print(f"   OK  StopOutput({GENERIC_RAW_OUTPUT}) succeeded AND outputActive=false")
 
 
 def assert_bounded() -> None:
