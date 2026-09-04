@@ -195,6 +195,8 @@ def test_live_selected_scene_references_propagate_and_roles_swap_after_take() ->
     assert "obs_scene_add(laneBScene, obs_scene_get_source(previewBootstrap))" in setup
     assert "obs_scene_add(laneScene, scene)" in replace
     assert "if (!obs_scene_from_source(scene))" in replace
+    assert "obs_sceneitem_get_source(laneItems[lane]) == scene" in replace
+    assert "Avoid an add/remove cycle" in replace
     assert "OBS_SCENE_DUP_PRIVATE_COPY" not in setup + replace
     assert "programSelection != previewSelection" in source
 
@@ -524,10 +526,13 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert "validate_trace_append" in probe
     assert "--trace-append requires --runtime-id matching the reference session" in probe
     assert "--resource-mode is supported only with --encoder nvenc" in probe
-    assert 'sample.get("encoder_family") == "nvenc"' in probe
+    assert "def _resource_sample_has_encode_timing" in probe
+    assert "_resource_sample_has_encode_timing(record)" in probe
 
 
-def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: Path) -> None:
+def test_resource_mode_and_append_preflight_are_nvenc_reference_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_append_preflight")
     common = [
         "--trace",
@@ -547,6 +552,7 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
 
     session = {
         "record_type": "session",
+        "session_id": "runtime-reference-nvenc",
         "codec": "nvenc",
         "runtime_instance_id": "runtime-reference",
         "build_revision": "a" * 40,
@@ -554,6 +560,7 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
         "producer_topology": "single_lane_reference",
         "producer_count": 1,
         "workload": {"wgc": True, "cef": True, "nvenc": True},
+        "evidence_kind": "runtime",
     }
     resource = {
         "record_type": "resource_sample",
@@ -565,12 +572,17 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
         "producer_count": 1,
         "encoder_active": True,
         "encoder_family": "nvenc",
+        "rtmp_load_active": True,
+        "encode_time_samples": 1,
     }
     trace_path = tmp_path / "reference.jsonl"
-    trace_path.write_text(
-        json.dumps(session) + "\n" + json.dumps(resource) + "\n",
-        encoding="utf-8",
-    )
+    key_path = probe.trace_integrity.ensure_key(trace_path)
+    monkeypatch.setenv(probe.trace_integrity.KEY_ENV, key_path.read_text(encoding="ascii").strip())
+
+    def write_reference() -> None:
+        probe.trace_integrity.write_trace(trace_path, [session, resource], key_path)
+
+    write_reference()
     original_trace = trace_path.read_bytes()
     probe.validate_trace_append(
         trace_path,
@@ -599,10 +611,8 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
 
     wrong_family = dict(resource)
     wrong_family["encoder_family"] = "x264"
-    trace_path.write_text(
-        json.dumps(session) + "\n" + json.dumps(wrong_family) + "\n",
-        encoding="utf-8",
-    )
+    resource = wrong_family
+    write_reference()
     with pytest.raises(probe.ProbeFailure, match="active sample"):
         probe.validate_trace_append(
             trace_path,
@@ -614,10 +624,10 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
 
     wrong_codec = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
     wrong_codec["codec"] = "x264"
-    trace_path.write_text(
-        json.dumps(wrong_codec) + "\n" + json.dumps(resource) + "\n",
-        encoding="utf-8",
-    )
+    session = wrong_codec
+    resource = dict(resource)
+    resource["encoder_family"] = "nvenc"
+    write_reference()
     with pytest.raises(probe.ProbeFailure, match="existing NVENC"):
         probe.validate_trace_append(
             trace_path,
@@ -668,7 +678,7 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "IsControlledSceneSwitchPendingBypass" in handler
     assert 'request.RequestType != "CallVendorRequest"' in handler
     assert 'vendor->get<std::string>() != "pulsar-scene-switch"' in handler
-    assert 'return nested == "Abort" || nested == "GetState" || nested == "Take"' in handler
+    assert 'return nested == "Abort" || nested == "GetState"' in handler
     assert "vendor->is_string() || !nestedRequest->is_string()" in handler
     assert "json::value() here" in handler
     assert "const bool controlledSceneSwitchBypass" in handler
@@ -684,12 +694,12 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "PREVIEW_FROZEN" in handler
     assert "after the dual-lane rollback freeze" in handler
     # The gate is central and acquired before handler lookup. The only scene
-    # switch pending bypass is the exact vendor Abort/GetState/Take trio; the
+    # switch pending bypass is the exact vendor Abort/GetState pair; the
     # finite output-stop allowlist is unrelated to Preview mutations.
-    # Prepare/Dispatch, malformed CallVendorRequest data, and every other
-    # vendor remain gated. Take is admitted only for vendor idempotence replay.
+    # Prepare/Take/Dispatch, malformed CallVendorRequest data, and every other
+    # vendor remain gated. A post-freeze Take must fail closed at the gateway.
     assert 'nested == "Prepare"' not in handler
-    assert 'nested == "Take"' in handler
+    assert 'nested == "Take"' not in handler
     assert 'nested == "Dispatch"' not in handler
     assert handler.index("const bool controlledSceneSwitchBypass") < handler.index("_handlerMap.at")
 
@@ -1189,7 +1199,18 @@ def test_output_effect_probe_settles_record_stop_before_next_case() -> None:
     assert "STOP_SETTLE_S" in helper
     assert "await asyncio.sleep(0.2)" in helper
     assert 'wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopRecord(nominal)")' in nominal_record
-    assert 'wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopOutput(nominal)")' in nominal_generic
+    assert "STOP_PENDING_CODE = 702" in source
+    assert "if not ok and code != STOP_PENDING_CODE" in nominal_record
+    assert "StopRecord accepted (702 Pending)" in nominal_record
+    # Generic latency/effect coverage must use the raw virtual-camera output;
+    # PulsarRecord is a ffmpeg_muxer and its asynchronous flush belongs only to
+    # the separate record case above.
+    assert 'GENERIC_RAW_OUTPUT = "PulsarVCam"' in source
+    assert 'c.req("StartVirtualCam")' in nominal_generic
+    assert "wait_record_and_output_inactive" not in nominal_generic
+    assert 'c.req("StopOutput", {"outputName": GENERIC_RAW_OUTPUT})' in nominal_generic
+    assert "if not ok and code != STOP_PENDING_CODE" not in nominal_generic
+    assert "StopOutput accepted (702 Pending)" not in nominal_generic
 
 
 def test_core_swap_is_frame_boundary_and_rejects_concurrent_requests() -> None:

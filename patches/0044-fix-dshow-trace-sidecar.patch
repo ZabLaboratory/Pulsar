@@ -1,0 +1,75 @@
+From a5f574501b378e1be94ca50ab8b951d97f4cff29 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Fri, 4 Sep 2026 19:25:22 +0200
+Subject: [PATCH] fix: route DirectShow trace observations through sidecar
+
+---
+ .../virtualcam-module/virtualcam-filter.cpp   | 27 +++++++++++++------
+ 1 file changed, 19 insertions(+), 8 deletions(-)
+
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index ef3632a38..3e60f639f 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -510,29 +510,40 @@ static bool trace_prepare_identifier(const char *value, size_t capacity, std::st
+ 	return true;
+ }
+ 
+-static void append_trace_line(const std::string &line, const std::string &runtime_id)
++static bool append_trace_line(const std::string &line, const std::string &runtime_id)
+ {
+-	const char *path = getenv("PULSAR_TRACE_PATH");
++	/* DirectShow observations are consumer-owned and cannot be added to the
++	 * producer's authenticated stream without the operator key.  Emit them to
++	 * the explicit out-of-band sidecar; the probe validates and re-signs them
++	 * during post-stop fusion. */
++	const char *path = getenv("PULSAR_DIRECTSHOW_TRACE_PATH");
+ 	if (!path || !*path || runtime_id.empty())
+-		return;
++		return false;
+ 
+ 	const std::string mutex_name = std::string("Local\\Pulsar.") + runtime_id + ".Trace";
+ 	HANDLE mutex = CreateMutexA(nullptr, FALSE, mutex_name.c_str());
+ 	if (!mutex)
+-		return;
+-	WaitForSingleObject(mutex, INFINITE);
++		return false;
++	const DWORD wait_result = WaitForSingleObject(mutex, INFINITE);
++	if (wait_result != WAIT_OBJECT_0 && wait_result != WAIT_ABANDONED) {
++		CloseHandle(mutex);
++		return false;
++	}
+ 
++	bool appended = false;
+ 	HANDLE file = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+ 				 nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+ 	if (file != INVALID_HANDLE_VALUE) {
+ 		const std::string payload = line + "\n";
+ 		DWORD written = 0;
+-		WriteFile(file, payload.data(), (DWORD)payload.size(), &written, nullptr);
++		appended = WriteFile(file, payload.data(), (DWORD)payload.size(), &written, nullptr) != FALSE &&
++				written == payload.size();
+ 		CloseHandle(file);
+ 	}
+ 
+ 	ReleaseMutex(mutex);
+ 	CloseHandle(mutex);
++	return appended;
+ }
+ 
+ void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metadata &metadata,
+@@ -608,8 +619,8 @@ void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metada
+ 				<< timing.unlock_sample_data_completed_monotonic_ns
+ 				<< ",\"emission_monotonic_ns\":" << emission_monotonic_ns << "}";
+ 	}
+-	append_trace_line(observation.str(), runtime_id);
+-	last_trace_take = take_command_id;
++	if (append_trace_line(observation.str(), runtime_id))
++		last_trace_take = take_command_id;
+ }
+ 
+ void VCamFilter::ShowDefaultFrame(uint8_t *ptr)
+-- 
+2.54.0.windows.1
+

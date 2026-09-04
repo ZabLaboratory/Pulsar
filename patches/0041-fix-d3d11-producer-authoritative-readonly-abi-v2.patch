@@ -1,0 +1,431 @@
+From 2020b3ab8b2034f1fd894aab39cb3aefa3a5cd80 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Fri, 4 Sep 2026 07:13:29 +0200
+Subject: fix(d3d11): enforce producer-authoritative readonly ABI v2
+
+Consumer mappings are read-only and all registration state is derived from the producer-owned pipe PID and a revalidated session. Mixed ABI clients fail closed before any handle duplication; CPU fallback remains unchanged.
+
+Agent-Role: forge
+
+Agent-Thread: 01a06821-2c9c-7ab3-b107-96fe0178b65a
+
+Work-Unit: forge-254-f02-helper-20260904
+
+Issue: 254
+
+ADR-Revision: amendment-2-draft-f02-helper-cpu-readonly-20260904
+
+Evidence: producer-authenticated PID/session; consumer FILE_MAP_READ
+---
+ .../d3d11-return-transport.cpp                | 156 +++++++++++-------
+ .../d3d11-return-transport.hpp                |   3 +-
+ plugins/win-dshow/virtualcam.c                |  19 ++-
+ 3 files changed, 111 insertions(+), 67 deletions(-)
+
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+index 164d052b8..de8513f28 100644
+--- a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+@@ -50,6 +50,11 @@ static uint32_t process_session(DWORD pid)
+ 	return ProcessIdToSessionId(pid, &session) ? session : UINT32_MAX;
+ }
+ 
++static uint32_t load_u32(const volatile uint32_t *value)
++{
++	return static_cast<uint32_t>(InterlockedCompareExchange((volatile LONG *)value, 0, 0));
++}
++
+ static void set_fallback(pulsar_d3d11_return_control *control, enum pulsar_d3d11_return_fallback reason,
+ 				 HRESULT hr)
+ {
+@@ -61,6 +66,17 @@ static void set_fallback(pulsar_d3d11_return_control *control, enum pulsar_d3d11
+ 	InterlockedExchange((volatile LONG *)&control->consumer_ready, 0);
+ }
+ 
++/* A consumer has a read-only control view in ABI v2.  Its local failures are
++ * deliberately not written into the producer snapshot; the producer owns
++ * fallback state and observes disconnect through the registration pipe. */
++static void consumer_report_fallback(const pulsar_d3d11_return_control *control,
++					 enum pulsar_d3d11_return_fallback reason, HRESULT hr)
++{
++	(void)control;
++	(void)reason;
++	(void)hr;
++}
++
+ static bool valid_nv12(uint32_t width, uint32_t height, uint8_t **data, uint32_t *linesize)
+ {
+ 	return width == PULSAR_D3D11_RETURN_WIDTH && height == PULSAR_D3D11_RETURN_HEIGHT && data && linesize &&
+@@ -198,6 +214,8 @@ struct pulsar_d3d11_return_producer {
+ 	HANDLE source_handles[PULSAR_D3D11_RETURN_SLOT_COUNT] = {};
+ 	uint32_t consumer_pid = 0;
+ 	HANDLE consumer_process = nullptr;
++	volatile LONG authenticated_consumer_pid = 0;
++	volatile LONG authenticated_consumer_session = 0;
+ 	uint64_t epoch = 1;
+ 	uint64_t sequence = 0;
+ 	uint32_t width = 0;
+@@ -217,7 +235,7 @@ struct pulsar_d3d11_return_consumer {
+ 	uint32_t width = 0;
+ 	uint32_t height = 0;
+ 	bool active = false;
+-	HANDLE consumer_process = nullptr;
++	uint64_t consumed_sequence = 0;
+ };
+ 
+ extern "C" pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
+@@ -267,6 +285,44 @@ extern "C" pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
+ 	return producer;
+ }
+ 
++extern "C" bool pulsar_d3d11_return_producer_set_consumer_pid(
++	pulsar_d3d11_return_producer_t *producer, uint32_t pid)
++{
++	if (!producer || !producer->control || !pid) {
++		if (producer) {
++			InterlockedExchange(&producer->authenticated_consumer_pid, 0);
++			InterlockedExchange(&producer->authenticated_consumer_session, 0);
++			if (producer->control) {
++				InterlockedExchange((volatile LONG *)&producer->control->consumer_ready, 0);
++				InterlockedExchange((volatile LONG *)&producer->control->consumer_pid, 0);
++				InterlockedExchange((volatile LONG *)&producer->control->consumer_session, 0);
++			}
++		}
++		return false;
++	}
++	const uint32_t previous_pid = load_u32((volatile uint32_t *)&producer->authenticated_consumer_pid);
++	if (previous_pid && previous_pid != pid) {
++		InterlockedExchange((volatile LONG *)&producer->control->consumer_ready, 0);
++		InterlockedExchange((volatile LONG *)&producer->control->consumer_pid, 0);
++		InterlockedExchange((volatile LONG *)&producer->control->consumer_session, 0);
++	}
++	HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
++	const uint32_t session = process ? process_session(pid) : UINT32_MAX;
++	const bool live = process && session != UINT32_MAX && WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
++	if (process)
++		CloseHandle(process);
++	if (!live) {
++		InterlockedExchange(&producer->authenticated_consumer_pid, 0);
++		InterlockedExchange(&producer->authenticated_consumer_session, 0);
++		return false;
++	}
++	/* Publish session before PID so producer_prepare_ring never observes a new
++	 * PID paired with the previous registration's session. */
++	InterlockedExchange(&producer->authenticated_consumer_session, static_cast<LONG>(session));
++	InterlockedExchange(&producer->authenticated_consumer_pid, static_cast<LONG>(pid));
++	return true;
++}
++
+ static void producer_release_ring(pulsar_d3d11_return_producer *producer)
+ {
+ 	if (!producer)
+@@ -322,9 +378,15 @@ static bool producer_prepare_ring(pulsar_d3d11_return_producer *producer)
+ {
+ 	if (!producer || !producer->control)
+ 		return false;
+-	const uint32_t pid = producer->control->consumer_pid;
+-	if (!pid)
++	const uint32_t pid = load_u32((volatile uint32_t *)&producer->authenticated_consumer_pid);
++	const uint32_t authenticated_session = load_u32((volatile uint32_t *)&producer->authenticated_consumer_session);
++	if (!pid || authenticated_session == UINT32_MAX) {
++		if (producer->consumer_pid)
++			producer_invalidate_consumer_registration(producer, producer->consumer_pid);
+ 		return false;
++	}
++	producer->control->consumer_pid = pid;
++	producer->control->consumer_session = authenticated_session;
+ 	if (producer->consumer_pid == pid && producer->consumer_process &&
+ 		WaitForSingleObject(producer->consumer_process, 0) != WAIT_TIMEOUT) {
+ 		/* The consumer disappeared (or the liveness query failed). Do not
+@@ -336,16 +398,13 @@ static bool producer_prepare_ring(pulsar_d3d11_return_producer *producer)
+ 		return false;
+ 	}
+ 	const uint32_t consumer_session = process_session(pid);
+-	if (consumer_session == UINT32_MAX) {
+-		/* A dead or inaccessible PID cannot prove ownership. Clear the stale
+-		 * registration even when no liveness handle was retained. */
++	if (consumer_session == UINT32_MAX || consumer_session != authenticated_session) {
++		/* The PID/session pair is rechecked at the producer boundary. */
+ 		if (producer_invalidate_consumer_registration(producer, pid))
+-			set_fallback(producer->control, PULSAR_D3D11_FALLBACK_INTEROP, E_HANDLE);
++			set_fallback(producer->control, PULSAR_D3D11_FALLBACK_INTEROP, E_ACCESSDENIED);
+ 		return false;
+ 	}
+-	if (producer->control->consumer_session != consumer_session) {
+-		/* A recycled PID from another Windows session is not the consumer that
+-		 * published this control block.  Reject it before duplicating handles. */
++	if (producer->control->consumer_session != authenticated_session) {
+ 		set_fallback(producer->control, PULSAR_D3D11_FALLBACK_INTEROP, E_ACCESSDENIED);
+ 		return false;
+ 	}
+@@ -500,7 +559,8 @@ static bool consumer_open_ring(pulsar_d3d11_return_consumer *consumer)
+ 	HRESULT hr = create_device_for_luid(&consumer->control->adapter_luid, device, context, &actual);
+ 	if (FAILED(hr) || actual.low != consumer->control->adapter_luid.low ||
+ 		actual.high != consumer->control->adapter_luid.high) {
+-		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_ADAPTER, FAILED(hr) ? hr : DXGI_ERROR_NOT_FOUND);
++		consumer_report_fallback(consumer->control, PULSAR_D3D11_FALLBACK_ADAPTER,
++					 FAILED(hr) ? hr : DXGI_ERROR_NOT_FOUND);
+ 		return false;
+ 	}
+ 	consumer->device = device;
+@@ -508,13 +568,13 @@ static bool consumer_open_ring(pulsar_d3d11_return_consumer *consumer)
+ 	for (uint32_t i = 0; i < PULSAR_D3D11_RETURN_SLOT_COUNT; ++i) {
+ 		const uint64_t handle_value = consumer->control->slots[i].handle.value;
+ 		if (sizeof(uintptr_t) < sizeof(uint64_t) && handle_value > UINT32_MAX) {
+-			set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP,
+-				     HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW));
++			consumer_report_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP,
++					 HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW));
+ 			return false;
+ 		}
+ 		HANDLE shared = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle_value));
+ 		if (!shared) {
+-			set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP, E_HANDLE);
++			consumer_report_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP, E_HANDLE);
+ 			return false;
+ 		}
+ 		ComPtr<ID3D11Device1> device1;
+@@ -522,9 +582,9 @@ static bool consumer_open_ring(pulsar_d3d11_return_consumer *consumer)
+ 		if (SUCCEEDED(hr))
+ 			hr = device1->OpenSharedResource1(shared, IID_PPV_ARGS(&consumer->textures[i]));
+ 		CloseHandle(shared);
+-		consumer->control->slots[i].handle.value = 0;
+ 		if (FAILED(hr) || FAILED(consumer->textures[i].As(&consumer->mutexes[i]))) {
+-			set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP, FAILED(hr) ? hr : E_NOINTERFACE);
++			consumer_report_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP,
++					 FAILED(hr) ? hr : E_NOINTERFACE);
+ 			return false;
+ 		}
+ 	}
+@@ -536,18 +596,17 @@ static bool consumer_open_ring(pulsar_d3d11_return_consumer *consumer)
+ 	desc.MiscFlags = 0;
+ 	hr = consumer->device->CreateTexture2D(&desc, nullptr, &consumer->staging);
+ 	if (FAILED(hr)) {
+-		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP, hr);
++		consumer_report_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP, hr);
+ 		return false;
+ 	}
+ 	D3D11_QUERY_DESC query_desc = {};
+ 	query_desc.Query = D3D11_QUERY_EVENT;
+ 	hr = consumer->device->CreateQuery(&query_desc, &consumer->query);
+ 	if (FAILED(hr)) {
+-		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP, hr);
++		consumer_report_fallback(consumer->control, PULSAR_D3D11_FALLBACK_INTEROP, hr);
+ 		return false;
+ 	}
+ 	consumer->active = true;
+-	InterlockedExchange((volatile LONG *)&consumer->control->consumer_ready, 1);
+ 	return true;
+ }
+ 
+@@ -558,13 +617,13 @@ extern "C" pulsar_d3d11_return_consumer_t *pulsar_d3d11_return_consumer_open(
+ 		width != PULSAR_D3D11_RETURN_WIDTH || height != PULSAR_D3D11_RETURN_HEIGHT)
+ 		return nullptr;
+ 	const std::wstring map_name = control_name(name);
+-	HANDLE mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, map_name.c_str());
++	HANDLE mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, map_name.c_str());
+ 	if (!mapping)
+ 		return nullptr;
+ 	auto *consumer = new pulsar_d3d11_return_consumer();
+ 	consumer->mapping = mapping;
+ 	consumer->control = static_cast<pulsar_d3d11_return_control *>(MapViewOfFile(
+-		mapping, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(pulsar_d3d11_return_control)));
++		mapping, FILE_MAP_READ, 0, 0, sizeof(pulsar_d3d11_return_control)));
+ 	if (!consumer->control || consumer->control->abi_version != PULSAR_D3D11_RETURN_ABI_VERSION ||
+ 		consumer->control->lane != static_cast<uint32_t>(lane)) {
+ 		if (consumer->control)
+@@ -575,19 +634,7 @@ extern "C" pulsar_d3d11_return_consumer_t *pulsar_d3d11_return_consumer_open(
+ 	}
+ 	consumer->width = width;
+ 	consumer->height = height;
+-	consumer->control->consumer_pid = GetCurrentProcessId();
+-	consumer->control->consumer_session = process_session(consumer->control->consumer_pid);
+-	consumer->consumer_process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE,
+-		consumer->control->consumer_pid);
+-	if (!consumer->consumer_process) {
+-		UnmapViewOfFile(consumer->control);
+-		CloseHandle(consumer->mapping);
+-		delete consumer;
+-		return nullptr;
+-	}
+ 	if (!consumer_open_ring(consumer) && consumer->control->selected_path != PULSAR_D3D11_PATH_CPU) {
+-		CloseHandle(consumer->consumer_process);
+-		consumer->consumer_process = nullptr;
+ 		UnmapViewOfFile(consumer->control);
+ 		CloseHandle(consumer->mapping);
+ 		delete consumer;
+@@ -600,14 +647,6 @@ extern "C" void pulsar_d3d11_return_consumer_close(pulsar_d3d11_return_consumer_
+ {
+ 	if (!consumer)
+ 		return;
+-	if (consumer->consumer_process)
+-		CloseHandle(consumer->consumer_process);
+-	if (consumer->control) {
+-		InterlockedExchange((volatile LONG *)&consumer->control->consumer_ready, 0);
+-		const LONG pid = (LONG)GetCurrentProcessId();
+-		if (InterlockedCompareExchange((volatile LONG *)&consumer->control->consumer_pid, 0, pid) == pid)
+-			InterlockedExchange((volatile LONG *)&consumer->control->consumer_session, 0);
+-	}
+ 	consumer->active = false;
+ 	if (consumer->control)
+ 		UnmapViewOfFile(consumer->control);
+@@ -622,11 +661,6 @@ extern "C" bool pulsar_d3d11_return_consumer_read(pulsar_d3d11_return_consumer_t
+ {
+ 	if (!d3d11_transport_requested() || !consumer || !dst || !consumer->control)
+ 		return false;
+-	if (consumer->consumer_process && WaitForSingleObject(consumer->consumer_process, 0) != WAIT_TIMEOUT) {
+-		InterlockedExchange((volatile LONG *)&consumer->control->consumer_ready, 0);
+-		consumer->active = false;
+-		return false;
+-	}
+ 	if (!consumer->active && !consumer_open_ring(consumer))
+ 		return false;
+ 	if (consumer->control->selected_path != PULSAR_D3D11_PATH_SHARED_TEXTURE)
+@@ -634,28 +668,25 @@ extern "C" bool pulsar_d3d11_return_consumer_read(pulsar_d3d11_return_consumer_t
+ 	const uint64_t published = load_u64((volatile uint64_t *)&consumer->control->published_sequence);
+ 	if (!published)
+ 		return false;
+-	const uint64_t consumed = load_u64((volatile uint64_t *)&consumer->control->consumed_sequence);
+-	if (published > consumed + 1)
+-		consumer->control->gap_count += published - consumed - 1;
++	const uint64_t consumed = consumer->consumed_sequence;
+ 	const uint32_t index = static_cast<uint32_t>((published - 1) % PULSAR_D3D11_RETURN_SLOT_COUNT);
+ 	const uint64_t wait_start = now_ns();
+ 	const HRESULT acquire = consumer->mutexes[index]->AcquireSync(1, kWaitMs);
+ 	const uint64_t wait_end = now_ns();
+-	consumer->control->mutex_wait_ns = wait_end >= wait_start ? wait_end - wait_start : 0;
++	(void)wait_start;
++	(void)wait_end;
+ 	if (acquire == WAIT_TIMEOUT) {
+-		++consumer->control->retry_count;
+-		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_TIMEOUT, HRESULT_FROM_WIN32(WAIT_TIMEOUT));
++		consumer_report_fallback(consumer->control, PULSAR_D3D11_FALLBACK_TIMEOUT,
++					 HRESULT_FROM_WIN32(WAIT_TIMEOUT));
+ 		return false;
+ 	}
+ 	if (FAILED(acquire)) {
+-		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_DEVICE_REMOVED, acquire);
++		consumer_report_fallback(consumer->control, PULSAR_D3D11_FALLBACK_DEVICE_REMOVED, acquire);
+ 		return false;
+ 	}
+-	auto &slot = consumer->control->slots[index];
++	const auto &slot = consumer->control->slots[index];
+ 	if (slot.sequence != published || slot.epoch != consumer->control->epoch) {
+ 		consumer->mutexes[index]->ReleaseSync(0);
+-		++consumer->control->retry_count;
+-		++consumer->control->torn_count;
+ 		return false;
+ 	}
+ 	const uint64_t copy_start = now_ns();
+@@ -667,15 +698,15 @@ extern "C" bool pulsar_d3d11_return_consumer_read(pulsar_d3d11_return_consumer_t
+ 		SwitchToThread();
+ 	if (consumer->context->GetData(consumer->query.Get(), nullptr, 0, 0) != S_OK) {
+ 		consumer->mutexes[index]->ReleaseSync(0);
+-		++consumer->control->retry_count;
+-		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_TIMEOUT, HRESULT_FROM_WIN32(WAIT_TIMEOUT));
++		consumer_report_fallback(consumer->control, PULSAR_D3D11_FALLBACK_TIMEOUT,
++					 HRESULT_FROM_WIN32(WAIT_TIMEOUT));
+ 		return false;
+ 	}
+ 	D3D11_MAPPED_SUBRESOURCE mapped = {};
+ 	HRESULT hr = consumer->context->Map(consumer->staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+ 	if (FAILED(hr)) {
+ 		consumer->mutexes[index]->ReleaseSync(0);
+-		set_fallback(consumer->control, PULSAR_D3D11_FALLBACK_DEVICE_REMOVED, hr);
++		consumer_report_fallback(consumer->control, PULSAR_D3D11_FALLBACK_DEVICE_REMOVED, hr);
+ 		return false;
+ 	}
+ 	for (uint32_t row = 0; row < consumer->height; ++row)
+@@ -689,9 +720,10 @@ extern "C" bool pulsar_d3d11_return_consumer_read(pulsar_d3d11_return_consumer_t
+ 	consumer->context->Unmap(consumer->staging.Get(), 0);
+ 	consumer->mutexes[index]->ReleaseSync(0);
+ 	const uint64_t copy_end = now_ns();
+-	consumer->control->readback_ns = copy_end >= copy_start ? copy_end - copy_start : 0;
++	(void)copy_start;
+ 	const uint64_t frame_clock = slot.pts_ns ? slot.pts_ns : slot.timestamp;
+-	consumer->control->frame_age_ns = frame_clock && copy_end >= frame_clock ? copy_end - frame_clock : 0;
++	(void)copy_end;
++	(void)frame_clock;
+ 	if (timestamp)
+ 		*timestamp = slot.timestamp;
+ 	if (metadata) {
+@@ -709,7 +741,7 @@ extern "C" bool pulsar_d3d11_return_consumer_read(pulsar_d3d11_return_consumer_t
+ 		memcpy(metadata->intent_id, slot.intent_id, sizeof(metadata->intent_id));
+ 		memcpy(metadata->take_command_id, slot.take_command_id, sizeof(metadata->take_command_id));
+ 	}
+-	store_u64((volatile uint64_t *)&consumer->control->consumed_sequence, published);
++	consumer->consumed_sequence = published;
+ 	return true;
+ }
+ 
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
+index 65efe46ed..56f1bde09 100644
+--- a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
+@@ -9,7 +9,7 @@ extern "C" {
+ #endif
+ 
+ #define PULSAR_D3D11_RETURN_SLOT_COUNT 3U
+-#define PULSAR_D3D11_RETURN_ABI_VERSION 1U
++#define PULSAR_D3D11_RETURN_ABI_VERSION 2U
+ #define PULSAR_D3D11_RETURN_WIDTH 1920U
+ #define PULSAR_D3D11_RETURN_HEIGHT 1080U
+ #define PULSAR_D3D11_RETURN_IDENTIFIER_CAPACITY 129U
+@@ -106,6 +106,7 @@ struct video_queue_frame_metadata;
+ pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
+ 	const wchar_t *control_name, enum pulsar_d3d11_return_lane lane, uint32_t width, uint32_t height);
+ void pulsar_d3d11_return_producer_close(pulsar_d3d11_return_producer_t *producer);
++bool pulsar_d3d11_return_producer_set_consumer_pid(pulsar_d3d11_return_producer_t *producer, uint32_t pid);
+ bool pulsar_d3d11_return_producer_ready(pulsar_d3d11_return_producer_t *producer);
+ bool pulsar_d3d11_return_producer_write(pulsar_d3d11_return_producer_t *producer, uint8_t **data,
+ 						uint32_t *linesize, uint64_t timestamp,
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index b3ccae6b1..7208a0706 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -124,8 +124,10 @@ static bool return_consumer_process_image_allowed(HANDLE process)
+ 	       _wcsicmp(image_name, L"ffmpeg.exe") == 0 || _wcsicmp(image_name, L"pulsar.exe") == 0;
+ }
+ 
+-static bool return_consumer_registration_live(struct virtualcam_data *vcam)
++static bool return_consumer_registration_live(struct virtualcam_data *vcam, DWORD *client_pid)
+ {
++	if (client_pid)
++		*client_pid = 0;
+ 	if (!vcam->consumer_registration_pipe || vcam->consumer_registration_pipe == INVALID_HANDLE_VALUE)
+ 		return false;
+ 	BOOL connected = ConnectNamedPipe(vcam->consumer_registration_pipe, NULL);
+@@ -151,8 +153,11 @@ static bool return_consumer_registration_live(struct virtualcam_data *vcam)
+ 			  WaitForSingleObject(process, 0) == WAIT_TIMEOUT && return_consumer_process_image_allowed(process);
+ 	if (process)
+ 		CloseHandle(process);
+-	if (live)
++	if (live) {
++		if (client_pid)
++			*client_pid = pid;
+ 		return true;
++	}
+ 	return_consumer_registration_pipe_close(vcam);
+ 	(void)return_consumer_registration_pipe_start(vcam);
+ 	return false;
+@@ -166,8 +171,14 @@ static bool return_lease_probe_once(struct virtualcam_data *vcam)
+ 	const DWORD probe_error = lease_present ? ERROR_SUCCESS : GetLastError();
+ 	if (lease)
+ 		CloseHandle(lease);
+-	const bool registration_live = return_consumer_registration_live(vcam);
+-	const bool active = lease_present && registration_live;
++	DWORD registration_pid = 0;
++	const bool registration_live = return_consumer_registration_live(vcam, &registration_pid);
++	bool active = lease_present && registration_live;
++	if (vcam->d3d11) {
++		const bool producer_authorized = pulsar_d3d11_return_producer_set_consumer_pid(
++			vcam->d3d11, active ? registration_pid : 0);
++		active = active && producer_authorized;
++	}
+ 
+ 	if (active) {
+ 		InterlockedIncrement(&vcam->lease_hits);
+-- 
+2.54.0.windows.1
+

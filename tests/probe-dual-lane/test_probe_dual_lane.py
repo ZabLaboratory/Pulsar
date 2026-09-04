@@ -36,6 +36,33 @@ def _latency_fixture_records():
     return module._take_records(1)
 
 
+def _write_directshow_sidecar(tmp_path, records):
+    sidecar = tmp_path / "producer.jsonl.directshow.jsonl"
+    encoded = {
+        record.get("take_command_id"): record
+        for record in records
+        if record.get("record_type") == "observation"
+        and record.get("boundary") == "encoded_first_packet"
+    }
+    directshow = [
+        record
+        for record in records
+        if record.get("record_type") == "observation"
+        and record.get("boundary") == "directshow_return"
+    ]
+    # The fixture models a return frame with a deliberate +1 frame/PTS offset;
+    # a valid sidecar must carry the producer identity that fusion correlates.
+    normalized = []
+    for record in directshow:
+        item = dict(record)
+        producer = encoded[record["take_command_id"]]
+        for field in ("runtime_instance_id", "command_id", "intent_id", "take_command_id", "frame_id", "pts_ns", "revisions"):
+            item[field] = producer[field]
+        normalized.append(item)
+    sidecar.write_text("".join(json.dumps(record) + "\n" for record in normalized), encoding="utf-8")
+    return sidecar
+
+
 def test_receiver_separates_server_url_and_stream_key():
     receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id="runtime-001", stream_id="runtime-001-x264")
     assert receiver.server_url.endswith("/pulsar")
@@ -46,6 +73,44 @@ def test_receiver_separates_server_url_and_stream_key():
     assert metadata["server_url"] == receiver.server_url
     assert metadata["endpoint"] == receiver.endpoint
     assert metadata["stream_key"] == receiver.stream_key
+
+
+def test_rtmp_receiver_preserves_default_live_input_buffering():
+    source = SCRIPT.read_text(encoding="utf-8")
+    receiver_start = source.index("class RtmpReceiver:")
+    receiver_end = source.index("class PulsarProcess:", receiver_start)
+    receiver_source = source[receiver_start:receiver_end]
+    # Keep the RTMP receiver's established default buffering policy.  The
+    # DirectShow consumer has a separate low-latency path; applying those
+    # input flags here changes FLV packet timing/correlation and can turn a
+    # live packet into a fixed multi-hundred-millisecond offset.
+    command_start = receiver_source.index("command = [")
+    command_end = receiver_source.index("self.proc = subprocess.Popen", command_start)
+    command_source = receiver_source[command_start:command_end]
+    assert '"-loglevel",\n            "info"' in command_source
+    assert '"-loglevel",\n            "verbose"' not in command_source
+    assert '"-debug_ts"' in command_source
+    assert '"-listen"' in command_source
+    assert '"-fflags"' not in command_source
+    assert '"-flags"' not in command_source
+    assert '"-fps_mode",\n            "passthrough"' in command_source
+    assert '"-nostats"' in command_source
+    # fps_mode is output-scoped and must remain after the input URL and copy
+    # codec; moving it before -i makes FFmpeg reject the receiver command.
+    assert command_source.index('"-i"') < command_source.index('"-fps_mode"')
+    assert command_source.index('"-c"') < command_source.index('"-fps_mode"')
+
+
+def test_request_timeout_context_records_send_to_response_duration():
+    source = SCRIPT.read_text(encoding="utf-8")
+    request_start = source.index("async def request(")
+    request_end = source.index("\n\nasync def request_batch(", request_start)
+    request_source = source[request_start:request_end]
+    assert "sent_monotonic_ns" in request_source
+    assert "send_to_response_ms" in request_source
+    assert "send_to_timeout_ms" in request_source
+    assert "request_context[\"response_monotonic_ns\"]" in request_source
+    assert "request_context[\"timeout_monotonic_ns\"]" in request_source
 
 
 def test_inbox_consumes_out_of_order_buffered_response_without_socket_read():
@@ -158,6 +223,18 @@ def test_return_transport_is_propagated_to_runtime_and_directshow_children():
     assert source.count('env["PULSAR_RETURN_TRANSPORT"] = self.return_transport') == 2
     assert "default=os.environ.get(\"PULSAR_RETURN_TRANSPORT\") or None" in source
     assert "args.return_transport," in source
+
+
+def test_scene_composition_churn_diagnostic_is_opt_in_and_checks_active_binding():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert 'PULSAR_SCENE_CHURN_DIAGNOSTICS' in source
+    assert 'scene_composition_churn' in source
+    assert 'obs_scene_enum_items(' in source
+    assert 'obs_sceneitem_get_source(laneItems[lane]) == scene' in source
+    assert '++sceneCompositionAdds[lane]' in source
+    assert '++sceneCompositionRemoves[lane]' in source
 
 
 def test_recording_output_must_stay_under_runtime_directory(tmp_path):
@@ -547,6 +624,7 @@ def test_drive_propagates_resource_wait_and_keeps_outputs_alive_until_threshold(
         "encoder_active": True,
         "encoder_family": "nvenc",
         "rtmp_load_active": False,
+        "encode_time_samples": 100,
     }
     second = dict(first, rtmp_load_active=True)
     third = dict(first, rtmp_load_active=True)
@@ -556,6 +634,40 @@ def test_drive_propagates_resource_wait_and_keeps_outputs_alive_until_threshold(
     trace.write_text(
         json.dumps(first) + "\n" + json.dumps(second) + "\n" + json.dumps(third) + "\n",
         encoding="utf-8",
+    )
+    assert asyncio.run(probe.wait_for_eligible_resource_samples(FakeProcess(), "dual_lane", 2, 0.5)) == 2
+
+
+def test_resource_wait_does_not_count_zero_encode_warmup_toward_minimum(tmp_path):
+    trace = tmp_path / "trace-warmup.jsonl"
+    runtime_id_value = "runtime-resource-warmup"
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+    class FakeProcess:
+        trace_path = trace
+        runtime_id = runtime_id_value
+        proc = FakeProc()
+
+    sample = {
+        "record_type": "resource_sample",
+        "sample_mode": "dual_lane",
+        "runtime_instance_id": runtime_id_value,
+        "encoder_active": True,
+        "encoder_family": "nvenc",
+        "rtmp_load_active": True,
+    }
+    zero = dict(sample, encode_time_samples=0)
+    one = dict(sample, encode_time_samples=1)
+    trace.write_text(json.dumps(zero) + "\n" + json.dumps(one) + "\n", encoding="utf-8")
+    with pytest.raises(probe.ProbeSkip, match="did not produce enough"):
+        asyncio.run(probe.wait_for_eligible_resource_samples(FakeProcess(), "dual_lane", 2, 0.01))
+
+    two = dict(sample, encode_time_samples=2)
+    trace.write_text(
+        json.dumps(zero) + "\n" + json.dumps(one) + "\n" + json.dumps(two) + "\n", encoding="utf-8"
     )
     assert asyncio.run(probe.wait_for_eligible_resource_samples(FakeProcess(), "dual_lane", 2, 0.5)) == 2
 
@@ -578,10 +690,14 @@ def test_resource_wait_reports_process_exit_as_failure(tmp_path):
 
 
 def test_fusion_is_atomic_and_keeps_existing_reference_on_validation_failure(tmp_path):
+    all_records = _latency_fixture_records()
     records = [
         record
-        for record in _latency_fixture_records()
-        if not (record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet")
+        for record in all_records
+        if not (
+            record.get("record_type") == "observation"
+            and record.get("boundary") in {"rtmp_first_packet", "directshow_return"}
+        )
     ]
     producer = tmp_path / "producer.jsonl"
     producer.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
@@ -592,17 +708,22 @@ def test_fusion_is_atomic_and_keeps_existing_reference_on_validation_failure(tmp
     receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id="runtime-fixture-001", stream_id="runtime-fixture-001-nvenc")
     receiver.calibration = {"source": "perf_counter_ns/qpc", "qpc_delta_ns": 0, "qpc_bound_ns": 42}
     receiver.packets = []
+    sidecar = _write_directshow_sidecar(tmp_path, all_records)
     with pytest.raises(probe.ProbeFailure, match="no demuxed video packet"):
-        receiver.fuse_trace(producer, final)
+        receiver.fuse_trace(producer, final, directshow_path=sidecar)
     assert hashlib.sha256(final.read_bytes()).hexdigest() == expected_hash
     assert not list(tmp_path.glob("*.fused.tmp"))
 
 
 def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path):
+    all_records = _latency_fixture_records()
     records = [
         record
-        for record in _latency_fixture_records()
-        if not (record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet")
+        for record in all_records
+        if not (
+            record.get("record_type") == "observation"
+            and record.get("boundary") in {"rtmp_first_packet", "directshow_return"}
+        )
     ]
     producer = tmp_path / "producer.jsonl"
     producer.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
@@ -620,7 +741,8 @@ def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path)
             "packet_identity": "runtime-fixture-001-nvenc-video-0-1500-1500",
         }
     ]
-    receiver.fuse_trace(producer, final)
+    sidecar = _write_directshow_sidecar(tmp_path, all_records)
+    receiver.fuse_trace(producer, final, directshow_path=sidecar)
     fused = [json.loads(line) for line in final.read_text(encoding="utf-8").splitlines()]
     rtmp = [record for record in fused if record.get("boundary") == "rtmp_first_packet"]
     assert len(rtmp) == 1
@@ -631,10 +753,14 @@ def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path)
 
 
 def test_fusion_parser_failure_keeps_existing_final_byte_for_byte(tmp_path):
+    all_records = _latency_fixture_records()
     records = [
         record
-        for record in _latency_fixture_records()
-        if not (record.get("record_type") == "observation" and record.get("boundary") == "rtmp_first_packet")
+        for record in all_records
+        if not (
+            record.get("record_type") == "observation"
+            and record.get("boundary") in {"rtmp_first_packet", "directshow_return"}
+        )
     ]
     # Keep the encoded producer record but remove its declaration.  The
     # fusion writer can build the sibling temp, while parser validation must
@@ -660,8 +786,9 @@ def test_fusion_parser_failure_keeps_existing_final_byte_for_byte(tmp_path):
             "packet_identity": "runtime-fixture-001-nvenc-video-0-1500-1500",
         }
     ]
+    sidecar = _write_directshow_sidecar(tmp_path, all_records)
     with pytest.raises(probe.ProbeFailure, match="parser validation failed"):
-        receiver.fuse_trace(producer, final)
+        receiver.fuse_trace(producer, final, directshow_path=sidecar)
     assert final.read_bytes() == expected
     assert not list(tmp_path.glob("*.fused.tmp"))
 
@@ -774,6 +901,7 @@ def _reference_append_records():
     session["hardware"] = {"host": "fixture-host", "gpu": "fixture-gpu"}
     session["producer_topology"] = "single_lane_reference"
     session["producer_count"] = 1
+    session["evidence_kind"] = "runtime"
     for record in records[1:]:
         record["runtime_instance_id"] = session["runtime_instance_id"]
         record["build_revision"] = session["build_revision"]
@@ -783,10 +911,19 @@ def _reference_append_records():
     return records
 
 
-def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_path):
+def _write_signed_trace(path, records, monkeypatch):
+    key_path = probe.trace_integrity.ensure_key(path)
+    monkeypatch.setenv(
+        probe.trace_integrity.KEY_ENV,
+        key_path.read_text(encoding="ascii").strip(),
+    )
+    probe.trace_integrity.write_trace(path, records, key_path)
+
+
+def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_path, monkeypatch):
     records = _reference_append_records()
     path = tmp_path / "reference.jsonl"
-    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    _write_signed_trace(path, records, monkeypatch)
     probe.validate_trace_append(
         path,
         runtime_id="runtime-fixture-001",
@@ -797,7 +934,7 @@ def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_pat
     )
 
     records[0].pop("rtmp_load_requested")
-    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    _write_signed_trace(path, records, monkeypatch)
     with pytest.raises(probe.ProbeFailure, match="requires reference rtmp_load_requested"):
         probe.validate_trace_append(
             path,
@@ -809,7 +946,7 @@ def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_pat
         )
 
     records = _reference_append_records()
-    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    _write_signed_trace(path, records, monkeypatch)
     with pytest.raises(probe.ProbeFailure, match="lacks enough active NVENC samples"):
         probe.validate_trace_append(
             path,
@@ -819,6 +956,20 @@ def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_pat
             trace_gpu="fixture-gpu",
             require_rtmp_load=True,
             minimum_rtmp_samples=3,
+        )
+
+    records = _reference_append_records()
+    records[1]["encode_time_samples"] = 0
+    _write_signed_trace(path, records, monkeypatch)
+    with pytest.raises(probe.ProbeFailure, match="1 < 2"):
+        probe.validate_trace_append(
+            path,
+            runtime_id="runtime-fixture-001",
+            build_revision="f" * 40,
+            trace_host="fixture-host",
+            trace_gpu="fixture-gpu",
+            require_rtmp_load=True,
+            minimum_rtmp_samples=2,
         )
 
 
@@ -932,6 +1083,28 @@ def test_resource_fusion_does_not_count_rtmp_without_active_nvenc(tmp_path):
         receiver.fuse_resource_trace(producer, final, minimum_samples=1)
 
 
+def test_probe_identifies_with_only_output_events_to_bound_socket_backlog():
+    class FakeWebSocket:
+        def __init__(self):
+            self.messages = [
+                {"op": 0, "d": {"rpcVersion": 1}},
+                {"op": 2, "d": {"negotiatedRpcVersion": 1}},
+            ]
+            self.sent = []
+
+        async def recv(self):
+            return json.dumps(self.messages.pop(0))
+
+        async def send(self, message):
+            self.sent.append(json.loads(message))
+
+    ws = FakeWebSocket()
+    asyncio.run(probe.identify(ws, "unused-password"))
+    assert ws.sent[0]["op"] == 1
+    assert ws.sent[0]["d"]["eventSubscriptions"] == probe.PROBE_EVENT_SUBSCRIPTIONS
+    assert probe.PROBE_EVENT_SUBSCRIPTIONS == (1 << 6) | (1 << 9)
+
+
 def test_resource_fusion_preserves_observed_active_samples(tmp_path):
     records = [
         record
@@ -948,3 +1121,112 @@ def test_resource_fusion_preserves_observed_active_samples(tmp_path):
     fused = [json.loads(line) for line in final.read_text(encoding="utf-8").splitlines()]
     assert fused[0]["rtmp_load_requested"] is True
     assert all(record["rtmp_load_active"] is True for record in fused if record.get("record_type") == "resource_sample")
+
+
+def test_resource_sample_timeout_budget_adds_only_bounded_schedule_margin():
+    assert probe.resource_sample_timeout_budget(10, 500) == 30.0
+    assert probe.resource_sample_timeout_budget(300, 500) == 465.0
+    assert probe.resource_sample_timeout_budget(600, 500) == 915.0
+    with pytest.raises(probe.ProbeFailure):
+        probe.resource_sample_timeout_budget(0, 500)
+    with pytest.raises(probe.ProbeFailure):
+        probe.resource_sample_timeout_budget(1, 99)
+
+
+def test_reader_cleanup_closes_only_after_bounded_join():
+    source = inspect.getsource(probe.PulsarProcess._join_process_reader)
+    assert "PROCESS_READER_JOIN_TIMEOUT_S" in source
+    assert "_close_process_stdout" in source
+    assert "_close_process_stderr" in source
+    assert "stderr_thread" in source
+    directshow = inspect.getsource(probe.PulsarProcess._join_directshow_reader)
+    assert "_close_directshow_stdout" in directshow
+    assert "reader.is_alive()" in source
+
+
+def test_pulsar_child_capture_keeps_stdout_and_stderr_unbuffered_and_separate():
+    source = inspect.getsource(probe.PulsarProcess.spawn)
+    assert "stdout=subprocess.PIPE" in source
+    assert "stderr=subprocess.PIPE" in source
+    assert "stderr=subprocess.STDOUT" not in source
+    assert "bufsize=0" in source
+    assert "text=False" in source
+    assert "pulsar-probe-stderr" in source
+
+
+def test_process_diagnostic_context_reports_exit_and_encoder_components():
+    class DeadProcess:
+        returncode = 17
+
+        def poll(self):
+            return self.returncode
+
+    process = probe.PulsarProcess(Path("pulsar.exe"), "nvenc", Path("record"))
+    process.proc = DeadProcess()
+    process.stdout_lines[:] = ["video encoder allocated: family=nvenc", "mux interleaver stalled"]
+    process.stderr_lines[:] = ["password=do-not-leak", "NVENC error 10"]
+
+    diagnostic = process.diagnostic_context(limit=20)
+    assert "code:17" in diagnostic
+    assert "exit_code_17" in diagnostic
+    assert "video encoder allocated" in diagnostic
+    assert "mux interleaver stalled" in diagnostic
+    assert "NVENC error 10" in diagnostic
+    assert "component_tail=" in diagnostic
+    assert "do-not-leak" not in diagnostic
+
+
+def test_websocket_timeout_reports_request_and_child_diagnostics(monkeypatch):
+    class DeadProcess:
+        returncode = 23
+
+        def poll(self):
+            return self.returncode
+
+    process = probe.PulsarProcess(Path("pulsar.exe"), "nvenc", Path("record"))
+    process.proc = DeadProcess()
+    process.stdout_lines[:] = ["NVENC encoder initialization failed"]
+    inbox = probe.Inbox(process.diagnostic_context)
+
+    class FakeWebSocket:
+        async def send(self, _message):
+            return None
+
+        def recv(self):
+            return None
+
+    async def timeout(_awaitable, timeout=None):
+        del timeout
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(probe.asyncio, "wait_for", timeout)
+    with pytest.raises(probe.ProbeFailure) as failure:
+        asyncio.run(
+            probe.request(
+                inbox,
+                FakeWebSocket(),
+                "StartRecord",
+                "start-record",
+                {"pass" + "word": "do-not-leak", "outputPath": "record.mp4"},
+            )
+        )
+    message = str(failure.value)
+    assert "obs-websocket response timeout" in message
+    assert "StartRecord" in message and "start-record" in message
+    assert "outputPath" in message
+    assert "exit_code_23" in message and "NVENC encoder initialization failed" in message
+    assert "do-not-leak" not in message
+
+
+def test_recording_release_probe_restores_owned_path(tmp_path):
+    recording = tmp_path / "recording.mp4"
+    recording.write_bytes(b"fixture")
+    probe.wait_for_recording_release(recording, timeout=0.5)
+    assert recording.read_bytes() == b"fixture"
+    assert not list(tmp_path.glob("*.release-check"))
+
+
+def test_program_audio_waits_for_recording_handle_release():
+    source = (ROOT / "scripts" / "probe-program-audio.py").read_text(encoding="utf-8")
+    assert "wait_for_recording_release" in source
+    assert "ensure_recording_output_owned" in source

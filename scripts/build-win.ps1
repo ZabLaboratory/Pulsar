@@ -503,6 +503,17 @@ if ($Stage -in @('configure', 'all') -and -not $reuseFastUpstreamConfigure) {
         if (-not $qtVersion) { throw "Could not resolve Qt dependency version from CMakePresets.json" }
         $qtHostPath = Join-Path $upstream ".deps\obs-deps-qt6-$qtVersion-x64"
         $extraArgs += "-DQT_HOST_PATH=$qtHostPath"
+        # CMake's Windows dependency probe reads CMAKE_HOST_SYSTEM_PROCESSOR
+        # before it can consume QT_HOST_PATH.  Non-interactive shells may
+        # omit PROCESSOR_ARCHITECTURE entirely, which otherwise makes a
+        # perfectly valid x64 host fail during configure.  Supply the host
+        # architecture explicitly for this x64 preset without changing the
+        # user's process environment or the target architecture.
+        $extraArgs += '-DCMAKE_HOST_SYSTEM_PROCESSOR=AMD64'
+        # The OBS CMake probe prefers the environment variable over the
+        # cache entry above.  Set it only in this build process; PowerShell
+        # child-process scope means the caller's shell is unchanged.
+        $env:PROCESSOR_ARCHITECTURE = 'AMD64'
         Write-Host "  host architecture env absent: QT_HOST_PATH=$qtHostPath"
     }
     Push-Location $upstream

@@ -20,14 +20,15 @@ import inspect
 import json
 import math
 import os
-from pathlib import Path
 import re
+from pathlib import Path
 import secrets
 import shutil
 import struct
 import sys
 import tempfile
 import threading
+import time
 from urllib.parse import parse_qs, quote, urlsplit
 import wave
 
@@ -65,6 +66,281 @@ def test_headless_fences_browser_audio_before_obs_shutdown() -> None:
     browser_fence = normal_shutdown.index("browser_pre_shutdown_ready(browser_shutdown_error)")
     obs_shutdown = normal_shutdown.index("obs_shutdown();")
     assert browser_fence < frontend_shutdown < obs_shutdown
+
+
+def test_accelerated_paint_copies_callback_texture_into_owned_texture() -> None:
+    source = (ROOT / "plugins" / "pulsar-browser" / "browser-client.cpp").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("void BrowserClient::OnAcceleratedPaint(")
+    end = source.index("#ifdef CEF_ON_ACCELERATED_PAINT2", start)
+    callback = source[start:end]
+
+    assert "gs_texture_t *shared_texture = nullptr" in callback
+    direct_copy = callback.index("gs_copy_texture_from_nt_shared")
+    assert "gs_texture_open_nt_shared" in callback
+    assert direct_copy < callback.index("gs_texture_open_nt_shared")
+    assert "gs_texture_create(width, height, color_format" in callback
+    copy = callback.index("gs_copy_texture(bs->texture, shared_texture)")
+    release = callback.rindex("gs_texture_destroy(shared_texture)")
+    assert copy < release
+    assert "bs->texture = shared_texture" not in callback
+    assert "last_handle = info.shared_texture_handle" not in callback
+
+
+def test_legacy_accelerated_paint_copies_callback_texture_into_owned_texture() -> None:
+    source = (ROOT / "plugins" / "pulsar-browser" / "browser-client.cpp").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("void BrowserClient::OnAcceleratedPaint2(")
+    end = source.index("static speaker_layout", start)
+    callback = source[start:end]
+
+    assert "if (!new_texture)" in callback
+    assert "gs_texture_t *shared_texture = nullptr" in callback
+    direct_copy = callback.index("gs_copy_texture_from_nt_shared")
+    assert "gs_texture_open_nt_shared" in callback
+    assert direct_copy < callback.index("gs_texture_open_nt_shared")
+    assert "gs_texture_create(width, height, color_format" in callback
+    copy = callback.index("gs_copy_texture(bs->texture, shared_texture)")
+    release = callback.rindex("gs_texture_destroy(shared_texture)")
+    assert copy < release
+    assert "bs->texture = shared_texture" not in callback
+
+
+def test_render_callback_gate_fences_texture_destroy() -> None:
+    client = (ROOT / "plugins" / "pulsar-browser" / "browser-client.cpp").read_text(
+        encoding="utf-8"
+    )
+    source_header = (ROOT / "plugins" / "pulsar-browser" / "obs-browser-source.hpp").read_text(
+        encoding="utf-8"
+    )
+    gate = (ROOT / "plugins" / "pulsar-browser" / "browser-render-callback-gate.hpp").read_text(
+        encoding="utf-8"
+    )
+    source = (ROOT / "plugins" / "pulsar-browser" / "obs-browser-source.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "BrowserRenderCallbackGate::Lease BrowserClient::acquire_render_callback() const" in client
+    assert client.count("auto render_callback = acquire_render_callback();") == 3
+    assert "BrowserRenderCallbackGate::CallbackPause resize_pause;" in client
+    assert "resize_pause = render_callbacks->try_pause_for_current_callback();" in client
+    assert "DestroyTextures(resize_pause)" in client
+    destroy = source_header[source_header.index("inline bool DestroyTextures") :]
+    assert "render_callbacks->try_pause_for_current_callback();" in destroy
+    assert "render_callbacks->pause_for_texture_destroy();" in destroy
+    assert "CallbackPause callback_pause;" in destroy
+    assert "DestroyTextures(BrowserRenderCallbackGate::CallbackPause &callback_pause)" in destroy
+    assert "render_callbacks->close_and_wait();" in source
+    assert "close_and_wait()" in gate
+    assert "try_pause_for_current_callback()" in gate
+    assert "pause_for_texture_destroy()" in gate
+    assert "admission_paused_" in gate
+    assert "if (!bs->DestroyTextures(resize_pause))" in client
+
+    resize_start = client.index("if (bs->width != width")
+    assert client.index("DestroyTextures(resize_pause)", resize_start) < client.index(
+        "obs_enter_graphics();", resize_start
+    )
+    assert client.index("DestroyTextures(resize_pause)", resize_start) < client.index(
+        "if (!bs->texture && width && height)", resize_start
+    )
+
+
+def test_render_callback_resize_pause_covers_destroy_and_recreate() -> None:
+    client = (ROOT / "plugins" / "pulsar-browser" / "browser-client.cpp").read_text(
+        encoding="utf-8"
+    )
+    resize_start = client.index("BrowserRenderCallbackGate::CallbackPause resize_pause;")
+    resize_end = client.index("\n}\n\n#ifdef ENABLE_BROWSER_SHARED_TEXTURE", resize_start)
+    resize_path = client[resize_start:resize_end]
+    assert resize_path.count("try_pause_for_current_callback()") == 1
+    assert resize_path.count("DestroyTextures(resize_pause)") == 1
+    assert resize_path.index("DestroyTextures(resize_pause)") < resize_path.index(
+        "if (!bs->texture && width && height)"
+    )
+    assert "resize_pause" in resize_path
+
+
+def test_render_callback_resize_pause_blocks_destroy_create_interleaving() -> None:
+    """Admission stays paused across the texture-null interval of a resize."""
+
+    class GateModel:
+        def __init__(self) -> None:
+            self.condition = threading.Condition()
+            self.in_flight = 0
+            self.paused = False
+
+        def acquire(self) -> bool:
+            with self.condition:
+                if self.paused:
+                    return False
+                self.in_flight += 1
+                return True
+
+        def release(self) -> None:
+            with self.condition:
+                self.in_flight -= 1
+                self.condition.notify_all()
+
+        def try_pause_for_current(self) -> bool:
+            with self.condition:
+                if self.paused:
+                    return False
+                self.paused = True
+                self.condition.wait_for(lambda: self.in_flight <= 1)
+                return True
+
+        def resume(self) -> None:
+            with self.condition:
+                self.paused = False
+                self.condition.notify_all()
+
+    gate = GateModel()
+    assert gate.acquire()  # callback owning the resize transaction
+    assert gate.try_pause_for_current()
+    texture_ready = False
+    assert not gate.acquire()  # destroy -> texture-null interval
+    texture_ready = True  # recreate completes while the same pause is held
+    assert texture_ready
+    gate.resume()
+    assert gate.acquire()  # next callback sees only the recreated texture
+    gate.release()
+    gate.release()
+    assert gate.in_flight == 0
+
+
+def test_render_callback_gate_two_callback_resize_interleaving_does_not_deadlock() -> None:
+    """Exercise the gate protocol that the C++ static contract implements.
+
+    The current callback may hold one lease while a second callback is waiting
+    for graphics. Pausing admission before entering graphics lets the current
+    callback wait for and drain the second lease without holding graphics.
+    """
+
+    class GateModel:
+        def __init__(self) -> None:
+            self.condition = threading.Condition()
+            self.in_flight = 0
+            self.paused = False
+
+        def acquire(self) -> bool:
+            with self.condition:
+                if self.paused:
+                    return False
+                self.in_flight += 1
+                return True
+
+        def release(self) -> None:
+            with self.condition:
+                self.in_flight -= 1
+                self.condition.notify_all()
+
+        def try_pause_for_current(self) -> bool:
+            with self.condition:
+                if self.paused:
+                    return False
+                self.paused = True
+                self.condition.wait_for(lambda: self.in_flight <= 1)
+                return True
+
+        def resume(self) -> None:
+            with self.condition:
+                self.paused = False
+                self.condition.notify_all()
+
+    gate = GateModel()
+    assert gate.acquire()  # callback performing the resize
+    assert gate.acquire()  # concurrent callback, blocked before graphics
+    other_released = False
+
+    def release_other() -> None:
+        nonlocal other_released
+        threading.Event().wait(0.02)
+        gate.release()
+        other_released = True
+
+    worker = threading.Thread(target=release_other)
+    worker.start()
+    started = time.monotonic()
+    assert gate.try_pause_for_current()
+    elapsed = time.monotonic() - started
+    assert other_released
+    assert elapsed >= 0.01
+    assert not gate.acquire()  # no third callback can enter during teardown
+
+    # A CEF re-entrant callback observes paused admission and returns without
+    # taking a lease, so it cannot create a second wait cycle.
+    reentrant_result: list[bool] = []
+    reentrant = threading.Thread(target=lambda: reentrant_result.append(gate.acquire()))
+    reentrant.start()
+    reentrant.join(timeout=1.0)
+    assert not reentrant.is_alive()
+    assert reentrant_result == [False]
+
+    gate.resume()
+    gate.release()  # current callback lease
+    worker.join(timeout=1.0)
+    assert not worker.is_alive()
+    assert gate.in_flight == 0
+    assert gate.acquire()  # admission reopens after texture replacement
+    gate.release()
+
+    # Two already-admitted resize callbacks must serialize ownership. The
+    # loser releases its lease immediately; the winner drains it and proceeds.
+    gate = GateModel()
+    assert gate.acquire()
+    assert gate.acquire()
+    barrier = threading.Barrier(3)
+    resize_results: list[bool] = []
+
+    def resize_callback() -> None:
+        barrier.wait()
+        owns_pause = gate.try_pause_for_current()
+        resize_results.append(owns_pause)
+        if not owns_pause:
+            gate.release()
+            return
+        gate.resume()
+        gate.release()
+
+    first = threading.Thread(target=resize_callback)
+    second = threading.Thread(target=resize_callback)
+    first.start()
+    second.start()
+    barrier.wait()
+    first.join(timeout=1.0)
+    second.join(timeout=1.0)
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert sorted(resize_results) == [False, True]
+    assert gate.in_flight == 0
+
+
+def test_d3d11_direct_shared_copy_api_is_optional_and_validated() -> None:
+    graphics_header = (ROOT / "upstream" / "libobs" / "graphics" / "graphics.h").read_text(
+        encoding="utf-8"
+    )
+    graphics_source = (ROOT / "upstream" / "libobs" / "graphics" / "graphics.c").read_text(
+        encoding="utf-8"
+    )
+    graphics_imports = (ROOT / "upstream" / "libobs" / "graphics" / "graphics-imports.c").read_text(
+        encoding="utf-8"
+    )
+    d3d11_source = (ROOT / "upstream" / "libobs-d3d11" / "d3d11-subsystem.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "EXPORT bool gs_copy_texture_from_nt_shared(gs_texture_t *dst, uint32_t handle);"
+        in graphics_header
+    )
+    assert "device_copy_texture_from_nt_shared" in graphics_source
+    assert "GRAPHICS_IMPORT_OPTIONAL(device_copy_texture_from_nt_shared)" in graphics_imports
+    assert "return false;" in graphics_source[graphics_source.index("gs_copy_texture_from_nt_shared") :]
+    assert "OpenSharedResource1" in d3d11_source
+    assert "source_desc.Width != dst2d->width" in d3d11_source
+    assert "source_desc.ArraySize != 1" in d3d11_source
+    assert "return false;" in d3d11_source[d3d11_source.index("device_copy_texture_from_nt_shared") :]
 
 
 def test_create_remove_rendezvous_is_bounded_and_test_only() -> None:

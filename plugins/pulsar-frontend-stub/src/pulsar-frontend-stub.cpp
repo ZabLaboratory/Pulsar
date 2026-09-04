@@ -75,13 +75,16 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <limits>
+#include <locale>
 #include <memory>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -201,6 +204,48 @@ class PulsarFrontendAPI;
 PulsarFrontendAPI *g_api = nullptr;
 class PulsarSceneSwitchVendor;
 std::atomic<PulsarSceneSwitchVendor *> g_sceneSwitchVendor{nullptr};
+
+struct CounterBacklogBaseline {
+    uint64_t rawFrames = 0;
+    uint64_t encodedFrames = 0;
+    uint32_t eligibleSamples = 0;
+    bool valid = false;
+};
+
+// rawFrameCount_ and packetFrameCount_ are lifetime counters. Keep their
+// backlog estimate scoped to consecutive active samples instead of exposing
+// work accumulated before the current resource session. A counter reset is
+// also a new baseline; never turn it into a synthetic backlog spike.
+static uint64_t callbackBacklogEstimate(uint64_t rawFrames, uint64_t encodedFrames,
+                                        uint64_t encodeSamples, bool sampleEligible,
+                                        CounterBacklogBaseline &baseline)
+{
+    // Do not turn encoder/packet warm-up into a queue-depth spike.  The first
+    // two active samples with both counters started establish a stable
+    // baseline; only the following sample is an interval measurement.
+    if (!sampleEligible || encodedFrames == 0 || encodeSamples == 0) {
+        baseline = {};
+        return 0;
+    }
+    if (!baseline.valid || rawFrames < baseline.rawFrames || encodedFrames < baseline.encodedFrames) {
+        baseline.rawFrames = rawFrames;
+        baseline.encodedFrames = encodedFrames;
+        baseline.eligibleSamples = 1;
+        baseline.valid = true;
+        return 0;
+    }
+    if (baseline.eligibleSamples < 2) {
+        baseline.rawFrames = rawFrames;
+        baseline.encodedFrames = encodedFrames;
+        ++baseline.eligibleSamples;
+        return 0;
+    }
+    const uint64_t rawDelta = rawFrames - baseline.rawFrames;
+    const uint64_t encodedDelta = encodedFrames - baseline.encodedFrames;
+    baseline.rawFrames = rawFrames;
+    baseline.encodedFrames = encodedFrames;
+    return rawDelta > encodedDelta ? rawDelta - encodedDelta : 0;
+}
 
 template <typename T> struct StubCallback {
     T cb;
@@ -331,6 +376,186 @@ private:
 // the callback data itself remains valid across that boundary.
 PulsarDualLaneControlBridge g_dualLaneControlBridge;
 
+// Trace evidence has a separate cryptographic boundary from the scene
+// control plane.  The MAC key is supplied through the operator environment,
+// outside both the JSONL artifact and its manifest, and is never serialized.
+// Runtime traces therefore remain verifiable after a file copy/fusion, while
+// a file-only edit cannot be made to look like a producer record.
+static std::string traceSha256(const std::string &text)
+{
+#ifdef _WIN32
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    DWORD objectLen = 0, bytes = 0;
+    std::vector<unsigned char> object, digest(32);
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0)
+        return {};
+    if (BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLen), sizeof(objectLen),
+                          &bytes, 0) != 0) {
+        BCryptCloseAlgorithmProvider(alg, 0);
+        return {};
+    }
+    object.resize(objectLen);
+    const bool ok = BCryptCreateHash(alg, &hash, object.data(), objectLen, nullptr, 0, 0) == 0 &&
+                    BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char *>(text.data())),
+                                   static_cast<ULONG>(text.size()), 0) == 0 &&
+                    BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) == 0;
+    if (hash)
+        BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(alg, 0);
+    if (!ok)
+        return {};
+    static const char hex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(64);
+    for (unsigned char byte : digest) {
+        result.push_back(hex[byte >> 4]);
+        result.push_back(hex[byte & 15]);
+    }
+    return result;
+#else
+    (void)text;
+    return {};
+#endif
+}
+
+static std::string traceHmacSha256(const std::vector<unsigned char> &key, const std::string &text)
+{
+#ifdef _WIN32
+    if (key.empty())
+        return {};
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    DWORD objectLen = 0, bytes = 0;
+    std::vector<unsigned char> object, digest(32);
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, BCRYPT_ALG_HANDLE_HMAC_FLAG) != 0)
+        return {};
+    if (BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLen), sizeof(objectLen),
+                          &bytes, 0) != 0) {
+        BCryptCloseAlgorithmProvider(alg, 0);
+        return {};
+    }
+    object.resize(objectLen);
+    const bool ok = BCryptCreateHash(alg, &hash, object.data(), objectLen,
+                                     const_cast<PUCHAR>(key.data()), static_cast<ULONG>(key.size()), 0) == 0 &&
+                    BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char *>(text.data())),
+                                   static_cast<ULONG>(text.size()), 0) == 0 &&
+                    BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) == 0;
+    if (hash)
+        BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(alg, 0);
+    if (!ok)
+        return {};
+    static const char hex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(64);
+    for (unsigned char byte : digest) {
+        result.push_back(hex[byte >> 4]);
+        result.push_back(hex[byte & 15]);
+    }
+    return result;
+#else
+    (void)key;
+    (void)text;
+    return {};
+#endif
+}
+
+// nlohmann::json uses a shortest-round-trip spelling when dumping a parsed
+// double.  Python's verifier can choose a different, but numerically
+// equivalent, spelling for the same IEEE-754 value.  The trace boundary uses
+// one explicit JSON serializer instead: floats are rendered with twelve fixed
+// decimal places and trailing zeroes are removed.  Twelve decimal places in
+// seconds is materially below the timing resolution of this probe and does
+// not alter the media path or its quality.
+static std::string traceCanonicalDump(const json &value)
+{
+    if (value.is_null())
+        return "null";
+    if (value.is_boolean())
+        return value.get<bool>() ? "true" : "false";
+    if (value.is_number_unsigned() || value.is_number_integer())
+        return value.dump();
+    if (value.is_number_float()) {
+        const double number = value.get<double>();
+        if (!std::isfinite(number))
+            throw std::runtime_error("non-finite trace number");
+        std::ostringstream out;
+        out.imbue(std::locale::classic());
+        out << std::fixed << std::setprecision(12) << (number == 0.0 ? 0.0 : number);
+        std::string text = out.str();
+        while (!text.empty() && text.back() == '0')
+            text.pop_back();
+        if (!text.empty() && text.back() == '.')
+            text.pop_back();
+        return text.empty() || text == "-0" ? "0" : text;
+    }
+    if (value.is_string())
+        return json(value.get<std::string>()).dump(-1, ' ', false);
+    if (value.is_array()) {
+        std::string text = "[";
+        bool first = true;
+        for (const auto &item : value) {
+            if (!first)
+                text.push_back(',');
+            first = false;
+            text += traceCanonicalDump(item);
+        }
+        text.push_back(']');
+        return text;
+    }
+    if (value.is_object()) {
+        std::string text = "{";
+        bool first = true;
+        for (const auto &item : value.items()) {
+            if (!first)
+                text.push_back(',');
+            first = false;
+            text += json(item.key()).dump(-1, ' ', false);
+            text.push_back(':');
+            text += traceCanonicalDump(item.value());
+        }
+        text.push_back('}');
+        return text;
+    }
+    throw std::runtime_error("unsupported trace JSON value");
+}
+
+static bool readTraceKey(const char *value, std::vector<unsigned char> &key)
+{
+    if (!value)
+        return false;
+    std::string encoded(value);
+    if (encoded.size() != 64)
+        return false;
+    auto nibble = [](char value) -> int {
+        if (value >= '0' && value <= '9')
+            return value - '0';
+        if (value >= 'a' && value <= 'f')
+            return value - 'a' + 10;
+        return -1;
+    };
+    key.clear();
+    key.reserve(32);
+    for (size_t index = 0; index < encoded.size(); index += 2) {
+        const int high = nibble(encoded[index]);
+        const int low = nibble(encoded[index + 1]);
+        if (high < 0 || low < 0)
+            return false;
+        key.push_back(static_cast<unsigned char>((high << 4) | low));
+    }
+    return key.size() == 32;
+}
+
+static bool readTraceBytes(const std::filesystem::path &path, std::string &bytes)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        return false;
+    bytes.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    return input.good() || input.eof();
+}
+
 // #246 runtime evidence producer.  This object intentionally has process
 // lifetime: libobs's procedure handler has no remove operation, and the
 // websocket/virtual-camera modules can still issue a late lookup while OBS is
@@ -413,6 +638,13 @@ class PulsarRuntimeTelemetry {
     };
 
     static constexpr size_t kSignalQueueCapacity = 1024;
+    // Formatted records are produced by callbacks and the resource sampler
+    // faster than the file writer can drain them on a contended host.  Keep
+    // this queue bounded so telemetry cannot become the source of an
+    // unbounded resident-set growth.  Overflow is an integrity fault, never
+    // a silent drop: the trace is fail-stopped and callers cannot admit a
+    // subsequent Take.
+    static constexpr size_t kWriterQueueCapacity = 4096;
     struct SignalQueueSlot {
         std::atomic<uint64_t> sequence{0};
         SignalEvent event;
@@ -425,6 +657,7 @@ public:
         signalMask_.store(0, std::memory_order_release);
         stopResourceSampler();
         stopTraceWriter();
+        traceIntegrityFault_.store(false, std::memory_order_release);
     }
 
     void install()
@@ -457,6 +690,7 @@ public:
         signalMask_.store(0, std::memory_order_release);
         stopResourceSampler();
         stopTraceWriter();
+        traceIntegrityFault_.store(false, std::memory_order_release);
 
         contextWriteIndex_.store(0, std::memory_order_relaxed);
         resetSignalQueue();
@@ -550,6 +784,7 @@ public:
             std::lock_guard<std::mutex> lock(stateMutex_);
             runtimeInstanceId_ = runtimeId;
             tracePath_ = tracePath;
+            traceManifestPath_ = tracePath_ + ".manifest.json";
             buildRevision_ = buildRevision;
             traceHost_ = traceHost;
             traceGpu_ = traceGpu;
@@ -595,23 +830,16 @@ public:
             std::ifstream existing(tracePath_, std::ios::binary | std::ios::ate);
             hasExisting = existing.good() && existing.tellg() > 0;
         }
-        if (!hasExisting) {
-            {
-                std::lock_guard<std::mutex> fileLock(fileMutex_);
+        if (!prepareTraceFile(append && hasExisting)) {
 #ifdef _WIN32
-                if (traceMutex_)
-                    WaitForSingleObject(traceMutex_, INFINITE);
-#endif
-                std::ofstream truncate(tracePath_, std::ios::binary | std::ios::trunc);
-#ifdef _WIN32
-                if (traceMutex_)
-                    ReleaseMutex(traceMutex_);
-#endif
+            if (traceMutex_) {
+                CloseHandle(traceMutex_);
+                traceMutex_ = nullptr;
             }
-            // The state/lane locks are intentionally not held while opening
-            // or appending JSONL.  The writer queue is asynchronous: this
-            // enqueue is the only work the control path performs for the
-            // session record, and the worker performs the actual file I/O.
+#endif
+            traceIntegrityFault_.store(true, std::memory_order_release);
+            blog(LOG_WARNING, "[pulsar-runtime-telemetry] trace disabled: integrity anchor preflight failed");
+            return;
         }
 
         if (!startTraceWriter() || (!hasExisting && !enqueueLine(session))) {
@@ -714,7 +942,7 @@ public:
     bool integrityFaulted()
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
-        return degraded_;
+        return degraded_ || traceIntegrityFault_.load(std::memory_order_acquire);
     }
 
     bool environmentTruthy(const char *value) const { return truthy(value); }
@@ -1348,7 +1576,11 @@ private:
         obs_video_mix_pipeline_stats previousPreview = {};
         obs_raw_output_pipeline_stats previousProgramReturn = {};
         obs_raw_output_pipeline_stats previousPreviewReturn = {};
+        uint64_t previousLaggedFrames = 0;
         bool havePipelineBaseline = false;
+        CounterBacklogBaseline counterBacklogBaseline;
+        std::string counterBaselineRuntime;
+        std::string counterBaselineMode;
         resourceCpuInfo_ = os_cpu_usage_info_start();
         if (!resourceCpuInfo_)
             blog(LOG_WARNING, "[pulsar-runtime-telemetry] process CPU sampler unavailable");
@@ -1378,7 +1610,7 @@ private:
 
             const uint64_t rawFrames = rawFrameCount_.load(std::memory_order_relaxed);
             const uint64_t encodedFrames = packetFrameCount_.load(std::memory_order_relaxed);
-            const uint64_t queueDepth = rawFrames > encodedFrames ? rawFrames - encodedFrames : 0;
+            const uint64_t laggedFrames = static_cast<uint64_t>(obs_get_lagged_frames());
             std::string mode;
             std::string runtime;
             std::string buildRevision;
@@ -1430,15 +1662,29 @@ private:
                 (producerCount == 2 && previewReturnOutput &&
                  !obs_output_get_raw_pipeline_stats(previewReturnOutput, &previewReturn)))
                 continue;
+            const bool encoderActive = videoEncoder && obs_encoder_active(videoEncoder);
+            const bool rtmpLoadActive = streamOutput && obs_output_active(streamOutput);
+            const bool counterSampleEligible = encoderActive && rtmpLoadActive;
+            if (counterBaselineRuntime != runtime || counterBaselineMode != mode) {
+                counterBacklogBaseline = {};
+                counterBaselineRuntime = runtime;
+                counterBaselineMode = mode;
+            }
+            const uint64_t encodeSamples = encodeTimeSampleCount_.load(std::memory_order_relaxed);
+            const uint64_t callbackBacklog = callbackBacklogEstimate(
+                rawFrames, encodedFrames, encodeSamples, counterSampleEligible, counterBacklogBaseline);
             if (!havePipelineBaseline) {
                 previousGraphics = graphics;
                 previousProgram = program;
                 previousPreview = preview;
                 previousProgramReturn = programReturn;
                 previousPreviewReturn = previewReturn;
+                previousLaggedFrames = laggedFrames;
                 havePipelineBaseline = true;
                 continue;
             }
+
+            const uint64_t missedFrames = laggedFrames >= previousLaggedFrames ? laggedFrames - previousLaggedFrames : 0;
 
             profiler_result_t programProfile = {};
             profiler_result_t previewProfile = {};
@@ -1446,14 +1692,9 @@ private:
                                              source_profiler_fill_result(programRoot, &programProfile);
             const bool previewProfileValid = producerCount == 2 && previewRoot &&
                                              source_profiler_fill_result(previewRoot, &previewProfile);
-            const bool encoderActive = videoEncoder && obs_encoder_active(videoEncoder);
-            const bool rtmpLoadActive = streamOutput && obs_output_active(streamOutput);
             const int outputDropped = rtmpLoadActive ? obs_output_get_frames_dropped(streamOutput) : 0;
             const uint64_t droppedFrames =
                 outputDropped > 0 ? static_cast<uint64_t>(outputDropped) : 0;
-            const uint64_t missedFrames = static_cast<uint64_t>(obs_get_lagged_frames());
-            const uint64_t encodeSamples =
-                encodeTimeSampleCount_.load(std::memory_order_relaxed);
             const uint64_t encodeTimeNs = encodeTimeNsTotal_.load(std::memory_order_relaxed);
             const double encodeTimeMs = encodeSamples > 0
                 ? static_cast<double>(encodeTimeNs) /
@@ -1468,7 +1709,7 @@ private:
                    << ",\"resident_bytes\":" << os_get_proc_resident_size()
                    << ",\"process_cpu_percent\":" << std::setprecision(6) << cpu
                    << ",\"host_gpu_percent\":" << gpu.utilization
-                   << ",\"callback_backlog_estimate\":" << queueDepth
+                   << ",\"callback_backlog_estimate\":" << callbackBacklog
                    << ",\"dropped_frames\":" << droppedFrames
                    << ",\"missed_frames\":" << missedFrames
                    << ",\"encode_time_ms\":" << std::setprecision(9) << encodeTimeMs
@@ -1546,13 +1787,14 @@ private:
                    << "\",\"gpu\":\"" << escape(gpuName)
                    << "\"},\"producer_topology\":\"" << escape(producerTopology)
                    << "\",\"producer_count\":" << producerCount
-                   << ",\"notes\":\"frame time is OBS average; dropped_frames is the active RTMP output counter; missed_frames is OBS render lag; encode_time_ms is cumulative mean FERC-FER and is qualified by encode_time_samples; process CPU is this runtime; host GPU and encoder utilization are nvidia-smi device counters; callback backlog is a producer/packet counter estimate\"}";
+                   << ",\"notes\":\"frame time is OBS average; dropped_frames is the active RTMP output counter; missed_frames is the interval delta of OBS render lag; encode_time_ms is cumulative mean FERC-FER and is qualified by encode_time_samples; process CPU is this runtime; host GPU and encoder utilization are nvidia-smi device counters; callback_backlog_estimate is the non-negative interval delta between raw and encoded producer counters within consecutive encoder+RTMP-active samples, not a lifetime queue depth\"}";
             writeLine(sample.str());
             previousGraphics = graphics;
             previousProgram = program;
             previousPreview = preview;
             previousProgramReturn = programReturn;
             previousPreviewReturn = previewReturn;
+            previousLaggedFrames = laggedFrames;
         }
     }
 
@@ -1946,15 +2188,291 @@ private:
             writeSignalEvent(event);
     }
 
+    bool truncateTraceFile(uint64_t keepBytes)
+    {
+#ifdef _WIN32
+        const std::wstring path = std::filesystem::path(tracePath_).wstring();
+        HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+            return false;
+        LARGE_INTEGER offset;
+        offset.QuadPart = static_cast<LONGLONG>(keepBytes);
+        const bool positioned = SetFilePointerEx(handle, offset, nullptr, FILE_BEGIN) != FALSE;
+        const bool truncated = positioned && SetEndOfFile(handle) != FALSE;
+        const bool flushed = truncated && FlushFileBuffers(handle) != FALSE;
+        const bool closed = CloseHandle(handle) != FALSE;
+        return positioned && truncated && flushed && closed;
+#else
+        if (keepBytes != 0)
+            return false;
+        std::ofstream output(tracePath_, std::ios::binary | std::ios::trunc);
+        output.flush();
+        return output.good();
+#endif
+    }
+
+    bool prepareTraceFile(bool appendExisting)
+    {
+        traceKey_.clear();
+        if (!readTraceKey(std::getenv("PULSAR_TRACE_HMAC_KEY"), traceKey_))
+            return false;
+        traceChainHead_ = std::string(64, '0');
+        traceRecordCount_ = 0;
+        if (!appendExisting)
+            return truncateTraceFile(0);
+
+        std::string bytes;
+        if (!readTraceBytes(tracePath_, bytes) || bytes.empty() || bytes.back() != '\n')
+            return false;
+        const size_t footerStart = bytes.rfind('\n', bytes.size() - 2);
+        const size_t footerOffset = footerStart == std::string::npos ? 0 : footerStart + 1;
+        if (footerOffset >= bytes.size() - 1)
+            return false;
+        json footer;
+        try {
+            footer = json::parse(bytes.substr(footerOffset, bytes.size() - footerOffset - 1));
+        } catch (...) {
+            return false;
+        }
+        const auto validDigest = [](const json &value) {
+            if (!value.is_string())
+                return false;
+            const std::string digest = value.get<std::string>();
+            if (digest.size() != 64)
+                return false;
+            return std::all_of(digest.begin(), digest.end(), [](unsigned char character) {
+                return (character >= '0' && character <= '9') ||
+                       (character >= 'a' && character <= 'f');
+            });
+        };
+        if (!footer.is_object() || !footer.contains("record_type") || !footer["record_type"].is_string() ||
+            footer["record_type"] != "trace_footer" || !footer.contains("schema") ||
+            !footer["schema"].is_string() || footer["schema"] != "pulsar.trace-integrity.v1" ||
+            !footer.contains("chain_head") || !validDigest(footer["chain_head"]) ||
+            !footer.contains("record_count") || !footer["record_count"].is_number_unsigned() ||
+            footer["record_count"].get<uint64_t>() == 0 || !footer.contains("footer_mac") ||
+            !validDigest(footer["footer_mac"]) || !footer.contains("runtime_instance_id") ||
+            !footer["runtime_instance_id"].is_string() || !footer.contains("session_id") ||
+            !footer["session_id"].is_string())
+            return false;
+        const std::string footerMac = footer["footer_mac"].get<std::string>();
+        footer.erase("footer_mac");
+        const std::string expectedMac = traceHmacSha256(traceKey_, "footer|" + footer.dump());
+        if (expectedMac.empty() || expectedMac != footerMac)
+            return false;
+        if (footer.value("runtime_instance_id", "") != runtimeInstanceId_ ||
+            footer.value("session_id", "") != sessionId_)
+            return false;
+        std::string manifestBytes;
+        if (!readTraceBytes(traceManifestPath_, manifestBytes) || manifestBytes.empty())
+            return false;
+        json manifest;
+        try {
+            manifest = json::parse(manifestBytes);
+        } catch (...) {
+            return false;
+        }
+        if (!manifest.is_object() || !manifest.contains("schema") || !manifest["schema"].is_string() ||
+            manifest["schema"] != "pulsar.trace-integrity.v1" || !manifest.contains("chain_head") ||
+            !validDigest(manifest["chain_head"]) ||
+            manifest["chain_head"] != footer["chain_head"] || !manifest.contains("record_count") ||
+            !manifest["record_count"].is_number_unsigned() ||
+            manifest["record_count"] != footer["record_count"] || !manifest.contains("footer_mac") ||
+            !validDigest(manifest["footer_mac"]) || manifest["footer_mac"] != footerMac ||
+            !manifest.contains("trace_sha256") || !validDigest(manifest["trace_sha256"]) ||
+            !manifest.contains("manifest_mac") || !validDigest(manifest["manifest_mac"]) ||
+            !manifest.contains("runtime_instance_id") || !manifest["runtime_instance_id"].is_string() ||
+            manifest["runtime_instance_id"] != runtimeInstanceId_ || !manifest.contains("session_id") ||
+            !manifest["session_id"].is_string() || manifest["session_id"] != sessionId_)
+            return false;
+        const std::string manifestMac = manifest["manifest_mac"].get<std::string>();
+        manifest.erase("manifest_mac");
+        const std::string expectedManifestMac = traceHmacSha256(traceKey_, "manifest|" + manifest.dump());
+        if (expectedManifestMac.empty() || expectedManifestMac != manifestMac ||
+            traceSha256(bytes) != manifest["trace_sha256"].get<std::string>())
+            return false;
+        traceChainHead_ = footer["chain_head"].get<std::string>();
+        traceRecordCount_ = footer["record_count"].get<uint64_t>();
+        return truncateTraceFile(static_cast<uint64_t>(footerOffset));
+    }
+
+    bool openTraceOutput()
+    {
+#ifdef _WIN32
+        const std::wstring path = std::filesystem::path(tracePath_).wstring();
+        // DirectShow's producer-owned filter appends its correlated return
+        // observation through the same named trace mutex.  Keep the runtime
+        // handle shareable for writes; FILE_SHARE_READ alone makes every
+        // legitimate filter append fail with ERROR_SHARING_VIOLATION while
+        // the trace writer is alive.
+        traceFileHandle_ = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
+                                       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+        return traceFileHandle_ != INVALID_HANDLE_VALUE;
+#else
+        traceOutput_.open(tracePath_, std::ios::binary | std::ios::app);
+        return traceOutput_.is_open() && traceOutput_.good();
+#endif
+    }
+
+    bool closeTraceOutput()
+    {
+#ifdef _WIN32
+        if (!traceFileHandle_ || traceFileHandle_ == INVALID_HANDLE_VALUE)
+            return true;
+        const bool flushed = FlushFileBuffers(traceFileHandle_) != FALSE;
+        const bool closed = CloseHandle(traceFileHandle_) != FALSE;
+        traceFileHandle_ = nullptr;
+        return flushed && closed;
+#else
+        if (!traceOutput_.is_open())
+            return true;
+        traceOutput_.flush();
+        const bool good = traceOutput_.good();
+        traceOutput_.close();
+        return good && !traceOutput_.fail();
+#endif
+    }
+
+    bool writeTraceBytes(const std::string &bytes)
+    {
+        if (bytes.empty())
+            return true;
+#ifdef _WIN32
+        if (!traceFileHandle_ || traceFileHandle_ == INVALID_HANDLE_VALUE)
+            return false;
+        if (bytes.size() > (std::numeric_limits<DWORD>::max)())
+            return false;
+        const DWORD requested = static_cast<DWORD>(bytes.size());
+        DWORD written = 0;
+        if (!WriteFile(traceFileHandle_, bytes.data(), requested, &written, nullptr) || written != requested)
+            return false;
+        return FlushFileBuffers(traceFileHandle_) != FALSE;
+#else
+        traceOutput_.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        traceOutput_.flush();
+        return traceOutput_.good();
+#endif
+    }
+
+    void markTraceIntegrityFault(const char *reason)
+    {
+        bool expected = false;
+        if (traceIntegrityFault_.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+            blog(LOG_ERROR, "[pulsar-runtime-telemetry] integrity_fault=1 reason=%s", reason ? reason : "unknown");
+    }
+
     bool startTraceWriter()
     {
         std::lock_guard<std::mutex> lock(writerMutex_);
         if (writerThread_.joinable())
             return false;
+        if (traceKey_.empty() || !openTraceOutput()) {
+            markTraceIntegrityFault("trace_open_failed");
+            return false;
+        }
         writerStopping_ = false;
         writerAccepting_ = true;
+        traceIntegritySessionReady_ = true;
         writerThread_ = std::thread([this] { traceWriterLoop(); });
         return true;
+    }
+
+    void finalizeTraceIntegrity()
+    {
+        if (traceKey_.empty() || traceChainHead_.empty() || traceRecordCount_ == 0)
+            return;
+        json footer = { {"chain_head", traceChainHead_},
+                        {"record_count", traceRecordCount_},
+                        {"record_type", "trace_footer"},
+                        {"runtime_instance_id", runtimeInstanceId_},
+                        {"schema", "pulsar.trace-integrity.v1"},
+                        {"session_id", sessionId_} };
+        const std::string footerMac = traceHmacSha256(traceKey_, "footer|" + footer.dump());
+        if (footerMac.empty()) {
+            markTraceIntegrityFault("trace_footer_mac_failed");
+            return;
+        }
+        footer["footer_mac"] = footerMac;
+        if (!writeTraceBytes(footer.dump() + "\n")) {
+            markTraceIntegrityFault("trace_footer_write_failed");
+            return;
+        }
+        std::string bytes;
+        if (!readTraceBytes(tracePath_, bytes)) {
+            markTraceIntegrityFault("trace_manifest_read_failed");
+            return;
+        }
+        const std::string traceDigest = traceSha256(bytes);
+        if (traceDigest.empty()) {
+            markTraceIntegrityFault("trace_manifest_hash_failed");
+            return;
+        }
+        json manifest = { {"chain_head", traceChainHead_},
+                          {"footer_mac", footerMac},
+                          {"record_count", traceRecordCount_},
+                          {"runtime_instance_id", runtimeInstanceId_},
+                          {"schema", "pulsar.trace-integrity.v1"},
+                          {"session_id", sessionId_},
+                          {"trace_sha256", traceDigest} };
+        const std::string manifestMac = traceHmacSha256(traceKey_, "manifest|" + manifest.dump());
+        if (manifestMac.empty()) {
+            markTraceIntegrityFault("trace_manifest_mac_failed");
+            return;
+        }
+        manifest["manifest_mac"] = manifestMac;
+        const std::filesystem::path temp = traceManifestPath_.string() + ".tmp-" + std::to_string(os_gettime_ns());
+        const std::string serializedManifest = manifest.dump() + "\n";
+#ifdef _WIN32
+        HANDLE manifestHandle = CreateFileW(temp.wstring().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
+        if (manifestHandle == INVALID_HANDLE_VALUE) {
+            markTraceIntegrityFault("trace_manifest_open_failed");
+            return;
+        }
+        DWORD manifestWritten = 0;
+        const bool manifestWriteOk = serializedManifest.size() <= (std::numeric_limits<DWORD>::max)() &&
+                                     WriteFile(manifestHandle, serializedManifest.data(),
+                                               static_cast<DWORD>(serializedManifest.size()), &manifestWritten, nullptr) != FALSE &&
+                                     manifestWritten == serializedManifest.size();
+        const bool manifestFlushOk = manifestWriteOk && FlushFileBuffers(manifestHandle) != FALSE;
+        const bool manifestCloseOk = CloseHandle(manifestHandle) != FALSE;
+        if (!manifestWriteOk || !manifestCloseOk) {
+            DeleteFileW(temp.wstring().c_str());
+            markTraceIntegrityFault("trace_manifest_write_failed");
+            return;
+        }
+        if (!manifestFlushOk) {
+            DeleteFileW(temp.wstring().c_str());
+            markTraceIntegrityFault("trace_manifest_flush_failed");
+            return;
+        }
+#else
+        {
+            std::ofstream output(temp, std::ios::binary | std::ios::trunc);
+            if (!output) {
+                markTraceIntegrityFault("trace_manifest_open_failed");
+                return;
+            }
+            output.write(serializedManifest.data(), static_cast<std::streamsize>(serializedManifest.size()));
+            output.flush();
+            if (!output.good()) {
+                markTraceIntegrityFault("trace_manifest_flush_failed");
+                return;
+            }
+        }
+#endif
+#ifdef _WIN32
+        const bool installed = MoveFileExW(temp.wstring().c_str(), traceManifestPath_.wstring().c_str(),
+                                           MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
+#else
+        std::error_code renameError;
+        std::filesystem::rename(temp, traceManifestPath_, renameError);
+        const bool installed = !renameError;
+#endif
+        if (!installed)
+            markTraceIntegrityFault("trace_manifest_install_failed");
     }
 
     void stopTraceWriter()
@@ -1967,6 +2485,13 @@ private:
         writerCv_.notify_all();
         if (writerThread_.joinable())
             writerThread_.join();
+        if (traceIntegritySessionReady_) {
+            if (!traceIntegrityFault_.load(std::memory_order_acquire))
+                finalizeTraceIntegrity();
+            if (!closeTraceOutput())
+                markTraceIntegrityFault("trace_close_failed");
+            traceIntegritySessionReady_ = false;
+        }
         {
             std::lock_guard<std::mutex> lock(writerMutex_);
             writerQueue_.clear();
@@ -1999,7 +2524,17 @@ private:
                 line = std::move(writerQueue_.front());
                 writerQueue_.pop_front();
             }
-            writeLineFile(line);
+            if (!writeLineFile(line)) {
+                // Trace output is evidence, not a best-effort diagnostic. Stop
+                // accepting more records after the first I/O fault so a
+                // truncated artifact cannot be mistaken for a complete run.
+                std::lock_guard<std::mutex> lock(writerMutex_);
+                writerAccepting_ = false;
+                writerStopping_ = true;
+                writerQueue_.clear();
+                signalMask_.store(0, std::memory_order_release);
+                return;
+            }
         }
     }
 
@@ -2007,11 +2542,29 @@ private:
     {
         if (line.empty())
             return true;
+        bool overflow = false;
         {
             std::lock_guard<std::mutex> lock(writerMutex_);
             if (!writerAccepting_)
                 return false;
-            writerQueue_.push_back(line);
+            if (writerQueue_.size() >= kWriterQueueCapacity) {
+                writerAccepting_ = false;
+                writerStopping_ = true;
+                overflow = true;
+            } else {
+                writerQueue_.push_back(line);
+            }
+        }
+        if (overflow) {
+            bool expected = false;
+            if (traceIntegrityFault_.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel))
+                blog(LOG_ERROR,
+                     "[pulsar-runtime-telemetry] integrity_fault=1 reason=trace_queue_overflow "
+                     "capacity=%zu",
+                     kWriterQueueCapacity);
+            writerCv_.notify_all();
+            return false;
         }
         writerCv_.notify_one();
         return true;
@@ -2022,23 +2575,63 @@ private:
         (void)enqueueLine(line);
     }
 
-    void writeLineFile(const std::string &line)
+    bool writeLineFile(const std::string &line)
     {
         if (line.empty() || tracePath_.empty())
-            return;
+            return true;
         std::lock_guard<std::mutex> lock(fileMutex_);
+        json record;
+        try {
+            record = json::parse(line);
+        } catch (...) {
+            markTraceIntegrityFault("trace_record_json_failed");
+            return false;
+        }
+        if (!record.is_object() || record.contains("trace_integrity") || traceKey_.empty()) {
+            markTraceIntegrityFault("trace_record_invalid");
+            return false;
+        }
+        const uint64_t sequence = traceRecordCount_ + 1;
+        const std::string canonical = traceCanonicalDump(record);
+        const std::string digest = traceSha256(traceChainHead_ + "\n" + canonical);
+        if (digest.empty()) {
+            markTraceIntegrityFault("trace_record_hash_failed");
+            return false;
+        }
+        const std::string recordMac = traceHmacSha256(
+            traceKey_, "record|" + std::to_string(sequence) + "|" + traceChainHead_ + "|" + digest + "|" +
+                sessionId_);
+        if (recordMac.empty()) {
+            markTraceIntegrityFault("trace_record_mac_failed");
+            return false;
+        }
+        record["trace_integrity"] = { {"record_mac", recordMac},
+                                       {"record_sha256", digest},
+                                       {"previous", traceChainHead_},
+                                       {"schema", "pulsar.trace-integrity.v1"},
+                                       {"sequence", sequence} };
+        const std::string serialized = traceCanonicalDump(record) + "\n";
 #ifdef _WIN32
-        if (traceMutex_)
-            WaitForSingleObject(traceMutex_, INFINITE);
+        if (traceMutex_) {
+            const DWORD waitResult = WaitForSingleObject(traceMutex_, INFINITE);
+            if (waitResult != WAIT_OBJECT_0 && waitResult != WAIT_ABANDONED) {
+                markTraceIntegrityFault("trace_mutex_wait_failed");
+                return false;
+            }
+        }
 #endif
-        std::ofstream output(tracePath_, std::ios::binary | std::ios::app);
-        if (output.good())
-            output << line << '\n';
-        output.close();
+        bool success = writeTraceBytes(serialized);
 #ifdef _WIN32
         if (traceMutex_)
             ReleaseMutex(traceMutex_);
 #endif
+        if (!success)
+            markTraceIntegrityFault("trace_write_failed");
+        else {
+            traceChainHead_ = digest;
+            traceRecordCount_ = sequence;
+        }
+        return success;
     }
 
     static void BeginTake(void *param, calldata_t *cd)
@@ -2125,6 +2718,11 @@ private:
     bool enabled_ = false;
     bool degraded_ = false;
     std::string tracePath_;
+    std::filesystem::path traceManifestPath_;
+    std::vector<unsigned char> traceKey_;
+    std::string traceChainHead_ = std::string(64, '0');
+    uint64_t traceRecordCount_ = 0;
+    bool traceIntegritySessionReady_ = false;
     std::string runtimeInstanceId_ = "pulsar-runtime";
     std::string sessionId_;
     std::string buildRevision_;
@@ -2170,6 +2768,7 @@ private:
     std::atomic<uint64_t> encodeTimeNsTotal_{0};
     std::atomic<uint64_t> encodeTimeSampleCount_{0};
     std::atomic<uint32_t> signalMask_{0};
+    std::atomic<bool> traceIntegrityFault_{false};
     std::vector<std::string> traceSignals_;
     // Snapshots are write-once for the lifetime of this telemetry object.  A
     // slot is never reused, so a callback that acquired an old pointer cannot
@@ -2194,6 +2793,9 @@ private:
     bool writerStopping_ = false;
 #ifdef _WIN32
     HANDLE traceMutex_ = nullptr;
+    HANDLE traceFileHandle_ = nullptr;
+#else
+    std::ofstream traceOutput_;
 #endif
 };
 
@@ -3140,6 +3742,12 @@ private:
     int previewLane = 1;
     obs_source_t *laneSources[2] = {};
     obs_sceneitem_t *laneItems[2] = {};
+    // Opt-in diagnostics for repeated composition replacement.  These
+    // counters are intentionally outside acceptance telemetry so the normal
+    // Take path has no additional trace allocation or serialization work.
+    bool sceneChurnDiagnostics = false;
+    uint64_t sceneCompositionAdds[2] = {};
+    uint64_t sceneCompositionRemoves[2] = {};
 
     // Physical role roots remain stable for the lifetime of the frontend.
     // These references point at the roots bound to ProgramView/PreviewView;
@@ -3928,6 +4536,15 @@ bool PulsarFrontendAPI::replaceLaneCompositionLocked(int lane, obs_source_t *sce
         return false;
     }
 
+    // A repeated Prepare for the scene that is already bound to this lane is
+    // logically idempotent. Avoid an add/remove cycle: libobs may defer source
+    // and GPU cleanup until a later graphics boundary, turning an alternating
+    // A/B Take loop into avoidable resident-memory growth. The caller still
+    // advances its command/selection metadata and readiness contract, while
+    // the hot producer remains intact.
+    if (laneItems[lane] && obs_sceneitem_get_source(laneItems[lane]) == scene)
+        return true;
+
     obs_scene_t *laneScene = obs_scene_from_source(laneSources[lane]);
     if (!laneScene)
         return false;
@@ -3943,8 +4560,29 @@ bool PulsarFrontendAPI::replaceLaneCompositionLocked(int lane, obs_source_t *sce
     }
     obs_sceneitem_t *oldItem = laneItems[lane];
     laneItems[lane] = newItem;
-    if (oldItem)
+    if (oldItem) {
         obs_sceneitem_remove(oldItem);
+    }
+    if (sceneChurnDiagnostics) {
+        ++sceneCompositionAdds[lane];
+        if (oldItem)
+            ++sceneCompositionRemoves[lane];
+        size_t activeItems = 0;
+        obs_scene_enum_items(
+            laneScene,
+            [](obs_scene_t *, obs_sceneitem_t *, void *param) {
+                ++*static_cast<size_t *>(param);
+                return true;
+            },
+            &activeItems);
+        const bool activeBinding = obs_sceneitem_get_source(laneItems[lane]) == scene;
+        blog(LOG_INFO,
+             "[pulsar-dual-lane] scene_composition_churn lane=%d add_count=%llu "
+             "remove_count=%llu active_items=%zu active_binding=%d",
+             lane, static_cast<unsigned long long>(sceneCompositionAdds[lane]),
+             static_cast<unsigned long long>(sceneCompositionRemoves[lane]), activeItems,
+             activeBinding ? 1 : 0);
+    }
     return true;
 }
 
@@ -3952,6 +4590,8 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
 {
     if (!templateScene)
         return false;
+
+    sceneChurnDiagnostics = parse_env_bool(std::getenv("PULSAR_SCENE_CHURN_DIAGNOSTICS")) == EnvBool::Enabled;
 
     // The lane roots are private wrappers, not aliases for the user's scene.
     // Their single child is a live scene source.  Program starts on the

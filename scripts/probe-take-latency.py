@@ -69,6 +69,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from fractions import Fraction
+import importlib.util
 import json
 import math
 from pathlib import Path
@@ -84,6 +85,15 @@ from typing import Any, Iterable, Mapping, Sequence
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+
+_TRACE_INTEGRITY_SPEC = importlib.util.spec_from_file_location(
+    "pulsar_trace_integrity", SCRIPT_DIR / "trace-integrity.py"
+)
+if _TRACE_INTEGRITY_SPEC is None or _TRACE_INTEGRITY_SPEC.loader is None:  # pragma: no cover
+    raise RuntimeError("trace integrity verifier is unavailable")
+trace_integrity = importlib.util.module_from_spec(_TRACE_INTEGRITY_SPEC)
+sys.modules[_TRACE_INTEGRITY_SPEC.name] = trace_integrity
+_TRACE_INTEGRITY_SPEC.loader.exec_module(trace_integrity)
 
 try:
     from contracts.scene_switch_v1 import validate_event
@@ -116,6 +126,28 @@ SLO_MS = {
 RESOURCE_REFERENCE = {
     "extra_frame_render_ms": 0.091,
     "extra_resident_bytes": 3_130_000,
+}
+# AC-13 is accepted in the user-required dual-lane-only mode.  These are
+# absolute ceilings for the observed NVENC workload, not a capacity claim.
+# Growth limits catch a resource that is below the ceiling but still rising
+# across the measured window.
+DUAL_ONLY_ABSOLUTE_LIMITS = {
+    "resident_bytes": 1_500_000_000,
+    "process_cpu_percent": 90.0,
+    "host_gpu_percent": 95.0,
+    "gpu_memory_bytes": 8_000_000_000,
+    "callback_backlog_estimate": 3.0,
+    "dropped_frames": 2,
+    "missed_frames": 2,
+    "encode_time_ms": 5.0,
+    "encoder_utilization_percent": 100.0,
+}
+DUAL_ONLY_GROWTH_LIMITS = {
+    "resident_bytes": 32_000_000,
+    "gpu_memory_bytes": 64_000_000,
+    "callback_backlog_estimate": 3.0,
+    "dropped_frames": 2,
+    "missed_frames": 2,
 }
 RESOURCE_MODES = ("reference", "dual_lane")
 REQUIRED_CODECS = ("x264", "nvenc")
@@ -1153,23 +1185,42 @@ def parse_records(records: Iterable[Mapping[str, Any]], *, source: str = "<memor
     return Trace(session, events, observations, resources, signals, source)
 
 
-def parse_trace(path: Path) -> Trace:
-    """Read and validate one UTF-8 JSONL trace."""
+def parse_trace(
+    path: Path, *, key_path: Path | None = None, key_hex: str | None = None
+) -> Trace:
+    """Read and validate one UTF-8 JSONL trace and its external anchor."""
 
     try:
-        handle = path.open("r", encoding="utf-8")
-    except OSError as exc:
+        first_line = next(line for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+        first_record = json.loads(first_line)
+    except StopIteration as exc:
+        raise EvidenceError("TRACE_INTEGRITY", "trace is empty") from exc
+    except (OSError, UnicodeError) as exc:
         raise EvidenceError("TRACE_IO", f"cannot open {path}: {exc}") from exc
-    records: list[dict[str, Any]] = []
-    with handle:
-        for line_number, text in enumerate(handle, start=1):
-            if not text.strip():
-                continue
-            try:
-                value = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise EvidenceError("MALFORMED_JSON", exc.msg, line=line_number) from exc
-            records.append(value)
+    except json.JSONDecodeError as exc:
+        raise EvidenceError("MALFORMED_JSON", exc.msg, line=1) from exc
+
+    # Legacy in-memory/unit fixtures remain explicitly non-runtime evidence.
+    # Every runtime trace, including an append/fused artifact, must carry the
+    # authenticated chain, terminal footer, and external manifest.
+    if isinstance(first_record, dict) and first_record.get("evidence_kind") == "fixture" and not first_record.get(
+        "trace_integrity"
+    ):
+        try:
+            records = [
+                json.loads(text)
+                for text in path.read_text(encoding="utf-8").splitlines()
+                if text.strip()
+            ]
+        except (OSError, UnicodeError) as exc:
+            raise EvidenceError("TRACE_IO", f"cannot open {path}: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise EvidenceError("MALFORMED_JSON", exc.msg) from exc
+    else:
+        try:
+            records, _footer = trace_integrity.read_trace(path, key_path=key_path, key_hex=key_hex)
+        except trace_integrity.TraceIntegrityError as exc:
+            raise EvidenceError("TRACE_INTEGRITY", str(exc)) from exc
     return parse_records(records, source=str(path))
 
 
@@ -1370,6 +1421,112 @@ def _resource_stats(values: Sequence[float | int]) -> dict[str, Any]:
         "p50": round(quantile([float(v) for v in values], 0.50), 6),
         "p95": round(quantile([float(v) for v in values], 0.95), 6),
         "p99": round(quantile([float(v) for v in values], 0.99), 6),
+    }
+
+
+def _resource_encode_timing_present(sample: Mapping[str, Any]) -> bool:
+    """Return whether an active resource sample has measured encode timing."""
+
+    value = sample.get("encode_time_samples")
+    return type(value) is int and value > 0
+
+
+def _dual_only_resource_gate(
+    samples: Sequence[Mapping[str, Any]], minimum_samples: int
+) -> dict[str, Any]:
+    """Evaluate AC-13 without a forbidden single-lane reference run."""
+    required = tuple(DUAL_ONLY_ABSOLUTE_LIMITS)
+    eligible = [
+        sample
+        for sample in samples
+        if sample.get("encoder_active") is True
+        and sample.get("encoder_family") == "nvenc"
+        and sample.get("rtmp_load_active") is True
+        and sample.get("preview_mix", {}).get("active") is True
+        and _resource_encode_timing_present(sample)
+    ]
+    active_nvenc_samples = [
+        sample
+        for sample in samples
+        if sample.get("encoder_active") is True
+        and sample.get("encoder_family") == "nvenc"
+        and sample.get("rtmp_load_active") is True
+        and sample.get("preview_mix", {}).get("active") is True
+    ]
+    # A zero-timing sample at the beginning of a run is an encoder warm-up
+    # observation, not a measured resource sample.  Once the first positive
+    # timing has been observed, however, a later zero/missing value is a
+    # telemetry hole and must fail closed.  Use the monotonic timestamp rather
+    # than input order because traces may be assembled from several writers.
+    ordered_active_nvenc_samples = sorted(
+        active_nvenc_samples,
+        key=lambda sample: sample.get("observed_at_monotonic_ns", 0),
+    )
+    first_timed_index = next(
+        (
+            index
+            for index, sample in enumerate(ordered_active_nvenc_samples)
+            if _resource_encode_timing_present(sample)
+        ),
+        None,
+    )
+    warmup_sample_count = first_timed_index if first_timed_index is not None else len(ordered_active_nvenc_samples)
+    missing_encode_timing = (
+        first_timed_index is not None
+        and any(
+            not _resource_encode_timing_present(sample)
+            for sample in ordered_active_nvenc_samples[first_timed_index:]
+        )
+    )
+    missing = [key for key in required if any(key not in sample for sample in eligible)]
+    admitted = [sample for sample in eligible if not any(key not in sample for key in required)]
+    maxima = {
+        key: max((float(sample[key]) for sample in admitted), default=None)
+        for key in required
+    }
+    violations = [
+        f"{key} exceeds {limit}"
+        for key, limit in DUAL_ONLY_ABSOLUTE_LIMITS.items()
+        if maxima[key] is not None and maxima[key] > limit
+    ]
+    growth = {}
+    if admitted:
+        ordered = sorted(admitted, key=lambda sample: sample["observed_at_monotonic_ns"])
+        for key, limit in DUAL_ONLY_GROWTH_LIMITS.items():
+            delta = float(ordered[-1][key]) - float(ordered[0][key])
+            growth[key] = round(delta, 6)
+            if delta > limit:
+                violations.append(f"{key} growth exceeds {limit}")
+    status = (
+        "MEASURED"
+        if len(admitted) >= minimum_samples and not missing and not missing_encode_timing and not violations
+        else "UNPROVEN"
+    )
+    reason = None
+    if status != "MEASURED":
+        reasons = []
+        if len(admitted) < minimum_samples:
+            reasons.append(f"requires {minimum_samples} active dual-lane samples (observed {len(admitted)})")
+        if missing:
+            reasons.append(f"missing absolute-limit metrics: {', '.join(sorted(set(missing)))}")
+        if missing_encode_timing:
+            reasons.append("active NVENC sample missing encode_time_samples > 0")
+        if violations:
+            reasons.append("; ".join(violations))
+        reason = ", ".join(reasons)
+    return {
+        "status": status,
+        "mode": "dual_lane_only",
+        "minimum_samples": minimum_samples,
+        "active_sample_count": len(admitted),
+        "absolute_limits": dict(DUAL_ONLY_ABSOLUTE_LIMITS),
+        "growth_limits": dict(DUAL_ONLY_GROWTH_LIMITS),
+        "max_values": maxima,
+        "growth": growth,
+        "violations": violations,
+        "missing_encode_timing": missing_encode_timing,
+        "warmup_sample_count": warmup_sample_count,
+        "reason": reason,
     }
 
 
@@ -1849,6 +2006,7 @@ def analyze_trace(
         "accounting": {},
         "mix_formats": {},
         "comparison": {},
+        "dual_only": {},
     }
     for mode in RESOURCE_MODES:
         samples = [sample for sample in trace.resources if sample["sample_mode"] == mode]
@@ -1858,6 +2016,7 @@ def analyze_trace(
             for sample in active_samples
             if sample.get("encoder_family") == "nvenc"
             and sample.get("rtmp_load_active") is True
+            and (session["codec"] != "nvenc" or _resource_encode_timing_present(sample))
         ]
         resource_report["sample_counts"][mode] = len(samples)
         resource_report["active_sample_counts"][mode] = len(active_samples)
@@ -1924,6 +2083,15 @@ def analyze_trace(
         resource_report["status"] = "NOT_APPLICABLE"
         resource_report["reason"] = "AC-13 applies only to the NVENC resource workload; x264 samples are diagnostic only"
     else:
+        dual_only_samples = [
+            sample for sample in trace.resources if sample["sample_mode"] == "dual_lane"
+        ]
+        dual_only = _dual_only_resource_gate(dual_only_samples, minimum_resource_samples)
+        resource_report["dual_only"] = dual_only
+        workload_valid = all(bool(session["workload"][key]) for key in ("wgc", "cef", "nvenc"))
+        if not workload_valid:
+            dual_only["status"] = "UNPROVEN"
+            dual_only["reason"] = "requires WGC+CEF+NVENC workload flags"
         reference_samples = [
             sample
             for sample in trace.resources
@@ -1931,6 +2099,7 @@ def analyze_trace(
             and sample.get("encoder_active") is True
             and sample.get("encoder_family") == "nvenc"
             and sample.get("rtmp_load_active") is True
+            and _resource_encode_timing_present(sample)
         ]
         dual_samples = [
             sample
@@ -1939,8 +2108,11 @@ def analyze_trace(
             and sample.get("encoder_active") is True
             and sample.get("encoder_family") == "nvenc"
             and sample.get("rtmp_load_active") is True
+            and _resource_encode_timing_present(sample)
         ]
         if (
+            dual_only["status"] == "MEASURED"
+            and
             len(reference_samples) >= minimum_resource_samples
             and len(dual_samples) >= minimum_resource_samples
             and all(bool(session["workload"][key]) for key in ("wgc", "cef", "nvenc"))
@@ -1993,10 +2165,16 @@ def analyze_trace(
                 else "INCOMPLETE"
             )
         else:
-            resource_report["status"] = "UNPROVEN"
+            dual_accounting = resource_report["accounting"].get("dual_lane", {})
+            resource_report["status"] = dual_only["status"]
+            resource_report["accounting_status"] = (
+                "COMPLETE"
+                if dual_accounting and all(entry["status"] == "COMPLETE" for entry in dual_accounting.values())
+                else "INCOMPLETE"
+            )
             resource_report["reason"] = (
-                "requires both resource modes, minimum active NVENC-encoder samples, "
-                "WGC+CEF+NVENC workload flags, and symmetric active RTMP receiver load"
+                dual_only["reason"]
+                or "requires WGC+CEF+NVENC workload flags and symmetric active RTMP receiver load"
             )
 
     ac12a = {

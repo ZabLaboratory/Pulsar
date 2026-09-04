@@ -1,0 +1,1056 @@
+From 48b600cd75329fd9a504068075a37a2ee7636110 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Fri, 4 Sep 2026 17:20:24 +0200
+Subject: [PATCH] fix(win-dshow): bind return transport to private helper
+
+Agent-Role: forge
+Agent-Thread: 01a06ce4-49dc-7711-a10e-f8ed2d04a0f6
+Work-Unit: ZabLaboratory/Pulsar#254
+Issue: 254
+ADR-Revision: ATLAS-254-SECURITY-ARCH-20260904
+Evidence: private inherited handle bootstrap with HMAC generation and CPU fail-closed relay
+
+diff --git a/plugins/win-dshow/CMakeLists.txt b/plugins/win-dshow/CMakeLists.txt
+index 0ade03f4e..63afc8881 100644
+--- a/plugins/win-dshow/CMakeLists.txt
++++ b/plugins/win-dshow/CMakeLists.txt
+@@ -24,6 +24,7 @@ endif()
+ target_sources(
+   win-dshow
+   PRIVATE dshow-plugin.cpp encode-dstr.hpp ffmpeg-decode.c ffmpeg-decode.h win-dshow-encoder.cpp win-dshow.cpp
++          virtualcam-module/d3d11-return-auth.c virtualcam-module/d3d11-return-auth.h
+           virtualcam-module/d3d11-return-transport.cpp virtualcam-module/d3d11-return-transport.hpp
+ )
+ 
+@@ -45,6 +46,8 @@ target_link_libraries(
+     winmm
+     d3d11
+     dxgi
++    bcrypt
++    advapi32
+ )
+ 
+ add_subdirectory(virtualcam-module)
+diff --git a/plugins/win-dshow/virtualcam-module/CMakeLists.txt b/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+index ec3f43b8e..357679ff6 100644
+--- a/plugins/win-dshow/virtualcam-module/CMakeLists.txt
++++ b/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+@@ -79,6 +79,7 @@ target_sources(
+   obs-virtualcam-module
+   PRIVATE
+     ${CMAKE_CURRENT_BINARY_DIR}/virtualcam-module.rc
++    d3d11-return-auth.h
+     d3d11-return-transport.cpp
+     d3d11-return-transport.hpp
+     placeholder.cpp
+@@ -106,6 +107,39 @@ target_link_libraries(
+     winmm
+     d3d11
+     dxgi
++    bcrypt
++    advapi32
++)
++
++add_executable(
++  pulsar-d3d11-return-helper
++  d3d11-return-auth.c
++  d3d11-return-auth.h
++  d3d11-return-transport.cpp
++  d3d11-return-transport.hpp
++  pulsar-d3d11-return-helper.cpp
++)
++
++target_link_libraries(
++  pulsar-d3d11-return-helper
++  PRIVATE
++    OBS::shared-memory-queue
++    d3d11
++    dxgi
++    bcrypt
++    advapi32
++)
++
++if(CMAKE_VS_PLATFORM_NAME STREQUAL x64)
++  set(_HELPER_OUTPUT_NAME pulsar-d3d11-return-helper64)
++else()
++  set(_HELPER_OUTPUT_NAME pulsar-d3d11-return-helper32)
++endif()
++set_target_properties_obs(
++  pulsar-d3d11-return-helper PROPERTIES
++  FOLDER plugins/win-dshow
++  OUTPUT_NAME ${_HELPER_OUTPUT_NAME}
++  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+ )
+ 
+ if(OBS_PARENT_ARCHITECTURE STREQUAL CMAKE_VS_PLATFORM_NAME)
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-auth.c b/plugins/win-dshow/virtualcam-module/d3d11-return-auth.c
+new file mode 100644
+index 000000000..d9ff888fe
+--- /dev/null
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-auth.c
+@@ -0,0 +1,116 @@
++#include "d3d11-return-auth.h"
++
++#include <bcrypt.h>
++#include <string.h>
++
++static bool auth_hash(const uint8_t *key, size_t key_size, const void *payload, size_t payload_size,
++			      uint8_t output[PULSAR_RETURN_AUTH_NONCE_BYTES])
++{
++	BCRYPT_ALG_HANDLE algorithm = NULL;
++	BCRYPT_HASH_HANDLE hash = NULL;
++	PUCHAR object = NULL;
++	DWORD object_size = 0;
++	DWORD result_size = 0;
++	bool ok = false;
++
++	if (!key || key_size == 0 || !payload || !payload_size || !output)
++		return false;
++	if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL,
++					       BCRYPT_ALG_HANDLE_HMAC_FLAG) < 0)
++		goto done;
++	if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, (PUCHAR)&object_size,
++				      sizeof(object_size), &result_size, 0) < 0 || !object_size)
++		goto done;
++	object = (PUCHAR)HeapAlloc(GetProcessHeap(), 0, object_size);
++	if (!object)
++		goto done;
++	if (BCryptCreateHash(algorithm, &hash, object, object_size, (PUCHAR)key,
++				     (ULONG)key_size, 0) < 0)
++		goto done;
++	if (BCryptHashData(hash, (PUCHAR)payload, (ULONG)payload_size, 0) < 0)
++		goto done;
++	if (BCryptFinishHash(hash, output, PULSAR_RETURN_AUTH_NONCE_BYTES, 0) < 0)
++		goto done;
++	ok = true;
++
++done:
++	if (hash)
++		BCryptDestroyHash(hash);
++	if (object)
++		HeapFree(GetProcessHeap(), 0, object);
++	if (algorithm)
++		BCryptCloseAlgorithmProvider(algorithm, 0);
++	return ok;
++}
++
++bool pulsar_return_auth_random(void *destination, size_t size)
++{
++	return destination && size && BCryptGenRandom(NULL, (PUCHAR)destination, (ULONG)size,
++							BCRYPT_USE_SYSTEM_PREFERRED_RNG) >= 0;
++}
++
++bool pulsar_return_auth_write(HANDLE pipe, const void *data, size_t size)
++{
++	const uint8_t *cursor = (const uint8_t *)data;
++	if (!pipe || pipe == INVALID_HANDLE_VALUE || !data || !size)
++		return false;
++	while (size) {
++		DWORD written = 0;
++		if (!WriteFile(pipe, cursor, (DWORD)(size > UINT32_MAX ? UINT32_MAX : size), &written, NULL) || !written)
++			return false;
++		cursor += written;
++		size -= written;
++	}
++	return true;
++}
++
++bool pulsar_return_auth_read(HANDLE pipe, void *data, size_t size)
++{
++	uint8_t *cursor = (uint8_t *)data;
++	if (!pipe || pipe == INVALID_HANDLE_VALUE || !data || !size)
++		return false;
++	while (size) {
++		DWORD read_size = 0;
++		if (!ReadFile(pipe, cursor, (DWORD)(size > UINT32_MAX ? UINT32_MAX : size), &read_size, NULL) || !read_size)
++			return false;
++		cursor += read_size;
++		size -= read_size;
++	}
++	return true;
++}
++
++bool pulsar_return_auth_make_proof(const uint8_t capability[PULSAR_RETURN_AUTH_CAPABILITY_BYTES],
++					   const struct pulsar_return_auth_hello *hello,
++					   const struct pulsar_return_auth_challenge *challenge,
++					   uint8_t mac[PULSAR_RETURN_AUTH_NONCE_BYTES])
++{
++	struct {
++		uint32_t magic;
++		uint32_t version;
++		uint32_t lane;
++		uint8_t generation[PULSAR_RETURN_AUTH_GENERATION_BYTES];
++		uint8_t hello_nonce[PULSAR_RETURN_AUTH_NONCE_BYTES];
++		uint8_t challenge_nonce[PULSAR_RETURN_AUTH_NONCE_BYTES];
++	} payload = {0};
++	if (!capability || !hello || !challenge || !mac || hello->lane != challenge->lane ||
++		!pulsar_return_auth_equal(hello->generation, challenge->generation,
++					  PULSAR_RETURN_AUTH_GENERATION_BYTES))
++		return false;
++	payload.magic = PULSAR_RETURN_AUTH_MAGIC;
++	payload.version = PULSAR_RETURN_AUTH_VERSION;
++	payload.lane = hello->lane;
++	memcpy(payload.generation, hello->generation, sizeof(payload.generation));
++	memcpy(payload.hello_nonce, hello->nonce, sizeof(payload.hello_nonce));
++	memcpy(payload.challenge_nonce, challenge->nonce, sizeof(payload.challenge_nonce));
++	return auth_hash(capability, PULSAR_RETURN_AUTH_CAPABILITY_BYTES, &payload, sizeof(payload), mac);
++}
++
++bool pulsar_return_auth_equal(const uint8_t *left, const uint8_t *right, size_t size)
++{
++	uint8_t difference = 0;
++	if (!left || !right)
++		return false;
++	for (size_t i = 0; i < size; ++i)
++		difference |= left[i] ^ right[i];
++	return difference == 0;
++}
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-auth.h b/plugins/win-dshow/virtualcam-module/d3d11-return-auth.h
+new file mode 100644
+index 000000000..0b73b319f
+--- /dev/null
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-auth.h
+@@ -0,0 +1,81 @@
++#pragma once
++
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <windows.h>
++
++#define PULSAR_RETURN_AUTH_MAGIC 0x41525450U /* "PTRA" */
++#define PULSAR_RETURN_AUTH_VERSION 1U
++#define PULSAR_RETURN_AUTH_CAPABILITY_BYTES 32U
++#define PULSAR_RETURN_AUTH_GENERATION_BYTES 16U
++#define PULSAR_RETURN_AUTH_NONCE_BYTES 32U
++#define PULSAR_RETURN_AUTH_QUEUE_NAME_CAPACITY 256U
++#define PULSAR_RETURN_AUTH_FRAME_MAGIC 0x46525450U /* "PTRF" */
++#define PULSAR_RETURN_AUTH_FRAME_METADATA_BYTES 576U
++
++#pragma pack(push, 1)
++struct pulsar_return_auth_bootstrap {
++	uint32_t magic;
++	uint32_t version;
++	uint32_t lane;
++	uint32_t width;
++	uint32_t height;
++	uint64_t interval;
++	uint8_t generation[PULSAR_RETURN_AUTH_GENERATION_BYTES];
++	uint8_t capability[PULSAR_RETURN_AUTH_CAPABILITY_BYTES];
++	wchar_t queue_name[PULSAR_RETURN_AUTH_QUEUE_NAME_CAPACITY];
++};
++
++struct pulsar_return_auth_hello {
++	uint32_t magic;
++	uint32_t version;
++	uint32_t lane;
++	uint8_t generation[PULSAR_RETURN_AUTH_GENERATION_BYTES];
++	uint8_t nonce[PULSAR_RETURN_AUTH_NONCE_BYTES];
++};
++
++struct pulsar_return_auth_challenge {
++	uint32_t magic;
++	uint32_t version;
++	uint32_t lane;
++	uint8_t generation[PULSAR_RETURN_AUTH_GENERATION_BYTES];
++	uint8_t nonce[PULSAR_RETURN_AUTH_NONCE_BYTES];
++};
++
++struct pulsar_return_auth_proof {
++	uint32_t magic;
++	uint32_t version;
++	uint32_t lane;
++	uint8_t generation[PULSAR_RETURN_AUTH_GENERATION_BYTES];
++	uint8_t mac[PULSAR_RETURN_AUTH_NONCE_BYTES];
++};
++
++struct pulsar_return_auth_frame {
++	uint32_t magic;
++	uint32_t version;
++	uint32_t width;
++	uint32_t height;
++	uint32_t payload_size;
++	uint32_t reserved;
++	uint64_t timestamp;
++	uint8_t metadata[PULSAR_RETURN_AUTH_FRAME_METADATA_BYTES];
++};
++#pragma pack(pop)
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++bool pulsar_return_auth_random(void *destination, size_t size);
++bool pulsar_return_auth_write(HANDLE pipe, const void *data, size_t size);
++bool pulsar_return_auth_read(HANDLE pipe, void *data, size_t size);
++bool pulsar_return_auth_make_proof(const uint8_t capability[PULSAR_RETURN_AUTH_CAPABILITY_BYTES],
++					   const struct pulsar_return_auth_hello *hello,
++					   const struct pulsar_return_auth_challenge *challenge,
++					   uint8_t mac[PULSAR_RETURN_AUTH_NONCE_BYTES]);
++bool pulsar_return_auth_equal(const uint8_t *left, const uint8_t *right, size_t size);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+index de8513f28..9211755e1 100644
+--- a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.cpp
+@@ -5,6 +5,7 @@
+ #include <d3d11.h>
+ #include <d3d11_1.h>
+ #include <dxgi1_2.h>
++#include <sddl.h>
+ #include <windows.h>
+ #include <wrl/client.h>
+ 
+@@ -202,6 +203,39 @@ static HRESULT duplicate_handle_for_pid(HANDLE source, DWORD pid, uint64_t *valu
+ 	return S_OK;
+ }
+ 
++static HRESULT duplicate_handle_for_process(HANDLE source, HANDLE target_process, uint64_t *value)
++{
++	if (!source || !target_process || !value)
++		return E_INVALIDARG;
++	HANDLE duplicated = nullptr;
++	const BOOL ok = DuplicateHandle(GetCurrentProcess(), source, target_process, &duplicated, 0, FALSE,
++					DUPLICATE_SAME_ACCESS);
++	const DWORD error = GetLastError();
++	if (!ok)
++		return HRESULT_FROM_WIN32(error ? error : ERROR_INVALID_HANDLE);
++	*value = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(duplicated));
++	return S_OK;
++}
++
++static HANDLE create_owner_only_mapping(const std::wstring &name, DWORD size, bool *existed)
++{
++	if (existed)
++		*existed = false;
++	PSECURITY_DESCRIPTOR descriptor = nullptr;
++	if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;GA;;;OW)", SDDL_REVISION_1,
++								  &descriptor, nullptr))
++		return nullptr;
++	SECURITY_ATTRIBUTES attributes = {};
++	attributes.nLength = sizeof(attributes);
++	attributes.lpSecurityDescriptor = descriptor;
++	HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, &attributes, PAGE_READWRITE, 0, size, name.c_str());
++	const DWORD error = GetLastError();
++	LocalFree(descriptor);
++	if (existed)
++		*existed = error == ERROR_ALREADY_EXISTS;
++	return mapping;
++}
++
+ } // namespace
+ 
+ struct pulsar_d3d11_return_producer {
+@@ -214,6 +248,7 @@ struct pulsar_d3d11_return_producer {
+ 	HANDLE source_handles[PULSAR_D3D11_RETURN_SLOT_COUNT] = {};
+ 	uint32_t consumer_pid = 0;
+ 	HANDLE consumer_process = nullptr;
++	HANDLE helper_process = nullptr;
+ 	volatile LONG authenticated_consumer_pid = 0;
+ 	volatile LONG authenticated_consumer_session = 0;
+ 	uint64_t epoch = 1;
+@@ -238,6 +273,8 @@ struct pulsar_d3d11_return_consumer {
+ 	uint64_t consumed_sequence = 0;
+ };
+ 
++static void producer_release_ring(pulsar_d3d11_return_producer *producer);
++
+ extern "C" pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
+ 	const wchar_t *name, enum pulsar_d3d11_return_lane lane, uint32_t width, uint32_t height)
+ {
+@@ -249,9 +286,8 @@ extern "C" pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
+ 	auto *producer = new pulsar_d3d11_return_producer();
+ 	producer->width = width;
+ 	producer->height = height;
+-	producer->mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+-							 static_cast<DWORD>(sizeof(pulsar_d3d11_return_control)), map_name.c_str());
+-	const bool existed = GetLastError() == ERROR_ALREADY_EXISTS;
++	bool existed = false;
++	producer->mapping = create_owner_only_mapping(map_name, static_cast<DWORD>(sizeof(pulsar_d3d11_return_control)), &existed);
+ 	if (!producer->mapping) {
+ 		delete producer;
+ 		return nullptr;
+@@ -288,6 +324,12 @@ extern "C" pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
+ extern "C" bool pulsar_d3d11_return_producer_set_consumer_pid(
+ 	pulsar_d3d11_return_producer_t *producer, uint32_t pid)
+ {
++	/* A private helper is authenticated on its inherited channel.  Never let
++	 * the public DirectShow registration overwrite that binding. */
++	if (producer && producer->helper_process) {
++		const DWORD helper_pid = GetProcessId(producer->helper_process);
++		return pid && helper_pid == pid;
++	}
+ 	if (!producer || !producer->control || !pid) {
+ 		if (producer) {
+ 			InterlockedExchange(&producer->authenticated_consumer_pid, 0);
+@@ -323,6 +365,34 @@ extern "C" bool pulsar_d3d11_return_producer_set_consumer_pid(
+ 	return true;
+ }
+ 
++extern "C" bool pulsar_d3d11_return_producer_bind_helper(
++	pulsar_d3d11_return_producer_t *producer, HANDLE helper_process)
++{
++	if (!producer || !producer->control || !helper_process)
++		return false;
++	const DWORD pid = GetProcessId(helper_process);
++	const uint32_t session = process_session(pid);
++	if (!pid || session == UINT32_MAX || WaitForSingleObject(helper_process, 0) != WAIT_TIMEOUT)
++		return false;
++	HANDLE duplicate = nullptr;
++	if (!DuplicateHandle(GetCurrentProcess(), helper_process, GetCurrentProcess(), &duplicate, 0, FALSE,
++				     DUPLICATE_SAME_ACCESS))
++		return false;
++	producer_release_ring(producer);
++	if (producer->helper_process)
++		CloseHandle(producer->helper_process);
++	producer->helper_process = duplicate;
++	InterlockedExchange(&producer->authenticated_consumer_pid, 0);
++	InterlockedExchange(&producer->authenticated_consumer_session, 0);
++	InterlockedExchange((volatile LONG *)&producer->control->consumer_ready, 0);
++	InterlockedExchange((volatile LONG *)&producer->control->consumer_pid, 0);
++	InterlockedExchange((volatile LONG *)&producer->control->consumer_session, 0);
++	producer->control->selected_path = PULSAR_D3D11_PATH_CPU;
++	producer->control->fallback_reason = PULSAR_D3D11_FALLBACK_CAPABILITY;
++	producer->control->fallback_hresult = static_cast<int32_t>(E_PENDING);
++	return true;
++}
++
+ static void producer_release_ring(pulsar_d3d11_return_producer *producer)
+ {
+ 	if (!producer)
+@@ -371,6 +441,8 @@ extern "C" void pulsar_d3d11_return_producer_close(pulsar_d3d11_return_producer_
+ 		UnmapViewOfFile(producer->control);
+ 	if (producer->mapping)
+ 		CloseHandle(producer->mapping);
++	if (producer->helper_process)
++		CloseHandle(producer->helper_process);
+ 	delete producer;
+ }
+ 
+@@ -378,8 +450,11 @@ static bool producer_prepare_ring(pulsar_d3d11_return_producer *producer)
+ {
+ 	if (!producer || !producer->control)
+ 		return false;
+-	const uint32_t pid = load_u32((volatile uint32_t *)&producer->authenticated_consumer_pid);
+-	const uint32_t authenticated_session = load_u32((volatile uint32_t *)&producer->authenticated_consumer_session);
++	const bool helper_bound = producer->helper_process != nullptr;
++	const uint32_t pid = helper_bound ? GetProcessId(producer->helper_process)
++					 : load_u32((volatile uint32_t *)&producer->authenticated_consumer_pid);
++	const uint32_t authenticated_session = helper_bound ? process_session(pid)
++							 : load_u32((volatile uint32_t *)&producer->authenticated_consumer_session);
+ 	if (!pid || authenticated_session == UINT32_MAX) {
+ 		if (producer->consumer_pid)
+ 			producer_invalidate_consumer_registration(producer, producer->consumer_pid);
+@@ -416,7 +491,11 @@ static bool producer_prepare_ring(pulsar_d3d11_return_producer *producer)
+ 	if (producer->consumer_pid == pid && producer->control->fallback_reason != PULSAR_D3D11_FALLBACK_NONE)
+ 		return false;
+ 	producer_release_ring(producer);
+-	HANDLE consumer_process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
++	HANDLE consumer_process = helper_bound ? nullptr
++							 : OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
++	if (helper_bound && !DuplicateHandle(GetCurrentProcess(), producer->helper_process, GetCurrentProcess(),
++						&consumer_process, 0, FALSE, DUPLICATE_SAME_ACCESS))
++		consumer_process = nullptr;
+ 	if (!consumer_process || WaitForSingleObject(consumer_process, 0) != WAIT_TIMEOUT) {
+ 		if (consumer_process)
+ 			CloseHandle(consumer_process);
+@@ -445,7 +524,8 @@ static bool producer_prepare_ring(pulsar_d3d11_return_producer *producer)
+ 		if (FAILED(hr))
+ 			break;
+ 		uint64_t duplicated = 0;
+-		hr = duplicate_handle_for_pid(handle, pid, &duplicated);
++		hr = helper_bound ? duplicate_handle_for_process(handle, producer->helper_process, &duplicated)
++					 : duplicate_handle_for_pid(handle, pid, &duplicated);
+ 		if (FAILED(hr)) {
+ 			texture->Release();
+ 			CloseHandle(handle);
+@@ -661,8 +741,14 @@ extern "C" bool pulsar_d3d11_return_consumer_read(pulsar_d3d11_return_consumer_t
+ {
+ 	if (!d3d11_transport_requested() || !consumer || !dst || !consumer->control)
+ 		return false;
+-	if (!consumer->active && !consumer_open_ring(consumer))
+-		return false;
++	if (!consumer->active) {
++		/* The helper may open the producer mapping before the first frame.  Do
++		 * not treat the initial CPU/fallback state as a terminal failure; wait
++		 * for the producer-authoritative ring publication and only then open
++		 * the duplicated handles. */
++		if (consumer->control->selected_path != PULSAR_D3D11_PATH_SHARED_TEXTURE || !consumer_open_ring(consumer))
++			return false;
++	}
+ 	if (consumer->control->selected_path != PULSAR_D3D11_PATH_SHARED_TEXTURE)
+ 		return false;
+ 	const uint64_t published = load_u64((volatile uint64_t *)&consumer->control->published_sequence);
+diff --git a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
+index 56f1bde09..4de9de98a 100644
+--- a/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
++++ b/plugins/win-dshow/virtualcam-module/d3d11-return-transport.hpp
+@@ -3,6 +3,7 @@
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <wchar.h>
++#include <windows.h>
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -107,6 +108,11 @@ pulsar_d3d11_return_producer_t *pulsar_d3d11_return_producer_create(
+ 	const wchar_t *control_name, enum pulsar_d3d11_return_lane lane, uint32_t width, uint32_t height);
+ void pulsar_d3d11_return_producer_close(pulsar_d3d11_return_producer_t *producer);
+ bool pulsar_d3d11_return_producer_set_consumer_pid(pulsar_d3d11_return_producer_t *producer, uint32_t pid);
++/* Bind the D3D11 sink to a producer-owned helper process.  The caller must
++ * complete the private capability handshake before invoking this function;
++ * no PID obtained from a public mapping or DirectShow registration is accepted
++ * as the helper binding. */
++bool pulsar_d3d11_return_producer_bind_helper(pulsar_d3d11_return_producer_t *producer, HANDLE helper_process);
+ bool pulsar_d3d11_return_producer_ready(pulsar_d3d11_return_producer_t *producer);
+ bool pulsar_d3d11_return_producer_write(pulsar_d3d11_return_producer_t *producer, uint8_t **data,
+ 						uint32_t *linesize, uint64_t timestamp,
+diff --git a/plugins/win-dshow/virtualcam-module/pulsar-d3d11-return-helper.cpp b/plugins/win-dshow/virtualcam-module/pulsar-d3d11-return-helper.cpp
+new file mode 100644
+index 000000000..e1afcb62b
+--- /dev/null
++++ b/plugins/win-dshow/virtualcam-module/pulsar-d3d11-return-helper.cpp
+@@ -0,0 +1,120 @@
++#include "d3d11-return-auth.h"
++#include "d3d11-return-transport.hpp"
++
++#include "../../../shared/obs-shared-memory-queue/shared-memory-queue.h"
++
++#include <windows.h>
++
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <vector>
++
++namespace {
++
++static bool parse_handle(const wchar_t *value, HANDLE *handle)
++{
++	if (!value || !handle)
++		return false;
++	wchar_t *end = nullptr;
++	const unsigned long long parsed = wcstoull(value, &end, 0);
++	if (end == value || *end || !parsed)
++		return false;
++	*handle = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(parsed));
++	return true;
++}
++
++static const wchar_t *argument_value(int argc, wchar_t **argv, const wchar_t *prefix)
++{
++	const size_t length = wcslen(prefix);
++	for (int i = 1; i < argc; ++i) {
++		if (wcsncmp(argv[i], prefix, length) == 0)
++			return argv[i] + length;
++	}
++	return nullptr;
++}
++
++static bool validate_bootstrap(const pulsar_return_auth_bootstrap &bootstrap)
++{
++	return bootstrap.magic == PULSAR_RETURN_AUTH_MAGIC && bootstrap.version == PULSAR_RETURN_AUTH_VERSION &&
++		(bootstrap.lane == PULSAR_D3D11_PROGRAM_RETURN || bootstrap.lane == PULSAR_D3D11_PREVIEW_RETURN) &&
++		bootstrap.width == PULSAR_D3D11_RETURN_WIDTH && bootstrap.height == PULSAR_D3D11_RETURN_HEIGHT &&
++		bootstrap.interval && bootstrap.queue_name[0] != L'\0';
++}
++
++} // namespace
++
++int wmain(int argc, wchar_t **argv)
++{
++	HANDLE read_pipe = nullptr;
++	HANDLE write_pipe = nullptr;
++	if (!parse_handle(argument_value(argc, argv, L"--read-handle="), &read_pipe) ||
++		!parse_handle(argument_value(argc, argv, L"--write-handle="), &write_pipe))
++		return ERROR_INVALID_PARAMETER;
++
++	pulsar_return_auth_bootstrap bootstrap = {};
++	if (!pulsar_return_auth_read(read_pipe, &bootstrap, sizeof(bootstrap)) || !validate_bootstrap(bootstrap))
++		return ERROR_ACCESS_DENIED;
++
++	pulsar_return_auth_hello hello = {};
++	hello.magic = PULSAR_RETURN_AUTH_MAGIC;
++	hello.version = PULSAR_RETURN_AUTH_VERSION;
++	hello.lane = bootstrap.lane;
++	memcpy(hello.generation, bootstrap.generation, sizeof(hello.generation));
++	if (!pulsar_return_auth_random(hello.nonce, sizeof(hello.nonce)) ||
++		!pulsar_return_auth_write(write_pipe, &hello, sizeof(hello)))
++		return ERROR_ACCESS_DENIED;
++
++	pulsar_return_auth_challenge challenge = {};
++	if (!pulsar_return_auth_read(read_pipe, &challenge, sizeof(challenge)) ||
++		challenge.magic != PULSAR_RETURN_AUTH_MAGIC || challenge.version != PULSAR_RETURN_AUTH_VERSION ||
++		challenge.lane != bootstrap.lane ||
++		!pulsar_return_auth_equal(challenge.generation, bootstrap.generation,
++					  PULSAR_RETURN_AUTH_GENERATION_BYTES))
++		return ERROR_ACCESS_DENIED;
++
++	pulsar_return_auth_proof proof = {};
++	proof.magic = PULSAR_RETURN_AUTH_MAGIC;
++	proof.version = PULSAR_RETURN_AUTH_VERSION;
++	proof.lane = bootstrap.lane;
++	memcpy(proof.generation, bootstrap.generation, sizeof(proof.generation));
++	if (!pulsar_return_auth_make_proof(bootstrap.capability, &hello, &challenge, proof.mac) ||
++		!pulsar_return_auth_write(write_pipe, &proof, sizeof(proof)))
++		return ERROR_ACCESS_DENIED;
++
++	/* The helper is the only process that receives duplicated D3D11 handles.
++	 * DirectShow remains a read-only CPU consumer and never enters this path. */
++	_putenv_s("PULSAR_RETURN_TRANSPORT", "d3d11");
++	pulsar_d3d11_return_consumer_t *consumer = pulsar_d3d11_return_consumer_open(
++		bootstrap.queue_name, static_cast<enum pulsar_d3d11_return_lane>(bootstrap.lane), bootstrap.width,
++		bootstrap.height);
++	if (!consumer)
++		return ERROR_NOT_READY;
++
++	const size_t frame_size = static_cast<size_t>(bootstrap.width) * bootstrap.height * 3 / 2;
++	std::vector<uint8_t> frame(frame_size);
++	while (true) {
++		struct video_queue_frame_metadata metadata = {};
++		uint64_t timestamp = 0;
++		if (!pulsar_d3d11_return_consumer_read(consumer, frame.data(), &timestamp, &metadata)) {
++			if (WaitForSingleObject(GetCurrentProcess(), 0) != WAIT_TIMEOUT)
++				break;
++			Sleep(1);
++			continue;
++		}
++		pulsar_return_auth_frame envelope = {};
++		envelope.magic = PULSAR_RETURN_AUTH_FRAME_MAGIC;
++		envelope.version = PULSAR_RETURN_AUTH_VERSION;
++		envelope.width = bootstrap.width;
++		envelope.height = bootstrap.height;
++		envelope.payload_size = static_cast<uint32_t>(frame.size());
++		envelope.timestamp = timestamp;
++		memcpy(envelope.metadata, &metadata, sizeof(metadata));
++		if (!pulsar_return_auth_write(write_pipe, &envelope, sizeof(envelope)) ||
++			!pulsar_return_auth_write(write_pipe, frame.data(), frame.size()))
++			break;
++	}
++
++	pulsar_d3d11_return_consumer_close(consumer);
++	return ERROR_BROKEN_PIPE;
++}
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index ab2c314df..ef3632a38 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -59,8 +59,10 @@ VCamFilter::VCamFilter(enum directshow_consumer_filter_kind filter_kind)
+ 	program_return = filter_kind == DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN;
+ 	preview_return = filter_kind == DIRECTSHOW_CONSUMER_FILTER_PREVIEW_RETURN;
+ 	consumer_gated = program_return || preview_return;
+-	const char *return_transport = getenv("PULSAR_RETURN_TRANSPORT");
+-	d3d11_requested = consumer_gated && return_transport && strcmp(return_transport, "d3d11") == 0;
++	/* DirectShow is never a D3D11 capability holder.  The producer-launched
++	 * private helper performs the authenticated readback and relays an NV12
++	 * frame into this read-only queue. */
++	d3d11_requested = false;
+ 	const enum directshow_queue_namespace queue_namespace = directshow_queue_namespace_for_consumer(filter_kind);
+ 	queue_namespace_rejected = queue_namespace == DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
+ 	queue_name = queue_name_for_filter(queue_namespace, filter_kind);
+@@ -172,8 +174,6 @@ VCamFilter::~VCamFilter()
+ 	if (th.joinable())
+ 		th.join();
+ 	ReleaseConsumerRegistrationPipe();
+-	if (d3d11_requested && d3d11)
+-		pulsar_d3d11_return_consumer_close(d3d11);
+ 	d3d11 = nullptr;
+ 	video_queue_close(vq);
+ 
+@@ -432,48 +432,16 @@ void VCamFilter::Frame(uint64_t ts)
+ 	struct directshow_stage_timing timing = {};
+ 	timing.frame_entry_monotonic_ns = frame_entry_monotonic_ns;
+ 	bool consumed_program_frame = false;
+-	bool consumed_d3d11_frame = false;
+-	if (d3d11_requested && current_format == VideoFormat::NV12 && obs_cx == PULSAR_D3D11_RETURN_WIDTH &&
+-	    obs_cy == PULSAR_D3D11_RETURN_HEIGHT) {
+-		if (!d3d11) {
+-			const enum pulsar_d3d11_return_lane lane = program_return ? PULSAR_D3D11_PROGRAM_RETURN
+-										 : PULSAR_D3D11_PREVIEW_RETURN;
+-			d3d11 = pulsar_d3d11_return_consumer_open(queue_name.c_str(), lane, obs_cx, obs_cy);
+-		}
+-	}
+ 	if (LockSampleData(&ptr)) {
+ 		timing.lock_sample_data_acquired_monotonic_ns = trace_monotonic_ns();
+-		if (state == SHARED_QUEUE_STATE_READY || (d3d11_requested && d3d11))
++		if (state == SHARED_QUEUE_STATE_READY)
+ 			timing.queue_read_start_monotonic_ns = trace_monotonic_ns();
+-		if (d3d11_requested && d3d11)
+-			consumed_d3d11_frame = pulsar_d3d11_return_consumer_read(d3d11, ptr, nullptr, &metadata);
+-		if (!consumed_d3d11_frame && state == SHARED_QUEUE_STATE_READY)
++		if (state == SHARED_QUEUE_STATE_READY)
+ 			consumed_program_frame = ShowOBSFrame(ptr, &metadata, &timing.queue_counters);
+-		if (state == SHARED_QUEUE_STATE_READY || (d3d11_requested && d3d11))
++		if (state == SHARED_QUEUE_STATE_READY)
+ 			timing.queue_read_completed_monotonic_ns = trace_monotonic_ns();
+-		if ((!consumed_program_frame && !consumed_d3d11_frame) ||
+-		    (state != SHARED_QUEUE_STATE_READY && !consumed_d3d11_frame))
++		if (!consumed_program_frame)
+ 			ShowDefaultFrame(ptr);
+-		if (d3d11_requested && d3d11) {
+-			consumed_program_frame = consumed_program_frame || consumed_d3d11_frame;
+-			const struct pulsar_d3d11_return_control *control =
+-				pulsar_d3d11_return_consumer_control(d3d11);
+-			if (control) {
+-				timing.transport_path = control->selected_path;
+-				timing.transport_fallback = control->fallback_reason;
+-				timing.transport_hresult = control->fallback_hresult;
+-				timing.transport_lane = control->lane;
+-				timing.transport_epoch = control->epoch;
+-				timing.transport_produced_sequence = control->produced_sequence;
+-				timing.transport_published_sequence = control->published_sequence;
+-				timing.transport_consumed_sequence = control->consumed_sequence;
+-				timing.transport_mutex_wait_ns = control->mutex_wait_ns;
+-				timing.transport_fence_wait_ns = control->fence_wait_ns;
+-				timing.transport_gpu_copy_ns = control->gpu_copy_ns;
+-				timing.transport_readback_ns = control->readback_ns;
+-				timing.transport_frame_age_ns = control->frame_age_ns;
+-			}
+-		}
+ 
+ 		UnlockSampleData(ts, ts + obs_interval);
+ 		timing.unlock_sample_data_completed_monotonic_ns = trace_monotonic_ns();
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index 7208a0706..909c0f0a7 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -9,6 +9,7 @@
+ #include "util/threading.h"
+ #include "../../shared/obs-shared-memory-queue/shared-memory-queue.h"
+ #include "directshow-namespace.h"
++#include "virtualcam-module/d3d11-return-auth.h"
+ #include "virtualcam-module/d3d11-return-transport.hpp"
+ #include "../../../plugins/pulsar-frontend-stub/include/pulsar-runtime-telemetry-abi.h"
+ 
+@@ -29,6 +30,16 @@ struct virtualcam_data {
+ 	wchar_t consumer_lease_name[288];
+ 	wchar_t consumer_registration_pipe_name[256];
+ 	HANDLE consumer_registration_pipe;
++	HANDLE helper_process;
++	HANDLE helper_bootstrap_pipe;
++	HANDLE helper_frame_pipe;
++	pthread_t helper_thread;
++	volatile long helper_stop;
++	volatile long helper_failed;
++	volatile long helper_thread_started;
++	bool helper_authenticated;
++	uint32_t helper_width;
++	uint32_t helper_height;
+ 	bool queue_namespace_rejected;
+ 	bool program_return;
+ 	bool preview_return;
+@@ -112,6 +123,233 @@ static bool return_consumer_registration_pipe_start(struct virtualcam_data *vcam
+ 	return vcam->consumer_registration_pipe != INVALID_HANDLE_VALUE;
+ }
+ 
++static bool return_helper_path(wchar_t *path, size_t capacity)
++{
++	HMODULE module = NULL;
++	if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++					GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++					(LPCWSTR)(uintptr_t)&return_helper_path, &module))
++		return false;
++	DWORD length = GetModuleFileNameW(module, path, (DWORD)capacity);
++	if (!length || length >= capacity)
++		return false;
++	wchar_t *separator = wcsrchr(path, L'\\');
++	if (!separator)
++		return false;
++#ifdef _WIN64
++	const wchar_t *helper_name = L"pulsar-d3d11-return-helper64.exe";
++#else
++	const wchar_t *helper_name = L"pulsar-d3d11-return-helper32.exe";
++#endif
++	if ((size_t)(separator - path) + 1 + wcslen(helper_name) + 1 > capacity)
++		return false;
++	separator[1] = L'\0';
++	wcscat_s(path, capacity, helper_name);
++	return GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
++}
++
++static bool return_helper_image_matches(HANDLE process, const wchar_t *expected_path)
++{
++	wchar_t observed_path[MAX_PATH] = {0};
++	DWORD length = ARRAYSIZE(observed_path);
++	return process && expected_path && QueryFullProcessImageNameW(process, 0, observed_path, &length) &&
++		_wcsicmp(observed_path, expected_path) == 0;
++}
++
++static void return_helper_close(struct virtualcam_data *vcam)
++{
++	if (!vcam)
++		return;
++	os_atomic_set_long(&vcam->helper_stop, 1);
++	if (vcam->helper_process) {
++		TerminateProcess(vcam->helper_process, ERROR_CANCELLED);
++		WaitForSingleObject(vcam->helper_process, 2000);
++		CloseHandle(vcam->helper_process);
++		vcam->helper_process = NULL;
++	}
++	if (vcam->helper_bootstrap_pipe && vcam->helper_bootstrap_pipe != INVALID_HANDLE_VALUE) {
++		CloseHandle(vcam->helper_bootstrap_pipe);
++		vcam->helper_bootstrap_pipe = INVALID_HANDLE_VALUE;
++	}
++	if (vcam->helper_frame_pipe && vcam->helper_frame_pipe != INVALID_HANDLE_VALUE) {
++		CloseHandle(vcam->helper_frame_pipe);
++		vcam->helper_frame_pipe = INVALID_HANDLE_VALUE;
++	}
++	if (os_atomic_load_long(&vcam->helper_thread_started)) {
++		pthread_join(vcam->helper_thread, NULL);
++		os_atomic_set_long(&vcam->helper_thread_started, 0);
++	}
++	vcam->helper_authenticated = false;
++}
++
++static void *return_helper_frame_reader(void *param)
++{
++	struct virtualcam_data *vcam = (struct virtualcam_data *)param;
++	const size_t frame_size = (size_t)vcam->helper_width * vcam->helper_height * 3 / 2;
++	uint8_t *frame = bmalloc(frame_size);
++	if (!frame) {
++		os_atomic_set_long(&vcam->helper_failed, 1);
++		return NULL;
++	}
++	while (!os_atomic_load_long(&vcam->helper_stop)) {
++		struct pulsar_return_auth_frame envelope = {0};
++		if (!pulsar_return_auth_read(vcam->helper_frame_pipe, &envelope, sizeof(envelope)))
++			break;
++		if (envelope.magic != PULSAR_RETURN_AUTH_FRAME_MAGIC || envelope.version != PULSAR_RETURN_AUTH_VERSION ||
++			envelope.width != vcam->helper_width || envelope.height != vcam->helper_height ||
++			envelope.payload_size != frame_size ||
++			!pulsar_return_auth_read(vcam->helper_frame_pipe, frame, frame_size)) {
++			os_atomic_set_long(&vcam->helper_failed, 1);
++			break;
++		}
++		if (vcam->vq && os_atomic_load_bool(&vcam->active)) {
++			uint8_t *planes[2] = {frame, frame + (size_t)vcam->helper_width * vcam->helper_height};
++			uint32_t linesize[2] = {vcam->helper_width, vcam->helper_width};
++			struct video_queue_frame_metadata metadata = {0};
++			memcpy(&metadata, envelope.metadata, sizeof(metadata));
++			(void)video_queue_write_ex(vcam->vq, planes, linesize, envelope.timestamp,
++						   VIDEO_QUEUE_PIXEL_FORMAT_NV12, &metadata);
++		}
++	}
++	if (!os_atomic_load_long(&vcam->helper_stop))
++		os_atomic_set_long(&vcam->helper_failed, 1);
++	bfree(frame);
++	return NULL;
++}
++
++static bool return_helper_start(struct virtualcam_data *vcam, uint32_t width, uint32_t height, uint64_t interval)
++{
++	if (!vcam || !vcam->d3d11 || vcam->helper_process)
++		return false;
++	HANDLE child_read = NULL;
++	HANDLE parent_write = NULL;
++	HANDLE parent_read = NULL;
++	HANDLE child_write = NULL;
++	STARTUPINFOEXW startup = {0};
++	PROCESS_INFORMATION process = {0};
++	bool attribute_initialized = false;
++	SECURITY_ATTRIBUTES attributes = {sizeof(attributes), NULL, TRUE};
++	if (!CreatePipe(&child_read, &parent_write, &attributes, 0) ||
++		!CreatePipe(&parent_read, &child_write, &attributes, 0))
++		goto failed;
++	if (!SetHandleInformation(parent_write, HANDLE_FLAG_INHERIT, 0) ||
++		!SetHandleInformation(parent_read, HANDLE_FLAG_INHERIT, 0))
++		goto failed;
++
++	startup.StartupInfo.cb = sizeof(startup);
++	startup.StartupInfo.dwFlags = STARTF_USESHOWWINDOW;
++	startup.StartupInfo.wShowWindow = SW_HIDE;
++	SIZE_T attribute_size = 0;
++	InitializeProcThreadAttributeList(NULL, 1, 0, &attribute_size);
++	startup.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(), 0, attribute_size);
++	if (!startup.lpAttributeList || !InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &attribute_size))
++		goto failed;
++	attribute_initialized = true;
++	HANDLE inherited[2] = {child_read, child_write};
++	if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
++					       sizeof(inherited), NULL, NULL))
++		goto failed;
++	wchar_t helper_path[MAX_PATH] = {0};
++	if (!return_helper_path(helper_path, ARRAYSIZE(helper_path)))
++		goto failed;
++	wchar_t command_line[1024] = {0};
++	_snwprintf_s(command_line, ARRAYSIZE(command_line), _TRUNCATE,
++			     L"\"%ls\" --read-handle=%llu --write-handle=%llu", helper_path,
++			     (unsigned long long)(uintptr_t)child_read, (unsigned long long)(uintptr_t)child_write);
++	if (!CreateProcessW(helper_path, command_line, NULL, NULL, TRUE,
++				CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, NULL, NULL,
++				&startup.StartupInfo, &process))
++		goto failed;
++	DeleteProcThreadAttributeList(startup.lpAttributeList);
++	HeapFree(GetProcessHeap(), 0, startup.lpAttributeList);
++	startup.lpAttributeList = NULL;
++	attribute_initialized = false;
++	CloseHandle(child_read);
++	CloseHandle(child_write);
++	child_read = child_write = NULL;
++	CloseHandle(process.hThread);
++	if (!return_helper_image_matches(process.hProcess, helper_path))
++		goto failed_process;
++
++	struct pulsar_return_auth_bootstrap bootstrap = {0};
++	bootstrap.magic = PULSAR_RETURN_AUTH_MAGIC;
++	bootstrap.version = PULSAR_RETURN_AUTH_VERSION;
++	bootstrap.lane = vcam->program_return ? PULSAR_D3D11_PROGRAM_RETURN : PULSAR_D3D11_PREVIEW_RETURN;
++	bootstrap.width = width;
++	bootstrap.height = height;
++	bootstrap.interval = interval;
++	wcsncpy_s(bootstrap.queue_name, ARRAYSIZE(bootstrap.queue_name), vcam->queue_name, _TRUNCATE);
++	if (!pulsar_return_auth_random(bootstrap.generation, sizeof(bootstrap.generation)) ||
++		!pulsar_return_auth_random(bootstrap.capability, sizeof(bootstrap.capability)) ||
++		!pulsar_return_auth_write(parent_write, &bootstrap, sizeof(bootstrap))) {
++		TerminateProcess(process.hProcess, ERROR_ACCESS_DENIED);
++		CloseHandle(process.hProcess);
++		CloseHandle(parent_write);
++		CloseHandle(parent_read);
++		return false;
++	}
++	struct pulsar_return_auth_hello hello = {0};
++	if (!pulsar_return_auth_read(parent_read, &hello, sizeof(hello)) || hello.magic != PULSAR_RETURN_AUTH_MAGIC ||
++		hello.version != PULSAR_RETURN_AUTH_VERSION || hello.lane != bootstrap.lane ||
++		!pulsar_return_auth_equal(hello.generation, bootstrap.generation, sizeof(hello.generation)))
++		goto failed_process;
++	struct pulsar_return_auth_challenge challenge = {0};
++	challenge.magic = PULSAR_RETURN_AUTH_MAGIC;
++	challenge.version = PULSAR_RETURN_AUTH_VERSION;
++	challenge.lane = bootstrap.lane;
++	memcpy(challenge.generation, bootstrap.generation, sizeof(challenge.generation));
++	if (!pulsar_return_auth_random(challenge.nonce, sizeof(challenge.nonce)) ||
++		!pulsar_return_auth_write(parent_write, &challenge, sizeof(challenge)))
++		goto failed_process;
++	struct pulsar_return_auth_proof proof = {0};
++	uint8_t expected[PULSAR_RETURN_AUTH_NONCE_BYTES] = {0};
++	if (!pulsar_return_auth_read(parent_read, &proof, sizeof(proof)) || proof.magic != PULSAR_RETURN_AUTH_MAGIC ||
++		proof.version != PULSAR_RETURN_AUTH_VERSION || proof.lane != bootstrap.lane ||
++		!pulsar_return_auth_equal(proof.generation, bootstrap.generation, sizeof(proof.generation)) ||
++		!pulsar_return_auth_make_proof(bootstrap.capability, &hello, &challenge, expected) ||
++		!pulsar_return_auth_equal(proof.mac, expected, sizeof(expected)))
++		goto failed_process;
++	if (!pulsar_d3d11_return_producer_bind_helper(vcam->d3d11, process.hProcess))
++		goto failed_process;
++	vcam->helper_process = process.hProcess;
++	vcam->helper_bootstrap_pipe = parent_write;
++	vcam->helper_frame_pipe = parent_read;
++	vcam->helper_width = width;
++	vcam->helper_height = height;
++	vcam->helper_authenticated = true;
++	os_atomic_set_long(&vcam->helper_stop, 0);
++	os_atomic_set_long(&vcam->helper_failed, 0);
++	if (pthread_create(&vcam->helper_thread, NULL, return_helper_frame_reader, vcam) != 0) {
++		return_helper_close(vcam);
++		return false;
++	}
++	os_atomic_set_long(&vcam->helper_thread_started, 1);
++	return true;
++
++failed_process:
++	TerminateProcess(process.hProcess, ERROR_ACCESS_DENIED);
++	CloseHandle(process.hProcess);
++	CloseHandle(parent_write);
++	CloseHandle(parent_read);
++	return false;
++
++failed:
++	if (startup.lpAttributeList) {
++		if (attribute_initialized)
++			DeleteProcThreadAttributeList(startup.lpAttributeList);
++		HeapFree(GetProcessHeap(), 0, startup.lpAttributeList);
++	}
++	if (child_read)
++		CloseHandle(child_read);
++	if (child_write)
++		CloseHandle(child_write);
++	if (parent_write)
++		CloseHandle(parent_write);
++	if (parent_read)
++		CloseHandle(parent_read);
++	return false;
++}
++
+ static bool return_consumer_process_image_allowed(HANDLE process)
+ {
+ 	wchar_t image_path[MAX_PATH] = {0};
+@@ -174,7 +412,7 @@ static bool return_lease_probe_once(struct virtualcam_data *vcam)
+ 	DWORD registration_pid = 0;
+ 	const bool registration_live = return_consumer_registration_live(vcam, &registration_pid);
+ 	bool active = lease_present && registration_live;
+-	if (vcam->d3d11) {
++	if (vcam->d3d11 && !vcam->helper_authenticated) {
+ 		const bool producer_authorized = pulsar_d3d11_return_producer_set_consumer_pid(
+ 			vcam->d3d11, active ? registration_pid : 0);
+ 		active = active && producer_authorized;
+@@ -416,6 +654,7 @@ static void virtualcam_destroy(void *data)
+ 	struct virtualcam_data *vcam = (struct virtualcam_data *)data;
+ 	return_lease_watcher_stop(vcam);
+ 	return_consumer_registration_pipe_close(vcam);
++	return_helper_close(vcam);
+ 	pulsar_d3d11_return_producer_close(vcam->d3d11);
+ 	video_queue_close(vcam->vq);
+ 	bfree(data);
+@@ -431,6 +670,8 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+ 				       strcmp(obs_output_get_id(output), "preview_return_output") == 0;
+ 	vcam->consumer_gated = vcam->program_return || vcam->preview_return;
+ 	vcam->consumer_registration_pipe = INVALID_HANDLE_VALUE;
++	vcam->helper_bootstrap_pipe = INVALID_HANDLE_VALUE;
++	vcam->helper_frame_pipe = INVALID_HANDLE_VALUE;
+ 	vcam->lease_telemetry_enabled = return_lease_telemetry_enabled();
+ 	const char *transport = getenv("PULSAR_RETURN_TRANSPORT");
+ 	vcam->d3d11_requested = vcam->consumer_gated && transport && strcmp(transport, "d3d11") == 0;
+@@ -496,6 +737,11 @@ static bool virtualcam_start(void *data)
+ 		if (!vcam->d3d11)
+ 			blog(LOG_WARNING, "[pulsar-directshow] D3D11 %s control unavailable; using CPU return queue",
+ 			     vcam->program_return ? "ProgramReturn" : "PreviewReturn");
++		else if (!return_helper_start(vcam, width, height, interval)) {
++			pulsar_d3d11_return_producer_close(vcam->d3d11);
++			vcam->d3d11 = NULL;
++			blog(LOG_WARNING, "[pulsar-directshow] private D3D11 helper unavailable; using CPU return queue");
++		}
+ 	}
+ 	if (!return_lease_watcher_start(vcam))
+ 		blog(LOG_WARNING, "[pulsar-directshow] %s lease watcher unavailable; publication remains disabled",
+@@ -514,6 +760,7 @@ static void virtualcam_deactive(struct virtualcam_data *vcam)
+ 	os_atomic_set_bool(&vcam->active, false);
+ 	obs_output_end_data_capture(vcam->output);
+ 	return_consumer_registration_pipe_close(vcam);
++	return_helper_close(vcam);
+ 	pulsar_d3d11_return_producer_close(vcam->d3d11);
+ 	vcam->d3d11 = NULL;
+ 	video_queue_close(vcam->vq);
+@@ -555,13 +802,24 @@ static void virtual_video(void *param, struct video_data *frame)
+ 	 * no graph actively consumes this return. */
+ 	if (!return_consumer_is_active(vcam))
+ 		return;
++	if (vcam->helper_authenticated && os_atomic_load_long(&vcam->helper_failed)) {
++		return_helper_close(vcam);
++		pulsar_d3d11_return_producer_close(vcam->d3d11);
++		vcam->d3d11 = NULL;
++	}
+ 
+ 	struct video_queue_frame_metadata metadata;
+ 	snapshot_runtime_frame(&metadata);
+ 	const enum video_queue_pixel_format format = queue_pixel_format(vcam->output);
+-	if (vcam->d3d11 && format == VIDEO_QUEUE_PIXEL_FORMAT_NV12 &&
+-	    pulsar_d3d11_return_producer_write(vcam->d3d11, frame->data, frame->linesize, frame->timestamp, &metadata))
+-		return;
++	if (vcam->d3d11 && format == VIDEO_QUEUE_PIXEL_FORMAT_NV12) {
++		const bool published = pulsar_d3d11_return_producer_write(vcam->d3d11, frame->data, frame->linesize,
++									 frame->timestamp, &metadata);
++		/* While the authenticated helper is alive it is the sole CPU-queue
++		 * writer.  A transient GPU timeout must not race its readback relay;
++		 * the next helper failure transitions to the ordinary CPU fallback. */
++		if (published || vcam->helper_authenticated)
++			return;
++	}
+ 	(void)video_queue_write_ex(vcam->vq, frame->data, frame->linesize, frame->timestamp, format, &metadata);
+ }
+ 
+-- 
+2.54.0.windows.1
+

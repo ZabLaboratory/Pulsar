@@ -155,3 +155,151 @@ def test_callback_selector_cases_are_fail_closed_and_stage_specific():
     assert "result.mask = all_signal_mask();" in header
     assert "if (rawCallbackRequired)" in source
     assert "if (packetCallbackRequired && streamOutput)" in source
+
+
+def test_trace_writer_surfaces_io_fault_and_stops_accepting_evidence():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "trace_write_failed" in source
+    assert "FlushFileBuffers(traceFileHandle_)" in source
+    assert "trace_close_failed" in source
+    assert "trace_footer_write_failed" in source
+    assert "trace_manifest_open_failed" in source
+    assert "trace_manifest_write_failed" in source
+    assert "trace_manifest_flush_failed" in source
+    assert "trace_manifest_install_failed" in source
+    writer = source[source.index("void traceWriterLoop()"):source.index("bool enqueueLine", source.index("void traceWriterLoop()"))]
+    assert "writerAccepting_ = false;" in writer
+    assert "writerQueue_.clear();" in writer
+    assert "signalMask_.store(0, std::memory_order_release);" in writer
+
+
+def test_trace_writer_has_external_mac_footer_and_append_anchor():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert 'PULSAR_TRACE_HMAC_KEY' in source
+    assert 'PULSAR_TRACE_HMAC_KEY_PATH' not in source
+    assert 'pulsar.trace-integrity.v1' in source
+    assert 'traceChainHead_' in source
+    assert 'record_mac' in source
+    assert 'manifestMac' in source
+    assert 'trace_sha256' in source
+    assert 'MoveFileExW' in source
+    assert 'trace_footer' in source
+    assert 'prepareTraceFile(append && hasExisting)' in source
+
+
+def test_trace_writer_allows_directshow_append_while_runtime_handle_is_open():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    open_trace = source[source.index("bool openTraceOutput()"):source.index("bool closeTraceOutput()", source.index("bool openTraceOutput()"))]
+    assert "FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE" in open_trace
+    assert "FILE_SHARE_READ, nullptr, OPEN_ALWAYS" not in open_trace
+
+
+def test_directshow_observations_use_an_out_of_band_sidecar_before_fusion():
+    patch = (ROOT / "patches" / "0044-fix-dshow-trace-sidecar.patch").read_text(encoding="utf-8")
+    assert "static bool append_trace_line" in patch
+    assert '+\tconst char *path = getenv("PULSAR_DIRECTSHOW_TRACE_PATH");' in patch
+
+
+def test_named_mapping_race_closes_existing_handles_in_both_producers():
+    shared_patch = (ROOT / "patches" / "0035-fix-modern-cpu-queue-mapping-collision.patch").read_text(
+        encoding="utf-8"
+    )
+    dshow_patch = (ROOT / "patches" / "0032-fix-cpu-queue-mapping-collision.patch").read_text(
+        encoding="utf-8"
+    )
+    for patch in (shared_patch, dshow_patch):
+        assert "GetLastError() == ERROR_ALREADY_EXISTS" in patch
+        assert "CloseHandle(vq.handle);" in patch
+        assert "vq.handle = NULL;" in patch
+        assert "return NULL;" in patch
+
+
+def test_trace_writer_queue_is_bounded_and_overflow_fails_closed():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "kWriterQueueCapacity = 4096" in source
+    enqueue = source[source.index("bool enqueueLine"):source.index("void writeLine", source.index("bool enqueueLine"))]
+    assert "writerQueue_.size() >= kWriterQueueCapacity" in enqueue
+    assert "traceIntegrityFault_.compare_exchange_strong" in enqueue
+    assert "reason=trace_queue_overflow" in enqueue
+    assert "writerAccepting_ = false;" in enqueue
+    assert "writerStopping_ = true;" in enqueue
+    assert "return false;" in enqueue
+    assert "traceIntegrityFault_.store(false, std::memory_order_release);" in source
+    integrity = source[source.index("bool integrityFaulted()"):source.index("bool environmentTruthy", source.index("bool integrityFaulted()"))]
+    assert "degraded_ || traceIntegrityFault_.load(std::memory_order_acquire)" in integrity
+
+
+def test_callback_backlog_is_an_interval_baseline_with_session_reset():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    helper_start = source.index("static uint64_t callbackBacklogEstimate")
+    helper_end = source.index("template <typename T> struct StubCallback", helper_start)
+    helper = source[helper_start:helper_end]
+    assert "CounterBacklogBaseline" in helper
+    assert "if (!sampleEligible || encodedFrames == 0 || encodeSamples == 0)" in helper
+    assert "encodedFrames == 0 || encodeSamples == 0" in helper
+    assert "baseline.eligibleSamples < 2" in helper
+    assert "++baseline.eligibleSamples" in helper
+    assert "baseline = {};" in helper
+    assert "if (!baseline.valid || rawFrames < baseline.rawFrames || encodedFrames < baseline.encodedFrames)" in helper
+    assert "return rawDelta > encodedDelta ? rawDelta - encodedDelta : 0;" in helper
+    assert "counterBacklogBaseline = {};" in source
+    assert "counterBaselineRuntime != runtime || counterBaselineMode != mode" in source
+    assert "callbackBacklogEstimate(" in source
+
+    # Contract model: first active sample and every inactive/counter-reset
+    # transition are unmeasured (zero); only monotone consecutive active
+    # counters contribute, with encoded work faster than raw clamped to zero.
+    baseline = None
+    session = None
+
+    def estimate(raw, encoded, encode_samples, active, current_session="session-a"):
+        nonlocal baseline, session
+        if current_session != session:
+            baseline = None
+            session = current_session
+            warmup.clear()
+        if not active or encoded == 0 or encode_samples == 0:
+            baseline = None
+            warmup.clear()
+            return 0
+        if baseline is None or raw < baseline[0] or encoded < baseline[1]:
+            baseline = (raw, encoded)
+            warmup[:] = [True]
+            return 0
+        if len(warmup) < 2:
+            warmup.append(True)
+            baseline = (raw, encoded)
+            return 0
+        result = max((raw - baseline[0]) - (encoded - baseline[1]), 0)
+        baseline = (raw, encoded)
+        return result
+
+    warmup = []
+    assert estimate(100, 0, 0, True) == 0
+    assert estimate(160, 140, 0, True) == 0
+    # Startup packet/encode skew (70 then 7 in the observed run) is not a
+    # measured backlog while encode samples are absent or warming up.
+    assert estimate(220, 70, 0, True) == 0
+    assert estimate(227, 77, 63, True) == 0
+    assert estimate(234, 84, 63, True) == 0
+    assert estimate(244, 89, 63, True) == 5
+    assert estimate(254, 149, 63, True) == 0
+    assert estimate(0, 0, 0, False) == 0
+    warmup.clear()
+    assert estimate(9, 4, 4, True) == 0
+    assert estimate(14, 7, 4, True) == 0
+    assert estimate(20, 9, 4, True) == 4
+    warmup.clear()
+    assert estimate(20, 9, 4, True, "session-b") == 0
+    assert estimate(30, 14, 4, True, "session-b") == 0
+    assert estimate(40, 19, 4, True, "session-b") == 5
