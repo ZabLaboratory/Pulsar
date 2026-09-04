@@ -524,7 +524,8 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert "validate_trace_append" in probe
     assert "--trace-append requires --runtime-id matching the reference session" in probe
     assert "--resource-mode is supported only with --encoder nvenc" in probe
-    assert 'sample.get("encoder_family") == "nvenc"' in probe
+    assert "def _resource_sample_has_encode_timing" in probe
+    assert "_resource_sample_has_encode_timing(record)" in probe
 
 
 def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: Path) -> None:
@@ -565,6 +566,8 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
         "producer_count": 1,
         "encoder_active": True,
         "encoder_family": "nvenc",
+        "rtmp_load_active": True,
+        "encode_time_samples": 1,
     }
     trace_path = tmp_path / "reference.jsonl"
     trace_path.write_text(
