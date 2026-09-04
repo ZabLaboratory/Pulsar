@@ -61,3 +61,9 @@ def test_empty_main_canvas_inventory_remains_a_hard_failure():
 
     with pytest.raises(probe.Failure, match="no Main-canvas scenes"):
         asyncio.run(probe.resolve_main_canvas_scene(session))
+
+
+def test_reroute_settling_requires_new_track_and_previous_track_silent():
+    assert probe.track_route_is_settled({1: 0.499, 3: 0.0}, 1, 3)
+    assert not probe.track_route_is_settled({1: 0.499, 3: 0.499}, 1, 3)
+    assert not probe.track_route_is_settled({1: 0.0, 3: 0.0}, 1, 3)
