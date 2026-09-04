@@ -528,7 +528,9 @@ def test_runtime_probe_keeps_the_encoder_active_during_the_take_campaign() -> No
     assert "_resource_sample_has_encode_timing(record)" in probe
 
 
-def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: Path) -> None:
+def test_resource_mode_and_append_preflight_are_nvenc_reference_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     probe = _load_probe(_RUNTIME_PROBE, "pulsar_dual_lane_probe_append_preflight")
     common = [
         "--trace",
@@ -548,6 +550,7 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
 
     session = {
         "record_type": "session",
+        "session_id": "runtime-reference-nvenc",
         "codec": "nvenc",
         "runtime_instance_id": "runtime-reference",
         "build_revision": "a" * 40,
@@ -555,6 +558,7 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
         "producer_topology": "single_lane_reference",
         "producer_count": 1,
         "workload": {"wgc": True, "cef": True, "nvenc": True},
+        "evidence_kind": "runtime",
     }
     resource = {
         "record_type": "resource_sample",
@@ -570,10 +574,13 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
         "encode_time_samples": 1,
     }
     trace_path = tmp_path / "reference.jsonl"
-    trace_path.write_text(
-        json.dumps(session) + "\n" + json.dumps(resource) + "\n",
-        encoding="utf-8",
-    )
+    key_path = probe.trace_integrity.ensure_key(trace_path)
+    monkeypatch.setenv(probe.trace_integrity.KEY_ENV, key_path.read_text(encoding="ascii").strip())
+
+    def write_reference() -> None:
+        probe.trace_integrity.write_trace(trace_path, [session, resource], key_path)
+
+    write_reference()
     original_trace = trace_path.read_bytes()
     probe.validate_trace_append(
         trace_path,
@@ -602,10 +609,8 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
 
     wrong_family = dict(resource)
     wrong_family["encoder_family"] = "x264"
-    trace_path.write_text(
-        json.dumps(session) + "\n" + json.dumps(wrong_family) + "\n",
-        encoding="utf-8",
-    )
+    resource = wrong_family
+    write_reference()
     with pytest.raises(probe.ProbeFailure, match="active sample"):
         probe.validate_trace_append(
             trace_path,
@@ -617,10 +622,10 @@ def test_resource_mode_and_append_preflight_are_nvenc_reference_only(tmp_path: P
 
     wrong_codec = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
     wrong_codec["codec"] = "x264"
-    trace_path.write_text(
-        json.dumps(wrong_codec) + "\n" + json.dumps(resource) + "\n",
-        encoding="utf-8",
-    )
+    session = wrong_codec
+    resource = dict(resource)
+    resource["encoder_family"] = "nvenc"
+    write_reference()
     with pytest.raises(probe.ProbeFailure, match="existing NVENC"):
         probe.validate_trace_append(
             trace_path,

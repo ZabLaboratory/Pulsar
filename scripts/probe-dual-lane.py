@@ -123,6 +123,15 @@ from typing import Any, Mapping, cast
 if os.name == "nt":
     import winreg
 
+_TRACE_INTEGRITY_SPEC = importlib.util.spec_from_file_location(
+    "pulsar_trace_integrity", pathlib.Path(__file__).with_name("trace-integrity.py")
+)
+if _TRACE_INTEGRITY_SPEC is None or _TRACE_INTEGRITY_SPEC.loader is None:  # pragma: no cover
+    raise RuntimeError("trace integrity signer is unavailable")
+trace_integrity = importlib.util.module_from_spec(_TRACE_INTEGRITY_SPEC)
+sys.modules[_TRACE_INTEGRITY_SPEC.name] = trace_integrity
+_TRACE_INTEGRITY_SPEC.loader.exec_module(trace_integrity)
+
 try:
     import websockets
 except ImportError:
@@ -863,6 +872,8 @@ class RtmpReceiver:
         self.failure: str | None = None
         self.calibration: dict[str, int | str | None] | None = None
         self.live_correlation = RtmpPacketCorrelation()
+        self._trace_key_path: pathlib.Path | None = None
+        self._trace_key_hex: str | None = None
         self._lock = threading.Lock()
 
     def metadata(self) -> dict[str, int | str]:
@@ -1088,19 +1099,25 @@ class RtmpReceiver:
             raise ProbeFailure(failure)
 
     def _install_fused_records(self, records: list[dict[str, object]], output_path: pathlib.Path) -> None:
-        """Validate a complete trace in a sibling temp and atomically install it."""
+        """Atomically install a re-authenticated trace after receiver fusion."""
 
+        if self._trace_key_hex is None and self._trace_key_path is None:
+            raise ProbeFailure("RTMP fusion has no out-of-band trace key")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.fused.tmp")
-        if temp_path.exists():
+        temp_key_path = trace_integrity.key_path_for(temp_path) if self._trace_key_hex is None else None
+        temp_manifest_path = trace_integrity.manifest_path_for(temp_path)
+        if temp_path.exists() or (temp_key_path is not None and temp_key_path.exists()) or temp_manifest_path.exists():
             raise ProbeFailure(f"RTMP fusion temporary path already exists: {temp_path}")
         try:
-            with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-                for record in records:
-                    handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-                    handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
+            if self._trace_key_hex is not None:
+                trace_integrity.write_trace(temp_path, records, key_hex=self._trace_key_hex)
+            else:
+                # This branch is reserved for explicit non-runtime fixtures;
+                # runtime fusion always uses the operator-held environment key.
+                assert self._trace_key_path is not None and temp_key_path is not None
+                shutil.copyfile(self._trace_key_path, temp_key_path)
+                trace_integrity.write_trace(temp_path, records, temp_key_path)
 
             parser_path = pathlib.Path(__file__).with_name("probe-take-latency.py")
             parser_spec = importlib.util.spec_from_file_location("pulsar_take_latency_fusion", parser_path)
@@ -1111,7 +1128,7 @@ class RtmpReceiver:
             sys.modules[parser_spec.name] = parser_module
             try:
                 parser_spec.loader.exec_module(parser_module)
-                fused_trace = parser_module.parse_trace(temp_path)
+                fused_trace = parser_module.parse_trace(temp_path, key_path=temp_key_path)
                 parser_module.analyze_trace(
                     fused_trace,
                     minimum_takes=1,
@@ -1126,26 +1143,44 @@ class RtmpReceiver:
                 else:
                     sys.modules[parser_spec.name] = previous_module
             os.replace(temp_path, output_path)
+            os.replace(temp_manifest_path, trace_integrity.manifest_path_for(output_path))
         except Exception:
-            try:
-                temp_path.unlink()
-            except OSError:
-                pass
+            for candidate in (temp_path, temp_key_path, temp_manifest_path):
+                if candidate is None:
+                    continue
+                try:
+                    candidate.unlink()
+                except OSError:
+                    pass
             raise
 
     def _read_producer_records(self, producer_path: pathlib.Path) -> tuple[list[dict[str, object]], dict[str, object]]:
-        if not producer_path.is_file():
-            raise ProbeFailure(f"producer trace is missing: {producer_path}")
         try:
-            records = [
-                json.loads(line)
-                for line in producer_path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ProbeFailure(f"cannot read producer trace for RTMP fusion: {exc}") from exc
+            self._trace_key_hex = trace_integrity.external_key_hex()
+            records, _footer = trace_integrity.read_trace(producer_path, key_hex=self._trace_key_hex)
+        except trace_integrity.TraceIntegrityError as exc:
+            # Unit fixtures are explicitly non-runtime evidence and may use
+            # the legacy bare JSONL shape.  A production/runtime trace never
+            # takes this branch: its external key, chain and footer are
+            # mandatory and any failure is terminal.
+            try:
+                raw_records = [
+                    json.loads(line)
+                    for line in producer_path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+            except (OSError, json.JSONDecodeError) as read_exc:
+                raise ProbeFailure(f"cannot verify producer trace for RTMP fusion: {exc}") from read_exc
+            if not raw_records or raw_records[0].get("evidence_kind") != "fixture":
+                raise ProbeFailure(f"cannot verify producer trace for RTMP fusion: {exc}") from exc
+            try:
+                self._trace_key_hex = None
+                self._trace_key_path = trace_integrity.ensure_key(producer_path)
+            except trace_integrity.TraceIntegrityError as key_exc:
+                raise ProbeFailure(f"fixture producer trace key setup failed: {key_exc}") from key_exc
+            records = raw_records
         if not records or records[0].get("record_type") != "session":
-            raise ProbeFailure("producer trace must begin with one session record")
+            raise ProbeFailure("producer trace must begin with one authenticated session record")
         return records, dict(records[0])
 
     def fuse_resource_trace(
@@ -1442,6 +1477,7 @@ class PulsarProcess:
                     "40-character lowercase candidate SHA"
                 )
             env["PULSAR_TRACE_PATH"] = str(self.trace_path)
+            env["PULSAR_TRACE_HMAC_KEY"] = trace_integrity.external_key_hex()
             env["PULSAR_TRACE_SESSION_ID"] = f"{self.runtime_id}-{self.encoder}"
             env["PULSAR_BUILD_REVISION"] = self.build_revision
             env["PULSAR_TRACE_HOST"] = _valid_hardware_label(self.trace_host, "host")
@@ -1499,6 +1535,7 @@ class PulsarProcess:
             # Do not let a caller's trace-only owner flag leak into an
             # ordinary non-traced run.
             env.pop("PULSAR_TRACE_EXTERNAL_LANE_WORKLOAD", None)
+            env.pop("PULSAR_TRACE_HMAC_KEY", None)
         if self.encoder == "nvenc":
             # p1 is accepted by the current NVENC family and makes an
             # accidental x264 fallback visible in the boot log check below.
@@ -4144,41 +4181,21 @@ def validate_trace_append(
     append anything.
     """
 
-    if not trace_path.is_file():
-        raise ProbeFailure(f"--trace-append requires an existing trace file: {trace_path}")
-
-    records: list[dict[str, Any]] = []
     try:
-        with trace_path.open("r", encoding="utf-8") as handle:
-            for line_number, text in enumerate(handle, start=1):
-                if not text.strip():
-                    continue
-                try:
-                    value = json.loads(text)
-                except json.JSONDecodeError as exc:
-                    raise ProbeFailure(
-                        f"--trace-append found malformed JSON at line {line_number}: {exc.msg}"
-                    ) from exc
-                if not isinstance(value, dict):
-                    raise ProbeFailure(f"--trace-append record at line {line_number} is not an object")
-                record_type = value.get("record_type")
-                if record_type not in {"session", "event", "observation", "resource_sample"}:
-                    raise ProbeFailure(
-                        f"--trace-append found unsupported record_type={record_type!r} "
-                        f"at line {line_number}"
-                    )
-                records.append(value)
-    except OSError as exc:
-        raise ProbeFailure(f"--trace-append cannot read existing trace {trace_path}: {exc}") from exc
+        records, _footer = trace_integrity.read_trace(trace_path, key_hex=trace_integrity.external_key_hex())
+    except trace_integrity.TraceIntegrityError as exc:
+        raise ProbeFailure(f"--trace-append existing trace failed integrity validation: {exc}") from exc
 
     if not records or records[0].get("record_type") != "session":
-        raise ProbeFailure("--trace-append existing trace must begin with its session record")
+        raise ProbeFailure("--trace-append existing trace must begin with its authenticated session record")
     sessions = [record for record in records if record.get("record_type") == "session"]
     if len(sessions) != 1:
         raise ProbeFailure(
             f"--trace-append requires exactly one existing session record, found {len(sessions)}"
         )
     session = sessions[0]
+    if session.get("evidence_kind") != "runtime":
+        raise ProbeFailure("--trace-append requires an authenticated runtime evidence session")
     if session.get("codec") != "nvenc":
         raise ProbeFailure(
             f"--trace-append requires an existing NVENC reference session, got {session.get('codec')!r}"
@@ -4457,6 +4474,11 @@ def run(args: argparse.Namespace) -> int:
             trace_path = producer_trace_path
         if trace_path is not None:
             trace_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                trace_integrity.external_key_hex()
+            except trace_integrity.TraceIntegrityError as exc:
+                print(f"FAIL: out-of-band trace key preflight failed: {exc}", file=sys.stderr)
+                return EXIT_FAIL
         trace_host = trace_gpu = None
         if trace_path is not None:
             trace_host, trace_gpu = resolve_trace_hardware(args.trace_host, args.trace_gpu)
@@ -4538,6 +4560,10 @@ def run(args: argparse.Namespace) -> int:
                     if producer_trace_path is None:
                         raise ProbeFailure("RTMP append producer path was not configured")
                     shutil.copyfile(final_trace_path, producer_trace_path)
+                    shutil.copyfile(
+                        trace_integrity.manifest_path_for(final_trace_path),
+                        trace_integrity.manifest_path_for(producer_trace_path),
+                    )
                     trace_path = producer_trace_path
                 if args.rtmp_receiver:
                     if trace_path is None:
