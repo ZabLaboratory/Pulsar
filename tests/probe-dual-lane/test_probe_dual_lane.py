@@ -952,6 +952,28 @@ def test_resource_fusion_does_not_count_rtmp_without_active_nvenc(tmp_path):
         receiver.fuse_resource_trace(producer, final, minimum_samples=1)
 
 
+def test_probe_identifies_with_only_output_events_to_bound_socket_backlog():
+    class FakeWebSocket:
+        def __init__(self):
+            self.messages = [
+                {"op": 0, "d": {"rpcVersion": 1}},
+                {"op": 2, "d": {"negotiatedRpcVersion": 1}},
+            ]
+            self.sent = []
+
+        async def recv(self):
+            return json.dumps(self.messages.pop(0))
+
+        async def send(self, message):
+            self.sent.append(json.loads(message))
+
+    ws = FakeWebSocket()
+    asyncio.run(probe.identify(ws, "unused-password"))
+    assert ws.sent[0]["op"] == 1
+    assert ws.sent[0]["d"]["eventSubscriptions"] == probe.PROBE_EVENT_SUBSCRIPTIONS
+    assert probe.PROBE_EVENT_SUBSCRIPTIONS == 1 << 6
+
+
 def test_resource_fusion_preserves_observed_active_samples(tmp_path):
     records = [
         record

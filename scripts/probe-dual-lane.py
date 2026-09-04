@@ -235,6 +235,12 @@ RESOURCE_SAMPLE_TIMEOUT_MULTIPLIER = 3.0
 RESOURCE_SAMPLE_TIMEOUT_GRACE_S = 15.0
 PROCESS_READER_JOIN_TIMEOUT_S = 2.0
 RECORDING_RELEASE_TIMEOUT_S = 8.0
+# The probe waits only for RecordStateChanged and StreamStateChanged.  Both
+# belong to the Outputs subscription (1 << 6).  Subscribing to every ordinary
+# category makes the client accumulate scene/input/vendor events while it
+# waits on native trace boundaries; on a loaded x264 host that can back up the
+# websocket connection without adding evidence to this probe.
+PROBE_EVENT_SUBSCRIPTIONS = 1 << 6
 # The trace contract's warm-up count is an observed partition of the same
 # process: the first 100 committed Takes are discarded from latency
 # percentiles, and the following --takes commits are the measured sample.
@@ -2352,7 +2358,7 @@ async def identify(ws: Any, password: str) -> None:
     hello_data = hello.get("d") or {}
     identify_data: dict[str, Any] = {
         "rpcVersion": hello_data.get("rpcVersion", 1),
-        "eventSubscriptions": 0x7FF,
+        "eventSubscriptions": PROBE_EVENT_SUBSCRIPTIONS,
     }
     auth = hello_data.get("authentication")
     if auth:
