@@ -195,6 +195,8 @@ def test_live_selected_scene_references_propagate_and_roles_swap_after_take() ->
     assert "obs_scene_add(laneBScene, obs_scene_get_source(previewBootstrap))" in setup
     assert "obs_scene_add(laneScene, scene)" in replace
     assert "if (!obs_scene_from_source(scene))" in replace
+    assert "obs_sceneitem_get_source(laneItems[lane]) == scene" in replace
+    assert "Avoid an add/remove cycle" in replace
     assert "OBS_SCENE_DUP_PRIVATE_COPY" not in setup + replace
     assert "programSelection != previewSelection" in source
 

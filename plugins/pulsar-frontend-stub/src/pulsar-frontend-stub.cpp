@@ -4536,6 +4536,15 @@ bool PulsarFrontendAPI::replaceLaneCompositionLocked(int lane, obs_source_t *sce
         return false;
     }
 
+    // A repeated Prepare for the scene that is already bound to this lane is
+    // logically idempotent. Avoid an add/remove cycle: libobs may defer source
+    // and GPU cleanup until a later graphics boundary, turning an alternating
+    // A/B Take loop into avoidable resident-memory growth. The caller still
+    // advances its command/selection metadata and readiness contract, while
+    // the hot producer remains intact.
+    if (laneItems[lane] && obs_sceneitem_get_source(laneItems[lane]) == scene)
+        return true;
+
     obs_scene_t *laneScene = obs_scene_from_source(laneSources[lane]);
     if (!laneScene)
         return false;
