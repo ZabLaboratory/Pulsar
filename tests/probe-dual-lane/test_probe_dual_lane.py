@@ -198,6 +198,18 @@ def test_return_transport_is_propagated_to_runtime_and_directshow_children():
     assert "args.return_transport," in source
 
 
+def test_scene_composition_churn_diagnostic_is_opt_in_and_checks_active_binding():
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert 'PULSAR_SCENE_CHURN_DIAGNOSTICS' in source
+    assert 'scene_composition_churn' in source
+    assert 'obs_scene_enum_items(' in source
+    assert 'obs_sceneitem_get_source(laneItems[lane]) == scene' in source
+    assert '++sceneCompositionAdds[lane]' in source
+    assert '++sceneCompositionRemoves[lane]' in source
+
+
 def test_recording_output_must_stay_under_runtime_directory(tmp_path):
     record_dir = tmp_path / "session"
     record_dir.mkdir()

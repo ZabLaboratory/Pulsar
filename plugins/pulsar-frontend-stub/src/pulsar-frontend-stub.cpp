@@ -3247,6 +3247,12 @@ private:
     int previewLane = 1;
     obs_source_t *laneSources[2] = {};
     obs_sceneitem_t *laneItems[2] = {};
+    // Opt-in diagnostics for repeated composition replacement.  These
+    // counters are intentionally outside acceptance telemetry so the normal
+    // Take path has no additional trace allocation or serialization work.
+    bool sceneChurnDiagnostics = false;
+    uint64_t sceneCompositionAdds[2] = {};
+    uint64_t sceneCompositionRemoves[2] = {};
 
     // Physical role roots remain stable for the lifetime of the frontend.
     // These references point at the roots bound to ProgramView/PreviewView;
@@ -4050,8 +4056,29 @@ bool PulsarFrontendAPI::replaceLaneCompositionLocked(int lane, obs_source_t *sce
     }
     obs_sceneitem_t *oldItem = laneItems[lane];
     laneItems[lane] = newItem;
-    if (oldItem)
+    if (oldItem) {
         obs_sceneitem_remove(oldItem);
+    }
+    if (sceneChurnDiagnostics) {
+        ++sceneCompositionAdds[lane];
+        if (oldItem)
+            ++sceneCompositionRemoves[lane];
+        size_t activeItems = 0;
+        obs_scene_enum_items(
+            laneScene,
+            [](obs_scene_t *, obs_sceneitem_t *, void *param) {
+                ++*static_cast<size_t *>(param);
+                return true;
+            },
+            &activeItems);
+        const bool activeBinding = obs_sceneitem_get_source(laneItems[lane]) == scene;
+        blog(LOG_INFO,
+             "[pulsar-dual-lane] scene_composition_churn lane=%d add_count=%llu "
+             "remove_count=%llu active_items=%zu active_binding=%d",
+             lane, static_cast<unsigned long long>(sceneCompositionAdds[lane]),
+             static_cast<unsigned long long>(sceneCompositionRemoves[lane]), activeItems,
+             activeBinding ? 1 : 0);
+    }
     return true;
 }
 
@@ -4059,6 +4086,8 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
 {
     if (!templateScene)
         return false;
+
+    sceneChurnDiagnostics = parse_env_bool(std::getenv("PULSAR_SCENE_CHURN_DIAGNOSTICS")) == EnvBool::Enabled;
 
     // The lane roots are private wrappers, not aliases for the user's scene.
     // Their single child is a live scene source.  Program starts on the
