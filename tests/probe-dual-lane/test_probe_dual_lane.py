@@ -66,6 +66,24 @@ def test_rtmp_receiver_preserves_default_live_input_buffering():
     assert '"-listen"' in command_source
     assert '"-fflags"' not in command_source
     assert '"-flags"' not in command_source
+    assert '"-fps_mode",\n            "passthrough"' in command_source
+    assert '"-nostats"' in command_source
+    # fps_mode is output-scoped and must remain after the input URL and copy
+    # codec; moving it before -i makes FFmpeg reject the receiver command.
+    assert command_source.index('"-i"') < command_source.index('"-fps_mode"')
+    assert command_source.index('"-c"') < command_source.index('"-fps_mode"')
+
+
+def test_request_timeout_context_records_send_to_response_duration():
+    source = SCRIPT.read_text(encoding="utf-8")
+    request_start = source.index("async def request(")
+    request_end = source.index("\n\nasync def request_batch(", request_start)
+    request_source = source[request_start:request_end]
+    assert "sent_monotonic_ns" in request_source
+    assert "send_to_response_ms" in request_source
+    assert "send_to_timeout_ms" in request_source
+    assert "request_context[\"response_monotonic_ns\"]" in request_source
+    assert "request_context[\"timeout_monotonic_ns\"]" in request_source
 
 
 def test_inbox_consumes_out_of_order_buffered_response_without_socket_read():

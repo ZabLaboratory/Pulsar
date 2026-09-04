@@ -903,6 +903,10 @@ class RtmpReceiver:
             "-loglevel",
             "info",
             "-debug_ts",
+            # Keep the packet-level debug_ts records but suppress FFmpeg's
+            # periodic aggregate progress lines.  Those lines add pipe load
+            # without contributing a correlation observation.
+            "-nostats",
             "-listen",
             "1",
             "-i",
@@ -912,6 +916,10 @@ class RtmpReceiver:
             "-an",
             "-c",
             "copy",
+            # This is an output option: keep it adjacent to the null output
+            # so FFmpeg cannot apply it to the listening input.
+            "-fps_mode",
+            "passthrough",
             "-f",
             "null",
             "-",
@@ -2242,11 +2250,23 @@ async def request(
     }
     if data is not None:
         request_body["requestData"] = data
-    inbox.last_request = _safe_request_context(request_type, request_id, data)
+    request_context = _safe_request_context(request_type, request_id, data)
+    sent_at = time.monotonic_ns()
+    request_context["sent_monotonic_ns"] = sent_at
+    inbox.last_request = request_context
     try:
         await ws.send(json.dumps({"op": 6, "d": request_body}))
-        return await inbox.receive_until_response(ws, request_id)
+        response = await inbox.receive_until_response(ws, request_id)
+        request_context["response_monotonic_ns"] = time.monotonic_ns()
+        request_context["send_to_response_ms"] = round(
+            (request_context["response_monotonic_ns"] - sent_at) / 1_000_000, 3
+        )
+        return response
     except (asyncio.TimeoutError, TimeoutError) as exc:
+        request_context["timeout_monotonic_ns"] = time.monotonic_ns()
+        request_context["send_to_timeout_ms"] = round(
+            (request_context["timeout_monotonic_ns"] - sent_at) / 1_000_000, 3
+        )
         raise ProbeFailure(
             f"obs-websocket response timeout: {inbox.timeout_context()}"
         ) from exc
