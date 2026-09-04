@@ -1192,9 +1192,15 @@ def test_output_effect_probe_settles_record_stop_before_next_case() -> None:
     assert "STOP_PENDING_CODE = 702" in source
     assert "if not ok and code != STOP_PENDING_CODE" in nominal_record
     assert "StopRecord accepted (702 Pending)" in nominal_record
-    assert 'wait_record_and_output_inactive(c, GENERIC_RECORD_OUTPUT, "StopOutput(nominal)")' in nominal_generic
-    assert "if not ok and code != STOP_PENDING_CODE" in nominal_generic
-    assert "StopOutput accepted (702 Pending)" in nominal_generic
+    # Generic latency/effect coverage must use the raw virtual-camera output;
+    # PulsarRecord is a ffmpeg_muxer and its asynchronous flush belongs only to
+    # the separate record case above.
+    assert 'GENERIC_RAW_OUTPUT = "PulsarVCam"' in source
+    assert 'c.req("StartVirtualCam")' in nominal_generic
+    assert "wait_record_and_output_inactive" not in nominal_generic
+    assert 'c.req("StopOutput", {"outputName": GENERIC_RAW_OUTPUT})' in nominal_generic
+    assert "if not ok and code != STOP_PENDING_CODE" not in nominal_generic
+    assert "StopOutput accepted (702 Pending)" not in nominal_generic
 
 
 def test_core_swap_is_frame_boundary_and_rejects_concurrent_requests() -> None:
