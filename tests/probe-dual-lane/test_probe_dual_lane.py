@@ -971,7 +971,7 @@ def test_probe_identifies_with_only_output_events_to_bound_socket_backlog():
     asyncio.run(probe.identify(ws, "unused-password"))
     assert ws.sent[0]["op"] == 1
     assert ws.sent[0]["d"]["eventSubscriptions"] == probe.PROBE_EVENT_SUBSCRIPTIONS
-    assert probe.PROBE_EVENT_SUBSCRIPTIONS == 1 << 6
+    assert probe.PROBE_EVENT_SUBSCRIPTIONS == (1 << 6) | (1 << 9)
 
 
 def test_resource_fusion_preserves_observed_active_samples(tmp_path):
