@@ -510,6 +510,10 @@ if ($Stage -in @('configure', 'all') -and -not $reuseFastUpstreamConfigure) {
         # architecture explicitly for this x64 preset without changing the
         # user's process environment or the target architecture.
         $extraArgs += '-DCMAKE_HOST_SYSTEM_PROCESSOR=AMD64'
+        # The OBS CMake probe prefers the environment variable over the
+        # cache entry above.  Set it only in this build process; PowerShell
+        # child-process scope means the caller's shell is unchanged.
+        $env:PROCESSOR_ARCHITECTURE = 'AMD64'
         Write-Host "  host architecture env absent: QT_HOST_PATH=$qtHostPath"
     }
     Push-Location $upstream
