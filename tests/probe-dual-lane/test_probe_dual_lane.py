@@ -876,6 +876,20 @@ def test_trace_append_rtmp_requires_reference_load_metadata_before_spawn(tmp_pat
             minimum_rtmp_samples=3,
         )
 
+    records = _reference_append_records()
+    records[1]["encode_time_samples"] = 0
+    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+    with pytest.raises(probe.ProbeFailure, match="1 < 2"):
+        probe.validate_trace_append(
+            path,
+            runtime_id="runtime-fixture-001",
+            build_revision="f" * 40,
+            trace_host="fixture-host",
+            trace_gpu="fixture-gpu",
+            require_rtmp_load=True,
+            minimum_rtmp_samples=2,
+        )
+
 
 def test_resource_only_reference_may_enable_rtmp_receiver():
     args = _resource_only_args()

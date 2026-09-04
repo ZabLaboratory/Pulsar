@@ -1167,12 +1167,7 @@ class RtmpReceiver:
         # contains no Take and therefore no rtmp_first_packet correlation.
         session["capture_paths"] = [path for path in raw_paths if path != "rtmp_first_packet"]
         resource_records = [record for record in records if record.get("record_type") == "resource_sample"]
-        eligible = sum(
-            record.get("encoder_active") is True
-            and record.get("encoder_family") == "nvenc"
-            and record.get("rtmp_load_active") is True
-            for record in resource_records
-        )
+        eligible = sum(_resource_sample_has_encode_timing(record) for record in resource_records)
         if eligible < minimum_samples:
             raise ProbeFailure(
                 "resource-only RTMP load did not produce enough observed-active samples: "
@@ -3433,6 +3428,16 @@ async def stop_resource_recording(
     return output_path
 
 
+def _resource_sample_has_encode_timing(record: Mapping[str, object]) -> bool:
+    return (
+        record.get("encoder_active") is True
+        and record.get("encoder_family") == "nvenc"
+        and record.get("rtmp_load_active") is True
+        and type(record.get("encode_time_samples")) is int
+        and record.get("encode_time_samples") > 0
+    )
+
+
 async def collect_resource_samples(
     process: PulsarProcess, mode: str, minimum_samples: int, timeout: float
 ) -> int:
@@ -3573,12 +3578,7 @@ async def collect_resource_samples(
                                 count += 1
                                 if record.get("encoder_active") is True:
                                     active_count += 1
-                                    if (
-                                        record.get("encoder_family") == "nvenc"
-                                        and record.get("rtmp_load_active") is True
-                                        and type(record.get("encode_time_samples")) is int
-                                        and record.get("encode_time_samples") > 0
-                                    ):
+                                    if _resource_sample_has_encode_timing(record):
                                         rtmp_active_count += 1
                 except FileNotFoundError:
                     count = 0
@@ -3671,13 +3671,7 @@ async def wait_for_eligible_resource_samples(
                     total += 1
                     if record.get("encoder_active") is True:
                         active += 1
-                    if (
-                        record.get("encoder_active") is True
-                        and record.get("encoder_family") == "nvenc"
-                        and record.get("rtmp_load_active") is True
-                        and type(record.get("encode_time_samples")) is int
-                        and record.get("encode_time_samples") > 0
-                    ):
+                    if _resource_sample_has_encode_timing(record):
                         eligible += 1
         except FileNotFoundError:
             total = active = eligible = 0
@@ -4209,10 +4203,7 @@ def validate_trace_append(
             raise ProbeFailure(
                 "--trace-append reference contains an active sample without the NVENC encoder identity"
             )
-    if not any(
-        sample.get("encoder_active") is True and sample.get("encoder_family") == "nvenc"
-        for sample in reference_samples
-    ):
+    if not any(_resource_sample_has_encode_timing(sample) for sample in reference_samples):
         raise ProbeFailure(
             "--trace-append reference phase lacks an active NVENC encoder attestation"
         )
@@ -4268,9 +4259,7 @@ def validate_trace_append(
         ):
             raise ProbeFailure("--trace-append reference RTMP receiver clock/timebase is invalid")
         eligible_reference_samples = sum(
-            sample.get("encoder_active") is True
-            and sample.get("encoder_family") == "nvenc"
-            and sample.get("rtmp_load_active") is True
+            _resource_sample_has_encode_timing(sample)
             for sample in reference_samples
         )
         if eligible_reference_samples < minimum_rtmp_samples:
