@@ -143,14 +143,16 @@ def test_runtime_producer_consumers_preserve_distinct_boundaries() -> None:
     assert "(std::max)(1, cefVideo.fps_num / cefVideo.fps_den)" not in frontend
     assert "process_cpu_percent" in frontend
     assert "callback_backlog_estimate" in frontend
-    assert "previousRawFrames" in frontend
-    assert "previousPacketFrames" in frontend
+    assert "struct CounterBacklogBaseline" in frontend
+    assert "static uint64_t callbackBacklogEstimate" in frontend
     assert "previousLaggedFrames" in frontend
-    assert "bool previousCounterSampleEligible = false;" in frontend
     assert "const bool counterSampleEligible = encoderActive && rtmpLoadActive;" in frontend
-    assert "counterSampleEligible && previousCounterSampleEligible" in frontend
-    assert frontend.index("const bool counterSampleEligible = encoderActive && rtmpLoadActive;") < frontend.index("const uint64_t rawDelta")
-    assert "const uint64_t callbackBacklog = rawDelta > packetDelta" in frontend
+    assert "counterBacklogBaseline = {};" in frontend
+    assert "counterBaselineRuntime != runtime || counterBaselineMode != mode" in frontend
+    assert "callbackBacklogEstimate(" in frontend
+    assert "return rawDelta > encodedDelta ? rawDelta - encodedDelta : 0;" in frontend
+    assert frontend.index("const bool counterSampleEligible = encoderActive && rtmpLoadActive;") < frontend.index(
+        "const uint64_t callbackBacklog = callbackBacklogEstimate(")
     assert "const uint64_t missedFrames = laggedFrames >= previousLaggedFrames" in frontend
     assert "not a lifetime queue depth" in frontend
     assert "encoder_active" in frontend
