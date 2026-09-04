@@ -4653,9 +4653,10 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
     // Program is the libobs-owned main view.  It is already part of the main
     // render loop and its video_t is the object returned by obs_get_video(),
     // which preserves legacy stats/outputs and gives the encoder one stable
-    // binding.  Only Preview needs an auxiliary hot view.
+    // binding.  Preview uses a second permanently-active view so both lanes
+    // stay hot across frame-boundary role swaps.
     programView = obs_get_main_view();
-    previewView = obs_view_create();
+    previewView = obs_view_create_active();
     if (!programView || !previewView) {
         blog(LOG_ERROR, "[pulsar-dual-lane] failed to create ProgramView/PreviewView");
         // programView aliases libobs's main canvas and is never destroyed by
