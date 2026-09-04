@@ -23,6 +23,7 @@
 #include "cef-headers.hpp"
 #include "browser-app.hpp"
 #include "browser-source-task-state.hpp"
+#include "browser-render-callback-gate.hpp"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -135,6 +136,7 @@ struct BrowserSource {
 	bool first_update = true;
 	bool reroute_audio = true;
 	std::atomic<bool> destroying = false;
+	std::shared_ptr<BrowserRenderCallbackGate> render_callbacks;
 	std::shared_ptr<BrowserSourceTaskState> task_state;
 	ControlLevel webpage_control_level = DEFAULT_CONTROL_LEVEL;
 #if defined(BROWSER_EXTERNAL_BEGIN_FRAME_ENABLED) && defined(ENABLE_BROWSER_SHARED_TEXTURE)
@@ -142,8 +144,10 @@ struct BrowserSource {
 #endif
 	bool is_showing = false;
 
-	inline void DestroyTextures()
+	inline bool DestroyTextures(BrowserRenderCallbackGate::CallbackPause &callback_pause)
 	{
+		if (render_callbacks && !callback_pause)
+			return false;
 		obs_enter_graphics();
 		if (extra_texture) {
 			gs_texture_destroy(extra_texture);
@@ -157,6 +161,21 @@ struct BrowserSource {
 			texture = nullptr;
 		}
 		obs_leave_graphics();
+		return true;
+	}
+
+	inline bool DestroyTextures(bool render_callback_active = false)
+	{
+		BrowserRenderCallbackGate::CallbackPause callback_pause;
+		if (render_callbacks) {
+			if (render_callback_active)
+				callback_pause = render_callbacks->try_pause_for_current_callback();
+			else
+				callback_pause = render_callbacks->pause_for_texture_destroy();
+			if (!callback_pause)
+				return false;
+		}
+		return DestroyTextures(callback_pause);
 	}
 
 	/* ---------------------------- */

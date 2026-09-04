@@ -252,21 +252,31 @@ silently ignored. AC-12b's p95 is reported for diagnosis and has no threshold
 in this revision. The parser never pools packets between codecs, sessions or
 different Take identities.
 
-Resource samples use `sample_mode=reference` and `sample_mode=dual_lane` and
-record `frame_render_ms`, `resident_bytes`, `process_cpu_percent`,
-`host_gpu_percent`, `callback_backlog_estimate`, cumulative
-`dropped_frames` from the active RTMP output, cumulative `missed_frames` from
-OBS render lag, cumulative-average `encode_time_ms` (`FERC - FER`) qualified
+Resource samples may use `sample_mode=reference` and `sample_mode=dual_lane`.
+Because the acceptance campaign is dual-lane-only, AC-13 is admitted from the
+dual-lane samples alone; a single-lane reference is diagnostic and never a
+required comparator. Each accepted dual-lane sample must carry
+`frame_render_ms`, `resident_bytes`, `process_cpu_percent`,
+`host_gpu_percent`, `gpu_memory_bytes`, `callback_backlog_estimate` and
+`missed_frames` as non-negative deltas from the preceding sample (the native
+source counters are cumulative; these fields are not lifetime queue depth or
+lifetime lag counts), cumulative `dropped_frames` from the active RTMP output,
+cumulative-average `encode_time_ms` (`FERC - FER`) qualified
 by `encode_time_samples`, and `encoder_utilization_percent`, plus strict `encoder_active` and
 `encoder_family` and `rtmp_load_active` fields read from the actual bound
 encoder and native `streamOutput` at sample time. Reference and dual-lane
 resource phases must each collect their minimum samples while
-`rtmp_load_active=true`; early samples taken before `StartStream` remain
-diagnostic and cannot be promoted after the fact. The report computes actual
-deltas from the two sample sets and shows them beside the
-known `+0.091 ms/frame` and `+3.13 MB` references. It never declares runtime
-capacity from the reference alone. Samples with `encoder_active=false` remain
-diagnostic and cannot satisfy the AC-13 minimum.
+the dual-lane phase must collect the configured minimum active samples while
+`rtmp_load_active=true` and `preview_mix.active=true`; early samples taken
+before `StartStream` remain diagnostic and cannot be promoted after the fact.
+The parser applies absolute ceilings of 1.5 GB resident, 90% process CPU,
+95% host GPU, 8 GB GPU memory, backlog 3, dropped/missed frames 2, 5 ms
+encode time, and 100% encoder utilization. It also rejects growth over the
+sample window above 32 MB resident, 64 MB GPU memory, backlog 3, or two
+dropped/missed frames. The report exposes these limits and observed maxima;
+no capacity is inferred from a reference or from fewer than the minimum
+active samples. Samples with `encoder_active=false` remain diagnostic and
+cannot satisfy the AC-13 minimum.
 
 Stage telemetry keeps Preview at the session's declared 1920x1080/60 and
 decomposes the cost without changing cadence or resolution. `pipeline`
@@ -338,7 +348,8 @@ flags in the session record.
 # Run the runtime producer/instrumentation for x264 and save x264.jsonl.  This
 # campaign has no resource phase; AC-13 is NOT_APPLICABLE for x264.
 # Repeat with PULSAR_VIDEO_ENCODER=nvenc and save nvenc.jsonl; only the NVENC
-# campaign performs the reference/dual resource comparison while recording.
+# campaign records the dual-lane-only AC-13 resource phase; any reference
+# samples are optional diagnostics and cannot substitute for that gate.
 # The probe itself keeps the ProgramReturn DirectShow reader open; the reader
 # and encoder-output callback write observations using the same runtime/session
 # IDs and monotonic clock. Add --rtmp-receiver to exercise the native RTMP

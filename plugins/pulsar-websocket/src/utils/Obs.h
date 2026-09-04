@@ -376,7 +376,8 @@ namespace Utils {
 			// output, in which case the watch armed on the previous handle is
 			// mute and the active-state read is what decides.
 			ActionVerdict SettleStart(obs_output_t *output, const ActionWatch &watch);
-			ActionVerdict SettleStop(obs_output_t *output, const ActionWatch &watch);
+			ActionVerdict SettleStop(obs_output_t *output, const ActionWatch &watch,
+						 uint32_t timeoutMs = VerifyTimeoutMs());
 
 			// StopRecord returns a completed-file path, so it gets a longer but
 			// still bounded flush window than generic stop requests. Pending is

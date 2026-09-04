@@ -1,0 +1,323 @@
+From cf902a52686e75b92e791274e26544d0ef516873 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Thu, 3 Sep 2026 20:18:11 +0200
+Subject: [PATCH] fix(dshow): move registration to producer-owned pipe
+
+Require a kernel-bound named-pipe client and live process before publishing a return consumer. Keep the queue mapping read-only for consumers, rearm after stale clients, and return explicitly on every rejected path.
+
+Agent-Role: forge
+Agent-Thread: 01a06821-2c9c-7ab3-b107-96fe0178b65a
+Work-Unit: ZabLaboratory/Pulsar#254
+Issue: 254
+ADR-Revision: N/A
+Evidence: F-02 producer-owned pipe, F-04 fail-closed watcher, CI 33789066200 C4715 fix
+---
+ .../virtualcam-module/virtualcam-filter.cpp   | 28 ++++++
+ .../virtualcam-module/virtualcam-filter.hpp   |  3 +
+ plugins/win-dshow/virtualcam.c                | 90 ++++++++++++++++++-
+ .../shared-memory-queue.c                     | 27 +++++-
+ .../shared-memory-queue.h                     |  1 +
+ 5 files changed, 146 insertions(+), 3 deletions(-)
+
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index a6f88a57d..ab2c314df 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -171,6 +171,7 @@ VCamFilter::~VCamFilter()
+ 	SetEvent(thread_stop);
+ 	if (th.joinable())
+ 		th.join();
++	ReleaseConsumerRegistrationPipe();
+ 	if (d3d11_requested && d3d11)
+ 		pulsar_d3d11_return_consumer_close(d3d11);
+ 	d3d11 = nullptr;
+@@ -204,6 +205,29 @@ void VCamFilter::ReleaseConsumerLease()
+ 	consumer_lease = nullptr;
+ }
+ 
++bool VCamFilter::OpenConsumerRegistrationPipe()
++{
++	if (!consumer_gated || !vq || consumer_registration_pipe != INVALID_HANDLE_VALUE)
++		return consumer_registration_pipe != INVALID_HANDLE_VALUE;
++	uint64_t challenge = 0;
++	if (!video_queue_get_challenge(vq, &challenge))
++		return false;
++	wchar_t pipe_name[256] = {0};
++	const wchar_t *role = preview_return ? L"PreviewReturn" : L"ProgramReturn";
++	_snwprintf_s(pipe_name, sizeof(pipe_name) / sizeof(pipe_name[0]), _TRUNCATE,
++			     L"\\\\.\\pipe\\PulsarReturn.%ls.%016llx", role, (unsigned long long)challenge);
++	consumer_registration_pipe = CreateFileW(pipe_name, GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
++	return consumer_registration_pipe != INVALID_HANDLE_VALUE;
++}
++
++void VCamFilter::ReleaseConsumerRegistrationPipe()
++{
++	if (consumer_registration_pipe != INVALID_HANDLE_VALUE) {
++		CloseHandle(consumer_registration_pipe);
++		consumer_registration_pipe = INVALID_HANDLE_VALUE;
++	}
++}
++
+ const wchar_t *VCamFilter::FilterName() const
+ {
+ 	return L"VCamFilter";
+@@ -239,6 +263,7 @@ STDMETHODIMP VCamFilter::Stop()
+ {
+ 	os_atomic_set_bool(&active, false);
+ 	ReleaseConsumerLease();
++	ReleaseConsumerRegistrationPipe();
+ 	return OutputFilter::Stop();
+ }
+ 
+@@ -321,6 +346,8 @@ void VCamFilter::Frame(uint64_t ts)
+ 	if (!vq) {
+ 		vq = video_queue_open_named(queue_name.c_str());
+ 	}
++	if (consumer_gated && vq)
++		OpenConsumerRegistrationPipe();
+ 
+ 	enum queue_state state = video_queue_state(vq);
+ 	if (state != prev_state) {
+@@ -329,6 +356,7 @@ void VCamFilter::Frame(uint64_t ts)
+ 			   the actual cx / cy of the data stream */
+ 			video_queue_get_info(vq, &new_obs_cx, &new_obs_cy, &new_obs_interval);
+ 		} else if (state == SHARED_QUEUE_STATE_STOPPING) {
++			ReleaseConsumerRegistrationPipe();
+ 			video_queue_close(vq);
+ 			vq = nullptr;
+ 		}
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+index c27bf31eb..0b128710f 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.hpp
+@@ -67,6 +67,7 @@ class VCamFilter : public DShow::OutputFilter {
+ 	pulsar_d3d11_return_consumer_t *d3d11 = nullptr;
+ 	bool d3d11_requested = false;
+ 	WinHandle consumer_lease;
++	HANDLE consumer_registration_pipe = INVALID_HANDLE_VALUE;
+ 	int queue_mode = 0;
+ 	bool in_obs = false;
+ 	enum queue_state prev_state = SHARED_QUEUE_STATE_INVALID;
+@@ -97,6 +98,8 @@ class VCamFilter : public DShow::OutputFilter {
+ 					      const struct directshow_stage_timing &timing);
+ 	HRESULT AcquireConsumerLease();
+ 	void ReleaseConsumerLease();
++	bool OpenConsumerRegistrationPipe();
++	void ReleaseConsumerRegistrationPipe();
+ 	void UpdatePlaceholder(void);
+ 	const int GetOutputBufferSize(void);
+ 
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index f4dd39ef7..f8cb3bf76 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -1,4 +1,5 @@
+ #include <obs-module.h>
++#include <windows.h>
+ #include <util/platform.h>
+ #include <string.h>
+ #include <stdio.h>
+@@ -26,6 +27,8 @@ struct virtualcam_data {
+ 	video_queue_t *vq;
+ 	wchar_t queue_name[256];
+ 	wchar_t consumer_lease_name[288];
++	wchar_t consumer_registration_pipe_name[256];
++	HANDLE consumer_registration_pipe;
+ 	bool queue_namespace_rejected;
+ 	bool program_return;
+ 	bool preview_return;
+@@ -84,14 +87,87 @@ static void return_lease_log_state(struct virtualcam_data *vcam, enum return_lea
+ 		     return_lease_state_name(state), vcam->consumer_lease_name);
+ }
+ 
++static void return_consumer_registration_pipe_close(struct virtualcam_data *vcam)
++{
++	if (vcam->consumer_registration_pipe && vcam->consumer_registration_pipe != INVALID_HANDLE_VALUE) {
++		DisconnectNamedPipe(vcam->consumer_registration_pipe);
++		CloseHandle(vcam->consumer_registration_pipe);
++		vcam->consumer_registration_pipe = INVALID_HANDLE_VALUE;
++	}
++}
++
++static bool return_consumer_registration_pipe_start(struct virtualcam_data *vcam)
++{
++	uint64_t challenge = 0;
++	if (!video_queue_get_challenge(vcam->vq, &challenge))
++		return false;
++	_snwprintf_s(vcam->consumer_registration_pipe_name,
++			     sizeof(vcam->consumer_registration_pipe_name) /
++				     sizeof(vcam->consumer_registration_pipe_name[0]),
++			     _TRUNCATE, L"\\\\.\\pipe\\PulsarReturn.%hs.%016llx",
++			     return_lease_role(vcam), (unsigned long long)challenge);
++	vcam->consumer_registration_pipe = CreateNamedPipeW(
++		vcam->consumer_registration_pipe_name, PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
++		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 0, 0, 0, NULL);
++	return vcam->consumer_registration_pipe != INVALID_HANDLE_VALUE;
++}
++
++static bool return_consumer_process_image_allowed(HANDLE process)
++{
++	wchar_t image_path[MAX_PATH] = {0};
++	DWORD image_path_size = (DWORD)(sizeof(image_path) / sizeof(image_path[0]));
++	if (!QueryFullProcessImageNameW(process, 0, image_path, &image_path_size))
++		return false;
++	const wchar_t *image_name = wcsrchr(image_path, L'\\');
++	image_name = image_name ? image_name + 1 : image_path;
++	return _wcsicmp(image_name, L"obs64.exe") == 0 || _wcsicmp(image_name, L"obs32.exe") == 0 ||
++	       _wcsicmp(image_name, L"ffmpeg.exe") == 0 || _wcsicmp(image_name, L"pulsar.exe") == 0;
++}
++
++static bool return_consumer_registration_live(struct virtualcam_data *vcam)
++{
++	if (!vcam->consumer_registration_pipe || vcam->consumer_registration_pipe == INVALID_HANDLE_VALUE)
++		return false;
++	BOOL connected = ConnectNamedPipe(vcam->consumer_registration_pipe, NULL);
++	if (!connected) {
++		const DWORD error = GetLastError();
++		if (error != ERROR_PIPE_CONNECTED && error != ERROR_PIPE_LISTENING) {
++			return_consumer_registration_pipe_close(vcam);
++			(void)return_consumer_registration_pipe_start(vcam);
++			return false;
++		}
++	}
++	ULONG pid = 0;
++	if (!GetNamedPipeClientProcessId(vcam->consumer_registration_pipe, &pid) || !pid) {
++		return_consumer_registration_pipe_close(vcam);
++		(void)return_consumer_registration_pipe_start(vcam);
++		return false;
++	}
++	HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
++	DWORD observed_session = 0;
++	DWORD producer_session = 0;
++	const bool live = process && ProcessIdToSessionId(pid, &observed_session) &&
++			  ProcessIdToSessionId(GetCurrentProcessId(), &producer_session) && observed_session == producer_session &&
++			  WaitForSingleObject(process, 0) == WAIT_TIMEOUT && return_consumer_process_image_allowed(process);
++	if (process)
++		CloseHandle(process);
++	if (live)
++		return true;
++	return_consumer_registration_pipe_close(vcam);
++	(void)return_consumer_registration_pipe_start(vcam);
++	return false;
++}
++
+ static bool return_lease_probe_once(struct virtualcam_data *vcam)
+ {
+ 	InterlockedIncrement(&vcam->lease_polls);
+ 	HANDLE lease = OpenEventW(SYNCHRONIZE, FALSE, vcam->consumer_lease_name);
+-	const bool active = lease != NULL;
+-	const DWORD probe_error = active ? ERROR_SUCCESS : GetLastError();
++	const bool lease_present = lease != NULL;
++	const DWORD probe_error = lease_present ? ERROR_SUCCESS : GetLastError();
+ 	if (lease)
+ 		CloseHandle(lease);
++	const bool registration_live = return_consumer_registration_live(vcam);
++	const bool active = lease_present && registration_live;
+ 
+ 	if (active) {
+ 		InterlockedIncrement(&vcam->lease_hits);
+@@ -328,6 +404,7 @@ static void virtualcam_destroy(void *data)
+ {
+ 	struct virtualcam_data *vcam = (struct virtualcam_data *)data;
+ 	return_lease_watcher_stop(vcam);
++	return_consumer_registration_pipe_close(vcam);
+ 	pulsar_d3d11_return_producer_close(vcam->d3d11);
+ 	video_queue_close(vcam->vq);
+ 	bfree(data);
+@@ -342,6 +419,7 @@ static void *virtualcam_create(obs_data_t *settings, obs_output_t *output)
+ 	vcam->preview_return = obs_output_get_id(output) &&
+ 				       strcmp(obs_output_get_id(output), "preview_return_output") == 0;
+ 	vcam->consumer_gated = vcam->program_return || vcam->preview_return;
++	vcam->consumer_registration_pipe = INVALID_HANDLE_VALUE;
+ 	vcam->lease_telemetry_enabled = return_lease_telemetry_enabled();
+ 	const char *transport = getenv("PULSAR_RETURN_TRANSPORT");
+ 	vcam->d3d11_requested = vcam->consumer_gated && transport && strcmp(transport, "d3d11") == 0;
+@@ -387,6 +465,13 @@ static bool virtualcam_start(void *data)
+ 		     vcam->queue_name, runtime_id ? runtime_id : "");
+ 		return false;
+ 	}
++	if (vcam->consumer_gated && !return_consumer_registration_pipe_start(vcam)) {
++		video_queue_close(vcam->vq);
++		vcam->vq = NULL;
++		blog(LOG_WARNING, "[pulsar-directshow] %s registration channel unavailable; output remains stopped",
++		     return_lease_role(vcam));
++		return false;
++	}
+ 
+ 	struct video_scale_info vsi = {0};
+ 	vsi.format = VIDEO_FORMAT_NV12;
+@@ -417,6 +502,7 @@ static void virtualcam_deactive(struct virtualcam_data *vcam)
+ {
+ 	os_atomic_set_bool(&vcam->active, false);
+ 	obs_output_end_data_capture(vcam->output);
++	return_consumer_registration_pipe_close(vcam);
+ 	pulsar_d3d11_return_producer_close(vcam->d3d11);
+ 	vcam->d3d11 = NULL;
+ 	video_queue_close(vcam->vq);
+diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.c b/shared/obs-shared-memory-queue/shared-memory-queue.c
+index e8da13cf1..30b7ab128 100644
+--- a/shared/obs-shared-memory-queue/shared-memory-queue.c
++++ b/shared/obs-shared-memory-queue/shared-memory-queue.c
+@@ -29,7 +29,11 @@ struct queue_header {
+ 	 * reserved words, so the 80-byte header ABI is unchanged. */
+ 	uint32_t frame_header_size;
+ 	uint32_t frame_metadata_version;
+-	uint32_t reserved[6];
++	/* Producer-issued registration challenge; the reader mapping remains
++	 * FILE_MAP_READ and the 80-byte header ABI is unchanged. */
++	uint32_t consumer_challenge_low;
++	uint32_t consumer_challenge_high;
++	uint32_t reserved[4];
+ };
+ 
+ struct video_queue_slot_header {
+@@ -313,6 +317,15 @@ video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_t inter
+ 	header.interval = interval;
+ 	header.frame_header_size = metadata_enabled ? FRAME_HEADER_SIZE : 0;
+ 	header.frame_metadata_version = metadata_enabled ? VIDEO_QUEUE_METADATA_VERSION : 0;
++	LARGE_INTEGER challenge_counter = {};
++	QueryPerformanceCounter(&challenge_counter);
++	uint64_t challenge = (uint64_t)challenge_counter.QuadPart ^ ((uint64_t)GetCurrentProcessId() << 32);
++	if (!challenge)
++		challenge = 1;
++	else if (!(uint32_t)challenge)
++		challenge |= 1;
++	header.consumer_challenge_low = (uint32_t)challenge;
++	header.consumer_challenge_high = (uint32_t)(challenge >> 32);
+ 	vq.is_writer = true;
+ 
+ 	for (size_t i = 0; i < 3; i++) {
+@@ -413,6 +426,18 @@ open_failed:
+ 	return NULL;
+ }
+ 
++bool video_queue_get_challenge(video_queue_t *vq, uint64_t *challenge)
++{
++	if (!queue_mapping_live(vq) || !vq->metadata_enabled || !challenge)
++		return false;
++	const uint64_t value = ((uint64_t)vq->header->consumer_challenge_high << 32) |
++		(uint32_t)vq->header->consumer_challenge_low;
++	if (!value || !(uint32_t)value)
++		return false;
++	*challenge = value;
++	return true;
++}
++
+ video_queue_t *video_queue_create(uint32_t cx, uint32_t cy, uint64_t interval)
+ {
+ 	return video_queue_create_named(cx, cy, interval, VIDEO_NAME);
+diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.h b/shared/obs-shared-memory-queue/shared-memory-queue.h
+index a48db9f63..629bd1867 100644
+--- a/shared/obs-shared-memory-queue/shared-memory-queue.h
++++ b/shared/obs-shared-memory-queue/shared-memory-queue.h
+@@ -72,6 +72,7 @@ extern video_queue_t *video_queue_create_named(uint32_t cx, uint32_t cy, uint64_
+ 									 const wchar_t *name);
+ extern video_queue_t *video_queue_open_named(const wchar_t *name);
+ extern void video_queue_close(video_queue_t *vq);
++extern bool video_queue_get_challenge(video_queue_t *vq, uint64_t *challenge);
+ 
+ extern void video_queue_get_info(video_queue_t *vq, uint32_t *cx, uint32_t *cy, uint64_t *interval);
+ extern void video_queue_write(video_queue_t *vq, uint8_t **data, uint32_t *linesize, uint64_t timestamp);
+-- 
+2.54.0.windows.1

@@ -1,0 +1,33 @@
+From b905a0310c6b1bbb7a77f81b23600483ddaeae69 Mon Sep 17 00:00:00 2001
+From: Forge <forge@example.invalid>
+Date: Thu, 3 Sep 2026 16:06:38 +0200
+Subject: [PATCH] fix(dshow): reject spoofed consumer lease objects
+
+Agent-Role: forge
+
+Work-Unit: ZabLaboratory/Pulsar#254
+---
+ plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index 400e7c269..a6f88a57d 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -188,8 +188,11 @@ HRESULT VCamFilter::AcquireConsumerLease()
+ 		return S_OK;
+ 
+ 	consumer_lease = CreateEventW(nullptr, TRUE, FALSE, consumer_lease_name.c_str());
+-	if (!consumer_lease.Valid()) {
+-		const DWORD error = GetLastError();
++	const DWORD lease_error = GetLastError();
++	if (!consumer_lease.Valid() || lease_error == ERROR_ALREADY_EXISTS) {
++		if (consumer_lease.Valid())
++			consumer_lease = nullptr;
++		const DWORD error = lease_error;
+ 		OutputDebugStringW(L"[pulsar-directshow] failed to acquire return consumer lease\n");
+ 		return HRESULT_FROM_WIN32(error ? error : ERROR_OPEN_FAILED);
+ 	}
+-- 
+2.54.0.windows.1
+

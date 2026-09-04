@@ -22,7 +22,9 @@
 #include <util/threading.h>
 #include "cef-headers.hpp"
 #include "browser-audio-callback-gate.hpp"
+#include "browser-render-callback-gate.hpp"
 #include "obs-browser-source.hpp"
+#include <memory>
 
 struct BrowserSource;
 
@@ -39,6 +41,7 @@ class BrowserClient : public CefClient,
 	bool sharing_available = false;
 	bool reroute_audio = true;
 	BrowserAudioCallbackGate audio_callbacks;
+	std::shared_ptr<BrowserRenderCallbackGate> render_callbacks;
 	/*
 	 * CEF may release its last client reference from OnBeforeClose while
 	 * audio callbacks are still draining.  Hold the client until the gate has
@@ -48,6 +51,7 @@ class BrowserClient : public CefClient,
 	ControlLevel webpage_control_level = DEFAULT_CONTROL_LEVEL;
 
 	inline bool valid() const;
+	BrowserRenderCallbackGate::Lease acquire_render_callback() const;
 	bool begin_audio_callback();
 	void end_audio_callback(int browser_id);
 	void maybe_finalize_browser_close(int browser_id);
@@ -67,9 +71,10 @@ public:
 	int frames_per_buffer;
 
 	inline BrowserClient(BrowserSource *bs_, bool sharing_avail, bool reroute_audio_,
-			     ControlLevel webpage_control_level_)
+			     ControlLevel webpage_control_level_, std::shared_ptr<BrowserRenderCallbackGate> render_callbacks_)
 		: sharing_available(sharing_avail),
 		  reroute_audio(reroute_audio_),
+		  render_callbacks(render_callbacks_),
 		  webpage_control_level(webpage_control_level_),
 		  bs(bs_)
 	{

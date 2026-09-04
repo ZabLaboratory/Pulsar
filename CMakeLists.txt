@@ -148,6 +148,11 @@ if(WIN32)
     # helper after the lexical upstream patch series has been applied.
     add_subdirectory(tests/directshow-namespace-probe)
 
+    # #254 -- the producer-owned registration pipe must place
+    # FILE_FLAG_FIRST_PIPE_INSTANCE in CreateNamedPipeW's openMode, not its
+    # pipeMode. Exercise both return lanes with the native Win32 API.
+    add_subdirectory(tests/lease-watcher)
+
     # #182 -- regression gate for the pulsar:OutputFailed reason_class
     # classifier (ADR-005 §3.4). No pulsar.exe, no libobs/Qt: a pure
     # function of (is_local_output, code, last_error).
