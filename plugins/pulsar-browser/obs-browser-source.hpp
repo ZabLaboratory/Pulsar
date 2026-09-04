@@ -146,8 +146,13 @@ struct BrowserSource {
 
 	inline void DestroyTextures(bool render_callback_active = false)
 	{
-		if (!render_callback_active && render_callbacks)
-			render_callbacks->wait_for_idle();
+		BrowserRenderCallbackGate::CallbackPause callback_pause;
+		if (render_callbacks) {
+			if (render_callback_active)
+				callback_pause = render_callbacks->pause_for_current_callback();
+			else
+				callback_pause = render_callbacks->pause_for_texture_destroy();
+		}
 		obs_enter_graphics();
 		if (extra_texture) {
 			gs_texture_destroy(extra_texture);

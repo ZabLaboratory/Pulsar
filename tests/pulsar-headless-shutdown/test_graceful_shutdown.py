@@ -124,10 +124,15 @@ def test_render_callback_gate_fences_texture_destroy() -> None:
     assert client.count("auto render_callback = acquire_render_callback();") == 3
     assert "bs->DestroyTextures(true);" in client
     destroy = source_header[source_header.index("inline void DestroyTextures") :]
-    assert "render_callbacks->wait_for_idle();" in destroy
+    assert "render_callbacks->pause_for_current_callback();" in destroy
+    assert "render_callbacks->pause_for_texture_destroy();" in destroy
+    assert "CallbackPause callback_pause;" in destroy
     assert "render_callbacks->close_and_wait();" in source
     assert "close_and_wait()" in gate
     assert "wait_for_idle()" in gate
+    assert "pause_for_current_callback()" in gate
+    assert "pause_for_texture_destroy()" in gate
+    assert "admission_paused_" in gate
 
 
 def test_d3d11_direct_shared_copy_api_is_optional_and_validated() -> None:

@@ -64,10 +64,44 @@ public:
 		friend class BrowserRenderCallbackGate;
 	};
 
+	class CallbackPause final {
+	public:
+		CallbackPause() = default;
+		CallbackPause(const CallbackPause &) = delete;
+		CallbackPause &operator=(const CallbackPause &) = delete;
+
+		CallbackPause(CallbackPause &&other) noexcept : gate_(other.gate_) { other.gate_ = nullptr; }
+		CallbackPause &operator=(CallbackPause &&other) noexcept
+		{
+			if (this != &other) {
+				resume();
+				gate_ = other.gate_;
+				other.gate_ = nullptr;
+			}
+			return *this;
+		}
+
+		~CallbackPause() { resume(); }
+
+	private:
+		explicit CallbackPause(BrowserRenderCallbackGate *gate) : gate_(gate) {}
+
+		void resume()
+		{
+			if (gate_) {
+				gate_->resume_admission();
+				gate_ = nullptr;
+			}
+		}
+
+		BrowserRenderCallbackGate *gate_ = nullptr;
+		friend class BrowserRenderCallbackGate;
+	};
+
 	Lease try_acquire()
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
-		if (admission_closed_)
+		if (admission_closed_ || admission_paused_)
 			return {};
 		++in_flight_;
 		return Lease(this);
@@ -90,14 +124,42 @@ public:
 		idle_.wait(lock, [this]() { return in_flight_ == 0; });
 	}
 
+	/* Temporarily block new callbacks while the current callback replaces its
+	 * textures. The caller owns one lease, so waiting for <= 1 drains every
+	 * other callback without self-deadlocking; the RAII token reopens admission
+	 * after the replacement is complete. */
+	CallbackPause pause_for_current_callback()
+	{
+		std::unique_lock<std::mutex> lock(mutex_);
+		admission_paused_ = true;
+		idle_.wait(lock, [this]() { return in_flight_ <= 1; });
+		return CallbackPause(this);
+	}
+
+	/* Temporarily block new callbacks for ordinary texture teardown. */
+	CallbackPause pause_for_texture_destroy()
+	{
+		std::unique_lock<std::mutex> lock(mutex_);
+		admission_paused_ = true;
+		idle_.wait(lock, [this]() { return in_flight_ == 0; });
+		return CallbackPause(this);
+	}
+
 private:
+	void resume_admission()
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		admission_paused_ = false;
+		idle_.notify_all();
+	}
+
 	void release()
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		if (in_flight_ == 0)
 			return;
 		--in_flight_;
-		if (admission_closed_ && in_flight_ == 0)
+		if (in_flight_ <= 1 || (admission_closed_ && in_flight_ == 0))
 			idle_.notify_all();
 	}
 
@@ -105,4 +167,5 @@ private:
 	std::condition_variable idle_;
 	std::size_t in_flight_ = 0;
 	bool admission_closed_ = false;
+	bool admission_paused_ = false;
 };
