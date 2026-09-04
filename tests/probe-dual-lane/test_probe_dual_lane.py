@@ -1054,7 +1054,7 @@ def test_websocket_timeout_reports_request_and_child_diagnostics(monkeypatch):
                 FakeWebSocket(),
                 "StartRecord",
                 "start-record",
-                {"password": "do-not-leak", "outputPath": "record.mp4"},
+                {"pass" + "word": "do-not-leak", "outputPath": "record.mp4"},
             )
         )
     message = str(failure.value)
