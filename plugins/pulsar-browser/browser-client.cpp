@@ -525,6 +525,23 @@ void BrowserClient::OnAcceleratedPaint(CefRefPtr<CefBrowser>, PaintElementType t
 
 	obs_enter_graphics();
 
+#if defined(_WIN32) && CHROME_VERSION_BUILD > 4183
+	/* Prefer the D3D11 backend's direct copy when the destination already has
+	 * matching dimensions and format.  The backend opens the CEF handle only
+	 * for this call and releases its COM reference before returning. */
+	const uint32_t direct_shared_handle =
+#if CHROME_VERSION_BUILD >= 6367
+		(uint32_t)(uintptr_t)info.shared_texture_handle;
+#else
+		(uint32_t)(uintptr_t)shared_handle;
+#endif
+	if (bs->texture && gs_copy_texture_from_nt_shared(bs->texture, direct_shared_handle)) {
+		UpdateExtraTexture();
+		obs_leave_graphics();
+		return;
+	}
+#endif
+
 	/*
 	 * CEF owns the accelerated texture for the duration of this callback.
 	 * Open it only as a callback-local source and copy the pixels into a
@@ -609,6 +626,14 @@ void BrowserClient::OnAcceleratedPaint2(CefRefPtr<CefBrowser>, PaintElementType 
 	}
 
 	obs_enter_graphics();
+
+#if defined(_WIN32) && CHROME_VERSION_BUILD > 4183
+	if (bs->texture && gs_copy_texture_from_nt_shared(bs->texture, (uint32_t)(uintptr_t)shared_handle)) {
+		UpdateExtraTexture();
+		obs_leave_graphics();
+		return;
+	}
+#endif
 
 	/* Keep the legacy callback's shared wrapper local as well. */
 	gs_texture_t *shared_texture = nullptr;

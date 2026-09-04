@@ -1,0 +1,165 @@
+From 0aacfa0066c2c1698c14b77a0e916fe24dc2363f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Fri, 4 Sep 2026 10:08:07 +0200
+Subject: [PATCH] feat(graphics): copy NT shared textures without wrapper
+
+Expose an optional producer-side D3D11 copy path that validates the shared resource and copies directly into an existing destination. Backends without the export retain the existing wrapper fallback.
+
+Agent-Role: forge
+
+Agent-Thread: 01a06821-2c9c-7ab3-b107-96fe0178b65a
+
+Work-Unit: forge-254-f02-helper-20260904
+
+Issue: 254
+
+ADR-Revision: amendment-2-draft-f02-helper-cpu-readonly-20260904
+
+Evidence: callback-local fallback; D3D11 OpenSharedResource1 validation
+
+diff --git a/libobs-d3d11/d3d11-subsystem.cpp b/libobs-d3d11/d3d11-subsystem.cpp
+index ad42718c6..ff6258d09 100644
+--- a/libobs-d3d11/d3d11-subsystem.cpp
++++ b/libobs-d3d11/d3d11-subsystem.cpp
+@@ -2155,6 +2155,63 @@ void device_copy_texture(gs_device_t *device, gs_texture_t *dst, gs_texture_t *s
+ 	device_copy_texture_region(device, dst, 0, 0, src, 0, 0, 0, 0);
+ }
+ 
++extern "C" EXPORT bool device_copy_texture_from_nt_shared(gs_device_t *device, gs_texture_t *dst, uint32_t handle)
++{
++	try {
++		if (!device)
++			throw "Device is NULL";
++		if (!dst)
++			throw "Destination texture is NULL";
++		if (handle == GS_INVALID_HANDLE)
++			throw "Shared texture handle is invalid";
++		if (dst->type != GS_TEXTURE_2D)
++			throw "Destination texture must be 2D";
++
++		gs_texture_2d *const dst2d = static_cast<gs_texture_2d *>(dst);
++		if (!dst2d->texture)
++			throw "Destination texture resource is NULL";
++
++		ComQIPtr<ID3D11Device1> device1 = device->device;
++		if (!device1)
++			throw "D3D11.1 device is unavailable";
++
++		ComPtr<ID3D11Texture2D> source;
++		const HRESULT hr = device1->OpenSharedResource1((HANDLE)(uintptr_t)handle, __uuidof(ID3D11Texture2D),
++								(void **)source.Assign());
++		if (FAILED(hr))
++			throw HRError("Failed to open NT shared 2D texture", hr);
++
++		D3D11_TEXTURE2D_DESC source_desc;
++		source->GetDesc(&source_desc);
++		D3D11_TEXTURE2D_DESC destination_desc;
++		dst2d->texture->GetDesc(&destination_desc);
++		const gs_color_format source_format = ConvertDXGITextureFormat(source_desc.Format);
++		if (!source_desc.Width || !source_desc.Height || source_format == GS_UNKNOWN)
++			throw "Shared texture has an unsupported format or dimensions";
++		if (source_desc.Width != dst2d->width || source_desc.Height != dst2d->height)
++			throw "Shared and destination texture dimensions do not match";
++		if (destination_desc.Width != source_desc.Width || destination_desc.Height != source_desc.Height)
++			throw "Destination resource dimensions do not match";
++		if (source_desc.ArraySize != 1 || source_desc.MipLevels != 1 || source_desc.SampleDesc.Count != 1)
++			throw "Shared texture has unsupported subresources";
++		if (destination_desc.ArraySize != 1 || destination_desc.MipLevels != 1 ||
++		    destination_desc.SampleDesc.Count != 1 ||
++		    destination_desc.SampleDesc.Quality != source_desc.SampleDesc.Quality)
++			throw "Destination texture has unsupported subresources";
++		if (get_copy_compare_format(source_format) != get_copy_compare_format(dst2d->format))
++			throw "Shared and destination texture formats do not match";
++
++		device->context->CopyResource(dst2d->texture.Get(), source.Get());
++		return true;
++	} catch (const HRError &error) {
++		blog(LOG_DEBUG, "device_copy_texture_from_nt_shared (D3D11): %s (%08lX)", error.str, error.hr);
++	} catch (const char *error) {
++		blog(LOG_DEBUG, "device_copy_texture_from_nt_shared (D3D11): %s", error);
++	}
++
++	return false;
++}
++
+ void device_stage_texture(gs_device_t *device, gs_stagesurf_t *dst, gs_texture_t *src)
+ {
+ 	try {
+diff --git a/libobs/graphics/device-exports.h b/libobs/graphics/device-exports.h
+index 782b62334..0eba44053 100644
+--- a/libobs/graphics/device-exports.h
++++ b/libobs/graphics/device-exports.h
+@@ -138,6 +138,10 @@ EXPORT gs_texture_t *device_texture_create_from_iosurface(gs_device_t *device, v
+ EXPORT gs_texture_t *device_texture_open_shared(gs_device_t *device, uint32_t handle);
+ #endif
+ 
++#ifdef _WIN32
++EXPORT bool device_copy_texture_from_nt_shared(gs_device_t *device, gs_texture_t *dst, uint32_t handle);
++#endif
++
+ #if defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__)
+ 
+ EXPORT gs_texture_t *device_texture_create_from_dmabuf(gs_device_t *device, unsigned int width, unsigned int height,
+diff --git a/libobs/graphics/graphics-imports.c b/libobs/graphics/graphics-imports.c
+index 6a4a246ef..a9e4f7c8b 100644
+--- a/libobs/graphics/graphics-imports.c
++++ b/libobs/graphics/graphics-imports.c
+@@ -233,6 +233,7 @@ bool load_graphics_imports(struct gs_exports *exports, void *module, const char
+ 	GRAPHICS_IMPORT_OPTIONAL(gs_texture_release_dc);
+ 	GRAPHICS_IMPORT_OPTIONAL(device_texture_open_shared);
+ 	GRAPHICS_IMPORT_OPTIONAL(device_texture_open_nt_shared);
++	GRAPHICS_IMPORT_OPTIONAL(device_copy_texture_from_nt_shared);
+ 	GRAPHICS_IMPORT_OPTIONAL(device_texture_get_shared_handle);
+ 	GRAPHICS_IMPORT_OPTIONAL(device_texture_wrap_obj);
+ 	GRAPHICS_IMPORT_OPTIONAL(device_texture_acquire_sync);
+diff --git a/libobs/graphics/graphics-internal.h b/libobs/graphics/graphics-internal.h
+index 88423ad27..d2948bb11 100644
+--- a/libobs/graphics/graphics-internal.h
++++ b/libobs/graphics/graphics-internal.h
+@@ -250,6 +250,7 @@ struct gs_exports {
+ 
+ 	gs_texture_t *(*device_texture_open_shared)(gs_device_t *device, uint32_t handle);
+ 	gs_texture_t *(*device_texture_open_nt_shared)(gs_device_t *device, uint32_t handle);
++	bool (*device_copy_texture_from_nt_shared)(gs_device_t *device, gs_texture_t *dst, uint32_t handle);
+ 	uint32_t (*device_texture_get_shared_handle)(gs_texture_t *tex);
+ 	gs_texture_t *(*device_texture_wrap_obj)(gs_device_t *device, void *obj);
+ 	int (*device_texture_acquire_sync)(gs_texture_t *tex, uint64_t key, uint32_t ms);
+diff --git a/libobs/graphics/graphics.c b/libobs/graphics/graphics.c
+index 00abe2ea4..e90502e38 100644
+--- a/libobs/graphics/graphics.c
++++ b/libobs/graphics/graphics.c
+@@ -3205,6 +3205,17 @@ gs_texture_t *gs_texture_open_nt_shared(uint32_t handle)
+ 	return NULL;
+ }
+ 
++bool gs_copy_texture_from_nt_shared(gs_texture_t *dst, uint32_t handle)
++{
++	graphics_t *graphics = thread_graphics;
++	if (!gs_valid_p("gs_copy_texture_from_nt_shared", dst))
++		return false;
++
++	if (graphics->exports.device_copy_texture_from_nt_shared)
++		return graphics->exports.device_copy_texture_from_nt_shared(graphics->device, dst, handle);
++	return false;
++}
++
+ uint32_t gs_texture_get_shared_handle(gs_texture_t *tex)
+ {
+ 	graphics_t *graphics = thread_graphics;
+diff --git a/libobs/graphics/graphics.h b/libobs/graphics/graphics.h
+index 2b6c51511..24e14b719 100644
+--- a/libobs/graphics/graphics.h
++++ b/libobs/graphics/graphics.h
+@@ -861,6 +861,8 @@ EXPORT void gs_texture_release_dc(gs_texture_t *gdi_tex);
+ /** creates a windows shared texture from a texture handle */
+ EXPORT gs_texture_t *gs_texture_open_shared(uint32_t handle);
+ EXPORT gs_texture_t *gs_texture_open_nt_shared(uint32_t handle);
++/** copies a Windows NT shared texture directly into an existing destination */
++EXPORT bool gs_copy_texture_from_nt_shared(gs_texture_t *dst, uint32_t handle);
+ 
+ #define GS_INVALID_HANDLE (uint32_t) - 1
+ EXPORT uint32_t gs_texture_get_shared_handle(gs_texture_t *tex);
+-- 
+2.54.0.windows.1
+
