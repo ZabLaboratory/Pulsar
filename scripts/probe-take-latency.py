@@ -1424,7 +1424,31 @@ def _dual_only_resource_gate(
         and sample.get("rtmp_load_active") is True
         and sample.get("preview_mix", {}).get("active") is True
     ]
-    missing_encode_timing = any(not _resource_encode_timing_present(sample) for sample in active_nvenc_samples)
+    # A zero-timing sample at the beginning of a run is an encoder warm-up
+    # observation, not a measured resource sample.  Once the first positive
+    # timing has been observed, however, a later zero/missing value is a
+    # telemetry hole and must fail closed.  Use the monotonic timestamp rather
+    # than input order because traces may be assembled from several writers.
+    ordered_active_nvenc_samples = sorted(
+        active_nvenc_samples,
+        key=lambda sample: sample.get("observed_at_monotonic_ns", 0),
+    )
+    first_timed_index = next(
+        (
+            index
+            for index, sample in enumerate(ordered_active_nvenc_samples)
+            if _resource_encode_timing_present(sample)
+        ),
+        None,
+    )
+    warmup_sample_count = first_timed_index if first_timed_index is not None else len(ordered_active_nvenc_samples)
+    missing_encode_timing = (
+        first_timed_index is not None
+        and any(
+            not _resource_encode_timing_present(sample)
+            for sample in ordered_active_nvenc_samples[first_timed_index:]
+        )
+    )
     missing = [key for key in required if any(key not in sample for sample in eligible)]
     admitted = [sample for sample in eligible if not any(key not in sample for key in required)]
     maxima = {
@@ -1446,7 +1470,7 @@ def _dual_only_resource_gate(
                 violations.append(f"{key} growth exceeds {limit}")
     status = (
         "MEASURED"
-        if len(admitted) >= minimum_samples and not missing and not violations
+        if len(admitted) >= minimum_samples and not missing and not missing_encode_timing and not violations
         else "UNPROVEN"
     )
     reason = None
@@ -1472,6 +1496,7 @@ def _dual_only_resource_gate(
         "growth": growth,
         "violations": violations,
         "missing_encode_timing": missing_encode_timing,
+        "warmup_sample_count": warmup_sample_count,
         "reason": reason,
     }
 
