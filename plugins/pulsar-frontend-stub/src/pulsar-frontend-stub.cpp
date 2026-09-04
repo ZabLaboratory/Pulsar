@@ -83,6 +83,7 @@
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -457,6 +458,35 @@ static std::string traceHmacSha256(const std::vector<unsigned char> &key, const 
     (void)text;
     return {};
 #endif
+}
+
+// nlohmann::json uses a shortest-round-trip spelling when dumping a parsed
+// double.  Python's verifier can choose a different, but numerically
+// equivalent, spelling for the same IEEE-754 value.  Normalize telemetry
+// numbers before hashing and writing so both implementations share one
+// deterministic canonical boundary.  Twelve decimal places in seconds is
+// materially below the timing resolution of this probe and does not alter the
+// media path or its quality.
+static void normalizeTraceNumbers(json &value)
+{
+    constexpr double scale = 1000000000000.0; // 10^12, sub-nanosecond in seconds
+    if (value.is_number_float()) {
+        const double number = value.get<double>();
+        if (!std::isfinite(number))
+            throw std::runtime_error("non-finite trace number");
+        const double rounded = std::round(number * scale) / scale;
+        value = rounded == 0.0 ? 0.0 : rounded;
+        return;
+    }
+    if (value.is_array()) {
+        for (auto &item : value)
+            normalizeTraceNumbers(item);
+        return;
+    }
+    if (value.is_object()) {
+        for (auto &item : value.items())
+            normalizeTraceNumbers(item.value());
+    }
 }
 
 static bool readTraceKey(const char *value, std::vector<unsigned char> &key)
@@ -2521,6 +2551,7 @@ private:
         json record;
         try {
             record = json::parse(line);
+            normalizeTraceNumbers(record);
         } catch (...) {
             markTraceIntegrityFault("trace_record_json_failed");
             return false;

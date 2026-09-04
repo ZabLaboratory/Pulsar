@@ -94,3 +94,25 @@ def test_wrong_out_of_band_key_fails_closed(tmp_path: Path) -> None:
     _write(path)
     with pytest.raises(trace_integrity.TraceIntegrityError):
         trace_integrity.read_trace(path, key_hex="cd" * 32)
+
+
+def test_float_canonicalization_is_cross_runtime_stable(tmp_path: Path) -> None:
+    """C++/Python shortest-round-trip spellings hash to the same payload."""
+
+    path = tmp_path / "float-trace.jsonl"
+    records = _records()
+    records[1]["frame_render_ms"] = 0.0058934782600000004
+    key_hex = "ab" * 32
+    trace_integrity.write_trace(path, records, key_hex=key_hex)
+    records_out, _footer = trace_integrity.read_trace(path, key_hex=key_hex)
+    assert records_out[1]["frame_render_ms"] == 0.00589347826
+    assert '"frame_render_ms":0.00589347826' in path.read_text(encoding="utf-8")
+    assert trace_integrity._canonical(records[1]) == trace_integrity._canonical(records_out[1])
+
+
+def test_runtime_source_declares_float_canonicalization() -> None:
+    source = (ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "normalizeTraceNumbers(record)" in source
+    assert "sub-nanosecond in seconds" in source

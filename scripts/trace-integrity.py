@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import pathlib
 import secrets
@@ -23,6 +24,30 @@ SCHEMA = "pulsar.trace-integrity.v1"
 GENESIS = "0" * 64
 MANIFEST_SUFFIX = ".manifest.json"
 KEY_ENV = "PULSAR_TRACE_HMAC_KEY"
+# JSON numbers are parsed as IEEE-754 doubles by both the C++ runtime and the
+# Python verifier.  Canonicalizing to a fixed decimal precision before hashing
+# removes implementation-specific shortest-round-trip spellings (for example
+# 0.0058934782600000004 versus 0.00589347826) without affecting any measurable
+# video/audio timing budget (12 decimal places of seconds is sub-nanosecond).
+TRACE_FLOAT_DECIMAL_PLACES = 12
+
+
+def _normalize_numbers(value: Any) -> Any:
+    """Return a JSON-compatible value with deterministic floating-point form."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise TraceIntegrityError("trace contains a non-finite JSON number")
+        rounded = round(value, TRACE_FLOAT_DECIMAL_PLACES)
+        # Avoid platform-dependent ``-0.0`` spellings at the canonical boundary.
+        return 0.0 if rounded == 0.0 else rounded
+    if isinstance(value, dict):
+        return {key: _normalize_numbers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize_numbers(item) for item in value]
+    return value
 
 
 class TraceIntegrityError(ValueError):
@@ -117,6 +142,7 @@ def _load_key(path: pathlib.Path | None = None, *, key_hex: str | None = None) -
 def _canonical(record: dict[str, Any]) -> str:
     payload = dict(record)
     payload.pop("trace_integrity", None)
+    payload = _normalize_numbers(payload)
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
@@ -145,6 +171,7 @@ def _annotate(
     for original in records:
         record = dict(original)
         record.pop("trace_integrity", None)
+        record = _normalize_numbers(record)
         if not annotated:
             session_id = record.get("session_id", "")
         sequence += 1
