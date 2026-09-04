@@ -41,6 +41,19 @@ def test_registration_claim_is_owner_and_session_bound() -> None:
     assert "CreateFileW(pipe_name, GENERIC_WRITE" in text
 
 
+def test_registration_pipe_uses_first_instance_in_open_mode_for_both_lanes() -> None:
+    text = _patch_text()
+    start = text.index("vcam->consumer_registration_pipe = CreateNamedPipeW(")
+    call = text[start : text.index("\n+	return vcam->consumer_registration_pipe", start)]
+    assert "PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE" in call
+    assert "PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT" in call
+    assert "PIPE_NOWAIT | FILE_FLAG_FIRST_PIPE_INSTANCE" not in call
+    assert "return vcam->consumer_registration_pipe != INVALID_HANDLE_VALUE;" in text
+    # The single producer helper is used by both ProgramReturn and PreviewReturn;
+    # keep that role split visible so the guard covers both registration lanes.
+    assert 'const wchar_t *role = preview_return ? L"PreviewReturn" : L"ProgramReturn";' in text
+
+
 def test_release_cannot_clear_a_new_owner_registration() -> None:
     text = _patch_text()
     assert "PIPE_NOWAIT" in text

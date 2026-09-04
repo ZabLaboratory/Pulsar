@@ -151,8 +151,8 @@ index f4dd39ef7..f8cb3bf76 100644
 +			     _TRUNCATE, L"\\\\.\\pipe\\PulsarReturn.%hs.%016llx",
 +			     return_lease_role(vcam), (unsigned long long)challenge);
 +	vcam->consumer_registration_pipe = CreateNamedPipeW(
-+		vcam->consumer_registration_pipe_name, PIPE_ACCESS_INBOUND,
-+		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | FILE_FLAG_FIRST_PIPE_INSTANCE, 1, 0, 0, 0, NULL);
++		vcam->consumer_registration_pipe_name, PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
++		PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT, 1, 0, 0, 0, NULL);
 +	return vcam->consumer_registration_pipe != INVALID_HANDLE_VALUE;
 +}
 +
