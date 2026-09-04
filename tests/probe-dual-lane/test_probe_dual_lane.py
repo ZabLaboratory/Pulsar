@@ -567,6 +567,7 @@ def test_drive_propagates_resource_wait_and_keeps_outputs_alive_until_threshold(
         "encoder_active": True,
         "encoder_family": "nvenc",
         "rtmp_load_active": False,
+        "encode_time_samples": 100,
     }
     second = dict(first, rtmp_load_active=True)
     third = dict(first, rtmp_load_active=True)
@@ -576,6 +577,40 @@ def test_drive_propagates_resource_wait_and_keeps_outputs_alive_until_threshold(
     trace.write_text(
         json.dumps(first) + "\n" + json.dumps(second) + "\n" + json.dumps(third) + "\n",
         encoding="utf-8",
+    )
+    assert asyncio.run(probe.wait_for_eligible_resource_samples(FakeProcess(), "dual_lane", 2, 0.5)) == 2
+
+
+def test_resource_wait_does_not_count_zero_encode_warmup_toward_minimum(tmp_path):
+    trace = tmp_path / "trace-warmup.jsonl"
+    runtime_id_value = "runtime-resource-warmup"
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+    class FakeProcess:
+        trace_path = trace
+        runtime_id = runtime_id_value
+        proc = FakeProc()
+
+    sample = {
+        "record_type": "resource_sample",
+        "sample_mode": "dual_lane",
+        "runtime_instance_id": runtime_id_value,
+        "encoder_active": True,
+        "encoder_family": "nvenc",
+        "rtmp_load_active": True,
+    }
+    zero = dict(sample, encode_time_samples=0)
+    one = dict(sample, encode_time_samples=1)
+    trace.write_text(json.dumps(zero) + "\n" + json.dumps(one) + "\n", encoding="utf-8")
+    with pytest.raises(probe.ProbeSkip, match="did not produce enough"):
+        asyncio.run(probe.wait_for_eligible_resource_samples(FakeProcess(), "dual_lane", 2, 0.01))
+
+    two = dict(sample, encode_time_samples=2)
+    trace.write_text(
+        json.dumps(zero) + "\n" + json.dumps(one) + "\n" + json.dumps(two) + "\n", encoding="utf-8"
     )
     assert asyncio.run(probe.wait_for_eligible_resource_samples(FakeProcess(), "dual_lane", 2, 0.5)) == 2
 

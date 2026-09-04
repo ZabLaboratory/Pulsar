@@ -3573,7 +3573,12 @@ async def collect_resource_samples(
                                 count += 1
                                 if record.get("encoder_active") is True:
                                     active_count += 1
-                                    if record.get("rtmp_load_active") is True:
+                                    if (
+                                        record.get("encoder_family") == "nvenc"
+                                        and record.get("rtmp_load_active") is True
+                                        and type(record.get("encode_time_samples")) is int
+                                        and record.get("encode_time_samples") > 0
+                                    ):
                                         rtmp_active_count += 1
                 except FileNotFoundError:
                     count = 0
@@ -3670,6 +3675,8 @@ async def wait_for_eligible_resource_samples(
                         record.get("encoder_active") is True
                         and record.get("encoder_family") == "nvenc"
                         and record.get("rtmp_load_active") is True
+                        and type(record.get("encode_time_samples")) is int
+                        and record.get("encode_time_samples") > 0
                     ):
                         eligible += 1
         except FileNotFoundError:
