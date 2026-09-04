@@ -1,0 +1,108 @@
+/******************************************************************************
+ Copyright (C) 2026 ZabLaboratory
+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 2 of the License, or
+ (at your option) any later version.
+
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ ******************************************************************************/
+
+#pragma once
+
+#include <condition_variable>
+#include <cstddef>
+#include <mutex>
+
+/*
+ * CEF render callbacks can run while BrowserSource::Destroy tears down the
+ * graphics textures.  Admission and the final destruction fence share one
+ * lock so a callback cannot pass valid() and then race texture destruction.
+ */
+class BrowserRenderCallbackGate final {
+public:
+	class Lease final {
+	public:
+		Lease() = default;
+		Lease(const Lease &) = delete;
+		Lease &operator=(const Lease &) = delete;
+
+		Lease(Lease &&other) noexcept : gate_(other.gate_) { other.gate_ = nullptr; }
+		Lease &operator=(Lease &&other) noexcept
+		{
+			if (this != &other) {
+				release();
+				gate_ = other.gate_;
+				other.gate_ = nullptr;
+			}
+			return *this;
+		}
+
+		~Lease() { release(); }
+
+		explicit operator bool() const { return gate_ != nullptr; }
+
+	private:
+		explicit Lease(BrowserRenderCallbackGate *gate) : gate_(gate) {}
+
+		void release()
+		{
+			if (gate_) {
+				gate_->release();
+				gate_ = nullptr;
+			}
+		}
+
+		BrowserRenderCallbackGate *gate_ = nullptr;
+		friend class BrowserRenderCallbackGate;
+	};
+
+	Lease try_acquire()
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		if (admission_closed_)
+			return {};
+		++in_flight_;
+		return Lease(this);
+	}
+
+	/* Permanently stop render callback admission and wait for all admitted
+	 * callbacks before the owning BrowserSource destroys its textures. */
+	void close_and_wait()
+	{
+		std::unique_lock<std::mutex> lock(mutex_);
+		admission_closed_ = true;
+		idle_.wait(lock, [this]() { return in_flight_ == 0; });
+	}
+
+	/* Serialize ordinary texture teardown with callbacks without closing
+	 * admission; this is used for browser reload/resize paths. */
+	void wait_for_idle()
+	{
+		std::unique_lock<std::mutex> lock(mutex_);
+		idle_.wait(lock, [this]() { return in_flight_ == 0; });
+	}
+
+private:
+	void release()
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		if (in_flight_ == 0)
+			return;
+		--in_flight_;
+		if (admission_closed_ && in_flight_ == 0)
+			idle_.notify_all();
+	}
+
+	std::mutex mutex_;
+	std::condition_variable idle_;
+	std::size_t in_flight_ = 0;
+	bool admission_closed_ = false;
+};

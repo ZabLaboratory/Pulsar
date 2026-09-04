@@ -221,6 +221,7 @@ BrowserSource::BrowserSource(obs_data_t *, obs_source_t *source_)
 	: source(source_),
 	  weak_source(obs_source_get_weak_source(source_)),
 	  source_generation(next_source_generation.fetch_add(1, std::memory_order_relaxed)),
+	  render_callbacks(std::make_shared<BrowserRenderCallbackGate>()),
 	  task_state(std::make_shared<BrowserSourceTaskState>())
 {
 	{
@@ -984,6 +985,8 @@ void BrowserSource::Destroy()
 	if (!BrowserSourceBeginDestroyTaskState(task_state))
 		return;
 	destroying.store(true, std::memory_order_release);
+	if (render_callbacks)
+		render_callbacks->close_and_wait();
 	DestroyTextures();
 
 	std::vector<int> browser_ids = BrowserSourceBrowserIdsForSource(this);
@@ -1170,7 +1173,8 @@ bool BrowserSource::CreateBrowser()
 #endif
 
 		CefRefPtr<BrowserClient> browserClient = new BrowserClient(
-			source, hwaccel && source->tex_sharing_avail, source->reroute_audio, source->webpage_control_level);
+			source, hwaccel && source->tex_sharing_avail, source->reroute_audio, source->webpage_control_level,
+			source->render_callbacks);
 
 		CefWindowInfo windowInfo;
 		windowInfo.bounds.width = source->width;
@@ -1386,13 +1390,8 @@ void BrowserSource::SetShowing(bool showing)
 		if (showing)
 			return;
 
-		obs_enter_graphics();
-
-		if (!hwaccel && texture) {
+		if (!hwaccel && texture)
 			DestroyTextures();
-		}
-
-		obs_leave_graphics();
 	}
 }
 

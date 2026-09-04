@@ -107,6 +107,29 @@ def test_legacy_accelerated_paint_copies_callback_texture_into_owned_texture() -
     assert "bs->texture = shared_texture" not in callback
 
 
+def test_render_callback_gate_fences_texture_destroy() -> None:
+    client = (ROOT / "plugins" / "pulsar-browser" / "browser-client.cpp").read_text(
+        encoding="utf-8"
+    )
+    source_header = (ROOT / "plugins" / "pulsar-browser" / "obs-browser-source.hpp").read_text(
+        encoding="utf-8"
+    )
+    gate = (ROOT / "plugins" / "pulsar-browser" / "browser-render-callback-gate.hpp").read_text(
+        encoding="utf-8"
+    )
+    source = (ROOT / "plugins" / "pulsar-browser" / "obs-browser-source.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "BrowserRenderCallbackGate::Lease BrowserClient::acquire_render_callback() const" in client
+    assert client.count("auto render_callback = acquire_render_callback();") == 3
+    assert "bs->DestroyTextures(true);" in client
+    destroy = source_header[source_header.index("inline void DestroyTextures") :]
+    assert "render_callbacks->wait_for_idle();" in destroy
+    assert "render_callbacks->close_and_wait();" in source
+    assert "close_and_wait()" in gate
+    assert "wait_for_idle()" in gate
+
+
 def test_d3d11_direct_shared_copy_api_is_optional_and_validated() -> None:
     graphics_header = (ROOT / "upstream" / "libobs" / "graphics" / "graphics.h").read_text(
         encoding="utf-8"
