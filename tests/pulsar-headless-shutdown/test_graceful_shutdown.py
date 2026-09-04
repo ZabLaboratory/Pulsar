@@ -123,22 +123,91 @@ def test_render_callback_gate_fences_texture_destroy() -> None:
     )
     assert "BrowserRenderCallbackGate::Lease BrowserClient::acquire_render_callback() const" in client
     assert client.count("auto render_callback = acquire_render_callback();") == 3
-    assert "DestroyTextures(true)" in client
+    assert "BrowserRenderCallbackGate::CallbackPause resize_pause;" in client
+    assert "resize_pause = render_callbacks->try_pause_for_current_callback();" in client
+    assert "DestroyTextures(resize_pause)" in client
     destroy = source_header[source_header.index("inline bool DestroyTextures") :]
     assert "render_callbacks->try_pause_for_current_callback();" in destroy
     assert "render_callbacks->pause_for_texture_destroy();" in destroy
     assert "CallbackPause callback_pause;" in destroy
+    assert "DestroyTextures(BrowserRenderCallbackGate::CallbackPause &callback_pause)" in destroy
     assert "render_callbacks->close_and_wait();" in source
     assert "close_and_wait()" in gate
     assert "try_pause_for_current_callback()" in gate
     assert "pause_for_texture_destroy()" in gate
     assert "admission_paused_" in gate
-    assert "if (!bs->DestroyTextures(true))" in client
+    assert "if (!bs->DestroyTextures(resize_pause))" in client
 
     resize_start = client.index("if (bs->width != width")
-    assert client.index("DestroyTextures(true)", resize_start) < client.index(
+    assert client.index("DestroyTextures(resize_pause)", resize_start) < client.index(
         "obs_enter_graphics();", resize_start
     )
+    assert client.index("DestroyTextures(resize_pause)", resize_start) < client.index(
+        "if (!bs->texture && width && height)", resize_start
+    )
+
+
+def test_render_callback_resize_pause_covers_destroy_and_recreate() -> None:
+    client = (ROOT / "plugins" / "pulsar-browser" / "browser-client.cpp").read_text(
+        encoding="utf-8"
+    )
+    resize_start = client.index("BrowserRenderCallbackGate::CallbackPause resize_pause;")
+    resize_end = client.index("\n}\n\n#ifdef ENABLE_BROWSER_SHARED_TEXTURE", resize_start)
+    resize_path = client[resize_start:resize_end]
+    assert resize_path.count("try_pause_for_current_callback()") == 1
+    assert resize_path.count("DestroyTextures(resize_pause)") == 1
+    assert resize_path.index("DestroyTextures(resize_pause)") < resize_path.index(
+        "if (!bs->texture && width && height)"
+    )
+    assert "resize_pause" in resize_path
+
+
+def test_render_callback_resize_pause_blocks_destroy_create_interleaving() -> None:
+    """Admission stays paused across the texture-null interval of a resize."""
+
+    class GateModel:
+        def __init__(self) -> None:
+            self.condition = threading.Condition()
+            self.in_flight = 0
+            self.paused = False
+
+        def acquire(self) -> bool:
+            with self.condition:
+                if self.paused:
+                    return False
+                self.in_flight += 1
+                return True
+
+        def release(self) -> None:
+            with self.condition:
+                self.in_flight -= 1
+                self.condition.notify_all()
+
+        def try_pause_for_current(self) -> bool:
+            with self.condition:
+                if self.paused:
+                    return False
+                self.paused = True
+                self.condition.wait_for(lambda: self.in_flight <= 1)
+                return True
+
+        def resume(self) -> None:
+            with self.condition:
+                self.paused = False
+                self.condition.notify_all()
+
+    gate = GateModel()
+    assert gate.acquire()  # callback owning the resize transaction
+    assert gate.try_pause_for_current()
+    texture_ready = False
+    assert not gate.acquire()  # destroy -> texture-null interval
+    texture_ready = True  # recreate completes while the same pause is held
+    assert texture_ready
+    gate.resume()
+    assert gate.acquire()  # next callback sees only the recreated texture
+    gate.release()
+    gate.release()
+    assert gate.in_flight == 0
 
 
 def test_render_callback_gate_two_callback_resize_interleaving_does_not_deadlock() -> None:

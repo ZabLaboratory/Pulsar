@@ -425,8 +425,11 @@ void BrowserClient::OnPaint(CefRefPtr<CefBrowser>, PaintElementType type, const 
 		return;
 	}
 
+	BrowserRenderCallbackGate::CallbackPause resize_pause;
 	if (bs->width != width || bs->height != height) {
-		if (!bs->DestroyTextures(true))
+		if (render_callbacks)
+			resize_pause = render_callbacks->try_pause_for_current_callback();
+		if (!bs->DestroyTextures(resize_pause))
 			return;
 	}
 
