@@ -2274,7 +2274,7 @@ private:
 #ifdef _WIN32
         if (!traceFileHandle_ || traceFileHandle_ == INVALID_HANDLE_VALUE)
             return false;
-        if (bytes.size() > std::numeric_limits<DWORD>::max())
+        if (bytes.size() > (std::numeric_limits<DWORD>::max)())
             return false;
         const DWORD requested = static_cast<DWORD>(bytes.size());
         DWORD written = 0;
@@ -2364,7 +2364,7 @@ private:
             return;
         }
         DWORD manifestWritten = 0;
-        const bool manifestWriteOk = serializedManifest.size() <= std::numeric_limits<DWORD>::max() &&
+        const bool manifestWriteOk = serializedManifest.size() <= (std::numeric_limits<DWORD>::max)() &&
                                      WriteFile(manifestHandle, serializedManifest.data(),
                                                static_cast<DWORD>(serializedManifest.size()), &manifestWritten, nullptr) != FALSE &&
                                      manifestWritten == serializedManifest.size();
