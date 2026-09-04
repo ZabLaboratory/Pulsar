@@ -426,9 +426,7 @@ void BrowserClient::OnPaint(CefRefPtr<CefBrowser>, PaintElementType type, const 
 	}
 
 	if (bs->width != width || bs->height != height) {
-		obs_enter_graphics();
 		bs->DestroyTextures(true);
-		obs_leave_graphics();
 	}
 
 	if (!bs->texture && width && height) {

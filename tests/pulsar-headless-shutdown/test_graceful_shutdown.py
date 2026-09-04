@@ -20,14 +20,15 @@ import inspect
 import json
 import math
 import os
-from pathlib import Path
 import re
+from pathlib import Path
 import secrets
 import shutil
 import struct
 import sys
 import tempfile
 import threading
+import time
 from urllib.parse import parse_qs, quote, urlsplit
 import wave
 
@@ -133,6 +134,85 @@ def test_render_callback_gate_fences_texture_destroy() -> None:
     assert "pause_for_current_callback()" in gate
     assert "pause_for_texture_destroy()" in gate
     assert "admission_paused_" in gate
+
+    resize_start = client.index("if (bs->width != width")
+    assert client.index("bs->DestroyTextures(true);", resize_start) < client.index(
+        "obs_enter_graphics();", resize_start
+    )
+
+
+def test_render_callback_gate_two_callback_resize_interleaving_does_not_deadlock() -> None:
+    """Exercise the gate protocol that the C++ static contract implements.
+
+    The current callback may hold one lease while a second callback is waiting
+    for graphics. Pausing admission before entering graphics lets the current
+    callback wait for and drain the second lease without holding graphics.
+    """
+
+    class GateModel:
+        def __init__(self) -> None:
+            self.condition = threading.Condition()
+            self.in_flight = 0
+            self.paused = False
+
+        def acquire(self) -> bool:
+            with self.condition:
+                if self.paused:
+                    return False
+                self.in_flight += 1
+                return True
+
+        def release(self) -> None:
+            with self.condition:
+                self.in_flight -= 1
+                self.condition.notify_all()
+
+        def pause_for_current(self) -> None:
+            with self.condition:
+                self.paused = True
+                self.condition.wait_for(lambda: self.in_flight <= 1)
+
+        def resume(self) -> None:
+            with self.condition:
+                self.paused = False
+                self.condition.notify_all()
+
+    gate = GateModel()
+    assert gate.acquire()  # callback performing the resize
+    assert gate.acquire()  # concurrent callback, blocked before graphics
+    other_released = False
+
+    def release_other() -> None:
+        nonlocal other_released
+        threading.Event().wait(0.02)
+        gate.release()
+        other_released = True
+
+    worker = threading.Thread(target=release_other)
+    worker.start()
+    started = time.monotonic()
+    gate.pause_for_current()
+    elapsed = time.monotonic() - started
+    assert other_released
+    assert elapsed >= 0.01
+    assert not gate.acquire()  # no third callback can enter during teardown
+
+    # A CEF re-entrant callback observes paused admission and returns without
+    # taking a lease, so it cannot create a second wait cycle.
+    reentrant_result: list[bool] = []
+    reentrant = threading.Thread(target=lambda: reentrant_result.append(gate.acquire()))
+    reentrant.start()
+    reentrant.join(timeout=1.0)
+    assert not reentrant.is_alive()
+    assert reentrant_result == [False]
+
+    gate.resume()
+    gate.release()  # current callback lease
+    worker.join(timeout=1.0)
+    assert not worker.is_alive()
+    assert gate.in_flight == 0
+    assert gate.acquire()  # admission reopens after texture replacement
+    gate.release()
 
 
 def test_d3d11_direct_shared_copy_api_is_optional_and_validated() -> None:
