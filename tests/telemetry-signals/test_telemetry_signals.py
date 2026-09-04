@@ -207,9 +207,13 @@ def test_callback_backlog_is_an_interval_baseline_with_session_reset():
     # transition are unmeasured (zero); only monotone consecutive active
     # counters contribute, with encoded work faster than raw clamped to zero.
     baseline = None
+    session = None
 
-    def estimate(raw, encoded, active):
-        nonlocal baseline
+    def estimate(raw, encoded, active, current_session="session-a"):
+        nonlocal baseline, session
+        if current_session != session:
+            baseline = None
+            session = current_session
         if not active or baseline is None or raw < baseline[0] or encoded < baseline[1]:
             baseline = (raw, encoded) if active else None
             return 0
@@ -223,3 +227,5 @@ def test_callback_backlog_is_an_interval_baseline_with_session_reset():
     assert estimate(0, 0, False) == 0
     assert estimate(9, 4, True) == 0
     assert estimate(14, 7, True) == 2
+    assert estimate(20, 9, True, "session-b") == 0
+    assert estimate(30, 14, True, "session-b") == 1
