@@ -272,6 +272,20 @@ function expectedRevisionsMatch(state, event) {
   });
 }
 
+function isRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function applyReconciledSnapshot(state, event) {
+  const snapshot = isRecord(event.snapshot) ? event.snapshot : (isRecord(event.state) ? event.state : event);
+  if (typeof snapshot.operational === "boolean") state.operational = snapshot.operational;
+  if (isRecord(snapshot.role_map)) state.role_map = clone(snapshot.role_map);
+  if (isRecord(snapshot.revisions)) state.revisions = clone(snapshot.revisions);
+  if (isRecord(snapshot.on_air)) state.on_air = clone(snapshot.on_air);
+  if (isRecord(snapshot.preview)) state.preview = clone(snapshot.preview);
+  if (Number.isInteger(snapshot.server_seq)) state.server_seq = snapshot.server_seq;
+}
+
 function setDiagnostics(state, code, message, recovery, event) {
   state.diagnostics = {
     error_code: code || null,
@@ -616,6 +630,7 @@ export function reduceState(inputState, inputEvent) {
       return next;
     }
     case "StateReconciled": {
+      applyReconciledSnapshot(next, event);
       next.transport.status = "connected";
       next.frozen = false;
       next.pending = null;

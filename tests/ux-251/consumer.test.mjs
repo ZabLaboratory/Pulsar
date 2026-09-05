@@ -154,6 +154,53 @@ test("reconnect marks outcome unknown and reconciles without fabricating a commi
   assert.match(evidence.events.find((event) => event.type === "ReconnectOutcomeUnknown").outcome, /unknown/);
 });
 
+test("StateReconciled hydrates the authoritative snapshot before unlocking guards", () => {
+  const unknown = applyEvents(createInitialState({ operational: false }), [
+    { type: "ReconnectOutcomeUnknown", command_id: "take-unknown", server_seq: 5 },
+  ]);
+  const snapshot = {
+    operational: true,
+    role_map: { on_air_lane_id: "lane-live", preview_lane_id: "lane-next" },
+    revisions: { program: 12, preview: 13, role_map: 14 },
+    on_air: { scene_id: "scene-live", scene_name: "Live", frame_id: 91, pts_ns: 9100 },
+    preview: { scene_id: "scene-next", scene_name: "Next", ready: true, frame_id: 92, pts_ns: 9200 },
+    server_seq: 6,
+  };
+  const reconciled = reduceState(unknown, {
+    type: "StateReconciled",
+    command_id: "reconcile-authoritative",
+    server_seq: 6,
+    ...snapshot,
+  });
+  assert.equal(reconciled.operational, true);
+  assert.equal(reconciled.phase, "ready");
+  assert.equal(reconciled.frozen, false);
+  assert.equal(reconciled.pending, null);
+  assert.equal(reconciled.server_seq, 6);
+  assert.deepEqual(reconciled.role_map, snapshot.role_map);
+  assert.deepEqual(reconciled.revisions, snapshot.revisions);
+  assert.deepEqual(reconciled.on_air, snapshot.on_air);
+  assert.deepEqual(reconciled.preview, snapshot.preview);
+
+  const takePayload = {
+    scene_id: snapshot.preview.scene_id,
+    scene_name: snapshot.preview.scene_name,
+    target_lane_id: snapshot.role_map.preview_lane_id,
+    expected_revisions: snapshot.revisions,
+  };
+  const afterGuard = reduceState(reconciled, {
+    type: "TakeRequested",
+    command_id: "take-after-reconcile",
+    intent_id: "intent-after-reconcile",
+    server_seq: 7,
+    ...takePayload,
+    command_payload: takePayload,
+  });
+  assert.equal(afterGuard.phase, "take_requested");
+  assert.equal(afterGuard.pending.target_lane_id, "lane-next");
+  assert.equal(afterGuard.commit_count, 0);
+});
+
 test("all UX-01..UX-11 are injectable, deterministic and explicitly mock-only", () => {
   assert.deepEqual(UX_SCENARIO_IDS, Array.from({ length: 11 }, (_, index) => `UX-${String(index + 1).padStart(2, "0")}`));
   const first = runAllScenarios();
