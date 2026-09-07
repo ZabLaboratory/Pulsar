@@ -850,6 +850,9 @@ class RtmpReceiver:
     oracle.  ``-debug_ts`` packet records are timestamped when the receiver
     process emits its demux line; that is explicitly a receiver/demux
     observation and is never promoted to wire-level or decoded latency.
+    Optional decode_frames separately observes the same candidate packet's
+    decoded picture at showinfo, including log delivery delay. This is not
+    an oracle for the earliest visible changed picture or physical display.
     """
 
     def __init__(self, ffmpeg: str, *, runtime_id: str, stream_id: str, decode_frames: bool = False) -> None:

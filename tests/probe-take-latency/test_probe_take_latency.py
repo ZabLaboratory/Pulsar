@@ -967,6 +967,29 @@ def test_rtmp_slo_includes_declared_receiver_clock_bound_conservatively():
     assert conservative["status"] == "FAIL"
 
 
+@pytest.mark.parametrize("reorder_ns", [0, 16_666_667, 33_333_334])
+def test_packet_selection_separates_commit_from_future_picture(reorder_ns):
+    accepted = 100_000_000
+    commit = 110_000_000
+    cts = commit + reorder_ns
+    producer = {
+        "pts_ns": commit, "packet_cts_monotonic_ns": cts,
+        "packet_fer_monotonic_ns": cts + 1_000_000,
+        "packet_ferc_monotonic_ns": cts + 2_000_000,
+        "packet_pir_monotonic_ns": cts + 3_000_000,
+        "packet_callback_monotonic_ns": cts + 4_000_000,
+    }
+    result = probe._ac12b_stats(
+        {("take", "encoded_first_packet"): producer,
+         ("take", "rtmp_first_packet"): {"receiver_observed_normalized_ns": cts + 5_000_000}},
+        {"take": {"observed_at_monotonic_ns": accepted}}, {"take"}, {"take": {}}, 1,
+    )
+    diagnostic = result["packet_selection_diagnostic"]
+    assert diagnostic["take_accepted_to_committed_media_pts"]["p50_ms"] == 10
+    assert diagnostic["committed_media_pts_to_selected_packet_cts"]["p50_ms"] == pytest.approx(reorder_ns / 1e6)
+    assert result["stage_distributions"]["take_accepted_to_cts"]["p50_ms"] == pytest.approx(10 + reorder_ns / 1e6)
+
+
 def test_ac12a_and_ac12b_report_distinct_boundaries_without_pooling():
     records = _take_records(3, evidence_kind="runtime", include_resources=False)
     report = probe.analyze_trace(

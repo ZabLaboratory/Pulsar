@@ -1351,6 +1351,8 @@ def _ac12b_stats(
         "packet_callback_monotonic_ns",
     )
     full_path: list[tuple[int, int, int, int, int, int, int]] = []
+    acceptance_to_commit_pts: list[float] = []
+    commit_pts_to_packet_cts: list[float] = []
     for take_id in sorted(measured_take_ids):
         if take_id not in rtmp_matches:
             continue
@@ -1384,6 +1386,10 @@ def _ac12b_stats(
         if take_id not in rtmp_matches:
             continue
         full_path.append(values)
+        commit_pts = producer.get("pts_ns")
+        if type(commit_pts) is int and accepted_at <= commit_pts <= values[1]:
+            acceptance_to_commit_pts.append((commit_pts - accepted_at) / 1_000_000.0)
+            commit_pts_to_packet_cts.append((values[1] - commit_pts) / 1_000_000.0)
 
     if not full_path:
         return empty
@@ -1405,6 +1411,16 @@ def _ac12b_stats(
         "max_ms": total["max_ms"],
         "minimum_measurements_required": minimum_takes,
         "same_packet_count": len(full_path),
+        "packet_selection_diagnostic": {
+            "take_accepted_to_committed_media_pts": _stats(acceptance_to_commit_pts),
+            "committed_media_pts_to_selected_packet_cts": _stats(commit_pts_to_packet_cts),
+            "notes": (
+                "Media-timestamp decomposition, not wall-clock callback duration. "
+                "The first encoded packet passing the commit CTS floor may represent a later "
+                "presentation frame when B-frames reorder packet output. Its CTS gap must not "
+                "be attributed entirely to command handling or graphics scheduling."
+            ),
+        },
         "stage_distributions": {
             name: _stats(values) for name, values in stage_values.items()
         },
