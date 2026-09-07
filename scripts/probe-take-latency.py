@@ -749,7 +749,14 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
         decoder = _object(obj.get("decoder"), "decoder", line=line)
         fields = {"kind", "frame_index", "frame_pts_ms", "packet_index", "packet_pts", "packet_dts",
                   "packet_identity", "demux_observed_monotonic_ns", "clock_bound_ns", "marker_lane"}
-        _exact_keys(decoder, fields, fields | {"decoder_mode"}, "decoder", line=line)
+        content_fields = {"content_alignment", "content_pts_monotonic_ns"}
+        _exact_keys(decoder, fields, fields | {"decoder_mode"} | content_fields, "decoder", line=line)
+        if content_fields & decoder.keys():
+            if not content_fields <= decoder.keys() or decoder["content_alignment"] != "native_packet_audit_v1":
+                raise EvidenceError("SCHEMA_INVALID", "decoder native content identity is incomplete", line=line)
+            content_pts = _integer(decoder["content_pts_monotonic_ns"], "decoder content PTS", line=line)
+            if not obj["pts_ns"] <= content_pts <= obj["observed_at_monotonic_ns"]:
+                raise EvidenceError("CORRELATION_INVALID", "decoded native content is before commit or after observation", line=line)
         expected_kind = "selected_candidate" if obj["boundary"] == "decoded_candidate_frame" else "first_changed_marker"
         if decoder["kind"] != expected_kind:
             raise EvidenceError("BOUNDARY_INVALID", "decoder observation kind does not match boundary", line=line)

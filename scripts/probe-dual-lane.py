@@ -903,6 +903,68 @@ def first_changed_marker(frames: list[dict[str, int]], *, expected_pts_ms: float
     raise ProbeFailure("decoded marker did not change within two frames of committed PTS")
 
 
+def correlate_native_packet_content(records: list[dict[str, object]], receiver_packets: list[dict[str, object]],
+                                    runtime_id: str) -> dict[int, dict[str, object]]:
+    """Join authenticated input content to exact FLV packets, not elapsed time.
+
+    A stalled renderer can repeat one content identity across many cadence PTS.
+    Subtracting a content-time delta from media PTS is invalid in that case.
+    Only an unreceived shutdown tail may be omitted from this map.
+    """
+    correlation = RtmpPacketCorrelation()
+    receivers = {int(p["packet_index"]): p for p in receiver_packets}
+    if len(receivers) != len(receiver_packets):
+        raise ProbeFailure("native content audit has duplicate receiver packet indices")
+    last_receiver = max(receivers, default=-1)
+    result: dict[int, dict[str, object]] = {}
+    previous_index: int | None = None
+    fields = {"record_type", "clock_domain", "runtime_instance_id", "packet_index", "packet_pts", "packet_dts",
+              "packet_timebase_num", "packet_timebase_den", "packet_content_pts_monotonic_ns",
+              "packet_cts_monotonic_ns", "packet_fer_monotonic_ns", "packet_ferc_monotonic_ns",
+              "observed_at_monotonic_ns"}
+    for record in records:
+        if record.get("record_type") != "packet_content":
+            continue
+        if set(record) - {"trace_integrity"} != fields or record.get("runtime_instance_id") != runtime_id \
+                or record.get("clock_domain") != "monotonic_ns":
+            raise ProbeFailure("native content audit schema/runtime mismatch")
+        index = _packet_int(record["packet_index"], "native audit index")
+        if previous_index is not None and index != previous_index + 1:
+            raise ProbeFailure("native content audit has missing or duplicate packet indices")
+        previous_index = index
+        cts, content, fer, ferc, observed = [
+            _packet_int(record[key], "native audit " + key) for key in (
+                "packet_cts_monotonic_ns", "packet_content_pts_monotonic_ns", "packet_fer_monotonic_ns",
+                "packet_ferc_monotonic_ns", "observed_at_monotonic_ns")]
+        if not (0 < cts <= fer <= ferc <= observed and 0 < content <= fer):
+            raise ProbeFailure("native content audit timing is incomplete or inconsistent")
+        _producer_packet_times(record)
+        if index > last_receiver:
+            continue
+        receiver = receivers.get(index)
+        matches = correlation.candidates(record, [receiver] if receiver else [])
+        if len(matches) != 1:
+            raise ProbeFailure("native content audit packet/mux identity mismatch")
+        correlation.commit(matches[0])
+        pts = int(matches[0].packet["packet_pts"])
+        if pts in result:
+            raise ProbeFailure("native content audit has ambiguous presentation PTS")
+        result[pts] = record
+    ordered_content = [int(result[pts]["packet_content_pts_monotonic_ns"]) for pts in sorted(result)]
+    if any(b < a for a, b in zip(ordered_content, ordered_content[1:])):
+        raise ProbeFailure("native content audit goes backwards in presentation order")
+    return result
+
+
+def first_native_content_pts(content_map: dict[int, dict[str, object]], commit_pts_ns: int) -> int:
+    ordered = sorted(content_map)
+    eligible = [pts for pts in ordered
+                if int(content_map[pts]["packet_content_pts_monotonic_ns"]) >= commit_pts_ns]
+    if not eligible or ordered.index(eligible[0]) == 0:
+        raise ProbeFailure("native content audit has no complete pre/post-commit boundary")
+    return eligible[0]
+
+
 class DecodedMarkerMetadata:
     """One dedicated metadata writer; never infer missing pixels from log text.
 
@@ -957,7 +1019,8 @@ class RtmpReceiver:
     """
 
     def __init__(self, ffmpeg: str, *, runtime_id: str, stream_id: str, decode_frames: bool = False,
-                 audit_marker: bool = False, decoder_mode: str = "software") -> None:
+                 audit_marker: bool = False, decoder_mode: str = "software",
+                 require_native_content: bool = False) -> None:
         self.ffmpeg = ffmpeg
         self.decode_frames = decode_frames
         if decoder_mode not in ("software", "nvdec-lowdelay"):
@@ -968,6 +1031,8 @@ class RtmpReceiver:
         if audit_marker and not decode_frames:
             raise ProbeFailure("decoded marker audit requires decoding")
         self.audit_marker = audit_marker
+        self.require_native_content = require_native_content
+        self.native_content_map: dict[int, dict[str, object]] = {}
         self.decoded_frames: list[dict[str, int]] = []
         self.marker_metadata = DecodedMarkerMetadata()
         self.runtime_id = runtime_id
@@ -1462,6 +1527,12 @@ class RtmpReceiver:
         if receiver_failure:
             raise ProbeFailure(receiver_failure)
 
+        native_content_records = [r for r in records if r.get("record_type") == "packet_content"]
+        self.native_content_map = correlate_native_packet_content(native_content_records, receiver_packets,
+                                                                  self.runtime_id)
+        if self.require_native_content and not self.native_content_map:
+            raise ProbeFailure("native packet content audit required but absent")
+
         correlation = RtmpPacketCorrelation()
         rtmp_observations: list[dict[str, object]] = []
         decoded_observations: list[dict[str, object]] = []
@@ -1551,8 +1622,13 @@ class RtmpReceiver:
                     commit = commits[producer["take_command_id"]]
                     if "packet_content_pts_monotonic_ns" not in producer:
                         raise ProbeFailure("decoded marker requires native packet content timestamp; cadence CTS is insufficient")
-                    expected_pts_ms = int(packet["packet_pts"]) + (
-                        int(commit["pts_ns"]) - int(producer["packet_content_pts_monotonic_ns"])) / 1e6
+                    if self.native_content_map:
+                        expected_pts_ms = first_native_content_pts(self.native_content_map, int(commit["pts_ns"]))
+                    else:
+                        # Legacy archived traces did not carry every native
+                        # packet. New runtime marker probes require the map.
+                        expected_pts_ms = int(packet["packet_pts"]) + (
+                            int(commit["pts_ns"]) - int(producer["packet_content_pts_monotonic_ns"])) / 1e6
                     marker = first_changed_marker(
                         self.decoded_frames, expected_pts_ms=expected_pts_ms,
                         old_lane=commit["previous_role_map"]["on_air"], new_lane=commit["role_map"]["on_air"])
@@ -1580,7 +1656,7 @@ class RtmpReceiver:
         session["rtmp_receiver"] = {**self.metadata(), **correlation.metadata()}
         merged = [
             session,
-            *records[1:],
+            *(record for record in records[1:] if record.get("record_type") != "packet_content"),
             *sorted(rtmp_observations, key=lambda item: int(cast(int, item["packet_index"]))),
             *decoded_observations,
         ]
@@ -1594,16 +1670,21 @@ class RtmpReceiver:
                               "marker_crop": "32:32:1888:508" if self.audit_marker else None,
                               "decoder_threads": 1, "clock": self.metadata(),
                               "decoder_mode": self.decoder_mode,
+                              "content_alignment": "native_packet_audit_v1" if self.native_content_map else "legacy_linear_time",
                               "boundary": "signalstats_metadata_pipe_not_display" if self.audit_marker else "showinfo_pipe_not_display"}]
             audit_records.extend({"record_type": "frame", **item} for item in self.decoded_frames)
             audit_records.extend({"record_type": "packet", **item} for item in receiver_packets)
+            audit_records.extend(native_content_records)
             trace_integrity.write_trace(output_path.with_name(output_path.name + ".decoder-audit.jsonl"),
                                         audit_records, key_hex=self._trace_key_hex)
 
     def _decoder_identity(self, frame: dict[str, int], packet: dict[str, object], kind: str) -> dict[str, object]:
+        content = self.native_content_map.get(frame["pts_ms"])
         return {
             "kind": kind, "frame_index": frame["frame_index"], "frame_pts_ms": frame["pts_ms"],
             "decoder_mode": self.decoder_mode,
+            **({"content_alignment": "native_packet_audit_v1",
+                "content_pts_monotonic_ns": content["packet_content_pts_monotonic_ns"]} if content else {}),
             **{key: packet[key] for key in ("packet_index", "packet_pts", "packet_dts", "packet_identity")},
             "demux_observed_monotonic_ns": packet["observed_at_monotonic_ns"],
             "clock_bound_ns": self.metadata()["clock_bound_ns"],
@@ -1699,11 +1780,13 @@ class PulsarProcess:
         trace_host: str | None = None,
         trace_gpu: str | None = None,
         return_transport: str | None = None,
+        packet_content_audit: bool = False,
     ) -> None:
         self.exe = exe
         self.encoder = encoder
         self.record_dir = record_dir
         self.trace_path = trace_path
+        self.packet_content_audit = packet_content_audit
         self.runtime_id = runtime_id or f"runtime-{secrets.token_hex(8)}"
         self.resource_mode = resource_mode
         self.trace_append = trace_append
@@ -1759,6 +1842,7 @@ class PulsarProcess:
         env["PULSAR_PASSWORD"] = self.password
         env["PULSAR_RECORD_DIR"] = str(self.record_dir)
         env["PULSAR_VIDEO_ENCODER"] = self.encoder
+        env["PULSAR_TRACE_PACKET_CONTENT"] = "1" if self.packet_content_audit else "0"
         if self.return_transport is not None:
             env["PULSAR_RETURN_TRANSPORT"] = self.return_transport
         # The inherited shutdown-control acknowledgement is keyed by this
@@ -4879,6 +4963,7 @@ def run(args: argparse.Namespace) -> int:
             trace_host,
             trace_gpu,
             args.return_transport,
+            packet_content_audit=args.audit_decoded_marker,
         )
         if args.rtmp_receiver:
             if rtmp_ffmpeg is None:
@@ -4891,6 +4976,7 @@ def run(args: argparse.Namespace) -> int:
                 decode_frames=args.decode_rtmp,
                 audit_marker=args.audit_decoded_marker,
                 decoder_mode=args.rtmp_decoder,
+                require_native_content=args.audit_decoded_marker,
             )
             process.rtmp_producer_trace_path = producer_trace_path
             process.rtmp_final_trace_path = final_trace_path

@@ -585,6 +585,7 @@ class PulsarRuntimeTelemetry {
     enum class SignalKind : uint8_t {
         RawObservation,
         EncodedObservation,
+        PacketContentAudit,
         EncoderFrameReady,
         EncodeCallbackEnqueue,
         OutputMuxEnqueue,
@@ -703,6 +704,9 @@ public:
         }
         traceSignals_ = pulsar_runtime_telemetry::selected_signal_names(signalSelection.mask);
         signalMask_.store(signalSelection.mask, std::memory_order_release);
+        const char *packetAudit = std::getenv("PULSAR_TRACE_PACKET_CONTENT");
+        packetContentAudit_.store(packetAudit && std::strcmp(packetAudit, "1") == 0,
+                                  std::memory_order_release);
 
         // Retire any previous runtime before validating the next trace
         // configuration.  This keeps a failed reinitialization fail-closed.
@@ -1334,8 +1338,11 @@ public:
         const uint64_t packetIndex = packetFrameCount_.fetch_add(1, std::memory_order_relaxed);
         const uint64_t callbackAt = nowNs();
         const TraceContextSnapshot *context = activeContext_.load(std::memory_order_acquire);
-        if (!context || (packetTime && packetTime->cts < context->ptsNs) ||
-            context->packetCaptured.exchange(true, std::memory_order_acq_rel))
+        if (!context)
+            return;
+        const bool auditContent = packetContentAudit_.load(std::memory_order_acquire);
+        if (!auditContent && ((packetTime && packetTime->cts < context->ptsNs) ||
+                              context->packetCaptured.exchange(true, std::memory_order_acq_rel)))
             return;
 
         SignalEvent event;
@@ -1358,6 +1365,14 @@ public:
             event.packetInterleaverMutexAcquiredNs = packetTime->interleaved_mutex_acquired_monotonic_ns;
         }
         copyContextToEvent(event, *context);
+        if (auditContent) {
+            event.kind = SignalKind::PacketContentAudit;
+            enqueueSignal(event);
+            event.kind = SignalKind::EncodedObservation;
+            if ((packetTime && packetTime->cts < context->ptsNs) ||
+                context->packetCaptured.exchange(true, std::memory_order_acq_rel))
+                return;
+        }
         enqueueSignal(event);
 
         if (signalEnabled("encoder_frame_ready") && event.packetFerNs &&
@@ -2134,7 +2149,20 @@ private:
         const std::string revisions = revisionJson(event.programRevision, event.previewRevision,
                                                    event.roleMapRevision);
         std::ostringstream out;
-        if (event.kind == SignalKind::RawObservation) {
+        if (event.kind == SignalKind::PacketContentAudit) {
+            out << "{\"record_type\":\"packet_content\",\"clock_domain\":\"monotonic_ns\","
+                << "\"runtime_instance_id\":\"" << escape(runtime) << "\","
+                << "\"packet_index\":" << event.packetIndex
+                << ",\"packet_pts\":" << event.packetPts
+                << ",\"packet_dts\":" << event.packetDts
+                << ",\"packet_timebase_num\":" << event.packetTimebaseNum
+                << ",\"packet_timebase_den\":" << event.packetTimebaseDen
+                << ",\"packet_content_pts_monotonic_ns\":" << event.packetContentPtsNs
+                << ",\"packet_cts_monotonic_ns\":" << event.packetCtsNs
+                << ",\"packet_fer_monotonic_ns\":" << event.packetFerNs
+                << ",\"packet_ferc_monotonic_ns\":" << event.packetFercNs
+                << ",\"observed_at_monotonic_ns\":" << event.observedNs << "}";
+        } else if (event.kind == SignalKind::RawObservation) {
             out << "{\"record_type\":\"observation\",\"boundary\":\"encoder_input_raw\","
                 << "\"clock_domain\":\"monotonic_ns\",\"runtime_instance_id\":\""
                 << escape(runtime) << "\",\"command_id\":\"" << escape(command)
@@ -2771,6 +2799,7 @@ private:
     std::atomic<uint64_t> encodeTimeNsTotal_{0};
     std::atomic<uint64_t> encodeTimeSampleCount_{0};
     std::atomic<uint32_t> signalMask_{0};
+    std::atomic<bool> packetContentAudit_{false};
     std::atomic<bool> traceIntegrityFault_{false};
     std::vector<std::string> traceSignals_;
     // Snapshots are write-once for the lifetime of this telemetry object.  A
