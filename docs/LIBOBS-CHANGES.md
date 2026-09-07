@@ -574,4 +574,3 @@ Historical study results retain their original candidate and hardware scope.
 Current release CI, release assets and their hashes are separate evidence.
 No 4K, multi-camera capacity, universal NVENC gain or physical-display result
 is inferred from a passing native unit test.
-
