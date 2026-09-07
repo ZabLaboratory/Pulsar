@@ -159,5 +159,5 @@ déclenché par un `reason_class` ou par ce document.
 
 Voir [développement](../DEVELOPMENT.md), [architecture](../ARCHITECTURE.md)
 et [protocole](../PROTOCOL.md). Les wrappers Node attendent actuellement
-`pulsar-headless: idle`, puis établissent la connexion authentifiée ; ils ne
+`pulsar-headless: libobs <version> ready, idling`, puis établissent la connexion authentifiée ; ils ne
 parsent pas `PULSAR_READY` comme unique critère de résolution de `spawn()`.
