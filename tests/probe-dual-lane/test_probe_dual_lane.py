@@ -141,6 +141,19 @@ def test_prepare_record_directory_persists_unique_session(tmp_path):
     assert (session / "pulsar-test.mp4").is_file()
 
 
+def test_prepare_record_directory_allows_canonical_repository_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(probe, "REPO_ROOT", tmp_path)
+    evidence_root = tmp_path / "evidence" / "253" / "eleven" / "run"
+    context, session, persistent = probe.prepare_record_directory(evidence_root)
+    assert persistent is True
+    assert session.parent == evidence_root
+    with context:
+        assert session.is_dir()
+    assert session.is_dir()
+    with pytest.raises(probe.ProbeFailure):
+        probe.prepare_record_directory(tmp_path / "scripts" / "recordings")
+
+
 def test_prepare_record_directory_default_is_ephemeral():
     context, session, persistent = probe.prepare_record_directory(None)
     assert persistent is False

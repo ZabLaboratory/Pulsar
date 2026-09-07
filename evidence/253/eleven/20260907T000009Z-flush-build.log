@@ -1,0 +1,10 @@
+Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+
+  libobs-version.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-253-latency\upstream\build_x64\libobs\libobs-version.dir\RelWithDebInfo\libobs-version.lib
+  caption.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-253-latency\upstream\build_x64\deps\libcaption\RelWithDebInfo\caption.lib
+  w32-pthreads.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-253-latency\upstream\build_x64\deps\w32-pthreads\RelWithDebInfo\w32-pthreads.dll
+  Copy w32-pthreads to destination
+  obs-video.c
+  libobs.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-253-latency\upstream\build_x64\libobs\RelWithDebInfo\obs.dll
+  Copy libobs to destination
+  Copy libobs resources to data directory
