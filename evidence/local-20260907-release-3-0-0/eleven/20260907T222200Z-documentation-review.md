@@ -42,3 +42,13 @@ Before publication, revert the coherent release candidate through normal
 review if needed. After publication, retain immutable tag/assets/npm versions
 and fix forward. No consumer repository upgrade is authorized by this release
 alone. Preserve the unrelated dirty canonical checkout and upstream work.
+
+## CI baseline reconciliation
+
+Compliance run 34166453160 rejected the removed DEVELOPMENT.md example still
+listed in .secrets.baseline (no new finding reported; verified-secret scan
+passed). Remove only that obsolete record. Local detect-secrets 1.5.0 rescan
+matches all 22 remaining findings, including line/type/verification state,
+after normalizing Windows path separators. Preserve every scanner/filter
+setting and the existing baseline formatting. Exact-head CI must revalidate
+this metadata reconciliation; no scan is skipped or weakened.
