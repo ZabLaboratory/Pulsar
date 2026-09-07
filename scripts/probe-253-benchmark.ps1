@@ -6,7 +6,7 @@ param(
     [ValidateSet('x264','nvenc')][string[]]$Encoders = @('x264','nvenc'),
     [int]$Takes = 100,
     [ValidateSet('packet','candidate','marker')][string]$ReceiverMode = 'candidate',
-    [ValidateSet('software','nvdec-lowdelay')][string]$Decoder = 'software',
+    [ValidateSet('software','nvdec-lowdelay','native-software')][string]$Decoder = 'software',
     [switch]$FreshFramePoll,
     [switch]$CurrentReadback,
     [switch]$NvencReadyDrain,
@@ -39,6 +39,9 @@ try {
     $bin = Split-Path $Exe -Parent
     $runtime = Split-Path (Split-Path $bin -Parent) -Parent
     $binaries = @($Exe, (Join-Path $bin 'obs.dll'), (Join-Path $runtime 'obs-plugins/64bit/obs-nvenc.dll'), (Join-Path $runtime 'data/obs-plugins/win-dshow/obs-virtualcam-module64.dll'))
+    if ($Decoder -eq 'native-software') {
+        $binaries += Join-Path $repo 'build/tests/nv-probe/RelWithDebInfo/native-rtmp-receiver.exe'
+    }
     Get-FileHash -Algorithm SHA256 -LiteralPath $binaries | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'binary.json')
     @{ receiver_mode = $ReceiverMode; fresh_frame_poll = [bool]$FreshFramePoll; current_readback = [bool]$CurrentReadback;
        nvenc_ready_drain = [bool]$NvencReadyDrain; nvenc_async_output = [bool]$NvencAsyncOutput; decoder = $Decoder;

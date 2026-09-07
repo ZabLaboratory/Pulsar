@@ -911,7 +911,7 @@ def correlate_native_packet_content(records: list[dict[str, object]], receiver_p
     Subtracting a content-time delta from media PTS is invalid in that case.
     Only an unreceived shutdown tail may be omitted from this map.
     """
-    correlation = RtmpPacketCorrelation()
+    mux_offset_ms: int | None = None
     receivers = {int(p["packet_index"]): p for p in receiver_packets}
     if len(receivers) != len(receiver_packets):
         raise ProbeFailure("native content audit has duplicate receiver packet indices")
@@ -938,15 +938,20 @@ def correlate_native_packet_content(records: list[dict[str, object]], receiver_p
                 "packet_ferc_monotonic_ns", "observed_at_monotonic_ns")]
         if not (0 < cts <= fer <= ferc <= observed and 0 < content <= fer):
             raise ProbeFailure("native content audit timing is incomplete or inconsistent")
-        _producer_packet_times(record)
+        producer_pts, producer_dts = _producer_packet_times(record)
         if index > last_receiver:
             continue
         receiver = receivers.get(index)
-        matches = correlation.candidates(record, [receiver] if receiver else [])
-        if len(matches) != 1:
+        # flv-mux.c/get_ms_time truncates each signed PTS/DTS towards zero
+        # before subtracting the integral start_dts_offset. In particular,
+        # negative startup DTS cannot share a round-to-nearest interval with
+        # positive timestamps. Match the actual mux arithmetic exactly.
+        pts_offset = int(receiver["packet_pts"]) - int(producer_pts * 1000) if receiver else None
+        dts_offset = int(receiver["packet_dts"]) - int(producer_dts * 1000) if receiver else None
+        if receiver is None or pts_offset != dts_offset or (mux_offset_ms is not None and pts_offset != mux_offset_ms):
             raise ProbeFailure("native content audit packet/mux identity mismatch")
-        correlation.commit(matches[0])
-        pts = int(matches[0].packet["packet_pts"])
+        mux_offset_ms = pts_offset
+        pts = int(receiver["packet_pts"])
         if pts in result:
             raise ProbeFailure("native content audit has ambiguous presentation PTS")
         result[pts] = record
@@ -1020,14 +1025,19 @@ class RtmpReceiver:
 
     def __init__(self, ffmpeg: str, *, runtime_id: str, stream_id: str, decode_frames: bool = False,
                  audit_marker: bool = False, decoder_mode: str = "software",
-                 require_native_content: bool = False) -> None:
+                 require_native_content: bool = False, native_runtime_dir: pathlib.Path | None = None) -> None:
         self.ffmpeg = ffmpeg
         self.decode_frames = decode_frames
-        if decoder_mode not in ("software", "nvdec-lowdelay"):
+        if decoder_mode not in ("software", "nvdec-lowdelay", "native-software"):
             raise ProbeFailure("unsupported decoder mode")
         if decoder_mode != "software" and not decode_frames:
-            raise ProbeFailure("NVDEC receiver mode requires decoding")
+            raise ProbeFailure("selected receiver mode requires decoding")
         self.decoder_mode = decoder_mode
+        if decoder_mode == "native-software" and not audit_marker:
+            raise ProbeFailure("native receiver requires decoded marker audit")
+        self.native_runtime_dir = native_runtime_dir
+        self.native_clock_ready = False
+        self.stderr_thread: threading.Thread | None = None
         if audit_marker and not decode_frames:
             raise ProbeFailure("decoded marker audit requires decoding")
         self.audit_marker = audit_marker
@@ -1072,7 +1082,7 @@ class RtmpReceiver:
             "server_url": self.server_url,
             "stream_key": self.stream_key,
             "endpoint": self.endpoint,
-            "receiver_id": "ffmpeg-rtmp-receiver",
+            "receiver_id": "pulsar-native-rtmp-receiver" if self.decoder_mode == "native-software" else "ffmpeg-rtmp-receiver",
             "decoder_mode": self.decoder_mode,
             "stream_id": self.stream_id,
             "clock_source": str(source),
@@ -1095,6 +1105,9 @@ class RtmpReceiver:
         if self.proc is not None:
             raise ProbeFailure("RTMP receiver was started twice")
         self.calibration = calibrate_wire_clock()
+        if self.decoder_mode == "native-software":
+            self._start_native()
+            return
         command = [
             self.ffmpeg,
             "-hide_banner",
@@ -1158,11 +1171,104 @@ class RtmpReceiver:
             self.stop()
             raise ProbeFailure("RTMP receiver exited before Pulsar could connect: " + " | ".join(self.lines[-20:]))
 
+    def _start_native(self) -> None:
+        executable = REPO_ROOT / "build/tests/nv-probe/RelWithDebInfo/native-rtmp-receiver.exe"
+        if not executable.is_file() or self.native_runtime_dir is None:
+            raise ProbeFailure("native receiver binary/runtime directory is unavailable")
+        environment = dict(os.environ)
+        environment["PATH"] = str(self.native_runtime_dir) + os.pathsep + environment.get("PATH", "")
+        self.proc = subprocess.Popen(
+            [str(executable), "--listen", "--input", self.endpoint],
+            cwd=str(REPO_ROOT), env=environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="strict",
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        self.thread = threading.Thread(target=self._pump, name="pulsar-native-rtmp", daemon=True)
+        self.stderr_thread = threading.Thread(target=self._pump_native_stderr, name="pulsar-native-rtmp-errors", daemon=True)
+        self.thread.start()
+        self.stderr_thread.start()
+        deadline = time.monotonic() + 5
+        while not self.native_clock_ready and self.proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(.01)
+        if not self.native_clock_ready or self.failure:
+            self.stop()
+            raise ProbeFailure("native receiver did not establish its QPC clock: " + " | ".join(self.lines[-10:]))
+
+    def _pump_native_stderr(self) -> None:
+        process = self.proc
+        if process is not None and process.stderr is not None:
+            for line in process.stderr:
+                with self._lock:
+                    self.lines.append("native stderr: " + line.rstrip())
+
+    def _consume_native_line(self, line: str) -> None:
+        value = json.loads(line)
+        if not isinstance(value, dict):
+            raise ProbeFailure("native receiver record must be an object")
+        kind = value.get("kind")
+        if kind == "ready":
+            frequency = _packet_int(value.get("clock_frequency"), "native clock frequency")
+            if self.native_clock_ready or frequency <= 0 or value.get("clock") != "libobs_qpc" or value.get("threads") != 1:
+                raise ProbeFailure("native receiver clock/decoder handshake is invalid")
+            # Both endpoints call the same libobs QPC conversion. The bound
+            # is one hardware clock tick, not Python pipe-delivery latency.
+            self.calibration = {"source": "qpc", "qpc_delta_ns": 0,
+                                "qpc_bound_ns": max(1, (1_000_000_000 + frequency - 1) // frequency)}
+            self.native_clock_ready = True
+            return
+        if not self.native_clock_ready:
+            raise ProbeFailure("native receiver emitted data before its clock identity")
+        if kind == "error":
+            raise ProbeFailure(f"native receiver failed with code {value.get('code')}")
+        if kind == "end":
+            if value.get("packets") != len(self.packets) or value.get("frames") != len(self.decoded_frames):
+                raise ProbeFailure("native receiver final counts disagree with observations")
+            return
+        observed = _packet_int(value.get("observed_at_monotonic_ns"), "native observation timestamp")
+        if observed <= 0:
+            raise ProbeFailure("native receiver observation clock is invalid")
+        if kind == "packet":
+            index = _packet_int(value.get("packet_index"), "native packet index")
+            pts = _packet_int(value.get("packet_pts"), "native packet PTS", non_negative=False)
+            dts = _packet_int(value.get("packet_dts"), "native packet DTS", non_negative=False)
+            if index != len(self.packets):
+                raise ProbeFailure("native receiver packet sequence is incomplete")
+            with self._lock:
+                self.packets.append({"packet_index": index, "packet_pts": pts, "packet_dts": dts,
+                                     "packet_pts_time_ms": pts, "packet_dts_time_ms": dts,
+                                     "observed_at_monotonic_ns": observed,
+                                     "packet_identity": _rtmp_packet_identity(self.stream_id, index, pts, dts)})
+        elif kind == "frame":
+            index = _packet_int(value.get("frame_index"), "native frame index")
+            if index != len(self.decoded_frames):
+                raise ProbeFailure("native receiver frame sequence is incomplete")
+            frame = {"frame_index": index, "pts_ms": _packet_int(value.get("pts_ms"), "native frame PTS", non_negative=False),
+                     "observed_at_monotonic_ns": observed}
+            for plane in ("y_mean", "u_mean", "v_mean"):
+                mean = _packet_int(value.get(plane), "native " + plane)
+                if mean > 255:
+                    raise ProbeFailure("native receiver plane mean is invalid")
+                frame[plane] = mean
+            with self._lock:
+                self.decoded_frames.append(frame)
+        else:
+            raise ProbeFailure("native receiver emitted an unknown record kind")
+
     def _pump(self) -> None:
         process = self.proc
         if process is None or process.stdout is None:
             return
         for line in process.stdout:
+            if self.decoder_mode == "native-software":
+                try:
+                    with self._lock:
+                        self.lines.append(line.rstrip())
+                    self._consume_native_line(line)
+                except (ProbeFailure, ValueError, TypeError) as exc:
+                    with self._lock:
+                        self.failure = str(exc)
+                continue
             received_at = wire_monotonic_ns()
             calibration = self.calibration
             offset = calibration.get("qpc_delta_ns", 0) if calibration is not None else 0
@@ -1320,6 +1426,10 @@ class RtmpReceiver:
                 self.thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
             if self.thread.is_alive():
                 failure = failure or "RTMP receiver reader thread did not exit"
+        if self.stderr_thread is not None:
+            self.stderr_thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
+            if self.stderr_thread.is_alive():
+                failure = failure or "native receiver diagnostic reader did not exit"
         if failure is not None:
             self.failure = failure
             raise ProbeFailure(failure)
@@ -1584,7 +1694,7 @@ class RtmpReceiver:
                     "clock_source": self.metadata()["clock_source"],
                     "clock_offset_ns": self.metadata()["clock_offset_ns"],
                     "clock_bound_ns": self.metadata()["clock_bound_ns"],
-                    "notes": "first video packet observed at FFmpeg RTMP demux; not wire-level or decoded timing",
+                    "notes": "first video packet observed at RTMP demux; not wire-level or decoded timing",
                 }
             )
             if self.decode_frames:
@@ -1608,7 +1718,7 @@ class RtmpReceiver:
                     "valid": True, "surface": "RTMP", "consumer": "decoder",
                     "decoder": self._decoder_identity(frame, packet, "selected_candidate"),
                     "notes": (
-                        f"FFmpeg {'direct signalstats metadata' if self.audit_marker else 'showinfo'} pipe observation; decoder_threads=1; "
+                        f"{'Native libavcodec frame-ready QPC' if self.decoder_mode == 'native-software' else 'FFmpeg pipe'} observation; decoder_threads=1; "
                         f"frame_index={frame['frame_index']}; packet_index={packet['packet_index']}; "
                         f"pts_ms={frame['pts_ms']}; includes decoder reorder and log delivery; "
                         "same RTMP PTS as correlated encoded candidate; not display/antenna latency"
@@ -1671,7 +1781,8 @@ class RtmpReceiver:
                               "decoder_threads": 1, "clock": self.metadata(),
                               "decoder_mode": self.decoder_mode,
                               "content_alignment": "native_packet_audit_v1" if self.native_content_map else "legacy_linear_time",
-                              "boundary": "signalstats_metadata_pipe_not_display" if self.audit_marker else "showinfo_pipe_not_display"}]
+                              "boundary": ("libavcodec_receive_frame_qpc_not_display" if self.decoder_mode == "native-software"
+                                           else "signalstats_metadata_pipe_not_display" if self.audit_marker else "showinfo_pipe_not_display")}]
             audit_records.extend({"record_type": "frame", **item} for item in self.decoded_frames)
             audit_records.extend({"record_type": "packet", **item} for item in receiver_packets)
             audit_records.extend(native_content_records)
@@ -4840,7 +4951,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--audit-decoded-marker", action="store_true",
                         help="audit first changed CEF lane marker in decoded display order; requires local CEF page")
-    parser.add_argument("--rtmp-decoder", choices=("software", "nvdec-lowdelay"), default="software",
+    parser.add_argument("--rtmp-decoder", choices=("software", "nvdec-lowdelay", "native-software"), default="software",
                         help="explicit receiver decoder; NVDEC requires decoded continuity/pixel qualification")
     parser.add_argument(
         "--cef-url",
@@ -4977,6 +5088,7 @@ def run(args: argparse.Namespace) -> int:
                 audit_marker=args.audit_decoded_marker,
                 decoder_mode=args.rtmp_decoder,
                 require_native_content=args.audit_decoded_marker,
+                native_runtime_dir=args.exe.parent,
             )
             process.rtmp_producer_trace_path = producer_trace_path
             process.rtmp_final_trace_path = final_trace_path

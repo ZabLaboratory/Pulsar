@@ -484,7 +484,7 @@ def _validate_rtmp_receiver(value: Any, *, line: int | None = None) -> dict[str,
         )
     if obj["clock_source"] not in RTMP_CLOCK_SOURCES:
         raise EvidenceError("SCHEMA_INVALID", "session.rtmp_receiver.clock_source is unsupported", line=line)
-    if obj.get("decoder_mode", "software") not in ("software", "nvdec-lowdelay"):
+    if obj.get("decoder_mode", "software") not in ("software", "nvdec-lowdelay", "native-software"):
         raise EvidenceError("SCHEMA_INVALID", "session.rtmp_receiver.decoder_mode is unsupported", line=line)
     _integer(obj["clock_offset_ns"], "session.rtmp_receiver.clock_offset_ns", non_negative=False, line=line)
     bound = _integer(obj["clock_bound_ns"], "session.rtmp_receiver.clock_bound_ns", line=line)

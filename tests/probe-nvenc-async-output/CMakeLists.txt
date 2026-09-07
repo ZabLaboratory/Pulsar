@@ -14,6 +14,7 @@ if(WIN32 AND DEFINED PULSAR_UPSTREAM_BUILD_DIR)
       "${PULSAR_UPSTREAM_BUILD_DIR}/rundir/$<CONFIG>/data/libobs"
       "${CMAKE_BINARY_DIR}/tests/data/libobs")
   add_test(NAME async-gpu-runtime COMMAND async-gpu-runtime)
-  set_tests_properties(async-gpu-runtime PROPERTIES TIMEOUT 20
+  add_test(NAME async-gpu-pending-error COMMAND async-gpu-runtime --pending-error)
+  set_tests_properties(async-gpu-runtime async-gpu-pending-error PROPERTIES TIMEOUT 25
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${PULSAR_UPSTREAM_BUILD_DIR}/rundir/$<CONFIG>/bin/64bit")
 endif()

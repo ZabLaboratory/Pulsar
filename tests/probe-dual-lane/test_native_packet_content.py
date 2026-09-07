@@ -27,8 +27,8 @@ def stalled_renderer_packets():
             "observed_at_monotonic_ns": 2_000_000_000 + index * 1_000_000,
         })
         received.append({
-            "packet_index": index, "packet_pts": round(index * 1000 / 60 + 33),
-            "packet_dts": round((index - 2) * 1000 / 60 + 33),
+            "packet_index": index, "packet_pts": int(index * 1000 / 60) + 33,
+            "packet_dts": int((index - 2) * 1000 / 60) + 33,
             "packet_identity": f"packet-{index}",
             "observed_at_monotonic_ns": 2_000_100_000 + index * 1_000_000,
         })
@@ -39,7 +39,7 @@ def test_fourteen_repeated_content_frames_use_native_identity_not_linear_extrapo
     native, received = stalled_renderer_packets()
     mapping = probe.correlate_native_packet_content(native, received, "runtime-test")
     exact_pts = probe.first_native_content_pts(mapping, 1_500_000_000)
-    assert exact_pts == received[1]["packet_pts"] == 50
+    assert exact_pts == received[1]["packet_pts"] == 49
     linear_guess = received[-1]["packet_pts"] - (native[-1]["packet_content_pts_monotonic_ns"] - 1_500_000_000) / 1e6
     assert linear_guess - exact_pts > 230
     frames = [{"frame_index": i, "pts_ms": packet["packet_pts"], "y_mean": 235 if i == 0 else 16,
@@ -88,6 +88,6 @@ def test_presentation_order_is_independent_of_encoded_submission_order():
     for index, original in enumerate(order):
         native[original]["packet_index"] = received[original]["packet_index"] = index
         native[original]["packet_dts"] = index - 2
-        received[original]["packet_dts"] = round((index - 2) * 1000 / 60 + 33)
+        received[original]["packet_dts"] = int((index - 2) * 1000 / 60) + 33
     mapping = probe.correlate_native_packet_content([native[i] for i in order], [received[i] for i in order], "runtime-test")
-    assert probe.first_native_content_pts(mapping, 1_500_000_000) == 50
+    assert probe.first_native_content_pts(mapping, 1_500_000_000) == 49

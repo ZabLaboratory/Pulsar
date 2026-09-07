@@ -16,6 +16,7 @@ static HANDLE completed;
 static volatile LONG delivered, submitted;
 static int remaining, next_packet;
 static uint64_t ready_at;
+static bool fail_pending;
 static const int64_t order[] = {2, 0, 1};
 static const char *name(void *unused) { (void)unused; return "Pulsar async GPU fixture"; }
 static void destroy(void *unused) { (void)unused; }
@@ -27,6 +28,7 @@ static bool pending(void *data, struct encoder_packet *packet, bool *received)
     assert(packet->encoder == data && packet->timebase_num == 1 && packet->timebase_den == 1);
     *received = remaining > 0 && os_gettime_ns() >= ready_at;
     if (!*received) return true;
+    if (fail_pending) return false;
     /* Completion must be serviced before a fourth texture is submitted. */
     assert(InterlockedCompareExchange(&submitted, 0, 0) == 3);
     static uint8_t bytes[] = {0, 0, 0, 1, 0x65, 0x88};
@@ -79,6 +81,10 @@ static void stop_output(void *data, uint64_t ts)
 static void receive(void *data, struct encoder_packet *packet)
 {
     (void)data;
+    if (!packet && fail_pending) {
+        SetEvent(completed);
+        return;
+    }
     assert(packet != NULL);
     LONG index = InterlockedCompareExchange(&delivered, 0, 0);
     assert(index < 3 && packet->pts == order[index] && packet->dts == index - 2);
@@ -86,8 +92,10 @@ static void receive(void *data, struct encoder_packet *packet)
     if (InterlockedIncrement(&delivered) == 3) SetEvent(completed);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    (void)argv;
+    fail_pending = argc > 1;
     _putenv_s("PULSAR_NVENC_ASYNC_OUTPUT", "1");
     assert(obs_startup("en-US", NULL, NULL));
     struct obs_video_info video = {0};
@@ -131,12 +139,27 @@ int main(void)
     obs_output_set_video_encoder(output, encoder);
     assert(obs_output_start(output));
     assert(WaitForSingleObject(completed, 10000) == WAIT_OBJECT_0);
-    assert(delivered == 3 && submitted == 3 && remaining == 0);
+    assert(submitted == 3);
+    assert(fail_pending ? delivered == 0 : (delivered == 3 && remaining == 0));
+    if (fail_pending) {
+        uint64_t deadline = os_gettime_ns() + 1000000000ULL;
+        while (obs_encoder_active(encoder) && os_gettime_ns() < deadline) Sleep(10);
+        assert(!obs_encoder_active(encoder));
+        /* The same output/encoder must be restartable after the failed
+         * generation, without inheriting a pending stop or queued packets. */
+        fail_pending = false;
+        delivered = submitted = remaining = next_packet = 0;
+        ResetEvent(completed);
+        assert(obs_output_start(output));
+        assert(WaitForSingleObject(completed, 10000) == WAIT_OBJECT_0);
+        assert(delivered == 3 && submitted == 3 && remaining == 0);
+    }
     obs_output_stop(output);
     obs_output_release(output);
     obs_encoder_release(encoder);
     CloseHandle(completed);
     obs_shutdown();
-    puts("PASS: real GPU scheduler drains delayed reordered packets before the next input and shuts down cleanly");
+    puts(argc > 1 ? "PASS: pending failure retires the GPU encoder and the same output restarts cleanly" :
+                    "PASS: real GPU scheduler drains delayed reordered packets before the next input and shuts down cleanly");
     return 0;
 }

@@ -1,0 +1,123 @@
+From 62fe3383c91495e9e67663a0dcd54a9960002bbb Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 17:56:03 +0200
+Subject: [PATCH] fix(libobs): retire GPU encoder errors outside the encode
+ thread
+
+Agent-Role: eleven
+Agent-Thread: 01a045e2-996f-7913-99f0-2cd237d3a6f8
+Work-Unit: ZabLaboratory/Pulsar#253
+Issue: #253
+Evidence: async-gpu-runtime pending failure remains active before fix
+---
+ libobs/obs-encoder.c  | 57 +++++++++++++++++++++++++++++++++++++++++++
+ libobs/obs-internal.h |  1 +
+ 2 files changed, 58 insertions(+)
+
+diff --git a/libobs/obs-encoder.c b/libobs/obs-encoder.c
+index 9b27a1dac..cb42b1fc1 100644
+--- a/libobs/obs-encoder.c
++++ b/libobs/obs-encoder.c
+@@ -610,6 +610,8 @@ static THREAD_LOCAL bool can_reroute = false;
+ 
+ static inline bool obs_encoder_initialize_internal(obs_encoder_t *encoder)
+ {
++	if (os_atomic_load_bool(&encoder->gpu_error_stop_pending))
++		return false;
+ 	if (!encoder->media) {
+ 		blog(LOG_ERROR, "obs_encoder_initialize_internal: encoder '%s' has no media set",
+ 		     encoder->context.name);
+@@ -746,6 +748,8 @@ void pause_reset(struct pause_data *pause)
+ 
+ static inline void obs_encoder_start_internal(obs_encoder_t *encoder, encoded_callback_t new_packet, void *param)
+ {
++	if (os_atomic_load_bool(&encoder->gpu_error_stop_pending))
++		return;
+ 	struct encoder_callback cb = {false, new_packet, param};
+ 	bool first = false;
+ 
+@@ -1307,9 +1311,60 @@ static inline void send_packet(struct obs_encoder *encoder, struct encoder_callb
+ 	profile_end(send_packet_name);
+ }
+ 
++static void gpu_error_stop_task(void *data)
++{
++	struct obs_encoder *encoder = data;
++	DARRAY(obs_output_t *) outputs;
++	da_init(outputs);
++	/* Output stop hooks may synchronously call back into libobs. Do not hold
++	 * encoder/init or output-list locks across them. Retain each output. */
++	pthread_mutex_lock(&encoder->outputs_mutex);
++	for (size_t i = 0; i < encoder->outputs.num; i++) {
++		obs_output_t *output = obs_output_get_ref(encoder->outputs.array[i]);
++		if (output)
++			da_push_back(outputs, &output);
++	}
++	pthread_mutex_unlock(&encoder->outputs_mutex);
++	for (size_t i = 0; i < outputs.num; i++) {
++		obs_output_t *output = outputs.array[i];
++		obs_output_force_stop(output);
++		pthread_mutex_lock(&output->interleaved_mutex);
++		output->info.encoded_packet(output->context.data, NULL);
++		pthread_mutex_unlock(&output->interleaved_mutex);
++	}
++	/* Serialize connection removal with a concurrent user stop. A restart
++	 * is rejected until this error generation has completely retired. */
++	pthread_mutex_lock(&encoder->init_mutex);
++	if (encoder_active(encoder)) {
++		pthread_mutex_lock(&encoder->callbacks_mutex);
++		da_free(encoder->callbacks);
++		pthread_mutex_unlock(&encoder->callbacks_mutex);
++		remove_connection(encoder, false);
++	}
++	os_atomic_set_bool(&encoder->gpu_error_stop_pending, false);
++	pthread_mutex_unlock(&encoder->init_mutex);
++	for (size_t i = 0; i < outputs.num; i++)
++		obs_output_release(outputs.array[i]);
++	da_free(outputs);
++	obs_encoder_release(encoder);
++}
++
+ void full_stop(struct obs_encoder *encoder)
+ {
+ 	if (encoder) {
++		struct obs_core_video_mix *video = encoder->info.type == OBS_ENCODER_VIDEO
++							 ? get_mix_for_video(encoder->media) : NULL;
++		if (video && video->gpu_encode_thread_initialized &&
++		    pthread_equal(pthread_self(), video->gpu_encode_thread)) {
++			/* Never wait for gpu_encode_inactive or join this same thread.
++			 * Existing destruction work owns a strong ref until teardown. */
++			if (!os_atomic_exchange_bool(&encoder->gpu_error_stop_pending, true)) {
++				obs_encoder_t *ref = obs_encoder_get_ref(encoder);
++				if (ref)
++					obs_queue_task(OBS_TASK_DESTROY, gpu_error_stop_task, ref, false);
++			}
++			return;
++		}
+ 		pthread_mutex_lock(&encoder->outputs_mutex);
+ 		for (size_t i = 0; i < encoder->outputs.num; i++) {
+ 			struct obs_output *output = encoder->outputs.array[i];
+@@ -1392,6 +1447,8 @@ void send_off_encoder_packet(obs_encoder_t *encoder, bool success, bool received
+ 
+ bool drain_encoder_packets(obs_encoder_t *encoder)
+ {
++	if (os_atomic_load_bool(&encoder->gpu_error_stop_pending))
++		return false;
+ 	if (!encoder->info.get_pending_packet)
+ 		return true;
+ 
+diff --git a/libobs/obs-internal.h b/libobs/obs-internal.h
+index b2c93935d..e37e10b75 100644
+--- a/libobs/obs-internal.h
++++ b/libobs/obs-internal.h
+@@ -1455,6 +1455,7 @@ struct obs_encoder {
+ 	volatile bool active;
+ 	volatile bool paused;
+ 	bool initialized;
++	volatile bool gpu_error_stop_pending;
+ 
+ 	/* indicates ownership of the info.id buffer */
+ 	bool owns_info_id;
+-- 
+2.54.0.windows.1
