@@ -1303,7 +1303,8 @@ public:
             !signalEnabled("output_mux_enqueue") && !signalEnabled("encode_callback_enqueue"))
             return;
         const TraceContextSnapshot *context = activeContext_.load(std::memory_order_acquire);
-        if (!context || frame->timestamp < context->ptsNs ||
+        const uint64_t contentPts = frame->content_pts_ns ? frame->content_pts_ns : frame->timestamp;
+        if (!context || contentPts < context->ptsNs ||
             context->rawCaptured.exchange(true, std::memory_order_acq_rel))
             return;
 
@@ -1311,7 +1312,7 @@ public:
         event.kind = SignalKind::RawObservation;
         event.observedNs = nowNs();
         copyContextToEvent(event, *context);
-        event.ptsNs = frame->timestamp;
+        event.ptsNs = contentPts;
         enqueueSignal(event);
     }
 
