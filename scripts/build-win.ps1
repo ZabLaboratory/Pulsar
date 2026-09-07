@@ -426,8 +426,11 @@ if ($Fast -and (Test-Path $upstreamCache)) {
     $reuseFastUpstreamConfigure =
         $cacheText -match '(?m)^ENABLE_FRONTEND:BOOL=OFF\r?$' -and
         $cacheText -match '(?m)^ENABLE_UI:BOOL=OFF\r?$' -and
-        $cacheText -match '(?m)^ENABLE_BROWSER:BOOL=OFF\r?$' -and
+        $cacheText -match '(?m)^ENABLE_BROWSER:BOOL=(ON|OFF)\r?$' -and
         $cacheText -match '(?m)^ENABLE_WEBSOCKET:BOOL=OFF\r?$'
+    # Fast mode inherits the validated browser capability. Otherwise a cache
+    # created with -Full is rejected (or the Pulsar reconfigure disables CEF).
+    $Full = [bool]($cacheText -match '(?m)^ENABLE_BROWSER:BOOL=ON\r?$')
 }
 if ($Fast -and -not $reuseFastUpstreamConfigure) {
     throw "-Fast requires an existing compatible headless build_x64 cache at $upstreamBuildDir; run scripts/build-win.ps1 once first"
