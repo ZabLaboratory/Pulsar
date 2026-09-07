@@ -1,13 +1,22 @@
 #include <windows.h>
-#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "obs.h"
 #include "obs-encoder.h"
 #include "obs-output.h"
 #include "media-io/video-io.h"
 #include "media-io/video-frame.h"
+
+#define PULSAR_CHECK(expr)                                                         \
+	do {                                                                         \
+		if (!(expr)) {                                                        \
+			fprintf(stderr, "CHECK FAILED: %s (%s:%d)\n", #expr, __FILE__, \
+				__LINE__);                                              \
+			abort();                                                       \
+		}                                                                    \
+	} while (0)
 
 static HANDLE completed;
 static volatile LONG delivered;
@@ -21,7 +30,7 @@ static void *create_encoder(obs_data_t *settings, obs_encoder_t *encoder)
 
 static bool pending(void *data, struct encoder_packet *packet, bool *received)
 {
-    assert(packet->encoder == data && packet->timebase_num == 1 && packet->timebase_den == 60);
+    PULSAR_CHECK(packet->encoder == data && packet->timebase_num == 1 && packet->timebase_den == 60);
     *received = remaining != 0;
     if (!*received) return true;
     static uint8_t bytes[] = {0, 0, 0, 1, 0x65, 0x88};
@@ -38,7 +47,7 @@ static bool pending(void *data, struct encoder_packet *packet, bool *received)
 
 static bool encode(void *data, struct encoder_frame *frame, struct encoder_packet *packet, bool *received)
 {
-    assert(frame->pts == submitted && frame->data[0][0] == 80);
+    PULSAR_CHECK(frame->pts == submitted && frame->data[0][0] == 80);
     ++submitted;
     if (submitted == 3) remaining = 3;
     return pending(data, packet, received);
@@ -60,14 +69,14 @@ static void stop_output(void *data, uint64_t ts)
 static void receive(void *data, struct encoder_packet *packet)
 {
     (void)data;
-    assert(packet != NULL);
+    PULSAR_CHECK(packet != NULL);
     LONG index = InterlockedCompareExchange(&delivered, 0, 0);
-    assert(index < 3 && packet->pts == order[index] && packet->dts == index - 2);
+    PULSAR_CHECK(index < 3 && packet->pts == order[index] && packet->dts == index - 2);
     if (InterlockedIncrement(&delivered) == 3) SetEvent(completed);
 }
 int main(void)
 {
-    assert(obs_startup("en-US", NULL, NULL));
+    PULSAR_CHECK(obs_startup("en-US", NULL, NULL));
     struct obs_encoder_info encoder_info = {0};
     encoder_info.id = "pulsar_ready_batch_fixture";
     encoder_info.codec = "h264";
@@ -95,22 +104,22 @@ int main(void)
     info.width = info.height = 64;
     info.fps_num = 60; info.fps_den = 1; info.cache_size = 4;
     info.colorspace = VIDEO_CS_709; info.range = VIDEO_RANGE_PARTIAL;
-    assert(video_output_open(&video, &info) == VIDEO_OUTPUT_SUCCESS);
+    PULSAR_CHECK(video_output_open(&video, &info) == VIDEO_OUTPUT_SUCCESS);
     interval = video_output_get_frame_time(video);
     completed = CreateEventW(NULL, TRUE, FALSE, NULL);
     obs_encoder_t *encoder = obs_video_encoder_create(encoder_info.id, "ready-batch", NULL, NULL);
-    assert(encoder && completed);
+    PULSAR_CHECK(encoder && completed);
     obs_encoder_set_video(encoder, video);
     obs_output_t *output = obs_output_create(output_info.id, "ready-batch-sink", NULL, NULL);
-    assert(output);
+    PULSAR_CHECK(output);
     obs_output_set_video_encoder(output, encoder);
     /* Video-only outputs use default_encoded_callback, not the interleaver's
      * packet-timing observers. Exact timing association is covered by the
      * authenticated real A/V probe, not claimed by this mock-output test. */
-    assert(obs_output_start(output));
+    PULSAR_CHECK(obs_output_start(output));
     for (unsigned i = 0; i < 3; ++i) {
         struct video_frame frame = {0};
-        assert(video_output_lock_frame_with_content(video, &frame, 1,
+        PULSAR_CHECK(video_output_lock_frame_with_content(video, &frame, 1,
             1000000000ULL + i * interval, 1001000000ULL + i * interval));
         for (unsigned row = 0; row < 64; ++row)
             memset(frame.data[0] + row * frame.linesize[0], 80, 64);
@@ -118,8 +127,8 @@ int main(void)
             memset(frame.data[1] + row * frame.linesize[1], 128, 64);
         video_output_unlock_frame(video);
     }
-    assert(WaitForSingleObject(completed, 5000) == WAIT_OBJECT_0);
-    assert(delivered == 3 && submitted == 3 && remaining == 0);
+    PULSAR_CHECK(WaitForSingleObject(completed, 5000) == WAIT_OBJECT_0);
+    PULSAR_CHECK(delivered == 3 && submitted == 3 && remaining == 0);
     obs_output_stop(output);
     obs_output_release(output);
     obs_encoder_release(encoder);

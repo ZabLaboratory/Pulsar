@@ -2,7 +2,6 @@
  * One frame/second makes the assertion about input count, not a fragile
  * sub-millisecond wall-clock deadline. Real NVENC is qualified separately. */
 #include <windows.h>
-#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +10,15 @@
 #include "obs-output.h"
 #include "graphics/graphics.h"
 #include "util/platform.h"
+
+#define PULSAR_CHECK(expr)                                                         \
+	do {                                                                         \
+		if (!(expr)) {                                                        \
+			fprintf(stderr, "CHECK FAILED: %s (%s:%d)\n", #expr, __FILE__, \
+				__LINE__);                                              \
+			abort();                                                       \
+		}                                                                    \
+	} while (0)
 
 static HANDLE completed;
 static volatile LONG delivered, submitted;
@@ -25,12 +33,12 @@ static void *create_encoder(obs_data_t *settings, obs_encoder_t *encoder)
 
 static bool pending(void *data, struct encoder_packet *packet, bool *received)
 {
-    assert(packet->encoder == data && packet->timebase_num == 1 && packet->timebase_den == 1);
+    PULSAR_CHECK(packet->encoder == data && packet->timebase_num == 1 && packet->timebase_den == 1);
     *received = remaining > 0 && os_gettime_ns() >= ready_at;
     if (!*received) return true;
     if (fail_pending) return false;
     /* Completion must be serviced before a fourth texture is submitted. */
-    assert(InterlockedCompareExchange(&submitted, 0, 0) == 3);
+    PULSAR_CHECK(InterlockedCompareExchange(&submitted, 0, 0) == 3);
     static uint8_t bytes[] = {0, 0, 0, 1, 0x65, 0x88};
     packet->data = bytes;
     packet->size = sizeof(bytes);
@@ -48,15 +56,15 @@ static bool encode_texture(void *data, struct encoder_texture *texture, int64_t 
                            struct encoder_packet *packet, bool *received)
 {
     (void)data; (void)packet;
-    assert(texture && texture->tex[0]);
+    PULSAR_CHECK(texture && texture->tex[0]);
     /* Fulfil the real shared-texture lifetime protocol, even though the mock
      * compressed bytes do not inspect the pixels. */
     obs_enter_graphics();
-    assert(gs_texture_acquire_sync(texture->tex[0], lock_key, 5000) == 0);
-    assert(gs_texture_release_sync(texture->tex[0], *next_key) == 0);
+    PULSAR_CHECK(gs_texture_acquire_sync(texture->tex[0], lock_key, 5000) == 0);
+    PULSAR_CHECK(gs_texture_release_sync(texture->tex[0], *next_key) == 0);
     obs_leave_graphics();
     LONG count = InterlockedIncrement(&submitted);
-    assert(pts == count - 1 && count <= 3);
+    PULSAR_CHECK(pts == count - 1 && count <= 3);
     if (count == 3) {
         remaining = 3;
         ready_at = os_gettime_ns() + 5000000ULL;
@@ -85,10 +93,10 @@ static void receive(void *data, struct encoder_packet *packet)
         SetEvent(completed);
         return;
     }
-    assert(packet != NULL);
+    PULSAR_CHECK(packet != NULL);
     LONG index = InterlockedCompareExchange(&delivered, 0, 0);
-    assert(index < 3 && packet->pts == order[index] && packet->dts == index - 2);
-    assert(InterlockedCompareExchange(&submitted, 0, 0) == 3);
+    PULSAR_CHECK(index < 3 && packet->pts == order[index] && packet->dts == index - 2);
+    PULSAR_CHECK(InterlockedCompareExchange(&submitted, 0, 0) == 3);
     if (InterlockedIncrement(&delivered) == 3) SetEvent(completed);
 }
 
@@ -97,7 +105,7 @@ int main(int argc, char **argv)
     (void)argv;
     fail_pending = argc > 1;
     _putenv_s("PULSAR_NVENC_ASYNC_OUTPUT", "1");
-    assert(obs_startup("en-US", NULL, NULL));
+    PULSAR_CHECK(obs_startup("en-US", NULL, NULL));
     struct obs_video_info video = {0};
     video.graphics_module = "libobs-d3d11.dll";
     video.fps_num = video.fps_den = 1;
@@ -108,7 +116,7 @@ int main(int argc, char **argv)
     video.range = VIDEO_RANGE_PARTIAL;
     video.gpu_conversion = true;
     video.scale_type = OBS_SCALE_BILINEAR;
-    assert(obs_reset_video(&video) == OBS_VIDEO_SUCCESS);
+    PULSAR_CHECK(obs_reset_video(&video) == OBS_VIDEO_SUCCESS);
     struct obs_encoder_info encoder_info = {0};
     encoder_info.id = "pulsar_async_gpu_fixture";
     encoder_info.codec = "h264";
@@ -132,27 +140,27 @@ int main(int argc, char **argv)
     obs_register_output(&output_info);
     completed = CreateEventW(NULL, TRUE, FALSE, NULL);
     obs_encoder_t *encoder = obs_video_encoder_create(encoder_info.id, "async-gpu", NULL, NULL);
-    assert(encoder && completed);
+    PULSAR_CHECK(encoder && completed);
     obs_encoder_set_video(encoder, obs_get_video());
     obs_output_t *output = obs_output_create(output_info.id, "async-gpu-sink", NULL, NULL);
-    assert(output);
+    PULSAR_CHECK(output);
     obs_output_set_video_encoder(output, encoder);
-    assert(obs_output_start(output));
-    assert(WaitForSingleObject(completed, 10000) == WAIT_OBJECT_0);
-    assert(submitted == 3);
-    assert(fail_pending ? delivered == 0 : (delivered == 3 && remaining == 0));
+    PULSAR_CHECK(obs_output_start(output));
+    PULSAR_CHECK(WaitForSingleObject(completed, 10000) == WAIT_OBJECT_0);
+    PULSAR_CHECK(submitted == 3);
+    PULSAR_CHECK(fail_pending ? delivered == 0 : (delivered == 3 && remaining == 0));
     if (fail_pending) {
         uint64_t deadline = os_gettime_ns() + 1000000000ULL;
         while (obs_encoder_active(encoder) && os_gettime_ns() < deadline) Sleep(10);
-        assert(!obs_encoder_active(encoder));
+        PULSAR_CHECK(!obs_encoder_active(encoder));
         /* The same output/encoder must be restartable after the failed
          * generation, without inheriting a pending stop or queued packets. */
         fail_pending = false;
         delivered = submitted = remaining = next_packet = 0;
         ResetEvent(completed);
-        assert(obs_output_start(output));
-        assert(WaitForSingleObject(completed, 10000) == WAIT_OBJECT_0);
-        assert(delivered == 3 && submitted == 3 && remaining == 0);
+        PULSAR_CHECK(obs_output_start(output));
+        PULSAR_CHECK(WaitForSingleObject(completed, 10000) == WAIT_OBJECT_0);
+        PULSAR_CHECK(delivered == 3 && submitted == 3 && remaining == 0);
     }
     obs_output_stop(output);
     obs_output_release(output);
