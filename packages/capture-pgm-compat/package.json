@@ -26,8 +26,8 @@
   },
   "dependencies": {
     "@clodocapeo/pgm-correlator": "^0.1.0",
-    "@clodocapeo/pulsar-bundle-full": "^1.8.0",
-    "@clodocapeo/pulsar-client": "^1.8.0"
+    "@clodocapeo/pulsar-bundle-full": "^3.0.0",
+    "@clodocapeo/pulsar-client": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
