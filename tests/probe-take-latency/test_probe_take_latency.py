@@ -413,6 +413,54 @@ def test_quantile_is_deterministic_linear_interpolation():
     assert probe.quantile([1.0, 2.0, 3.0, 4.0], 0.99) == pytest.approx(3.97)
 
 
+@pytest.mark.parametrize("defect", [None, "wrong_kind", "wrong_pts", "wrong_packet", "wrong_demux", "wrong_clock", "wrong_decoder_mode", "unknown_decoder_mode", "duplicate"])
+def test_decoded_candidate_requires_explicit_packet_and_clock_identity(defect):
+    records = _take_records(2)
+    session = records[0]
+    assert "decoded_candidate_frame" in session["capture_paths"]
+    packet = next(r for r in records if r.get("boundary") == "rtmp_first_packet")
+    candidate = {key: packet[key] for key in probe.OBSERVATION_REQUIRED}
+    candidate.update(boundary="decoded_candidate_frame", consumer="decoder",
+                     observed_at_monotonic_ns=packet["observed_at_monotonic_ns"] + 20_000_000)
+    candidate["decoder"] = {
+        "kind": "selected_candidate", "frame_index": 5, "frame_pts_ms": packet["packet_pts"],
+        **{key: packet[key] for key in ("packet_index", "packet_pts", "packet_dts", "packet_identity")},
+        "demux_observed_monotonic_ns": packet["observed_at_monotonic_ns"],
+        "clock_bound_ns": packet["clock_bound_ns"], "marker_lane": "unobserved",
+    }
+    records.append(candidate)
+    if defect == "wrong_kind":
+        candidate["decoder"]["kind"] = "first_changed_marker"
+    elif defect == "wrong_pts":
+        candidate["decoder"]["frame_pts_ms"] += 1
+    elif defect == "wrong_packet":
+        candidate["decoder"]["packet_identity"] = "wrong-packet"
+    elif defect == "wrong_demux":
+        candidate["decoder"]["demux_observed_monotonic_ns"] -= 1
+    elif defect == "wrong_clock":
+        candidate["decoder"]["clock_bound_ns"] += 1
+    elif defect == "wrong_decoder_mode":
+        candidate["decoder"]["decoder_mode"] = "nvdec-lowdelay"
+    elif defect == "unknown_decoder_mode":
+        session["rtmp_receiver"]["decoder_mode"] = "unknown-decoder"
+    elif defect == "duplicate":
+        records.append(deepcopy(candidate))
+    if defect:
+        with pytest.raises(probe.EvidenceError):
+            probe.analyze_trace(probe.parse_records(records), minimum_takes=1, minimum_warmup=0, minimum_resource_samples=1)
+    else:
+        probe.analyze_trace(probe.parse_records(records), minimum_takes=1, minimum_warmup=0, minimum_resource_samples=1)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "invalid", 10**18])
+def test_packet_content_timestamp_cannot_be_missing_zero_future_or_noninteger(value):
+    records = _take_records(2)
+    encoded = next(r for r in records if r.get("boundary") == "encoded_first_packet")
+    encoded["packet_content_pts_monotonic_ns"] = value
+    with pytest.raises(probe.EvidenceError):
+        probe.parse_records(records)
+
+
 def test_fixture_reports_all_boundaries_separately_and_never_runtime_pass():
     report = probe.analyze_trace(_trace(), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
     assert report["status"] == "FIXTURE_ONLY"
@@ -967,6 +1015,29 @@ def test_rtmp_slo_includes_declared_receiver_clock_bound_conservatively():
     assert conservative["status"] == "FAIL"
 
 
+@pytest.mark.parametrize("reorder_ns", [0, 16_666_667, 33_333_334])
+def test_packet_selection_separates_commit_from_future_picture(reorder_ns):
+    accepted = 100_000_000
+    commit = 110_000_000
+    cts = commit + reorder_ns
+    producer = {
+        "pts_ns": commit, "packet_cts_monotonic_ns": cts,
+        "packet_fer_monotonic_ns": cts + 1_000_000,
+        "packet_ferc_monotonic_ns": cts + 2_000_000,
+        "packet_pir_monotonic_ns": cts + 3_000_000,
+        "packet_callback_monotonic_ns": cts + 4_000_000,
+    }
+    result = probe._ac12b_stats(
+        {("take", "encoded_first_packet"): producer,
+         ("take", "rtmp_first_packet"): {"receiver_observed_normalized_ns": cts + 5_000_000}},
+        {"take": {"observed_at_monotonic_ns": accepted}}, {"take"}, {"take": {}}, 1,
+    )
+    diagnostic = result["packet_selection_diagnostic"]
+    assert diagnostic["take_accepted_to_committed_media_pts"]["p50_ms"] == 10
+    assert diagnostic["committed_media_pts_to_selected_packet_cts"]["p50_ms"] == pytest.approx(reorder_ns / 1e6)
+    assert result["stage_distributions"]["take_accepted_to_cts"]["p50_ms"] == pytest.approx(10 + reorder_ns / 1e6)
+
+
 def test_ac12a_and_ac12b_report_distinct_boundaries_without_pooling():
     records = _take_records(3, evidence_kind="runtime", include_resources=False)
     report = probe.analyze_trace(
@@ -1111,7 +1182,7 @@ def test_telemetry_patch_captures_directshow_stage_timing_without_changing_bound
     assert "EmitDirectShowObservation(metadata, timing)" in patch_text
 
 
-def test_directshow_stage_timing_requires_complete_strictly_ordered_metadata():
+def test_directshow_stage_timing_requires_complete_nondecreasing_metadata():
     records = _take_records(3)
     directshow = next(
         item
@@ -1129,7 +1200,12 @@ def test_directshow_stage_timing_requires_complete_strictly_ordered_metadata():
         if item.get("record_type") == "observation" and item.get("boundary") == "directshow_return"
     )
     directshow["queue_read_completed_monotonic_ns"] = directshow["queue_read_start_monotonic_ns"]
-    with pytest.raises(probe.EvidenceError, match="strictly ordered"):
+    probe.parse_records(records)  # finite clock resolution can yield equal readings
+    directshow["queue_read_completed_monotonic_ns"] -= 1
+    with pytest.raises(probe.EvidenceError, match="nondecreasing"):
+        probe.parse_records(records)
+    directshow["queue_read_completed_monotonic_ns"] = 0
+    with pytest.raises(probe.EvidenceError, match="positive"):
         probe.parse_records(records)
 
     records = _take_records(3)

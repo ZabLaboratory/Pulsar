@@ -170,6 +170,11 @@ if(WIN32)
     # GPU, or running Pulsar process.
     add_subdirectory(tests/dual-lane-config)
     add_subdirectory(tests/pulsar-transition-controller)
+    add_subdirectory(tests/equal-view-swap)
+    add_subdirectory(tests/return-queue-safety)
+    add_subdirectory(tests/probe-nvenc-ready-drain)
+    add_subdirectory(tests/probe-nvenc-async-output)
+    add_subdirectory(tests/native-rtmp-receiver)
 
     # #249 -- admission, in-flight callback accounting, and CEF close
     # finalization share one linearization point. This native test forces the

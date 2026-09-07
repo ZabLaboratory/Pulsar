@@ -1,0 +1,22 @@
+diff --git a/libobs/obs-video.c b/libobs/obs-video.c
+index 48bb127a3..bfb735994 100644
+--- a/libobs/obs-video.c
++++ b/libobs/obs-video.c
+@@ -572,9 +572,14 @@ static inline void render_video(struct obs_core_video_mix *video, bool raw_activ
+ 			copy_surfaces = video->copy_surfaces_encode;
+ 			channel_count = 1;
+ #endif
+-			stage_start = os_gettime_ns();
+-			gs_flush();
+-			obs_pipeline_stats_add_u64(&video->pipeline_stats.gpu_flush_ns, os_gettime_ns() - stage_start);
++			/* D3D11 keeps scaling and conversion commands ordered on the same
++			 * immediate context. Submit both at the existing post-conversion
++			 * flush; retain that handoff and the end-of-frame/readback flush. */
++			if (gs_get_device_type() != GS_DEVICE_DIRECT3D_11) {
++				stage_start = os_gettime_ns();
++				gs_flush();
++				obs_pipeline_stats_add_u64(&video->pipeline_stats.gpu_flush_ns, os_gettime_ns() - stage_start);
++			}
+ 		}
+ 
+ 		if (video->gpu_conversion) {

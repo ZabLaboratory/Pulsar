@@ -1,6 +1,12 @@
 """Static contract for the external upstream build-directory seam."""
 
 from pathlib import Path
+import json
+import os
+import shutil
+import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,3 +53,32 @@ def test_headless_output_is_resolved_from_external_build_directory():
 
     assert "$pulsarExe = Join-Path $upstreamBuildDir" in script
     assert "rundir\\RelWithDebInfo\\bin\\64bit\\pulsar.exe" in script
+
+
+@pytest.mark.parametrize("browser", ["ON", "OFF"])
+@pytest.mark.parametrize("frontend", ["ON", "OFF"])
+def test_fast_cache_gate_executes_with_preserved_browser_capability(tmp_path, browser, frontend):
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("PowerShell required for the actual Windows build-cache gate")
+    script = (ROOT / "scripts" / "build-win.ps1").read_text(encoding="utf-8")
+    gate = script[script.index("$upstreamCache =") : script.index("if ($Stage -in @('configure', 'all') -and -not $reuseFastUpstreamConfigure)")]
+    (tmp_path / "CMakeCache.txt").write_text(
+        f"ENABLE_FRONTEND:BOOL={frontend}\nENABLE_UI:BOOL=OFF\n"
+        f"ENABLE_BROWSER:BOOL={browser}\nENABLE_WEBSOCKET:BOOL=OFF\n", encoding="utf-8"
+    )
+    command = (
+        "$ErrorActionPreference='Stop'; $Fast=$true; [switch]$Full=$false; "
+        "$upstreamBuildDir=$env:PULSAR_TEST_CACHE; " + gate +
+        "\n@{full=[bool]$Full;reused=$reuseFastUpstreamConfigure} | ConvertTo-Json -Compress"
+    )
+    result = subprocess.run(
+        [pwsh, "-NoProfile", "-Command", command], capture_output=True, text=True,
+        env={**os.environ, "PULSAR_TEST_CACHE": str(tmp_path)}, timeout=30,
+    )
+    if frontend == "ON":
+        assert result.returncode != 0
+        assert "compatible headless" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == {"full": browser == "ON", "reused": True}

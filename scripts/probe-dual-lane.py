@@ -437,7 +437,14 @@ def cef_page_html(lane: str | None = None) -> bytes:
     if lane not in ("A", "B"):
         return CEF_PAGE_HTML
     marker = f"PULSAR CEF #246 / LANE {lane}".encode("ascii")
-    return CEF_PAGE_HTML.replace(b"PULSAR CEF #246</h1>", marker + b"</h1>")
+    page = CEF_PAGE_HTML.replace(b"PULSAR CEF #246</h1>", marker + b"</h1>")
+    # A small, opaque lane marker supports decoded-content evidence. The
+    # decoder still decodes the complete frame; only diagnostic checksums are
+    # cropped. Both lanes retain the same WGC/CEF workload and geometry.
+    colour = "#000000" if lane == "A" else "#ffffff"
+    patch = (f'<div id="decoded-lane-marker" style="position:fixed;right:0;bottom:0;'
+             f'width:64px;height:64px;background:{colour};z-index:9999"></div>').encode("ascii")
+    return page.replace(b"</body>", patch + b"</body>")
 
 
 class _DeterministicCefHandler(http.server.BaseHTTPRequestHandler):
@@ -843,6 +850,167 @@ def compute_auth(password: str, salt: str, challenge: str) -> str:
     ).decode("ascii")
 
 
+def decoded_marker_lane(frame: dict[str, int]) -> str:
+    """Classify the probe's opaque 64x64 neutral black/white marker only."""
+    values = [frame.get(key) for key in ("y_mean", "u_mean", "v_mean")]
+    if any(type(value) is not int or not 0 <= value <= 255 for value in values):
+        raise ProbeFailure("decoded marker has missing or invalid plane means")
+    y, u, v = values
+    if abs(u - 128) > 8 or abs(v - 128) > 8:
+        raise ProbeFailure("decoded marker is not neutral black/white")
+    if y <= 32:
+        return "A"
+    if y >= 220:
+        return "B"
+    raise ProbeFailure("decoded marker is ambiguous; no lane evidence")
+
+
+def validate_decoded_sequence(frames: list[dict[str, int]]) -> None:
+    """A missing/repeated frame invalidates any claim of earliest change."""
+    for index, frame in enumerate(frames):
+        if frame.get("frame_index") != index:
+            raise ProbeFailure("decoded sequence has a missing or duplicate frame index")
+        if index:
+            previous = frames[index - 1]
+            if not 15 <= frame["pts_ms"] - previous["pts_ms"] <= 18:
+                raise ProbeFailure("decoded sequence is not continuous 60fps presentation order")
+            if frame["observed_at_monotonic_ns"] < previous["observed_at_monotonic_ns"]:
+                raise ProbeFailure("decoded observation clock went backwards")
+
+
+def first_changed_marker(frames: list[dict[str, int]], *, expected_pts_ms: float,
+                         old_lane: str, new_lane: str) -> dict[str, int]:
+    """Find the first *observed marker* transition around the committed PTS.
+
+    The +/- one millisecond mapping tolerance is below a frame period. Allow
+    at most two later pictures, retaining every old/ambiguous sample instead
+    of skipping it. This does not certify a physical display or all pixels.
+    """
+    if old_lane not in ("A", "B") or new_lane not in ("A", "B") or old_lane == new_lane:
+        raise ProbeFailure("decoded marker audit requires distinct old/new lanes")
+    candidates = [i for i, frame in enumerate(frames) if frame["pts_ms"] >= expected_pts_ms - 1.0]
+    if not candidates or candidates[0] == 0:
+        raise ProbeFailure("decoded marker has no preceding old-lane frame")
+    first_index = candidates[0]
+    if decoded_marker_lane(frames[first_index - 1]) != old_lane:
+        raise ProbeFailure(f"decoded marker preceding committed PTS is not the old lane: "
+                           f"expected_pts_ms={expected_pts_ms}; previous={frames[first_index - 1]}; expected_old={old_lane}")
+    for frame in frames[first_index:first_index + 3]:
+        if frame["pts_ms"] > expected_pts_ms + 35:
+            break
+        if decoded_marker_lane(frame) == new_lane:
+            return frame
+    raise ProbeFailure("decoded marker did not change within two frames of committed PTS")
+
+
+def correlate_native_packet_content(records: list[dict[str, object]], receiver_packets: list[dict[str, object]],
+                                    runtime_id: str) -> dict[int, dict[str, object]]:
+    """Join authenticated input content to exact FLV packets, not elapsed time.
+
+    A stalled renderer can repeat one content identity across many cadence PTS.
+    Subtracting a content-time delta from media PTS is invalid in that case.
+    Only an unreceived shutdown tail may be omitted from this map.
+    """
+    mux_offset_ms: int | None = None
+    receivers = {int(p["packet_index"]): p for p in receiver_packets}
+    if len(receivers) != len(receiver_packets):
+        raise ProbeFailure("native content audit has duplicate receiver packet indices")
+    last_receiver = max(receivers, default=-1)
+    result: dict[int, dict[str, object]] = {}
+    previous_index: int | None = None
+    fields = {"record_type", "clock_domain", "runtime_instance_id", "packet_index", "packet_pts", "packet_dts",
+              "packet_timebase_num", "packet_timebase_den", "packet_content_pts_monotonic_ns",
+              "packet_cts_monotonic_ns", "packet_fer_monotonic_ns", "packet_ferc_monotonic_ns",
+              "observed_at_monotonic_ns"}
+    for record in records:
+        if record.get("record_type") != "packet_content":
+            continue
+        if set(record) - {"trace_integrity"} != fields or record.get("runtime_instance_id") != runtime_id \
+                or record.get("clock_domain") != "monotonic_ns":
+            raise ProbeFailure("native content audit schema/runtime mismatch")
+        index = _packet_int(record["packet_index"], "native audit index")
+        if previous_index is not None and index != previous_index + 1:
+            raise ProbeFailure("native content audit has missing or duplicate packet indices")
+        previous_index = index
+        cts, content, fer, ferc, observed = [
+            _packet_int(record[key], "native audit " + key) for key in (
+                "packet_cts_monotonic_ns", "packet_content_pts_monotonic_ns", "packet_fer_monotonic_ns",
+                "packet_ferc_monotonic_ns", "observed_at_monotonic_ns")]
+        if not (0 < cts <= fer <= ferc <= observed and 0 < content <= fer):
+            raise ProbeFailure("native content audit timing is incomplete or inconsistent")
+        producer_pts, producer_dts = _producer_packet_times(record)
+        if index > last_receiver:
+            continue
+        receiver = receivers.get(index)
+        # flv-mux.c/get_ms_time truncates each signed PTS/DTS towards zero
+        # before subtracting the integral start_dts_offset. In particular,
+        # negative startup DTS cannot share a round-to-nearest interval with
+        # positive timestamps. Match the actual mux arithmetic exactly.
+        pts_offset = int(receiver["packet_pts"]) - int(producer_pts * 1000) if receiver else None
+        dts_offset = int(receiver["packet_dts"]) - int(producer_dts * 1000) if receiver else None
+        if receiver is None or pts_offset != dts_offset or (mux_offset_ms is not None and pts_offset != mux_offset_ms):
+            raise ProbeFailure("native content audit packet/mux identity mismatch")
+        mux_offset_ms = pts_offset
+        pts = int(receiver["packet_pts"])
+        if pts in result:
+            raise ProbeFailure("native content audit has ambiguous presentation PTS")
+        result[pts] = record
+    ordered_content = [int(result[pts]["packet_content_pts_monotonic_ns"]) for pts in sorted(result)]
+    if any(b < a for a, b in zip(ordered_content, ordered_content[1:])):
+        raise ProbeFailure("native content audit goes backwards in presentation order")
+    return result
+
+
+def first_native_content_pts(content_map: dict[int, dict[str, object]], commit_pts_ns: int) -> int:
+    ordered = sorted(content_map)
+    eligible = [pts for pts in ordered
+                if int(content_map[pts]["packet_content_pts_monotonic_ns"]) >= commit_pts_ns]
+    if not eligible or ordered.index(eligible[0]) == 0:
+        raise ProbeFailure("native content audit has no complete pre/post-commit boundary")
+    return eligible[0]
+
+
+class DecodedMarkerMetadata:
+    """One dedicated metadata writer; never infer missing pixels from log text.
+
+    FFmpeg showinfo emits each plane mean in separate av_log calls, allowing
+    other threads to interleave inside a frame's diagnostic line. The metadata
+    filter instead writes complete key/value lines through direct AVIO. Keep
+    it on the same pipe as demux observations to retain observation ordering.
+    """
+
+    def __init__(self) -> None:
+        self.pending: dict[str, int] | None = None
+
+    def feed(self, line: str, observed_ns: int) -> dict[str, int] | None:
+        header = re.search(r"\bframe:\s*(\d+)\s+pts:\s*(-?\d+)\s+pts_time:", line)
+        if header:
+            if self.pending is not None:
+                raise ProbeFailure("decoded metadata frame ended before all three plane means")
+            self.pending = {"frame_index": int(header.group(1)), "pts_ms": int(header.group(2))}
+        for plane, raw in re.findall(r"lavfi\.signalstats\.([YUV])AVG=([^\s]+)", line):
+            if self.pending is None:
+                raise ProbeFailure("decoded metadata plane mean has no frame identity")
+            key = plane.lower() + "_mean"
+            if key in self.pending:
+                raise ProbeFailure("decoded metadata repeats a plane mean")
+            try:
+                value = Decimal(raw)
+                if not value.is_finite() or not 0 <= value <= 255:
+                    raise ValueError("out of range")
+                # Match showinfo's integer rounding, retaining the existing
+                # strict neutral black/white classifier and thresholds.
+                self.pending[key] = int((value + Decimal("0.5")).to_integral_value(rounding="ROUND_FLOOR"))
+            except (InvalidOperation, ValueError) as exc:
+                raise ProbeFailure("decoded metadata plane mean is invalid") from exc
+        if self.pending is not None and all(key in self.pending for key in ("y_mean", "u_mean", "v_mean")):
+            frame = self.pending
+            frame["observed_at_monotonic_ns"] = observed_ns
+            self.pending = None
+            return frame
+        return None
+
+
 class RtmpReceiver:
     """Own a real FFmpeg RTMP loopback receiver for AC-12 evidence.
 
@@ -850,10 +1018,33 @@ class RtmpReceiver:
     oracle.  ``-debug_ts`` packet records are timestamped when the receiver
     process emits its demux line; that is explicitly a receiver/demux
     observation and is never promoted to wire-level or decoded latency.
+    Optional decode_frames separately observes the same candidate packet's
+    decoded picture at showinfo, including log delivery delay. This is not
+    an oracle for the earliest visible changed picture or physical display.
     """
 
-    def __init__(self, ffmpeg: str, *, runtime_id: str, stream_id: str) -> None:
+    def __init__(self, ffmpeg: str, *, runtime_id: str, stream_id: str, decode_frames: bool = False,
+                 audit_marker: bool = False, decoder_mode: str = "software",
+                 require_native_content: bool = False, native_runtime_dir: pathlib.Path | None = None) -> None:
         self.ffmpeg = ffmpeg
+        self.decode_frames = decode_frames
+        if decoder_mode not in ("software", "nvdec-lowdelay", "native-software"):
+            raise ProbeFailure("unsupported decoder mode")
+        if decoder_mode != "software" and not decode_frames:
+            raise ProbeFailure("selected receiver mode requires decoding")
+        self.decoder_mode = decoder_mode
+        if decoder_mode == "native-software" and not audit_marker:
+            raise ProbeFailure("native receiver requires decoded marker audit")
+        self.native_runtime_dir = native_runtime_dir
+        self.native_clock_ready = False
+        self.stderr_thread: threading.Thread | None = None
+        if audit_marker and not decode_frames:
+            raise ProbeFailure("decoded marker audit requires decoding")
+        self.audit_marker = audit_marker
+        self.require_native_content = require_native_content
+        self.native_content_map: dict[int, dict[str, object]] = {}
+        self.decoded_frames: list[dict[str, int]] = []
+        self.marker_metadata = DecodedMarkerMetadata()
         self.runtime_id = runtime_id
         if ID_RE.fullmatch(stream_id) is None:
             raise ProbeFailure("RTMP stream_id must be a non-empty identifier of at most 128 characters")
@@ -891,7 +1082,8 @@ class RtmpReceiver:
             "server_url": self.server_url,
             "stream_key": self.stream_key,
             "endpoint": self.endpoint,
-            "receiver_id": "ffmpeg-rtmp-receiver",
+            "receiver_id": "pulsar-native-rtmp-receiver" if self.decoder_mode == "native-software" else "ffmpeg-rtmp-receiver",
+            "decoder_mode": self.decoder_mode,
             "stream_id": self.stream_id,
             "clock_source": str(source),
             "clock_offset_ns": offset,
@@ -900,10 +1092,22 @@ class RtmpReceiver:
             "packet_timebase_den": RTMP_PACKET_TIMEBASE_DEN,
         }
 
+    def decoder_input_options(self) -> list[str]:
+        options = ["-copyts", "-threads", "1"]
+        if self.decoder_mode == "nvdec-lowdelay":
+            # CUVID sets parser ulMaxDisplayDelay=0. This does NOT enable the
+            # software decoder's reorder bypass. Qualification compares full
+            # decoded PTS and pixel hashes with two-B-frame input.
+            options += ["-c:v", "h264_cuvid", "-flags", "low_delay"]
+        return options
+
     def start(self) -> None:
         if self.proc is not None:
             raise ProbeFailure("RTMP receiver was started twice")
         self.calibration = calibrate_wire_clock()
+        if self.decoder_mode == "native-software":
+            self._start_native()
+            return
         command = [
             self.ffmpeg,
             "-hide_banner",
@@ -935,6 +1139,21 @@ class RtmpReceiver:
             "null",
             "-",
         ]
+        if self.decode_frames:
+            # Preserve the demux PTS at the diagnostic filter. One decoder
+            # thread avoids FFmpeg frame-thread queueing; codec reordering is
+            # retained. This changes receiver workload, not the encoded stream.
+            input_index = command.index("-i")
+            command[input_index:input_index] = self.decoder_input_options()
+            decoder_filter = "settb=expr=1/1000,"
+            if self.audit_marker:
+                decoder_filter += "crop=32:32:1888:508,signalstats,metadata=mode=print:file='pipe\\:1':direct=1"
+            else:
+                decoder_filter += "showinfo"
+            command.extend([
+                "-map", "0:v:0", "-an", "-vf", decoder_filter,
+                "-fps_mode", "passthrough", "-f", "null", "-",
+            ])
         self.proc = subprocess.Popen(
             command,
             cwd=str(REPO_ROOT),
@@ -952,11 +1171,104 @@ class RtmpReceiver:
             self.stop()
             raise ProbeFailure("RTMP receiver exited before Pulsar could connect: " + " | ".join(self.lines[-20:]))
 
+    def _start_native(self) -> None:
+        executable = REPO_ROOT / "build/tests/nv-probe/RelWithDebInfo/native-rtmp-receiver.exe"
+        if not executable.is_file() or self.native_runtime_dir is None:
+            raise ProbeFailure("native receiver binary/runtime directory is unavailable")
+        environment = dict(os.environ)
+        environment["PATH"] = str(self.native_runtime_dir) + os.pathsep + environment.get("PATH", "")
+        self.proc = subprocess.Popen(
+            [str(executable), "--listen", "--input", self.endpoint],
+            cwd=str(REPO_ROOT), env=environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="strict",
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        self.thread = threading.Thread(target=self._pump, name="pulsar-native-rtmp", daemon=True)
+        self.stderr_thread = threading.Thread(target=self._pump_native_stderr, name="pulsar-native-rtmp-errors", daemon=True)
+        self.thread.start()
+        self.stderr_thread.start()
+        deadline = time.monotonic() + 5
+        while not self.native_clock_ready and self.proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(.01)
+        if not self.native_clock_ready or self.failure:
+            self.stop()
+            raise ProbeFailure("native receiver did not establish its QPC clock: " + " | ".join(self.lines[-10:]))
+
+    def _pump_native_stderr(self) -> None:
+        process = self.proc
+        if process is not None and process.stderr is not None:
+            for line in process.stderr:
+                with self._lock:
+                    self.lines.append("native stderr: " + line.rstrip())
+
+    def _consume_native_line(self, line: str) -> None:
+        value = json.loads(line)
+        if not isinstance(value, dict):
+            raise ProbeFailure("native receiver record must be an object")
+        kind = value.get("kind")
+        if kind == "ready":
+            frequency = _packet_int(value.get("clock_frequency"), "native clock frequency")
+            if self.native_clock_ready or frequency <= 0 or value.get("clock") != "libobs_qpc" or value.get("threads") != 1:
+                raise ProbeFailure("native receiver clock/decoder handshake is invalid")
+            # Both endpoints call the same libobs QPC conversion. The bound
+            # is one hardware clock tick, not Python pipe-delivery latency.
+            self.calibration = {"source": "qpc", "qpc_delta_ns": 0,
+                                "qpc_bound_ns": max(1, (1_000_000_000 + frequency - 1) // frequency)}
+            self.native_clock_ready = True
+            return
+        if not self.native_clock_ready:
+            raise ProbeFailure("native receiver emitted data before its clock identity")
+        if kind == "error":
+            raise ProbeFailure(f"native receiver failed with code {value.get('code')}")
+        if kind == "end":
+            if value.get("packets") != len(self.packets) or value.get("frames") != len(self.decoded_frames):
+                raise ProbeFailure("native receiver final counts disagree with observations")
+            return
+        observed = _packet_int(value.get("observed_at_monotonic_ns"), "native observation timestamp")
+        if observed <= 0:
+            raise ProbeFailure("native receiver observation clock is invalid")
+        if kind == "packet":
+            index = _packet_int(value.get("packet_index"), "native packet index")
+            pts = _packet_int(value.get("packet_pts"), "native packet PTS", non_negative=False)
+            dts = _packet_int(value.get("packet_dts"), "native packet DTS", non_negative=False)
+            if index != len(self.packets):
+                raise ProbeFailure("native receiver packet sequence is incomplete")
+            with self._lock:
+                self.packets.append({"packet_index": index, "packet_pts": pts, "packet_dts": dts,
+                                     "packet_pts_time_ms": pts, "packet_dts_time_ms": dts,
+                                     "observed_at_monotonic_ns": observed,
+                                     "packet_identity": _rtmp_packet_identity(self.stream_id, index, pts, dts)})
+        elif kind == "frame":
+            index = _packet_int(value.get("frame_index"), "native frame index")
+            if index != len(self.decoded_frames):
+                raise ProbeFailure("native receiver frame sequence is incomplete")
+            frame = {"frame_index": index, "pts_ms": _packet_int(value.get("pts_ms"), "native frame PTS", non_negative=False),
+                     "observed_at_monotonic_ns": observed}
+            for plane in ("y_mean", "u_mean", "v_mean"):
+                mean = _packet_int(value.get(plane), "native " + plane)
+                if mean > 255:
+                    raise ProbeFailure("native receiver plane mean is invalid")
+                frame[plane] = mean
+            with self._lock:
+                self.decoded_frames.append(frame)
+        else:
+            raise ProbeFailure("native receiver emitted an unknown record kind")
+
     def _pump(self) -> None:
         process = self.proc
         if process is None or process.stdout is None:
             return
         for line in process.stdout:
+            if self.decoder_mode == "native-software":
+                try:
+                    with self._lock:
+                        self.lines.append(line.rstrip())
+                    self._consume_native_line(line)
+                except (ProbeFailure, ValueError, TypeError) as exc:
+                    with self._lock:
+                        self.failure = str(exc)
+                continue
             received_at = wire_monotonic_ns()
             calibration = self.calibration
             offset = calibration.get("qpc_delta_ns", 0) if calibration is not None else 0
@@ -972,6 +1284,25 @@ class RtmpReceiver:
             clean = line.rstrip("\r\n")
             with self._lock:
                 self.lines.append(clean)
+            if self.audit_marker:
+                try:
+                    decoded_frame = self.marker_metadata.feed(clean, received_at)
+                    if decoded_frame is not None:
+                        with self._lock:
+                            self.decoded_frames.append(decoded_frame)
+                except ProbeFailure as exc:
+                    with self._lock:
+                        self.failure = str(exc)
+            if self.decode_frames and not self.audit_marker and "showinfo" in clean:
+                decoded = re.search(r"\bn:\s*(\d+)\s+pts:\s*(-?\d+)\s+pts_time:", clean)
+                if decoded:
+                    with self._lock:
+                        decoded_frame = {
+                            "frame_index": int(decoded.group(1)),
+                            "pts_ms": int(decoded.group(2)),
+                            "observed_at_monotonic_ns": received_at,
+                        }
+                        self.decoded_frames.append(decoded_frame)
             match = RTMP_PACKET_RE.search(clean)
             if match is None:
                 continue
@@ -1045,6 +1376,7 @@ class RtmpReceiver:
             "failure": failure,
             "packet_count": len(packets),
             "packets": packets,
+            "decoded_frames": list(self.decoded_frames),
             "line_tail": line_tail,
         }
         diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1094,6 +1426,10 @@ class RtmpReceiver:
                 self.thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
             if self.thread.is_alive():
                 failure = failure or "RTMP receiver reader thread did not exit"
+        if self.stderr_thread is not None:
+            self.stderr_thread.join(timeout=PROCESS_READER_JOIN_TIMEOUT_S)
+            if self.stderr_thread.is_alive():
+                failure = failure or "native receiver diagnostic reader did not exit"
         if failure is not None:
             self.failure = failure
             raise ProbeFailure(failure)
@@ -1293,14 +1629,27 @@ class RtmpReceiver:
             raise ProbeFailure("producer trace already contains RTMP observations; fusion would double-count receiver data")
         if not encoded:
             raise ProbeFailure("producer trace contains no encoded packet observations for RTMP correlation")
+        if self.decode_frames and any(record.get("boundary") == "decoded_first_frame" for record in records):
+            raise ProbeFailure("producer already contains decoded observations")
         receiver_packets, receiver_failure = self.snapshot()
         if not receiver_packets:
             raise ProbeFailure("RTMP receiver emitted no demuxed video packet observations")
         if receiver_failure:
             raise ProbeFailure(receiver_failure)
 
+        native_content_records = [r for r in records if r.get("record_type") == "packet_content"]
+        self.native_content_map = correlate_native_packet_content(native_content_records, receiver_packets,
+                                                                  self.runtime_id)
+        if self.require_native_content and not self.native_content_map:
+            raise ProbeFailure("native packet content audit required but absent")
+
         correlation = RtmpPacketCorrelation()
         rtmp_observations: list[dict[str, object]] = []
+        decoded_observations: list[dict[str, object]] = []
+        commits = {r["event"]["take_command_id"]: r["event"] for r in records
+                   if r.get("record_type") == "event" and r["event"].get("event_type") == "TakeCommitted"}
+        commit_order = sorted(commits, key=lambda key: (commits[key]["observed_at_monotonic_ns"], commits[key]["server_seq"]))
+        measured_ids = set(commit_order[int(session["warmup_takes"]):])
         for producer in encoded:
             candidates = correlation.candidates(producer, receiver_packets)
             if len(candidates) != 1:
@@ -1345,16 +1694,115 @@ class RtmpReceiver:
                     "clock_source": self.metadata()["clock_source"],
                     "clock_offset_ns": self.metadata()["clock_offset_ns"],
                     "clock_bound_ns": self.metadata()["clock_bound_ns"],
-                    "notes": "first video packet observed at FFmpeg RTMP demux; not wire-level or decoded timing",
+                    "notes": "first video packet observed at RTMP demux; not wire-level or decoded timing",
                 }
             )
+            if self.decode_frames:
+                matching_frames = [frame for frame in self.decoded_frames if frame["pts_ms"] == packet["packet_pts"]]
+                if len(matching_frames) != 1:
+                    raise ProbeFailure(
+                        f"decoded frame correlation for {producer.get('take_command_id')}: "
+                        f"expected one frame at RTMP PTS {packet['packet_pts']}, got {len(matching_frames)}"
+                    )
+                frame = matching_frames[0]
+                if frame["observed_at_monotonic_ns"] < int(packet["observed_at_monotonic_ns"]):
+                    raise ProbeFailure("decoded-frame observation precedes its demux packet")
+                decoded_observations.append({
+                    "record_type": "observation", "boundary": "decoded_candidate_frame",
+                    "clock_domain": "monotonic_ns",
+                    **{key: producer[key] for key in (
+                        "runtime_instance_id", "command_id", "intent_id", "take_command_id",
+                        "revisions", "frame_id", "pts_ns",
+                    )},
+                    "observed_at_monotonic_ns": frame["observed_at_monotonic_ns"],
+                    "valid": True, "surface": "RTMP", "consumer": "decoder",
+                    "decoder": self._decoder_identity(frame, packet, "selected_candidate"),
+                    "notes": (
+                        f"{'Native libavcodec frame-ready QPC' if self.decoder_mode == 'native-software' else 'FFmpeg pipe'} observation; decoder_threads=1; "
+                        f"frame_index={frame['frame_index']}; packet_index={packet['packet_index']}; "
+                        f"pts_ms={frame['pts_ms']}; includes decoder reorder and log delivery; "
+                        "same RTMP PTS as correlated encoded candidate; not display/antenna latency"
+                    ),
+                })
+                if self.audit_marker and producer["take_command_id"] in measured_ids:
+                    # Shutdown may truncate a later decoder tail. It cannot
+                    # invalidate or supply frames before this candidate; any
+                    # gap through the candidate itself still fails closed.
+                    validate_decoded_sequence(self.decoded_frames[:frame["frame_index"] + 1])
+                    commit = commits[producer["take_command_id"]]
+                    if "packet_content_pts_monotonic_ns" not in producer:
+                        raise ProbeFailure("decoded marker requires native packet content timestamp; cadence CTS is insufficient")
+                    if self.native_content_map:
+                        expected_pts_ms = first_native_content_pts(self.native_content_map, int(commit["pts_ns"]))
+                    else:
+                        # Legacy archived traces did not carry every native
+                        # packet. New runtime marker probes require the map.
+                        expected_pts_ms = int(packet["packet_pts"]) + (
+                            int(commit["pts_ns"]) - int(producer["packet_content_pts_monotonic_ns"])) / 1e6
+                    marker = first_changed_marker(
+                        self.decoded_frames, expected_pts_ms=expected_pts_ms,
+                        old_lane=commit["previous_role_map"]["on_air"], new_lane=commit["role_map"]["on_air"])
+                    marker_packets = [p for p in receiver_packets if p["packet_pts"] == marker["pts_ms"]]
+                    if len(marker_packets) != 1:
+                        raise ProbeFailure("decoded marker packet PTS is missing or ambiguous")
+                    marker_packet = marker_packets[0]
+                    if marker["observed_at_monotonic_ns"] < int(marker_packet["observed_at_monotonic_ns"]):
+                        raise ProbeFailure("decoded marker precedes its demux packet")
+                    if decoded_marker_lane(frame) != commit["role_map"]["on_air"]:
+                        raise ProbeFailure("decoded candidate marker is not the committed new lane")
+                    if marker["frame_index"] > frame["frame_index"]:
+                        raise ProbeFailure("first changed marker follows selected candidate")
+                    decoded_observations.append({
+                        **decoded_observations[-1], "boundary": "decoded_marker_first_frame",
+                        "observed_at_monotonic_ns": marker["observed_at_monotonic_ns"],
+                        "decoder": self._decoder_identity(marker, marker_packet, "first_changed_marker"),
+                        "notes": "First changed 64x64 lane marker in continuous decoded presentation order; "
+                                 "PTS aligned to committed frame; includes pipe delay; not display/antenna latency",
+                    })
+        for boundary, enabled in (("decoded_candidate_frame", self.decode_frames),
+                                  ("decoded_marker_first_frame", self.audit_marker)):
+            if enabled and boundary not in paths:
+                paths.append(boundary)
         session["rtmp_receiver"] = {**self.metadata(), **correlation.metadata()}
         merged = [
             session,
-            *records[1:],
+            *(record for record in records[1:] if record.get("record_type") != "packet_content"),
             *sorted(rtmp_observations, key=lambda item: int(cast(int, item["packet_index"]))),
+            *decoded_observations,
         ]
         self._install_fused_records(merged, output_path)
+        if self.decode_frames and self._trace_key_hex:
+            # Keep all frames/packets, not merely the selected samples, so
+            # earliest-marker and continuity assertions can be independently
+            # replayed. Anchor this companion with the same private run key.
+            audit_records = [{"record_type": "decoder_audit", "schema": "pulsar.decoder-audit.v1",
+                              "runtime_instance_id": self.runtime_id, "session_id": session["session_id"],
+                              "marker_crop": "32:32:1888:508" if self.audit_marker else None,
+                              "decoder_threads": 1, "clock": self.metadata(),
+                              "decoder_mode": self.decoder_mode,
+                              "content_alignment": "native_packet_audit_v1" if self.native_content_map else "legacy_linear_time",
+                              "boundary": ("libavcodec_receive_frame_qpc_not_display" if self.decoder_mode == "native-software"
+                                           else "signalstats_metadata_pipe_not_display" if self.audit_marker else "showinfo_pipe_not_display")}]
+            audit_records.extend({"record_type": "frame", **item} for item in self.decoded_frames)
+            audit_records.extend({"record_type": "packet", **item} for item in receiver_packets)
+            audit_records.extend(native_content_records)
+            trace_integrity.write_trace(output_path.with_name(output_path.name + ".decoder-audit.jsonl"),
+                                        audit_records, key_hex=self._trace_key_hex)
+
+    def _decoder_identity(self, frame: dict[str, int], packet: dict[str, object], kind: str) -> dict[str, object]:
+        content = self.native_content_map.get(frame["pts_ms"])
+        return {
+            "kind": kind, "frame_index": frame["frame_index"], "frame_pts_ms": frame["pts_ms"],
+            "decoder_mode": self.decoder_mode,
+            **({"content_alignment": "native_packet_audit_v1",
+                "content_pts_monotonic_ns": content["packet_content_pts_monotonic_ns"]} if content else {}),
+            **{key: packet[key] for key in ("packet_index", "packet_pts", "packet_dts", "packet_identity")},
+            "demux_observed_monotonic_ns": packet["observed_at_monotonic_ns"],
+            "clock_bound_ns": self.metadata()["clock_bound_ns"],
+            "marker_lane": decoded_marker_lane(frame) if self.audit_marker and "y_mean" in frame
+                           and frame["u_mean"] in range(120, 137) and frame["v_mean"] in range(120, 137)
+                           and (frame["y_mean"] <= 32 or frame["y_mean"] >= 220) else "unobserved",
+        }
 
 
 def _windows_create_inherited_shutdown_event() -> int:
@@ -1443,11 +1891,13 @@ class PulsarProcess:
         trace_host: str | None = None,
         trace_gpu: str | None = None,
         return_transport: str | None = None,
+        packet_content_audit: bool = False,
     ) -> None:
         self.exe = exe
         self.encoder = encoder
         self.record_dir = record_dir
         self.trace_path = trace_path
+        self.packet_content_audit = packet_content_audit
         self.runtime_id = runtime_id or f"runtime-{secrets.token_hex(8)}"
         self.resource_mode = resource_mode
         self.trace_append = trace_append
@@ -1503,6 +1953,7 @@ class PulsarProcess:
         env["PULSAR_PASSWORD"] = self.password
         env["PULSAR_RECORD_DIR"] = str(self.record_dir)
         env["PULSAR_VIDEO_ENCODER"] = self.encoder
+        env["PULSAR_TRACE_PACKET_CONTENT"] = "1" if self.packet_content_audit else "0"
         if self.return_transport is not None:
             env["PULSAR_RETURN_TRANSPORT"] = self.return_transport
         # The inherited shutdown-control acknowledgement is keyed by this
@@ -2608,11 +3059,12 @@ def prepare_record_directory(requested: pathlib.Path | None) -> tuple[Any, pathl
         raise ProbeFailure(f"--record-dir cannot be resolved: {exc}") from exc
     repository = REPO_ROOT.resolve()
     try:
-        destination.relative_to(repository)
+        relative = destination.relative_to(repository)
     except ValueError:
         pass
     else:
-        raise ProbeFailure("--record-dir must be outside the Pulsar repository")
+        if len(relative.parts) < 4 or relative.parts[0] != "evidence":
+            raise ProbeFailure("--record-dir must be outside the Pulsar repository or below evidence/<issue>/<role>/<run>")
 
     if destination.exists() and not destination.is_dir():
         raise ProbeFailure(f"--record-dir is not a directory: {destination}")
@@ -3091,6 +3543,38 @@ async def create_public_lane_scenes(
                     "webpage_control_level": 0,
                 },
             )
+async def arrange_measured_workload(inbox: Inbox, ws: Any) -> None:
+    """After lifecycle checks, keep real WGC and CEF visible in encoded output.
+
+    Creation of full-canvas mutation colors otherwise occludes the workload.
+    Source instances remain 960x540 WGC / 1920x1080 CEF; CEF is composited in
+    the right 960x540 region, with its decoded marker at (1888, 508).
+    """
+    for lane, scene in (("A", SCENE_A), ("B", SCENE_B)):
+        response = await request(inbox, ws, "GetSceneItemList", f"measured-items-{lane}", {"sceneName": scene})
+        assert_success(response, "GetSceneItemList(measured workload)")
+        items = (response.get("responseData") or response)["sceneItems"]
+        for kind, x, scale in (("window_capture", 0.0, 1.0), ("browser_source", 960.0, 0.5)):
+            name = LANE_SOURCE_NAMES[lane][kind]
+            matching = [item for item in items if item.get("sourceName") == name]
+            if len(matching) != 1:
+                raise ProbeFailure(f"measured composition lacks exact source {name}")
+            item_id = matching[0]["sceneItemId"]
+            identity = {"sceneName": scene, "sceneItemId": item_id}
+            transform = {"positionX": x, "positionY": 0.0, "scaleX": scale, "scaleY": scale,
+                         "rotation": 0.0, "alignment": 5, "boundsType": "OBS_BOUNDS_NONE"}
+            assert_success(await request(inbox, ws, "SetSceneItemTransform", f"measured-transform-{name}",
+                                         {**identity, "sceneItemTransform": transform}), "SetSceneItemTransform(measured)")
+            assert_success(await request(inbox, ws, "SetSceneItemIndex", f"measured-index-{name}",
+                                         {**identity, "sceneItemIndex": len(items) - 1}), "SetSceneItemIndex(measured)")
+            observed = await request(inbox, ws, "GetSceneItemTransform", f"measured-readback-{name}", identity)
+            assert_success(observed, "GetSceneItemTransform(measured)")
+            actual = (observed.get("responseData") or observed)["sceneItemTransform"]
+            if any(actual.get(key) != value for key, value in transform.items()):
+                raise ProbeFailure(f"measured transform did not persist for {name}")
+    print("   measured composition: WGC left and CEF right above retained lifecycle colors; decoded marker 32:32:1888:508")
+
+
 async def verify_workload_sources(
     inbox: Inbox,
     ws: Any,
@@ -4143,6 +4627,9 @@ async def drive(
                     "post-commit Preview after 30 frames",
                 )
 
+            if number == 2 and process.trace_path is not None:
+                await arrange_measured_workload(inbox, ws)
+
         # The native sampler runs on its own cadence.  For the dual-lane
         # capacity append, keep both outputs alive after the final Take until
         # the requested number of observed active NVENC+RTMP samples exists.
@@ -4459,6 +4946,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="return transport policy propagated to Pulsar and DirectShow (default: PULSAR_RETURN_TRANSPORT)",
     )
     parser.add_argument(
+        "--decode-rtmp", action="store_true",
+        help="also observe decoded candidate frames in FFmpeg (one thread, PTS correlation; no display guarantee)",
+    )
+    parser.add_argument("--audit-decoded-marker", action="store_true",
+                        help="audit first changed CEF lane marker in decoded display order; requires local CEF page")
+    parser.add_argument("--rtmp-decoder", choices=("software", "nvdec-lowdelay", "native-software"), default="software",
+                        help="explicit receiver decoder; NVDEC requires decoded continuity/pixel qualification")
+    parser.add_argument(
         "--cef-url",
         default=os.environ.get("PULSAR_CEF_URL"),
         help="URL for the --cef-workload browser_source (or PULSAR_CEF_URL; default is an ephemeral local page)",
@@ -4466,6 +4961,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.takes < 1:
         parser.error("--takes must be >= 1")
+    if args.decode_rtmp and not args.rtmp_receiver:
+        parser.error("--decode-rtmp requires --rtmp-receiver")
+    if args.rtmp_decoder != "software" and not args.decode_rtmp:
+        parser.error("--rtmp-decoder nvdec-lowdelay requires --decode-rtmp")
     if args.runtime_id and args.trace is None:
         parser.error("--runtime-id requires --trace")
     if args.resource_mode and args.trace is None:
@@ -4499,6 +4998,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         not args.build_revision or BUILD_REVISION_RE.fullmatch(args.build_revision) is None
     ):
         parser.error("--trace requires --build-revision to be the exact 40-character lowercase candidate SHA")
+    if args.audit_decoded_marker and (not args.decode_rtmp or not args.cef_workload or args.cef_url):
+        parser.error("--audit-decoded-marker requires --decode-rtmp, --cef-workload and the built-in CEF page")
     if args.cef_workload and not args.capture_window:
         parser.error("--cef-workload requires --capture-window for a visible WGC target")
     if args.trace is not None and (not args.capture_window or not args.cef_workload):
@@ -4573,6 +5074,7 @@ def run(args: argparse.Namespace) -> int:
             trace_host,
             trace_gpu,
             args.return_transport,
+            packet_content_audit=args.audit_decoded_marker,
         )
         if args.rtmp_receiver:
             if rtmp_ffmpeg is None:
@@ -4582,6 +5084,11 @@ def run(args: argparse.Namespace) -> int:
                 rtmp_ffmpeg,
                 runtime_id=process.runtime_id,
                 stream_id=_stream_id_for_runtime(process.runtime_id, args.encoder),
+                decode_frames=args.decode_rtmp,
+                audit_marker=args.audit_decoded_marker,
+                decoder_mode=args.rtmp_decoder,
+                require_native_content=args.audit_decoded_marker,
+                native_runtime_dir=args.exe.parent,
             )
             process.rtmp_producer_trace_path = producer_trace_path
             process.rtmp_final_trace_path = final_trace_path
@@ -4746,6 +5253,19 @@ def run(args: argparse.Namespace) -> int:
         if result == 0:
             try:
                 process.assert_shutdown_clean(require_runtime_lease=trace_path is not None)
+                if args.encoder == "nvenc":
+                    ready_requested = os.environ.get("PULSAR_NVENC_READY_DRAIN") == "1"
+                    ready_observed = any("Pulsar ready-batch drain enabled" in line
+                                         for line in process.snapshot())
+                    if ready_requested != ready_observed:
+                        raise ProbeFailure("NVENC ready-drain requested/observed mode mismatch")
+                    print(f"   native NVENC ready-drain mode observed: {ready_observed}")
+                    async_requested = os.environ.get("PULSAR_NVENC_ASYNC_OUTPUT") == "1"
+                    async_observed = any("Pulsar asynchronous output enabled" in line
+                                         for line in process.snapshot())
+                    if async_requested != async_observed:
+                        raise ProbeFailure("NVENC asynchronous output requested/observed mode mismatch")
+                    print(f"   native NVENC asynchronous output mode observed: {async_observed}")
                 if args.rtmp_receiver:
                     try:
                         process.finalize_rtmp_trace(

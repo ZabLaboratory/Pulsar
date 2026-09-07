@@ -1,0 +1,83 @@
+/* Executes the actual patched swap function. Mutexes are single-thread stubs:
+ * this checks reference ownership and fallback, not thread-race safety. */
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+enum view_type { MAIN_VIEW, AUX_VIEW };
+struct obs_source { int shown, active, released; };
+struct obs_view { enum view_type type; struct obs_source *channels[1]; int channels_mutex; };
+struct obs_view_atomic_swap {
+    struct obs_view *first_view, *second_view;
+    unsigned first_channel, second_channel;
+    struct obs_source *first_source, *second_source;
+    uint64_t admission_floor_ns;
+    void (*callback)(void *, uint64_t, uint64_t);
+    void *callback_param;
+};
+struct core { struct {
+    bool atomic_swap_initialized, atomic_swap_inflight;
+    int atomic_swap_mutex, atomic_swap_cond;
+    struct obs_view_atomic_swap *pending_atomic_swap;
+} video; } core, *obs = &core;
+static int walks, callbacks, freed, failed;
+static void pthread_mutex_lock(int *p) { (void)p; }
+static void pthread_mutex_unlock(int *p) { (void)p; }
+static void pthread_cond_broadcast(int *p) { (void)p; }
+static void obs_source_activate(struct obs_source *s, enum view_type t) {
+    s->shown++; if (t == MAIN_VIEW) s->active++; walks++;
+}
+static void obs_source_deactivate(struct obs_source *s, enum view_type t) {
+    s->shown--; if (t == MAIN_VIEW) s->active--; walks++;
+}
+static void obs_source_transfer_main_activation(struct obs_source *a, struct obs_source *b) {
+    a->active--; b->active++; walks += 2;
+}
+static void obs_source_release(struct obs_source *s) { s->released++; }
+static void release_atomic_swap(struct obs_view_atomic_swap *s) {
+    if (s->first_source || s->second_source) failed++;
+    freed++;
+}
+@SWAP_IMPLEMENTATION@
+static void check(bool ok, const char *message) {
+    if (!ok) { fprintf(stderr, "FAIL: %s\n", message); failed++; }
+}
+static void committed(void *param, uint64_t frame, uint64_t pts) {
+    (void)param;
+    check(frame == 42 && pts == 1000, "commit identity"); callbacks++;
+}
+static void run_case(enum view_type first, enum view_type second, bool exchange) {
+    struct obs_source a={3,4,0}, b={5,6,0}, c={2,2,0};
+    struct obs_view v1={first,{&a},0}, v2={second,{&b},0};
+    struct obs_view_atomic_swap swap={&v1,&v2,0,0,exchange ? &b : &c,&a,1000,committed,NULL};
+    memset(&core,0,sizeof(core));
+    core.video.atomic_swap_initialized=true; core.video.pending_atomic_swap=&swap;
+    walks=callbacks=freed=0;
+    obs_view_apply_pending_atomic_swap(41,999);
+    check(walks==0 && callbacks==0 && core.video.pending_atomic_swap==&swap, "admission floor preserves pending");
+    obs_view_apply_pending_atomic_swap(42,1000);
+    check(v1.channels[0]==(exchange ? &b : &c) && v2.channels[0]==&a, "atomic routes");
+    check(a.released==1 && b.released==1 && c.released==0, "old refs released exactly once");
+    check(callbacks==1 && freed==1 && !core.video.atomic_swap_inflight, "commit and drain complete");
+    check(a.shown==3 && a.active==4+(second==MAIN_VIEW)-(first==MAIN_VIEW), "first root ownership");
+    if (exchange) {
+        check(b.shown==5 && b.active==6+(first==MAIN_VIEW)-(second==MAIN_VIEW), "second root ownership");
+        if (first==second) check(walks==0, "equal view exchange must not traverse source trees");
+    } else {
+        check(b.shown==4 && b.active==6-(second==MAIN_VIEW), "removed root ownership");
+        check(c.shown==3 && c.active==2+(first==MAIN_VIEW), "replacement root ownership");
+        check(walks==4, "generic replacement keeps full lifecycle");
+    }
+    obs_view_apply_pending_atomic_swap(43,1001);
+    check(callbacks==1, "no double commit");
+}
+int main(void) {
+    for (int a=0;a<2;a++) for (int b=0;b<2;b++) {
+        run_case((enum view_type)a,(enum view_type)b,true);
+        run_case((enum view_type)a,(enum view_type)b,false);
+    }
+    if (failed) return 1;
+    puts("PASS: actual swap implementation, 8 topology cases plus admission/refcount/drain guards");
+    return 0;
+}
