@@ -14,7 +14,11 @@ def test_automatic_promotion_is_bounded_to_qualified_cpu_pipeline():
     assert "readback_info->fps_num == 60 && readback_info->fps_den == 1" in patch
     assert "readback_info->format == VIDEO_FORMAT_NV12" in patch
     assert "hardware_readback_capable = gs_get_adapter_count() > 0" in hardware_guard
-    assert "qualified_readback = hardware_readback_capable" in hardware_guard
+    assert "gs_enter_context(obs->video.graphics);" in hardware_guard
+    assert hardware_guard.index("gs_enter_context(obs->video.graphics);") < hardware_guard.index(
+        "hardware_readback_capable = gs_get_adapter_count() > 0"
+    )
+    assert "hardware_readback_capable && qualified_readback" in hardware_guard
     assert hardware_guard.count("gs_get_adapter_count()") == 1
     additions = [line for line in hardware_guard.splitlines() if line.startswith("+") and not line.startswith("+++")]
     assert not any("PULSAR_RAW_CURRENT_READBACK" in line for line in additions)

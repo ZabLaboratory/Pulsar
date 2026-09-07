@@ -16,5 +16,6 @@ if(WIN32 AND DEFINED PULSAR_UPSTREAM_BUILD_DIR)
   add_test(NAME async-gpu-runtime COMMAND async-gpu-runtime)
   add_test(NAME async-gpu-pending-error COMMAND async-gpu-runtime --pending-error)
   set_tests_properties(async-gpu-runtime async-gpu-pending-error PROPERTIES TIMEOUT 25
+    SKIP_RETURN_CODE 77
     ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${PULSAR_UPSTREAM_BUILD_DIR}/rundir/$<CONFIG>/bin/64bit")
 endif()

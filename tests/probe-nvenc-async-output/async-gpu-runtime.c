@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "obs.h"
 #include "obs-encoder.h"
 #include "obs-output.h"
@@ -103,6 +104,11 @@ static void receive(void *data, struct encoder_packet *packet)
 int main(int argc, char **argv)
 {
     (void)argv;
+    const char *skip_accelerated = getenv("PULSAR_SKIP_ACCELERATED_CEF_PROBE");
+    if (skip_accelerated && strcmp(skip_accelerated, "1") == 0) {
+        puts("SKIP: no physical GPU is available for the texture-encoder scheduler probe");
+        return 77;
+    }
     fail_pending = argc > 1;
     _putenv_s("PULSAR_NVENC_ASYNC_OUTPUT", "1");
     PULSAR_CHECK(obs_startup("en-US", NULL, NULL));

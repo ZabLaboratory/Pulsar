@@ -40,3 +40,13 @@ def test_timed_completion_service_preserves_frame_queue_and_retirement():
     assert "enc->buffers_queued >= (int)enc->buf_count" in source
     for forbidden in ("props.bf =", "averageBitRate =", "enableLookahead =", "enc->buf_count ="):
         assert forbidden not in source
+
+
+def test_native_gpu_runtime_is_typed_skip_only_on_the_ci_hardware_signal():
+    runtime = (ROOT / "tests/probe-nvenc-async-output/async-gpu-runtime.c").read_text()
+    cmake = (ROOT / "tests/probe-nvenc-async-output/CMakeLists.txt").read_text()
+    assert 'getenv("PULSAR_SKIP_ACCELERATED_CEF_PROBE")' in runtime
+    assert 'strcmp(skip_accelerated, "1") == 0' in runtime
+    assert "return 77;" in runtime
+    assert "SKIP_RETURN_CODE 77" in cmake
+    assert "PULSAR_SKIP_ACCELERATED_CEF_PROBE" not in cmake
