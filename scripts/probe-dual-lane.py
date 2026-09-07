@@ -437,7 +437,14 @@ def cef_page_html(lane: str | None = None) -> bytes:
     if lane not in ("A", "B"):
         return CEF_PAGE_HTML
     marker = f"PULSAR CEF #246 / LANE {lane}".encode("ascii")
-    return CEF_PAGE_HTML.replace(b"PULSAR CEF #246</h1>", marker + b"</h1>")
+    page = CEF_PAGE_HTML.replace(b"PULSAR CEF #246</h1>", marker + b"</h1>")
+    # A small, opaque lane marker supports decoded-content evidence. The
+    # decoder still decodes the complete frame; only diagnostic checksums are
+    # cropped. Both lanes retain the same WGC/CEF workload and geometry.
+    colour = "#000000" if lane == "A" else "#ffffff"
+    patch = (f'<div id="decoded-lane-marker" style="position:fixed;right:0;bottom:0;'
+             f'width:64px;height:64px;background:{colour};z-index:9999"></div>').encode("ascii")
+    return page.replace(b"</body>", patch + b"</body>")
 
 
 class _DeterministicCefHandler(http.server.BaseHTTPRequestHandler):
@@ -843,6 +850,59 @@ def compute_auth(password: str, salt: str, challenge: str) -> str:
     ).decode("ascii")
 
 
+def decoded_marker_lane(frame: dict[str, int]) -> str:
+    """Classify the probe's opaque 64x64 neutral black/white marker only."""
+    values = [frame.get(key) for key in ("y_mean", "u_mean", "v_mean")]
+    if any(type(value) is not int or not 0 <= value <= 255 for value in values):
+        raise ProbeFailure("decoded marker has missing or invalid plane means")
+    y, u, v = values
+    if abs(u - 128) > 8 or abs(v - 128) > 8:
+        raise ProbeFailure("decoded marker is not neutral black/white")
+    if y <= 32:
+        return "A"
+    if y >= 220:
+        return "B"
+    raise ProbeFailure("decoded marker is ambiguous; no lane evidence")
+
+
+def validate_decoded_sequence(frames: list[dict[str, int]]) -> None:
+    """A missing/repeated frame invalidates any claim of earliest change."""
+    for index, frame in enumerate(frames):
+        if frame.get("frame_index") != index:
+            raise ProbeFailure("decoded sequence has a missing or duplicate frame index")
+        if index:
+            previous = frames[index - 1]
+            if not 15 <= frame["pts_ms"] - previous["pts_ms"] <= 18:
+                raise ProbeFailure("decoded sequence is not continuous 60fps presentation order")
+            if frame["observed_at_monotonic_ns"] < previous["observed_at_monotonic_ns"]:
+                raise ProbeFailure("decoded observation clock went backwards")
+
+
+def first_changed_marker(frames: list[dict[str, int]], *, expected_pts_ms: float,
+                         old_lane: str, new_lane: str) -> dict[str, int]:
+    """Find the first *observed marker* transition around the committed PTS.
+
+    The +/- one millisecond mapping tolerance is below a frame period. Allow
+    at most two later pictures, retaining every old/ambiguous sample instead
+    of skipping it. This does not certify a physical display or all pixels.
+    """
+    if old_lane not in ("A", "B") or new_lane not in ("A", "B") or old_lane == new_lane:
+        raise ProbeFailure("decoded marker audit requires distinct old/new lanes")
+    candidates = [i for i, frame in enumerate(frames) if frame["pts_ms"] >= expected_pts_ms - 1.0]
+    if not candidates or candidates[0] == 0:
+        raise ProbeFailure("decoded marker has no preceding old-lane frame")
+    first_index = candidates[0]
+    if decoded_marker_lane(frames[first_index - 1]) != old_lane:
+        raise ProbeFailure(f"decoded marker preceding committed PTS is not the old lane: "
+                           f"expected_pts_ms={expected_pts_ms}; previous={frames[first_index - 1]}; expected_old={old_lane}")
+    for frame in frames[first_index:first_index + 3]:
+        if frame["pts_ms"] > expected_pts_ms + 35:
+            break
+        if decoded_marker_lane(frame) == new_lane:
+            return frame
+    raise ProbeFailure("decoded marker did not change within two frames of committed PTS")
+
+
 class RtmpReceiver:
     """Own a real FFmpeg RTMP loopback receiver for AC-12 evidence.
 
@@ -855,9 +915,13 @@ class RtmpReceiver:
     an oracle for the earliest visible changed picture or physical display.
     """
 
-    def __init__(self, ffmpeg: str, *, runtime_id: str, stream_id: str, decode_frames: bool = False) -> None:
+    def __init__(self, ffmpeg: str, *, runtime_id: str, stream_id: str, decode_frames: bool = False,
+                 audit_marker: bool = False) -> None:
         self.ffmpeg = ffmpeg
         self.decode_frames = decode_frames
+        if audit_marker and not decode_frames:
+            raise ProbeFailure("decoded marker audit requires decoding")
+        self.audit_marker = audit_marker
         self.decoded_frames: list[dict[str, int]] = []
         self.runtime_id = runtime_id
         if ID_RE.fullmatch(stream_id) is None:
@@ -946,8 +1010,12 @@ class RtmpReceiver:
             # retained. This changes receiver workload, not the encoded stream.
             input_index = command.index("-i")
             command[input_index:input_index] = ["-copyts", "-threads", "1"]
+            decoder_filter = "settb=expr=1/1000,"
+            if self.audit_marker:
+                decoder_filter += "crop=32:32:1888:508,"
+            decoder_filter += "showinfo"
             command.extend([
-                "-map", "0:v:0", "-an", "-vf", "settb=expr=1/1000,showinfo",
+                "-map", "0:v:0", "-an", "-vf", decoder_filter,
                 "-fps_mode", "passthrough", "-f", "null", "-",
             ])
         self.proc = subprocess.Popen(
@@ -991,11 +1059,16 @@ class RtmpReceiver:
                 decoded = re.search(r"\bn:\s*(\d+)\s+pts:\s*(-?\d+)\s+pts_time:", clean)
                 if decoded:
                     with self._lock:
-                        self.decoded_frames.append({
+                        decoded_frame = {
                             "frame_index": int(decoded.group(1)),
                             "pts_ms": int(decoded.group(2)),
                             "observed_at_monotonic_ns": received_at,
-                        })
+                        }
+                        if self.audit_marker:
+                            mean = re.search(r"\bmean:\[\s*(\d+)\s+(\d+)\s+(\d+)\s*\]", clean)
+                            if mean:
+                                decoded_frame.update(zip(("y_mean", "u_mean", "v_mean"), map(int, mean.groups())))
+                        self.decoded_frames.append(decoded_frame)
             match = RTMP_PACKET_RE.search(clean)
             if match is None:
                 continue
@@ -1069,6 +1142,7 @@ class RtmpReceiver:
             "failure": failure,
             "packet_count": len(packets),
             "packets": packets,
+            "decoded_frames": list(self.decoded_frames),
             "line_tail": line_tail,
         }
         diagnostic_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1328,6 +1402,10 @@ class RtmpReceiver:
         correlation = RtmpPacketCorrelation()
         rtmp_observations: list[dict[str, object]] = []
         decoded_observations: list[dict[str, object]] = []
+        commits = {r["event"]["take_command_id"]: r["event"] for r in records
+                   if r.get("record_type") == "event" and r["event"].get("event_type") == "TakeCommitted"}
+        commit_order = sorted(commits, key=lambda key: (commits[key]["observed_at_monotonic_ns"], commits[key]["server_seq"]))
+        measured_ids = set(commit_order[int(session["warmup_takes"]):])
         for producer in encoded:
             candidates = correlation.candidates(producer, receiver_packets)
             if len(candidates) != 1:
@@ -1386,7 +1464,7 @@ class RtmpReceiver:
                 if frame["observed_at_monotonic_ns"] < int(packet["observed_at_monotonic_ns"]):
                     raise ProbeFailure("decoded-frame observation precedes its demux packet")
                 decoded_observations.append({
-                    "record_type": "observation", "boundary": "decoded_first_frame",
+                    "record_type": "observation", "boundary": "decoded_candidate_frame",
                     "clock_domain": "monotonic_ns",
                     **{key: producer[key] for key in (
                         "runtime_instance_id", "command_id", "intent_id", "take_command_id",
@@ -1394,6 +1472,7 @@ class RtmpReceiver:
                     )},
                     "observed_at_monotonic_ns": frame["observed_at_monotonic_ns"],
                     "valid": True, "surface": "RTMP", "consumer": "decoder",
+                    "decoder": self._decoder_identity(frame, packet, "selected_candidate"),
                     "notes": (
                         f"FFmpeg showinfo pipe observation; decoder_threads=1; "
                         f"frame_index={frame['frame_index']}; packet_index={packet['packet_index']}; "
@@ -1401,8 +1480,40 @@ class RtmpReceiver:
                         "same RTMP PTS as correlated encoded candidate; not display/antenna latency"
                     ),
                 })
-        if self.decode_frames and "decoded_first_frame" not in paths:
-            paths.append("decoded_first_frame")
+                if self.audit_marker and producer["take_command_id"] in measured_ids:
+                    # Shutdown may truncate a later decoder tail. It cannot
+                    # invalidate or supply frames before this candidate; any
+                    # gap through the candidate itself still fails closed.
+                    validate_decoded_sequence(self.decoded_frames[:frame["frame_index"] + 1])
+                    commit = commits[producer["take_command_id"]]
+                    if "packet_content_pts_monotonic_ns" not in producer:
+                        raise ProbeFailure("decoded marker requires native packet content timestamp; cadence CTS is insufficient")
+                    expected_pts_ms = int(packet["packet_pts"]) + (
+                        int(commit["pts_ns"]) - int(producer["packet_content_pts_monotonic_ns"])) / 1e6
+                    marker = first_changed_marker(
+                        self.decoded_frames, expected_pts_ms=expected_pts_ms,
+                        old_lane=commit["previous_role_map"]["on_air"], new_lane=commit["role_map"]["on_air"])
+                    marker_packets = [p for p in receiver_packets if p["packet_pts"] == marker["pts_ms"]]
+                    if len(marker_packets) != 1:
+                        raise ProbeFailure("decoded marker packet PTS is missing or ambiguous")
+                    marker_packet = marker_packets[0]
+                    if marker["observed_at_monotonic_ns"] < int(marker_packet["observed_at_monotonic_ns"]):
+                        raise ProbeFailure("decoded marker precedes its demux packet")
+                    if decoded_marker_lane(frame) != commit["role_map"]["on_air"]:
+                        raise ProbeFailure("decoded candidate marker is not the committed new lane")
+                    if marker["frame_index"] > frame["frame_index"]:
+                        raise ProbeFailure("first changed marker follows selected candidate")
+                    decoded_observations.append({
+                        **decoded_observations[-1], "boundary": "decoded_marker_first_frame",
+                        "observed_at_monotonic_ns": marker["observed_at_monotonic_ns"],
+                        "decoder": self._decoder_identity(marker, marker_packet, "first_changed_marker"),
+                        "notes": "First changed 64x64 lane marker in continuous decoded presentation order; "
+                                 "PTS aligned to committed frame; includes pipe delay; not display/antenna latency",
+                    })
+        for boundary, enabled in (("decoded_candidate_frame", self.decode_frames),
+                                  ("decoded_marker_first_frame", self.audit_marker)):
+            if enabled and boundary not in paths:
+                paths.append(boundary)
         session["rtmp_receiver"] = {**self.metadata(), **correlation.metadata()}
         merged = [
             session,
@@ -1411,6 +1522,30 @@ class RtmpReceiver:
             *decoded_observations,
         ]
         self._install_fused_records(merged, output_path)
+        if self.decode_frames and self._trace_key_hex:
+            # Keep all frames/packets, not merely the selected samples, so
+            # earliest-marker and continuity assertions can be independently
+            # replayed. Anchor this companion with the same private run key.
+            audit_records = [{"record_type": "decoder_audit", "schema": "pulsar.decoder-audit.v1",
+                              "runtime_instance_id": self.runtime_id, "session_id": session["session_id"],
+                              "marker_crop": "32:32:1888:508" if self.audit_marker else None,
+                              "decoder_threads": 1, "clock": self.metadata(),
+                              "boundary": "showinfo_pipe_not_display"}]
+            audit_records.extend({"record_type": "frame", **item} for item in self.decoded_frames)
+            audit_records.extend({"record_type": "packet", **item} for item in receiver_packets)
+            trace_integrity.write_trace(output_path.with_name(output_path.name + ".decoder-audit.jsonl"),
+                                        audit_records, key_hex=self._trace_key_hex)
+
+    def _decoder_identity(self, frame: dict[str, int], packet: dict[str, object], kind: str) -> dict[str, object]:
+        return {
+            "kind": kind, "frame_index": frame["frame_index"], "frame_pts_ms": frame["pts_ms"],
+            **{key: packet[key] for key in ("packet_index", "packet_pts", "packet_dts", "packet_identity")},
+            "demux_observed_monotonic_ns": packet["observed_at_monotonic_ns"],
+            "clock_bound_ns": self.metadata()["clock_bound_ns"],
+            "marker_lane": decoded_marker_lane(frame) if self.audit_marker and "y_mean" in frame
+                           and frame["u_mean"] in range(120, 137) and frame["v_mean"] in range(120, 137)
+                           and (frame["y_mean"] <= 32 or frame["y_mean"] >= 220) else "unobserved",
+        }
 
 
 def _windows_create_inherited_shutdown_event() -> int:
@@ -3148,6 +3283,38 @@ async def create_public_lane_scenes(
                     "webpage_control_level": 0,
                 },
             )
+async def arrange_measured_workload(inbox: Inbox, ws: Any) -> None:
+    """After lifecycle checks, keep real WGC and CEF visible in encoded output.
+
+    Creation of full-canvas mutation colors otherwise occludes the workload.
+    Source instances remain 960x540 WGC / 1920x1080 CEF; CEF is composited in
+    the right 960x540 region, with its decoded marker at (1888, 508).
+    """
+    for lane, scene in (("A", SCENE_A), ("B", SCENE_B)):
+        response = await request(inbox, ws, "GetSceneItemList", f"measured-items-{lane}", {"sceneName": scene})
+        assert_success(response, "GetSceneItemList(measured workload)")
+        items = (response.get("responseData") or response)["sceneItems"]
+        for kind, x, scale in (("window_capture", 0.0, 1.0), ("browser_source", 960.0, 0.5)):
+            name = LANE_SOURCE_NAMES[lane][kind]
+            matching = [item for item in items if item.get("sourceName") == name]
+            if len(matching) != 1:
+                raise ProbeFailure(f"measured composition lacks exact source {name}")
+            item_id = matching[0]["sceneItemId"]
+            identity = {"sceneName": scene, "sceneItemId": item_id}
+            transform = {"positionX": x, "positionY": 0.0, "scaleX": scale, "scaleY": scale,
+                         "rotation": 0.0, "alignment": 5, "boundsType": "OBS_BOUNDS_NONE"}
+            assert_success(await request(inbox, ws, "SetSceneItemTransform", f"measured-transform-{name}",
+                                         {**identity, "sceneItemTransform": transform}), "SetSceneItemTransform(measured)")
+            assert_success(await request(inbox, ws, "SetSceneItemIndex", f"measured-index-{name}",
+                                         {**identity, "sceneItemIndex": len(items) - 1}), "SetSceneItemIndex(measured)")
+            observed = await request(inbox, ws, "GetSceneItemTransform", f"measured-readback-{name}", identity)
+            assert_success(observed, "GetSceneItemTransform(measured)")
+            actual = (observed.get("responseData") or observed)["sceneItemTransform"]
+            if any(actual.get(key) != value for key, value in transform.items()):
+                raise ProbeFailure(f"measured transform did not persist for {name}")
+    print("   measured composition: WGC left and CEF right above retained lifecycle colors; decoded marker 32:32:1888:508")
+
+
 async def verify_workload_sources(
     inbox: Inbox,
     ws: Any,
@@ -4200,6 +4367,9 @@ async def drive(
                     "post-commit Preview after 30 frames",
                 )
 
+            if number == 2 and process.trace_path is not None:
+                await arrange_measured_workload(inbox, ws)
+
         # The native sampler runs on its own cadence.  For the dual-lane
         # capacity append, keep both outputs alive after the final Take until
         # the requested number of observed active NVENC+RTMP samples exists.
@@ -4519,6 +4689,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--decode-rtmp", action="store_true",
         help="also observe decoded candidate frames in FFmpeg (one thread, PTS correlation; no display guarantee)",
     )
+    parser.add_argument("--audit-decoded-marker", action="store_true",
+                        help="audit first changed CEF lane marker in decoded display order; requires local CEF page")
     parser.add_argument(
         "--cef-url",
         default=os.environ.get("PULSAR_CEF_URL"),
@@ -4562,6 +4734,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         not args.build_revision or BUILD_REVISION_RE.fullmatch(args.build_revision) is None
     ):
         parser.error("--trace requires --build-revision to be the exact 40-character lowercase candidate SHA")
+    if args.audit_decoded_marker and (not args.decode_rtmp or not args.cef_workload or args.cef_url):
+        parser.error("--audit-decoded-marker requires --decode-rtmp, --cef-workload and the built-in CEF page")
     if args.cef_workload and not args.capture_window:
         parser.error("--cef-workload requires --capture-window for a visible WGC target")
     if args.trace is not None and (not args.capture_window or not args.cef_workload):
@@ -4646,6 +4820,7 @@ def run(args: argparse.Namespace) -> int:
                 runtime_id=process.runtime_id,
                 stream_id=_stream_id_for_runtime(process.runtime_id, args.encoder),
                 decode_frames=args.decode_rtmp,
+                audit_marker=args.audit_decoded_marker,
             )
             process.rtmp_producer_trace_path = producer_trace_path
             process.rtmp_final_trace_path = final_trace_path

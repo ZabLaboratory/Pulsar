@@ -26,6 +26,65 @@ sys.modules[SPEC.name] = probe
 SPEC.loader.exec_module(probe)
 
 
+def _marker_frames(lanes="AAABBB"):
+    return [{"frame_index": i, "pts_ms": round(i * 1000 / 60),
+             "observed_at_monotonic_ns": 1_000_000_000 + i * 17_000_000,
+             "y_mean": 16 if lane == "A" else 235, "u_mean": 128, "v_mean": 128}
+            for i, lane in enumerate(lanes)]
+
+
+def test_first_changed_marker_precedes_future_p_candidate():
+    frames = _marker_frames()
+    probe.validate_decoded_sequence(frames)
+    first = probe.first_changed_marker(frames, expected_pts_ms=50.4, old_lane="A", new_lane="B")
+    assert first["frame_index"] == 3
+    assert first["frame_index"] < frames[5]["frame_index"]
+
+
+@pytest.mark.parametrize("defect", ["missing_index", "duplicate_index", "pts_gap", "backwards_pts", "clock_backwards"])
+def test_decoded_sequence_rejects_incomplete_evidence(defect):
+    frames = _marker_frames()
+    if defect == "missing_index":
+        frames.pop(2)
+    elif defect == "duplicate_index":
+        frames[2]["frame_index"] = 1
+    elif defect == "pts_gap":
+        frames[2]["pts_ms"] += 17
+    elif defect == "backwards_pts":
+        frames[2]["pts_ms"] = frames[1]["pts_ms"] - 1
+    else:
+        frames[2]["observed_at_monotonic_ns"] = frames[1]["observed_at_monotonic_ns"] - 1
+    with pytest.raises(probe.ProbeFailure, match="decoded"):
+        probe.validate_decoded_sequence(frames)
+
+
+@pytest.mark.parametrize("defect", ["old_is_new", "missing_old", "no_change", "ambiguous", "chroma", "missing_mean"])
+def test_first_changed_marker_does_not_skip_invalid_content(defect):
+    frames = _marker_frames()
+    expected = 50.0
+    if defect == "old_is_new":
+        frames[2]["y_mean"] = 235
+    elif defect == "missing_old":
+        expected = 0.0
+    elif defect == "no_change":
+        frames = _marker_frames("AAAAAA")
+    elif defect == "ambiguous":
+        frames[3]["y_mean"] = 100
+    elif defect == "chroma":
+        frames[3]["u_mean"] = 200
+    else:
+        del frames[3]["v_mean"]
+    with pytest.raises(probe.ProbeFailure, match="decoded"):
+        probe.first_changed_marker(frames, expected_pts_ms=expected, old_lane="A", new_lane="B")
+
+
+def test_cef_marker_geometry_and_distinct_lane_content():
+    assert b"background:#000000" in probe.cef_page_html("A")
+    assert b"background:#ffffff" in probe.cef_page_html("B")
+    assert b"width:64px;height:64px" in probe.cef_page_html("A")
+    assert b"decoded-lane-marker" not in probe.cef_page_html()
+
+
 def _latency_fixture_records():
     helper_path = ROOT / "tests" / "probe-take-latency" / "test_probe_take_latency.py"
     spec = importlib.util.spec_from_file_location("latency_fixture_helper", helper_path)
@@ -780,7 +839,7 @@ def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path,
     assert rtmp[0]["surface"] == "RTMP"
     assert rtmp[0]["consumer"] == "receiver"
     assert rtmp[0]["receiver_observed_normalized_ns"] == rtmp[0]["observed_at_monotonic_ns"]
-    decoded = [record for record in fused if record.get("boundary") == "decoded_first_frame"]
+    decoded = [record for record in fused if record.get("boundary") == "decoded_candidate_frame"]
     assert len(decoded) == (1 if decode_case == "valid" else 0)
     if decoded:
         assert decoded[0]["observed_at_monotonic_ns"] == 1_040_000_000

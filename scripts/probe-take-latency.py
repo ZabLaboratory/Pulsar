@@ -31,7 +31,10 @@ boundaries below:
     conservatively.  AC-12b measures that exact packet from TakeAccepted and
     reports every causal stage without adding a second threshold.
 ``decoded_first_frame`` / ``antenna_first_frame``
-    Optional diagnostic timings.  They are reported, but have no SLO here.
+    Legacy optional diagnostic timings; no first-visible claim is inferred.
+``decoded_candidate_frame`` / ``decoded_marker_first_frame``
+    Selected packet's decoded picture, or first changed probe lane marker in
+    continuous presentation order. Neither is physical display/antenna latency.
 
 The accepted event and every observation use the monotonic nanosecond clock
 of the runtime.  Frame IDs, PTS, revisions, command IDs, intent IDs and the
@@ -111,6 +114,8 @@ BOUNDARIES = (
     "encoded_first_packet",
     "rtmp_first_packet",
     "decoded_first_frame",
+    "decoded_candidate_frame",
+    "decoded_marker_first_frame",
     "antenna_first_frame",
 )
 REQUIRED_BOUNDARIES = (
@@ -292,6 +297,8 @@ OBSERVATION_REQUIRED = {
     "consumer",
 }
 OBSERVATION_OPTIONAL = {
+    "decoder",
+    "packet_content_pts_monotonic_ns",
     "program_frame",
     "packet_index",
     "packet_pts",
@@ -726,6 +733,8 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
         "encoded_first_packet": ("EncoderOutput", "encoder_callback"),
         "rtmp_first_packet": ("RTMP", "receiver"),
         "decoded_first_frame": ("RTMP", "decoder"),
+        "decoded_candidate_frame": ("RTMP", "decoder"),
+        "decoded_marker_first_frame": ("RTMP", "decoder"),
         "antenna_first_frame": ("Antenna", "antenna"),
     }[obj["boundary"]]
     if (obj["surface"], obj["consumer"]) != expected:
@@ -734,6 +743,30 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
             f"{obj['boundary']} must use surface/consumer={expected!r}, got {(obj['surface'], obj['consumer'])!r}",
             line=line,
         )
+    if obj["boundary"] in ("decoded_candidate_frame", "decoded_marker_first_frame"):
+        decoder = _object(obj.get("decoder"), "decoder", line=line)
+        fields = {"kind", "frame_index", "frame_pts_ms", "packet_index", "packet_pts", "packet_dts",
+                  "packet_identity", "demux_observed_monotonic_ns", "clock_bound_ns", "marker_lane"}
+        _exact_keys(decoder, fields, fields, "decoder", line=line)
+        expected_kind = "selected_candidate" if obj["boundary"] == "decoded_candidate_frame" else "first_changed_marker"
+        if decoder["kind"] != expected_kind:
+            raise EvidenceError("BOUNDARY_INVALID", "decoder observation kind does not match boundary", line=line)
+        for key in ("frame_index", "frame_pts_ms", "packet_index", "packet_pts",
+                    "demux_observed_monotonic_ns", "clock_bound_ns"):
+            _integer(decoder[key], f"decoder.{key}", line=line)
+        if type(decoder["packet_dts"]) is not int:
+            raise EvidenceError("SCHEMA_INVALID", "decoder.packet_dts must be integer", line=line)
+        _string(decoder["packet_identity"], "decoder.packet_identity", identifier=True, line=line)
+        if decoder["frame_pts_ms"] != decoder["packet_pts"]:
+            raise EvidenceError("CORRELATION_INVALID", "decoder frame and packet PTS disagree", line=line)
+        if not 0 < decoder["demux_observed_monotonic_ns"] <= obj["observed_at_monotonic_ns"]:
+            raise EvidenceError("CORRELATION_INVALID", "decoded frame precedes its demux packet", line=line)
+        receiver = session.get("rtmp_receiver") or {}
+        if decoder["clock_bound_ns"] <= 0 or decoder["clock_bound_ns"] != receiver.get("clock_bound_ns"):
+            raise EvidenceError("CORRELATION_INVALID", "decoder clock bound differs from receiver", line=line)
+        lanes = ("A", "B") if expected_kind == "first_changed_marker" else ("A", "B", "unobserved")
+        if decoder["marker_lane"] not in lanes:
+            raise EvidenceError("BOUNDARY_INVALID", "decoder marker lane is unproven", line=line)
     if obj["boundary"] in ("encoder_input_raw", "directshow_return"):
         if "program_frame" not in obj:
             raise EvidenceError("SCHEMA_INVALID", f"{obj['boundary']} requires program_frame", line=line)
@@ -819,6 +852,10 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
                     "encoder packet timing must satisfy 0 < CTS <= FER <= FERC <= PIR <= callback",
                     line=line,
                 )
+        if "packet_content_pts_monotonic_ns" in obj:
+            content = _integer(obj["packet_content_pts_monotonic_ns"], "packet content timestamp", line=line)
+            if content <= 0 or not all(key in obj for key in timing_fields) or content > obj["packet_fer_monotonic_ns"]:
+                raise EvidenceError("CLOCK_INVALID", "packet content timestamp must be positive and no later than FER", line=line)
         if "packet_output_enqueue_monotonic_ns" in obj:
             output_enqueue = _integer(
                 obj["packet_output_enqueue_monotonic_ns"],
@@ -1871,6 +1908,39 @@ def analyze_trace(
     declared_warmup = int(session["warmup_takes"])
     warmup_take_ids = set(committed_order[:declared_warmup])
     measured_take_ids = set(committed_order[declared_warmup:])
+
+    decoded_by_take = {}
+    rtmp_by_take = {o["take_command_id"]: o for o in trace.observations
+                    if o["boundary"] == "rtmp_first_packet" and o["valid"]}
+    for observation in trace.observations:
+        if observation["boundary"] not in ("decoded_candidate_frame", "decoded_marker_first_frame") or not observation["valid"]:
+            continue
+        key = (observation["take_command_id"], observation["boundary"])
+        if key in decoded_by_take:
+            raise EvidenceError("CORRELATION_INVALID", "duplicate decoded evidence for same Take/boundary")
+        decoded_by_take[key] = observation
+        decoder = observation["decoder"]
+        rtmp = rtmp_by_take.get(observation["take_command_id"])
+        if rtmp is None:
+            raise EvidenceError("CORRELATION_INVALID", "decoded evidence has no corresponding RTMP Take")
+        if observation["boundary"] == "decoded_candidate_frame":
+            for field in ("packet_index", "packet_pts", "packet_dts", "packet_identity"):
+                if decoder[field] != rtmp[field]:
+                    raise EvidenceError("CORRELATION_INVALID", f"decoded candidate differs from RTMP {field}")
+            if decoder["demux_observed_monotonic_ns"] != rtmp["observed_at_monotonic_ns"]:
+                raise EvidenceError("CORRELATION_INVALID", "decoded candidate demux timestamp differs from RTMP")
+        else:
+            commit = committed.get(observation["take_command_id"])
+            if commit is None or decoder["marker_lane"] != commit["role_map"]["on_air"]:
+                raise EvidenceError("CORRELATION_INVALID", "decoded marker is not the committed Program lane")
+    for (take_id, boundary), observation in decoded_by_take.items():
+        if boundary != "decoded_marker_first_frame":
+            continue
+        candidate = decoded_by_take.get((take_id, "decoded_candidate_frame"))
+        if candidate is None or observation["decoder"]["frame_index"] > candidate["decoder"]["frame_index"]:
+            raise EvidenceError("CORRELATION_INVALID", "first changed marker must precede or equal decoded candidate")
+        if observation["observed_at_monotonic_ns"] > candidate["observed_at_monotonic_ns"]:
+            raise EvidenceError("CORRELATION_INVALID", "first changed marker timestamp follows candidate")
 
     # Observations before the accepted frame-boundary commit are deliberately
     # retained for diagnostics but never admitted as evidence.  This matters

@@ -413,6 +413,50 @@ def test_quantile_is_deterministic_linear_interpolation():
     assert probe.quantile([1.0, 2.0, 3.0, 4.0], 0.99) == pytest.approx(3.97)
 
 
+@pytest.mark.parametrize("defect", [None, "wrong_kind", "wrong_pts", "wrong_packet", "wrong_demux", "wrong_clock", "duplicate"])
+def test_decoded_candidate_requires_explicit_packet_and_clock_identity(defect):
+    records = _take_records(2)
+    session = records[0]
+    assert "decoded_candidate_frame" in session["capture_paths"]
+    packet = next(r for r in records if r.get("boundary") == "rtmp_first_packet")
+    candidate = {key: packet[key] for key in probe.OBSERVATION_REQUIRED}
+    candidate.update(boundary="decoded_candidate_frame", consumer="decoder",
+                     observed_at_monotonic_ns=packet["observed_at_monotonic_ns"] + 20_000_000)
+    candidate["decoder"] = {
+        "kind": "selected_candidate", "frame_index": 5, "frame_pts_ms": packet["packet_pts"],
+        **{key: packet[key] for key in ("packet_index", "packet_pts", "packet_dts", "packet_identity")},
+        "demux_observed_monotonic_ns": packet["observed_at_monotonic_ns"],
+        "clock_bound_ns": packet["clock_bound_ns"], "marker_lane": "unobserved",
+    }
+    records.append(candidate)
+    if defect == "wrong_kind":
+        candidate["decoder"]["kind"] = "first_changed_marker"
+    elif defect == "wrong_pts":
+        candidate["decoder"]["frame_pts_ms"] += 1
+    elif defect == "wrong_packet":
+        candidate["decoder"]["packet_identity"] = "wrong-packet"
+    elif defect == "wrong_demux":
+        candidate["decoder"]["demux_observed_monotonic_ns"] -= 1
+    elif defect == "wrong_clock":
+        candidate["decoder"]["clock_bound_ns"] += 1
+    elif defect == "duplicate":
+        records.append(deepcopy(candidate))
+    if defect:
+        with pytest.raises(probe.EvidenceError):
+            probe.analyze_trace(probe.parse_records(records), minimum_takes=1, minimum_warmup=0, minimum_resource_samples=1)
+    else:
+        probe.analyze_trace(probe.parse_records(records), minimum_takes=1, minimum_warmup=0, minimum_resource_samples=1)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "invalid", 10**18])
+def test_packet_content_timestamp_cannot_be_missing_zero_future_or_noninteger(value):
+    records = _take_records(2)
+    encoded = next(r for r in records if r.get("boundary") == "encoded_first_packet")
+    encoded["packet_content_pts_monotonic_ns"] = value
+    with pytest.raises(probe.EvidenceError):
+        probe.parse_records(records)
+
+
 def test_fixture_reports_all_boundaries_separately_and_never_runtime_pass():
     report = probe.analyze_trace(_trace(), minimum_takes=3, minimum_warmup=3, minimum_resource_samples=2)
     assert report["status"] == "FIXTURE_ONLY"

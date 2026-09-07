@@ -624,6 +624,7 @@ class PulsarRuntimeTelemetry {
         int64_t packetTimebaseNum = 0;
         int64_t packetTimebaseDen = 0;
         uint64_t packetCtsNs = 0;
+        uint64_t packetContentPtsNs = 0;
         uint64_t packetFerNs = 0;
         uint64_t packetFercNs = 0;
         uint64_t packetPirNs = 0;
@@ -1348,6 +1349,7 @@ public:
         event.packetCallbackNs = callbackAt;
         if (packetTime) {
             event.packetCtsNs = packetTime->cts;
+            event.packetContentPtsNs = packetTime->content_pts_ns;
             event.packetFerNs = packetTime->fer;
             event.packetFercNs = packetTime->ferc;
             event.packetPirNs = packetTime->pir;
@@ -2156,6 +2158,7 @@ private:
                 << ",\"packet_timebase_den\":" << event.packetTimebaseDen;
             if (event.packetCtsNs) {
                 out << ",\"packet_cts_monotonic_ns\":" << event.packetCtsNs
+                    << ",\"packet_content_pts_monotonic_ns\":" << event.packetContentPtsNs
                     << ",\"packet_fer_monotonic_ns\":" << event.packetFerNs
                     << ",\"packet_ferc_monotonic_ns\":" << event.packetFercNs
                     << ",\"packet_pir_monotonic_ns\":" << event.packetPirNs
