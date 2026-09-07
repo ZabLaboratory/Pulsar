@@ -5062,6 +5062,12 @@ def run(args: argparse.Namespace) -> int:
                     if ready_requested != ready_observed:
                         raise ProbeFailure("NVENC ready-drain requested/observed mode mismatch")
                     print(f"   native NVENC ready-drain mode observed: {ready_observed}")
+                    async_requested = os.environ.get("PULSAR_NVENC_ASYNC_OUTPUT") == "1"
+                    async_observed = any("Pulsar asynchronous output enabled" in line
+                                         for line in process.snapshot())
+                    if async_requested != async_observed:
+                        raise ProbeFailure("NVENC asynchronous output requested/observed mode mismatch")
+                    print(f"   native NVENC asynchronous output mode observed: {async_observed}")
                 if args.rtmp_receiver:
                     try:
                         process.finalize_rtmp_trace(
