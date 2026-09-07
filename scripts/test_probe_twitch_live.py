@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 from unittest.mock import Mock
+import uuid
 
 
 def load_probe(monkeypatch, runtime=None):
@@ -38,8 +39,9 @@ def test_explicit_runtime_is_forwarded_and_config_is_read_there(monkeypatch, tmp
     assert env['PULSAR_RESOLUTION'] == '1920x1080'
     assert env['PULSAR_VIDEO_BITRATE'] == '6000'
     probe.CONFIG_PATH.parent.mkdir()
-    probe.CONFIG_PATH.write_text(json.dumps({'server_port': 12345, 'server_password': 'unit-test-placeholder'}))
-    assert probe.wait_for_obs_websocket_config(0.1) == (12345, 'unit-test-placeholder')
+    fixture_password = uuid.uuid4().hex
+    probe.CONFIG_PATH.write_text(json.dumps({'server_port': 12345, 'server_password': fixture_password}))
+    assert probe.wait_for_obs_websocket_config(0.1) == (12345, fixture_password)
 
 
 def test_main_preserves_duration_and_caller_owned_directory(monkeypatch, tmp_path):

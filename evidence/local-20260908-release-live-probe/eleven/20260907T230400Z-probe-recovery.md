@@ -22,6 +22,12 @@ an isolated runtime directory. GitHub Release attachment was consequently skippe
 
 Local command: `python -m pytest scripts/test_probe_twitch_live.py scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py -q`.
 Result: 24 passed. `git diff --check`: pass.
+Combined contract suite: 307 passed, 1 skipped (existing optional coverage).
+
+First CI feedback corrected before merge: use job-context `github.workspace`
+instead of unavailable `runner.temp` in the job-level environment. The test's
+literal placeholder triggered Secret Keyword detection; generate the disposable
+fixture at runtime instead. No baseline or scanner exclusion was changed.
 
 The workflow supplies a runner-local runtime directory to both the probe and its
 existing deny-by-default redacted-config staging step. No secret value, credential,

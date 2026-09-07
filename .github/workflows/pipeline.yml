@@ -646,7 +646,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     env:
-      PULSAR_RUNTIME_DIR: ${{ runner.temp }}/pulsar-live-runtime
+      PULSAR_RUNTIME_DIR: ${{ github.workspace }}/.pulsar-live-runtime
     permissions:
       contents: write   # gh-pages deploy is downstream, but release attach
                         # needs it on this job too if dispatch enables it.
