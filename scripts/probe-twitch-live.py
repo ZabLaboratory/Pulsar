@@ -16,6 +16,8 @@ Optional env :
                       <repo>/upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/pulsar.exe)
   LIVE_TEST_DURATION  seconds to broadcast (default 300)
   LIVE_TEST_FPS       target encoder fps (default 60 — set via PULSAR_FPS at spawn)
+  PULSAR_RUNTIME_DIR  explicit runtime/config directory (default: unique temporary
+                      directory, removed at exit; explicit directories are kept)
 
 Validations :
   - pulsar spawns + obs-websocket config drops within 30 s
@@ -45,12 +47,15 @@ import http.server
 import json
 import os
 import pathlib
+import shutil
 import socket
 import socketserver
 import subprocess
 import sys
 import threading
+import tempfile
 import time
+import uuid
 from typing import Any
 
 try:
@@ -63,7 +68,12 @@ except ImportError:
 REPO_ROOT  = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_EXE = REPO_ROOT / "upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/pulsar.exe"
 RUNDIR     = REPO_ROOT / "upstream/build_x64/rundir/RelWithDebInfo/bin/64bit"
-CONFIG_PATH = RUNDIR / "obs-websocket" / "config.json"
+# Native bootstrap no longer writes configuration beside the executable.
+# Give the child and the reader the same explicit, isolated runtime directory.
+_EXPLICIT_RUNTIME = os.environ.get("PULSAR_RUNTIME_DIR", "").strip()
+RUNTIME_DIR = (pathlib.Path(_EXPLICIT_RUNTIME) if _EXPLICIT_RUNTIME else
+               pathlib.Path(tempfile.gettempdir()) / f"pulsar-live-probe-{uuid.uuid4().hex}").resolve()
+CONFIG_PATH = RUNTIME_DIR / "obs-websocket" / "config.json"
 SCENE_DIR  = REPO_ROOT / "scripts/live-test"
 
 # Local recording directory : pulsar runs StartRecord in parallel with
@@ -140,6 +150,8 @@ def start_scene_server(port: int) -> socketserver.ThreadingTCPServer:
 def spawn_pulsar(exe: pathlib.Path, fps: int) -> subprocess.Popen:
     """Spawn pulsar.exe with the desired encoder geometry."""
     env = os.environ.copy()
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    env["PULSAR_RUNTIME_DIR"] = str(RUNTIME_DIR)
     env["PULSAR_FPS"] = str(fps)
     env["PULSAR_RESOLUTION"] = "1920x1080"
     env["PULSAR_VIDEO_BITRATE"] = "6000"
@@ -858,7 +870,13 @@ def main() -> int:
     args = ap.parse_args()
 
     key = os.environ.get("TWITCH_STREAM_KEY", "").strip()
-    return asyncio.run(probe(key, args.duration, args.fps))
+    try:
+        return asyncio.run(probe(key, args.duration, args.fps))
+    finally:
+        # Caller-owned directories are retained for redacted CI diagnostics.
+        # Only this invocation's generated temporary directory is ours to remove.
+        if not _EXPLICIT_RUNTIME:
+            shutil.rmtree(RUNTIME_DIR, ignore_errors=True)
 
 
 if __name__ == "__main__":

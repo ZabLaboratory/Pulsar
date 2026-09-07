@@ -335,7 +335,7 @@ jobs:
         # the --real-orion true-wire URL the CEF browser_source loads. The
         # on-air legs are the CTest integration suite (needs the build) +
         # Keeper's antenna run (needs the VPS).
-        run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py -v
+        run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py scripts/test_probe_twitch_live.py -v
 
       - name: Run offline Pulsar probe contract tests
         # The AC-12 RTMP boundary and AC-13 dual-lane probe contracts are
@@ -645,6 +645,8 @@ jobs:
       || github.event_name == 'workflow_dispatch'
     runs-on: windows-2022
     timeout-minutes: 60
+    env:
+      PULSAR_RUNTIME_DIR: ${{ github.workspace }}/.pulsar-live-runtime
     permissions:
       contents: write   # gh-pages deploy is downstream, but release attach
                         # needs it on this job too if dispatch enables it.
@@ -770,7 +772,8 @@ jobs:
       # requires the password itself.
       #
       # NB : the previous path `obs-websocket/config.json` was workspace-
-      # relative and matched nothing (the file lives under the rundir),
+        # relative and matched nothing. The file now lives under the explicit
+        # runtime directory shared with the probe and native bootstrap,
       # so `if-no-files-found: ignore` silently uploaded nothing. This
       # step also fixes that blind spot.
       - name: Stage redacted pulsar-websocket config on failure
@@ -778,7 +781,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          src="upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs-websocket/config.json"
+            src="${PULSAR_RUNTIME_DIR}/obs-websocket/config.json"
           if [ ! -f "${src}" ]; then
             echo "::warning::no pulsar-websocket config.json to redact (${src} absent)"
             exit 0
