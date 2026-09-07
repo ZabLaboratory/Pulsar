@@ -4,6 +4,16 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 
 
+def test_automatic_promotion_is_bounded_to_qualified_cpu_pipeline():
+    patch = (ROOT / "patches/0055-perf-libobs-default-qualified-current-readback.patch").read_text()
+    assert "#ifdef _WIN32" in patch
+    assert "current_readback_mode = !setting ? 2 : strcmp(setting, \"1\") == 0;" in patch
+    assert "current_readback = !gpu_active" in patch
+    assert "readback_info->width == 1920 && readback_info->height == 1080" in patch
+    assert "readback_info->fps_num == 60 && readback_info->fps_den == 1" in patch
+    assert "readback_info->format == VIDEO_FORMAT_NV12" in patch
+
+
 def test_current_cpu_surface_advances_one_cadence_interval_without_changing_count():
     patch = (ROOT / "patches/0053-fix-libobs-current-readback-audio-alignment.patch").read_text()
     assert "+\t\tif (current_readback && !gpu_active)" in patch

@@ -9,10 +9,12 @@ param(
     [ValidateSet('software','nvdec-lowdelay','native-software')][string]$Decoder = 'software',
     [switch]$FreshFramePoll,
     [switch]$CurrentReadback,
+    [switch]$DefaultReadback,
     [switch]$NvencReadyDrain,
     [switch]$NvencAsyncOutput
 )
 $ErrorActionPreference = 'Stop'
+if ($CurrentReadback -and $DefaultReadback) { throw 'Select explicit current or default readback, not both' }
 $repo = Split-Path $PSScriptRoot -Parent
 $output = [IO.Path]::GetFullPath($OutputDir)
 if (Test-Path -LiteralPath $output) { throw "Output already exists: $output" }
@@ -32,7 +34,7 @@ $previousReadyDrain = $env:PULSAR_NVENC_READY_DRAIN
 $previousAsyncOutput = $env:PULSAR_NVENC_ASYNC_OUTPUT
 $env:PULSAR_TRACE_HMAC_KEY = [Convert]::ToHexString($key).ToLowerInvariant()
 $env:PULSAR_DSHOW_FRESH_FRAME_POLL = if ($FreshFramePoll) { '1' } else { '0' }
-$env:PULSAR_RAW_CURRENT_READBACK = if ($CurrentReadback) { '1' } else { '0' }
+$env:PULSAR_RAW_CURRENT_READBACK = if ($DefaultReadback) { $null } elseif ($CurrentReadback) { '1' } else { '0' }
 $env:PULSAR_NVENC_READY_DRAIN = if ($NvencReadyDrain) { '1' } else { '0' }
 $env:PULSAR_NVENC_ASYNC_OUTPUT = if ($NvencAsyncOutput) { '1' } else { '0' }
 try {
@@ -44,6 +46,7 @@ try {
     }
     Get-FileHash -Algorithm SHA256 -LiteralPath $binaries | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'binary.json')
     @{ receiver_mode = $ReceiverMode; fresh_frame_poll = [bool]$FreshFramePoll; current_readback = [bool]$CurrentReadback;
+       default_readback = [bool]$DefaultReadback;
        nvenc_ready_drain = [bool]$NvencReadyDrain; nvenc_async_output = [bool]$NvencAsyncOutput; decoder = $Decoder;
        binary_revision = $Revision; takes_per_codec = $Takes; workload_layout = 'visible-wgc-left-cef-right-v1';
        scripts = @(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $PSScriptRoot 'probe-dual-lane.py'), (Join-Path $PSScriptRoot 'probe-take-latency.py'))

@@ -100,7 +100,10 @@ def main():
     parser.add_argument("--encoder", choices=["x264", "nvenc"], default="x264")
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--current-readback", action="store_true")
+    parser.add_argument("--default-readback", action="store_true")
     args = parser.parse_args()
+    if args.current_readback and args.default_readback:
+        parser.error("select explicit current or default readback, not both")
     args.output.mkdir(parents=True, exist_ok=False)
     fixture = args.fixture or args.output / "flash-click.mkv"
     if not args.fixture:
@@ -111,7 +114,10 @@ def main():
     source_result = inspect_sync(fixture)
     binary_hashes = {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
                      for path in (args.exe, args.exe.parent / "obs.dll")}
-    os.environ["PULSAR_RAW_CURRENT_READBACK"] = "1" if args.current_readback else "0"
+    if args.default_readback:
+        os.environ.pop("PULSAR_RAW_CURRENT_READBACK", None)
+    else:
+        os.environ["PULSAR_RAW_CURRENT_READBACK"] = "1" if args.current_readback else "0"
     os.environ["PULSAR_NVENC_ASYNC_OUTPUT"] = "0"
     process = base.PulsarProcess(args.exe, args.encoder, args.output / "recordings")
     try:
@@ -120,6 +126,7 @@ def main():
     finally:
         process.shutdown()
     result = dict(schema="pulsar.flash-click.v1", encoder=args.encoder, current_readback=args.current_readback,
+                  default_readback=args.default_readback,
                   source=source_result, recording=str(recording), measured=inspect_sync(recording),
                   binary_sha256=binary_hashes, fixture_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest())
     (args.output / "report.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
