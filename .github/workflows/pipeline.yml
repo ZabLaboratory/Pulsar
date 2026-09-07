@@ -402,12 +402,17 @@ jobs:
           # finds the test registered and the binary missing, which reads
           # as an infrastructure failure rather than as the security check
           # it is.
+          # build/tests/data/libobs/** is the executable-relative effect
+          # bundle used by the native D3D11 scheduler probes. Those tests
+          # deliberately call obs_reset_video on the Basic Render Driver;
+          # shipping only their executables makes that a false code failure.
           path: |
             upstream/build_x64/rundir/RelWithDebInfo
             build/CTestTestfile.cmake
             build/**/CTestTestfile.cmake
             build/**/*.vcxproj
             build/tests/nv-probe/**
+            build/tests/data/libobs/**
           retention-days: 1
           compression-level: 1
 

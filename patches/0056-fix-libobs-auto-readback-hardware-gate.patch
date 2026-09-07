@@ -1,0 +1,50 @@
+From 808d10ad3f899041871fe72f5346d55c67a6bd23 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 20:36:34 +0200
+Subject: [PATCH] fix(libobs): require hardware for automatic current readback
+
+Keep the measured explicit override available, but leave the historical pipeline selected when Windows exposes only the Microsoft Basic Render Driver.
+
+Agent-Role: eleven
+
+Agent-Thread: 01a045e2-996f-7913-99f0-2cd237d3a6f8
+
+Work-Unit: ZabLaboratory/Pulsar#253
+
+Issue: #253
+
+Evidence: GitHub Windows runner exposed zero hardware adapters and stalled split-record shutdown
+---
+ libobs/obs-video.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/libobs/obs-video.c b/libobs/obs-video.c
+index 841662cc4..4c8ed1d6d 100644
+--- a/libobs/obs-video.c
++++ b/libobs/obs-video.c
+@@ -927,9 +927,11 @@ static inline void output_frame(struct obs_core_video_mix *video)
+ 	 * decoded-image, flash/click, cadence and output-lifecycle probes.
+ 	 * Other formats/platforms and texture encoders retain their pipeline. */
+ 	static int current_readback_mode = -1;
++	static bool hardware_readback_capable = false;
+ 	if (current_readback_mode < 0) {
+ 		const char *setting = getenv("PULSAR_RAW_CURRENT_READBACK");
+ #ifdef _WIN32
++		hardware_readback_capable = gs_get_adapter_count() > 0;
+ 		current_readback_mode = !setting ? 2 : strcmp(setting, "1") == 0;
+ #else
+ 		current_readback_mode = setting && strcmp(setting, "1") == 0;
+@@ -939,7 +941,8 @@ static inline void output_frame(struct obs_core_video_mix *video)
+ 	const bool raw_active = video->raw_was_active;
+ 	const bool gpu_active = video->gpu_was_active;
+ 	const struct video_output_info *readback_info = video_output_get_info(video->video);
+-	const bool qualified_readback = readback_info->width == 1920 && readback_info->height == 1080 &&
++	const bool qualified_readback = hardware_readback_capable && readback_info->width == 1920 &&
++		readback_info->height == 1080 &&
+ 		readback_info->fps_num == 60 && readback_info->fps_den == 1 && readback_info->format == VIDEO_FORMAT_NV12;
+ 	const bool current_readback = !gpu_active && (current_readback_mode == 1 ||
+ 		(current_readback_mode == 2 && qualified_readback));
+-- 
+2.54.0.windows.1
+
