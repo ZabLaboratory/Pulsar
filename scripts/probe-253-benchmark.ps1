@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Exe,
     [Parameter(Mandatory=$true)][string]$CaptureWindow,
     [Parameter(Mandatory=$true)][string]$OutputDir,
-    [string]$Revision = 'ad2c290bb7ab1f73edc68add30fc31d35a577adc',
+    [string]$Revision = 'ad2c290bb7ab1f73edc68add30fc31d35a577adc', # pragma: allowlist secret
     [ValidateSet('x264','nvenc')][string[]]$Encoders = @('x264','nvenc'),
     [int]$Takes = 100,
     [ValidateSet('packet','candidate','marker')][string]$ReceiverMode = 'candidate',

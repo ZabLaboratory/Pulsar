@@ -54,7 +54,7 @@ if ($Stage -eq 'summarize') {
     $runtimeHashes=@(Get-ChildItem -LiteralPath $runtime -Recurse -File | ForEach-Object {
         [ordered]@{path=[IO.Path]::GetRelativePath($runtime,$_.FullName).Replace('\','/'); bytes=$_.Length; sha256=(Get-FileHash -LiteralPath $_.FullName).Hash}
     })
-    $summary=[ordered]@{schema='pulsar.253.native-optimization.v1'; code_revision='5fba882446741f863744f68d1c5726aeb2dacc94';
+    $summary=[ordered]@{schema='pulsar.253.native-optimization.v1'; code_revision='5fba882446741f863744f68d1c5726aeb2dacc94'; # pragma: allowlist secret
         generated_at_utc=[DateTime]::UtcNow.ToString('o'); scope='Windows 1080p60 NV12 CPU/x264; local fully decoded first changed marker, not display';
         promoted='current readback plus media-timestamp alignment, automatic on the qualified CPU path';
         not_promoted=@('NVENC async output','lower B-frame quality profiles'); runs=@($runs); audio=@($audio); av=@($av);
