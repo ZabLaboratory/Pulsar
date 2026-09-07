@@ -1,0 +1,4 @@
+x264 probe exit=0
+x264 analyzer exit=1; inspect report for latency failures and unproven capacity (no single-lane reference run)
+nvenc probe exit=0
+nvenc analyzer exit=1; inspect report for latency failures and unproven capacity (no single-lane reference run)

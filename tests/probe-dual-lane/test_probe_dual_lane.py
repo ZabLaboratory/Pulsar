@@ -506,11 +506,16 @@ def test_wait_for_take_boundaries_requires_all_four_unique_correlations(tmp_path
     process = _boundary_wait_process(trace, runtime_id)
     correlation = probe.RtmpPacketCorrelation()
 
-    for commit in commits:
-        result = asyncio.run(
-            probe.wait_for_take_boundaries(process, receiver, commit, correlation, timeout=0.1)
-        )
-        assert set(result) == {*probe.PRODUCER_BOUNDARIES, "rtmp_first_packet"}
+    async def check_all_commits():
+        # Match the real probe's one-loop lifecycle; avoid 200 Windows TCP
+        # socketpairs just to exercise 200 correlations on the same stream.
+        for commit in commits:
+            result = await probe.wait_for_take_boundaries(
+                process, receiver, commit, correlation, timeout=0.1
+            )
+            assert set(result) == {*probe.PRODUCER_BOUNDARIES, "rtmp_first_packet"}
+
+    asyncio.run(check_all_commits())
     assert correlation.used_packet_indices == set(range(200))
     assert correlation.offset_min is not None
     assert correlation.offset_max is not None

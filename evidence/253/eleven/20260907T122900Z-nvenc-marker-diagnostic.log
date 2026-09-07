@@ -1,0 +1,19 @@
+nvenc probe exit=1
+   source frame verified: probe-dual-lane-cef-B 1920x1080 distinct=847 nonblack=1.000
+   public workload topology verified: duplicated producer instances WGC=2, CEF=2; topology=dual_lane_ab producer_count=2 lanes=A,B; scene ownership + settings + screenshots (Default bootstrap excluded)
+   Take 001: frame_id=529 pts_ns=737558724098878 onair_lane=1 preview_lane=0
+   measured composition: WGC left and CEF right above retained lifecycle colors; decoded marker 32:32:1888:508
+   Take 010: frame_id=741 pts_ns=737562257432070 onair_lane=0 preview_lane=1
+   Take 025: frame_id=835 pts_ns=737563824098674 onair_lane=1 preview_lane=0
+   Take 050: frame_id=996 pts_ns=737566507431900 onair_lane=0 preview_lane=1
+   Take 075: frame_id=1182 pts_ns=737569607431776 onair_lane=1 preview_lane=0
+   Take 100: frame_id=1369 pts_ns=737572724098318 onair_lane=0 preview_lane=1
+   recording verified: pulsar-20260907-141231.mp4 12388243 bytes, H.264 1920x1080 60fps, frames=963, duration=16.050s, AAC
+   trace partition: warmup_takes=100 measured_takes=10 total_takes=110
+PASS: 10 Takes; computed lane/surface relations remained valid; frame_id/PTS monotone
+Exception: D:\Documents\Zab\Pulsar\.worktrees\eleven-253-latency\scripts\probe-253-benchmark.ps1:47
+Line |
+  47 |              throw "$codec probe failed; evidence preserved in $output …
+     |              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | nvenc probe failed; evidence preserved in
+     | D:\Documents\Zab\Pulsar\.worktrees\eleven-253-latency\evidence\253\eleven\20260907T122900Z-nvenc-marker-diagnostic

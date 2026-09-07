@@ -1,0 +1,19 @@
+CMake is re-running because D:/Documents/Zab/Pulsar/.worktrees/eleven-253-latency/.benchmark-build/queue/CMakeFiles/generate.stamp is out-of-date.
+  the file 'D:/Documents/Zab/Pulsar/.worktrees/eleven-253-latency/tests/return-queue-safety/CMakeLists.txt'
+  is newer than 'D:/Documents/Zab/Pulsar/.worktrees/eleven-253-latency/.benchmark-build/queue/CMakeFiles/generate.stamp.depend'
+  result='-1'
+-- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.26200.
+-- Configuring done (0.0s)
+-- Generating done (0.1s)
+-- Build files have been written to: D:/Documents/Zab/Pulsar/.worktrees/eleven-253-latency/.benchmark-build/queue
+Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-253-latency/tests/return-queue-safety/CMakeLists.txt
+cl : ligne de commande  warning D9025: substitution de '/DNDEBUG' par '/UNDEBUG' [D:\Documents\Zab\Pulsar\.worktrees\eleven-253-latency\.benchmark-build\queue\return-queue-runtime.vcxproj]
+  queue-runtime-test.c
+  shared-memory-queue.c
+  tiny-nv12-scale.c
+  Génération de code en cours...
+  return-queue-runtime.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-253-latency\.benchmark-build\queue\tests\nv-probe\Release\return-queue-runtime.exe
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-253-latency/tests/return-queue-safety/CMakeLists.txt

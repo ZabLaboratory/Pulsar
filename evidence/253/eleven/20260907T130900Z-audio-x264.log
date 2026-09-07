@@ -1,0 +1,5 @@
+program-audio probe: encoder=x264 takes=100 exe=D:\Documents\Zab\Pulsar\.worktrees\eleven-253-latency\upstream\build_x64\rundir\RelWithDebInfo\bin\64bit\pulsar.exe
+   recording verified: pulsar-20260907-150828.mp4 5383839 bytes, H.264 1920x1080 60fps, frames=424, duration=7.067s, AAC
+   AAC audio verified: codec=aac sample_rate=48000 Hz, packets=333, PTS monotone/continuous
+PASS: 100 Cuts; ProgramAudio identity/outputs stable, audio frames observed, PTS monotone, Preview video mutation isolated
+   evidence: D:\Documents\Zab\Pulsar\.worktrees\eleven-253-latency\evidence\253\eleven\20260907T130900Z-audio-x264.json
