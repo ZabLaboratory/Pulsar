@@ -715,8 +715,10 @@ def test_fusion_is_atomic_and_keeps_existing_reference_on_validation_failure(tmp
     assert not list(tmp_path.glob("*.fused.tmp"))
 
 
-def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path):
+@pytest.mark.parametrize("decode_case", ["off", "valid", "missing", "duplicate", "wrong_pts", "before_packet"])
+def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path, decode_case):
     all_records = _latency_fixture_records()
+    all_records = [record for record in all_records if record.get("boundary") != "decoded_first_frame"]
     records = [
         record
         for record in all_records
@@ -742,6 +744,21 @@ def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path)
         }
     ]
     sidecar = _write_directshow_sidecar(tmp_path, all_records)
+    receiver.decode_frames = decode_case != "off"
+    if decode_case != "missing":
+        receiver.decoded_frames = [{
+            "frame_index": 0,
+            "pts_ms": 1501 if decode_case == "wrong_pts" else 1500,
+            "observed_at_monotonic_ns": 1_019_000_000 if decode_case == "before_packet" else 1_040_000_000,
+        }]
+    if decode_case == "duplicate":
+        receiver.decoded_frames *= 2
+    if decode_case in {"missing", "duplicate", "wrong_pts", "before_packet"}:
+        final.write_bytes(b"preserved-final")
+        with pytest.raises(probe.ProbeFailure, match="decoded"):
+            receiver.fuse_trace(producer, final, directshow_path=sidecar)
+        assert final.read_bytes() == b"preserved-final"
+        return
     receiver.fuse_trace(producer, final, directshow_path=sidecar)
     fused = [json.loads(line) for line in final.read_text(encoding="utf-8").splitlines()]
     rtmp = [record for record in fused if record.get("boundary") == "rtmp_first_packet"]
@@ -750,6 +767,12 @@ def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path)
     assert rtmp[0]["surface"] == "RTMP"
     assert rtmp[0]["consumer"] == "receiver"
     assert rtmp[0]["receiver_observed_normalized_ns"] == rtmp[0]["observed_at_monotonic_ns"]
+    decoded = [record for record in fused if record.get("boundary") == "decoded_first_frame"]
+    assert len(decoded) == (1 if decode_case == "valid" else 0)
+    if decoded:
+        assert decoded[0]["observed_at_monotonic_ns"] == 1_040_000_000
+        assert decoded[0]["take_command_id"] == rtmp[0]["take_command_id"]
+        assert "not display/antenna" in decoded[0]["notes"]
 
 
 def test_fusion_parser_failure_keeps_existing_final_byte_for_byte(tmp_path):

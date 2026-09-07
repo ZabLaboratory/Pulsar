@@ -852,8 +852,10 @@ class RtmpReceiver:
     observation and is never promoted to wire-level or decoded latency.
     """
 
-    def __init__(self, ffmpeg: str, *, runtime_id: str, stream_id: str) -> None:
+    def __init__(self, ffmpeg: str, *, runtime_id: str, stream_id: str, decode_frames: bool = False) -> None:
         self.ffmpeg = ffmpeg
+        self.decode_frames = decode_frames
+        self.decoded_frames: list[dict[str, int]] = []
         self.runtime_id = runtime_id
         if ID_RE.fullmatch(stream_id) is None:
             raise ProbeFailure("RTMP stream_id must be a non-empty identifier of at most 128 characters")
@@ -935,6 +937,16 @@ class RtmpReceiver:
             "null",
             "-",
         ]
+        if self.decode_frames:
+            # Preserve the demux PTS at the diagnostic filter. One decoder
+            # thread avoids FFmpeg frame-thread queueing; codec reordering is
+            # retained. This changes receiver workload, not the encoded stream.
+            input_index = command.index("-i")
+            command[input_index:input_index] = ["-copyts", "-threads", "1"]
+            command.extend([
+                "-map", "0:v:0", "-an", "-vf", "settb=expr=1/1000,showinfo",
+                "-fps_mode", "passthrough", "-f", "null", "-",
+            ])
         self.proc = subprocess.Popen(
             command,
             cwd=str(REPO_ROOT),
@@ -972,6 +984,15 @@ class RtmpReceiver:
             clean = line.rstrip("\r\n")
             with self._lock:
                 self.lines.append(clean)
+            if self.decode_frames and "showinfo" in clean:
+                decoded = re.search(r"\bn:\s*(\d+)\s+pts:\s*(-?\d+)\s+pts_time:", clean)
+                if decoded:
+                    with self._lock:
+                        self.decoded_frames.append({
+                            "frame_index": int(decoded.group(1)),
+                            "pts_ms": int(decoded.group(2)),
+                            "observed_at_monotonic_ns": received_at,
+                        })
             match = RTMP_PACKET_RE.search(clean)
             if match is None:
                 continue
@@ -1293,6 +1314,8 @@ class RtmpReceiver:
             raise ProbeFailure("producer trace already contains RTMP observations; fusion would double-count receiver data")
         if not encoded:
             raise ProbeFailure("producer trace contains no encoded packet observations for RTMP correlation")
+        if self.decode_frames and any(record.get("boundary") == "decoded_first_frame" for record in records):
+            raise ProbeFailure("producer already contains decoded observations")
         receiver_packets, receiver_failure = self.snapshot()
         if not receiver_packets:
             raise ProbeFailure("RTMP receiver emitted no demuxed video packet observations")
@@ -1301,6 +1324,7 @@ class RtmpReceiver:
 
         correlation = RtmpPacketCorrelation()
         rtmp_observations: list[dict[str, object]] = []
+        decoded_observations: list[dict[str, object]] = []
         for producer in encoded:
             candidates = correlation.candidates(producer, receiver_packets)
             if len(candidates) != 1:
@@ -1348,11 +1372,40 @@ class RtmpReceiver:
                     "notes": "first video packet observed at FFmpeg RTMP demux; not wire-level or decoded timing",
                 }
             )
+            if self.decode_frames:
+                matching_frames = [frame for frame in self.decoded_frames if frame["pts_ms"] == packet["packet_pts"]]
+                if len(matching_frames) != 1:
+                    raise ProbeFailure(
+                        f"decoded frame correlation for {producer.get('take_command_id')}: "
+                        f"expected one frame at RTMP PTS {packet['packet_pts']}, got {len(matching_frames)}"
+                    )
+                frame = matching_frames[0]
+                if frame["observed_at_monotonic_ns"] < int(packet["observed_at_monotonic_ns"]):
+                    raise ProbeFailure("decoded-frame observation precedes its demux packet")
+                decoded_observations.append({
+                    "record_type": "observation", "boundary": "decoded_first_frame",
+                    "clock_domain": "monotonic_ns",
+                    **{key: producer[key] for key in (
+                        "runtime_instance_id", "command_id", "intent_id", "take_command_id",
+                        "revisions", "frame_id", "pts_ns",
+                    )},
+                    "observed_at_monotonic_ns": frame["observed_at_monotonic_ns"],
+                    "valid": True, "surface": "RTMP", "consumer": "decoder",
+                    "notes": (
+                        f"FFmpeg showinfo pipe observation; decoder_threads=1; "
+                        f"frame_index={frame['frame_index']}; packet_index={packet['packet_index']}; "
+                        f"pts_ms={frame['pts_ms']}; includes decoder reorder and log delivery; "
+                        "same RTMP PTS as correlated encoded candidate; not display/antenna latency"
+                    ),
+                })
+        if self.decode_frames and "decoded_first_frame" not in paths:
+            paths.append("decoded_first_frame")
         session["rtmp_receiver"] = {**self.metadata(), **correlation.metadata()}
         merged = [
             session,
             *records[1:],
             *sorted(rtmp_observations, key=lambda item: int(cast(int, item["packet_index"]))),
+            *decoded_observations,
         ]
         self._install_fused_records(merged, output_path)
 
@@ -2608,11 +2661,12 @@ def prepare_record_directory(requested: pathlib.Path | None) -> tuple[Any, pathl
         raise ProbeFailure(f"--record-dir cannot be resolved: {exc}") from exc
     repository = REPO_ROOT.resolve()
     try:
-        destination.relative_to(repository)
+        relative = destination.relative_to(repository)
     except ValueError:
         pass
     else:
-        raise ProbeFailure("--record-dir must be outside the Pulsar repository")
+        if len(relative.parts) < 4 or relative.parts[0] != "evidence":
+            raise ProbeFailure("--record-dir must be outside the Pulsar repository or below evidence/<issue>/<role>/<run>")
 
     if destination.exists() and not destination.is_dir():
         raise ProbeFailure(f"--record-dir is not a directory: {destination}")
@@ -4459,6 +4513,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="return transport policy propagated to Pulsar and DirectShow (default: PULSAR_RETURN_TRANSPORT)",
     )
     parser.add_argument(
+        "--decode-rtmp", action="store_true",
+        help="also observe decoded candidate frames in FFmpeg (one thread, PTS correlation; no display guarantee)",
+    )
+    parser.add_argument(
         "--cef-url",
         default=os.environ.get("PULSAR_CEF_URL"),
         help="URL for the --cef-workload browser_source (or PULSAR_CEF_URL; default is an ephemeral local page)",
@@ -4466,6 +4524,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.takes < 1:
         parser.error("--takes must be >= 1")
+    if args.decode_rtmp and not args.rtmp_receiver:
+        parser.error("--decode-rtmp requires --rtmp-receiver")
     if args.runtime_id and args.trace is None:
         parser.error("--runtime-id requires --trace")
     if args.resource_mode and args.trace is None:
@@ -4582,6 +4642,7 @@ def run(args: argparse.Namespace) -> int:
                 rtmp_ffmpeg,
                 runtime_id=process.runtime_id,
                 stream_id=_stream_id_for_runtime(process.runtime_id, args.encoder),
+                decode_frames=args.decode_rtmp,
             )
             process.rtmp_producer_trace_path = producer_trace_path
             process.rtmp_final_trace_path = final_trace_path
