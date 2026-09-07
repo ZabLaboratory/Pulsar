@@ -7,7 +7,8 @@ param(
     [int]$Takes = 100,
     [ValidateSet('packet','candidate','marker')][string]$ReceiverMode = 'candidate',
     [switch]$FreshFramePoll,
-    [switch]$CurrentReadback
+    [switch]$CurrentReadback,
+    [switch]$NvencReadyDrain
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -25,15 +26,18 @@ $key = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes(
 $previousKey = $env:PULSAR_TRACE_HMAC_KEY
 $previousPoll = $env:PULSAR_DSHOW_FRESH_FRAME_POLL
 $previousReadback = $env:PULSAR_RAW_CURRENT_READBACK
+$previousReadyDrain = $env:PULSAR_NVENC_READY_DRAIN
 $env:PULSAR_TRACE_HMAC_KEY = [Convert]::ToHexString($key).ToLowerInvariant()
 $env:PULSAR_DSHOW_FRESH_FRAME_POLL = if ($FreshFramePoll) { '1' } else { '0' }
 $env:PULSAR_RAW_CURRENT_READBACK = if ($CurrentReadback) { '1' } else { '0' }
+$env:PULSAR_NVENC_READY_DRAIN = if ($NvencReadyDrain) { '1' } else { '0' }
 try {
     $bin = Split-Path $Exe -Parent
     $runtime = Split-Path (Split-Path $bin -Parent) -Parent
     $binaries = @($Exe, (Join-Path $bin 'obs.dll'), (Join-Path $runtime 'obs-plugins/64bit/obs-nvenc.dll'), (Join-Path $runtime 'data/obs-plugins/win-dshow/obs-virtualcam-module64.dll'))
     Get-FileHash -Algorithm SHA256 -LiteralPath $binaries | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'binary.json')
     @{ receiver_mode = $ReceiverMode; fresh_frame_poll = [bool]$FreshFramePoll; current_readback = [bool]$CurrentReadback;
+       nvenc_ready_drain = [bool]$NvencReadyDrain;
        binary_revision = $Revision; takes_per_codec = $Takes; workload_layout = 'visible-wgc-left-cef-right-v1';
        scripts = @(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $PSScriptRoot 'probe-dual-lane.py'), (Join-Path $PSScriptRoot 'probe-take-latency.py'))
      } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'run-settings.json')
@@ -56,4 +60,5 @@ try {
     $env:PULSAR_TRACE_HMAC_KEY = $previousKey
     $env:PULSAR_DSHOW_FRESH_FRAME_POLL = $previousPoll
     $env:PULSAR_RAW_CURRENT_READBACK = $previousReadback
+    $env:PULSAR_NVENC_READY_DRAIN = $previousReadyDrain
 }
