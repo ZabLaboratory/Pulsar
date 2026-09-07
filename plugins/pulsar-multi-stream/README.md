@@ -31,7 +31,7 @@ goes through the vendor namespace.
 | Request | Inputs | Outputs |
 |---|---|---|
 | `GetDestinations` | — | `destinations: [{id, name, kind, url, enabled, active}, ...]` |
-| `CreateDestination` | `name, kind ("rtmp_custom" \| "vod_local" \| "twitch"), url, key?` | `id` (or `error`) |
+| `CreateDestination` | `name, kind ("rtmp_custom" \| "vod_local" \| "twitch" \| "youtube"), url, key?` | `id` (or `error`) |
 | `RemoveDestination` | `id` | `removed: bool` |
 | `StartDestination` | `id` | `started: bool, error?: string` |
 | `StopDestination` | `id` | `stopped: bool` |
@@ -39,6 +39,10 @@ goes through the vendor namespace.
 | `StopAllDestinations` | — | `ok: bool` |
 | `GetVideoSettings` | — | `fps, width, height, video_bitrate, video_rate_control, video_keyint_sec, audio_bitrate` |
 | `SetVideoSettings` | `video_bitrate?, audio_bitrate?` | `changed: bool, video_bitrate?, audio_bitrate?` (or `error`) |
+| `GetCapabilities` | — | Runtime manifest, inventories and mutation regimes; presence is not operational proof. |
+| `GetAudioTracks` / `MeasureAudioTrackFlow` | See protocol | Track/output mapping and actual flow observations. |
+| `GetMonitoringDeviceList` / `SetMonitoringDevice` | Optional `device_id` on write | Enumerated monitoring devices and effective readback. |
+| `GetDiagnostics` / `StopLogFileWrite` | See protocol | Bounded diagnostics and diagnostic log-sink control under their admission rules. |
 | `GetAdaptiveState` | — | `enabled, target_kbps, current_kbps, floor_kbps, stable_ticks, adjustments_total, last_delta_total, last_delta_dropped, last_drop_ratio, samples` |
 | `SetAdaptiveEnabled` | `enabled` | `enabled` |
 | `GetProgramAudioRoute` | — | Explicit `program-common` / `ProgramAudio` identity, output/source read-back, encoder-fed mixer tracks and monotone PTS counters/history. |
@@ -64,12 +68,19 @@ inferred from a Preview scene or output slot. `sources` contains only
 audio-capable main-canvas source channels (1..63 in the current libobs build);
 channel 0 is the mutable dual-lane video root and is intentionally omitted.
 
+The complete request/event fields, including `OutputAttemptSettled` and
+`OutputFailed`, are in [PROTOCOL.md](../../docs/PROTOCOL.md). A start response
+is not a remote-platform live guarantee. Observe effective state and later
+failure events; the registry does not expose an implemented
+`DestinationStateChanged` contract merely because an old roadmap named it.
+
 ### Kinds
 
 | Kind | `url` field | `key` field |
 |---|---|---|
 | `rtmp_custom` | RTMP server URL (`rtmp://...` or `rtmps://...`, validated) | required, non-empty stream key |
 | `vod_local` | output file path (parent dir is mkdir-p'd) | unused |
+| `youtube` | ignored; pinned `rtmps://a.rtmps.youtube.com:443/live2` | required, non-empty YouTube stream key; no OAuth flow |
 | `twitch` | ignored on input — Pulsar pins the URL to `rtmps://ingest.global-contribute.live-video.net/app/` (TLS, so the stream key never travels in cleartext) and surfaces the pinned value in `GetDestinations` | required, non-empty Twitch stream key |
 
 Output paths for `vod_local` are NOT auto-timestamped — supply a fully
@@ -78,15 +89,24 @@ resolved path; the client (Prism) is responsible for naming.
 `RemoveDestination` while a destination is active is safe: the registry
 calls `obs_output_stop` and polls until inactive (with a `force_stop`
 fallback after ~1 s) before releasing handles, so the MP4 / RTMP
-session is finalised gracefully.
+session can finalize before release. Inspect failures/timeouts rather than
+assuming the force fallback always produces an intact archive.
 
-## Phase scope
+## Current scope and limits
 
-- **PR1 (Phase 7a-d)** — `rtmp_custom` + `vod_local`, registry, vendor API, encode sharing.
-- **PR2 (Phase 7e)** — `twitch` kind alias, input validation, validated graceful remove-during-active.
-- **PR3 (Phase 12a)** — `GetVideoSettings` / `SetVideoSettings` for live bitrate mutation.
-- **PR4 (Phase 12b)** — adaptive bitrate worker (background thread sampling `obs_output_get_frames_dropped`, scaling within `[floor, target]`, emitting `pulsar:BitrateAdjusted`); `GetAdaptiveState` / `SetAdaptiveEnabled` for runtime control. `PULSAR_ADAPTIVE_BITRATE=off` opt-out at boot.
-- **Later** — destination state events (`pulsar:DestinationStateChanged`), per-destination retry policy, persistence of destination configs, YouTube OAuth (Phase 8 deferred), YouTube kind.
+The registry ships all four destination kinds, shared encoder fan-out,
+bitrate controls, adaptive sampling, capability/audio/monitoring readback and
+diagnostics. It does not manage provider accounts/OAuth or durable
+application-level destination persistence across runtime restarts.
+
+Adaptive bitrate changes a shared encoder, not one independent quality tier
+per destination. Inspect per-destination activity after a bulk action;
+`StartAllDestinations` returning does not prove every output became live.
+Encoder family/resolution/fps remain boot-fixed.
+
+Finalize outputs before process termination. The removal path waits with a
+bounded force fallback; a fallback is not an unconditional successful MP4
+finalization guarantee.
 
 ## Validation
 

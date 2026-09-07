@@ -71,7 +71,8 @@ Pulsar 3.0.0 delivers the dual-lane Preview/Program production core, isolated co
 - Document DirectShow transport/lease operation, latency collection, canary operation, embedding, scene-switch protocol, accessibility and qualified optimization scope.
 - Persist the approved AC-12/I14 amendment separating same-packet RTMP transport latency (AC-12a) from total command-to-egress latency (AC-12b).
 - Preserve rejected optimization experiments and their measurements. Native asynchronous NVENC completion remains disabled by default after a worse measured p95; lower-B-frame alternatives were not promoted after quality regressions.
-- Refresh product-neutral README/architecture guidance and remove obsolete agent artifacts while retaining canonical proof archives.
+- Rewrite the complete product README, architecture, development and embedding guides; audit every component/package README and secondary runbook against the current code. Add a documentation index and a complete 52-patch libobs/fork inventory; retain approved ADRs and historical measurement values with clear status boundaries.
+- Remove obsolete agent artifacts while retaining canonical proof archives.
 - Complete independent ADR closure covering I1-I14 and applicable AC-01 through AC-14, with the effective amendment and extension disposition recorded.
 
 ### Measured results and release limits
@@ -95,7 +96,7 @@ Pulsar 3.0.0 delivers the dual-lane Preview/Program production core, isolated co
 
 ### Complete commit inventory since v2.0.0b
 
-The following 70 entries enumerate every reachable commit in `v2.0.0b..3ba9ab8`, oldest first. A squash commit can contain several changes; the thematic sections above summarize their delivered behavior. Release-only version/changelog metadata is added by the 3.0.0 release commit.
+The following 70 entries enumerate every reachable commit in `v2.0.0b..3ba9ab8`, oldest first. A squash commit can contain several changes; the thematic sections above summarize their delivered behavior. The 3.0.0 release commits add version metadata and the comprehensive README/secondary-documentation refresh described above; the inventory boundary remains the integrated product commit.
 
 - [`1bd92e1`](https://github.com/ZabLaboratory/Pulsar/commit/1bd92e13dfaeeca3fac65cbe80862b61d8eab860) 2026-08-25 — docs: align Pulsar README with runtime
 - [`ffdc7fe`](https://github.com/ZabLaboratory/Pulsar/commit/ffdc7fe0059c02e6f6c92f648a4bd9bf859d718a) 2026-08-25 — docs: keep Pulsar README product-neutral

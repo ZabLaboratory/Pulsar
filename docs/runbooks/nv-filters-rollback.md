@@ -64,16 +64,17 @@ step below, and skipping it leaves the situation unchanged in production.
 The embedder pins `NVAFX_SDK_DIR` / `NV_VIDEO_EFFECTS_PATH` for the
 `pulsar.exe` it spawns (Amendment 3 §A3.4 layer ii, Prism's twin issue).
 
-6. Un-pin them — spawn Pulsar with **neither variable set**, and make sure
-   neither is inherited from Prism's own environment. Pulsar's probe then
-   finds no designated directory, `pulsar_nv_module_should_load()` is false,
-   and the module refuses to load **even on an installed bundle that still
-   contains it**. This is the step that changes behaviour on machines
-   already in the field, and it takes effect at the next Pulsar spawn.
+6. Remove inherited SDK overrides as environment hygiene, but do **not**
+   treat this as a reliable disable switch: the validated VFX loader can also
+   discover an SDK under the system Program Files location. An installed SDK
+   can therefore remain designated after both overrides are removed.
+   The dependable bundle mitigation is the newly shipped artifact with the
+   module stripped. Until that artifact is deployed, do not claim the old
+   full bundle has been disabled by unsetting environment variables.
 7. Re-pin the bundle version: bump the `@clodocapeo/pulsar-bundle-full`
    dependency to the release built above, and rebuild the desktop artefact.
-   Cf. [[rebuild-native-artefacts-when-touching-orion-solar-lumencast]] — the
-   bundle is embedded, not resolved at runtime.
+   Follow the consumer\'s current packaging runbook: verify the rebuilt
+   artifact actually contains the new Pulsar distribution.
 8. Remove `nvidia_audiofx_filter` / `nv_greenscreen_filter` /
    `nv_blur_filter` / `nv_background_blur_filter` from the filter whitelist
    (Prism ADR 023 §3.3) so the cockpit stops offering a filter that will
@@ -82,14 +83,16 @@ The embedder pins `NVAFX_SDK_DIR` / `NV_VIDEO_EFFECTS_PATH` for the
 ## Verifying the rollback
 
 - `capabilities.nv_filters.module_loaded` is `false` on a freshly spawned
-  Pulsar — **and** `afx.directory_designated` / `vfx.directory_designated`
-  are both `false`, which is what proves step 6 took, rather than step 1.
+  runtime from the new stripped bundle. Record the AFX/VFX designation
+  fields separately: host SDK discovery and packaged module presence are
+  different facts.
 - `capabilities.filters` no longer lists any `nv*` filter id.
 - Neither packaged tree has `nv-filters.dll` — run the check against both,
   since they carry different expectations:
   `python scripts/check-nv-filters-packaging.py --dist dist/pulsar-windows-x64-full-v<VERSION>`
   and `--dist dist/pulsar-windows-x64-v<VERSION>`.
-- Pulsar's log carries `[NVIDIA filters]: not loaded -- no validated NVIDIA SDK`.
+- If the SDK gate refused a still-present module, record that diagnostic.
+  A stripped module need not emit the same loader message.
 
 ## What this does not undo
 

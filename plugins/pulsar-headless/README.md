@@ -2,9 +2,10 @@
 
 Service-mode entry point for Pulsar.
 
-Starts libobs without instantiating any Qt component, manages
-lifecycle (init / scene graph load / shutdown), and exposes signals
-that `pulsar-websocket` translates into protocol events.
+Builds `bin/64bit/pulsar.exe` for Windows x64. It starts libobs without an
+OBS Studio window, but constructs a minimal Qt application required by
+loaded components. It owns bootstrap, readiness and teardown; the frontend
+component owns the production scene graph and encoder selection.
 
 ## Status
 
@@ -43,12 +44,36 @@ configured listener reports active.
 - Default video / audio backends selected for the host platform.
 - Signal pipe-out so `pulsar-websocket` can subscribe to scene /
   source / output events without coupling to libobs internals.
-- CLI entry: `pulsar --service [--port N] [--config path]`.
+- Direct entry: `pulsar.exe`, configured through the documented environment.
+  There is no supported `--service --port --config` CLI.
+- WebSocket and browser pre-shutdown barriers before frontend/libobs teardown.
+- Explicit inherited anonymous-event shutdown for the native redirected-stdio
+  harness; the current Node bundle does not expose that control.
 
 ## Out of scope
 
 - UI of any kind. If a debug surface is needed it lives in a separate
   optional plugin or as a developer-only build flag.
-- Encoder selection logic — that is `pulsar-multi-stream`'s job.
+- Encoder selection logic — owned by `pulsar-frontend-stub`; multi-stream
+  reads/mutates the supported settings through the shared runtime.
 - Authentication — handled inside `pulsar-websocket` at the protocol
   layer.
+
+
+## Boot and shutdown contract
+
+The order is namespace/lease acquisition → minimal Qt/logging → libobs and
+video/audio → frontend callback installation → protected WebSocket config →
+module load/listener check → frontend production state → session/READY/idle
+markers. READY does not prove that a media source has rendered or a remote
+stream has reached live.
+
+On graceful native shutdown, quiesce WebSocket, drain browser callbacks/tasks,
+stop/release frontend outputs/sources, then stop libobs and release leases.
+A failed barrier refuses unsafe continuation. Forceful process termination
+does not exercise these same barriers and must not be described as an MP4
+finalization guarantee.
+
+[Architecture](../../docs/ARCHITECTURE.md),
+[embedding lifecycle](../../docs/PRISM-EMBEDDING.md) and
+[environment reference](../../docs/PROTOCOL.md) describe the public contract.

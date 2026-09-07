@@ -1,13 +1,18 @@
 # Pulsar — Protocol
 
-Pulsar speaks the **obs-websocket v5 baseline** plus a `pulsar:*` vendor
-namespace. Existing v5 tooling (Stream Deck, Streamer.bot, Companion,
-Aitum, custom dashboards) plugs in unchanged; the vendor namespace
-covers capabilities the v5 baseline does not model — multi-destination
-first-class, adaptive bitrate, and live encoder retuning.
+Pulsar implements the obs-websocket v5 baseline plus three vendor surfaces:
+`pulsar` (outputs, capabilities, diagnostics and audio/video settings),
+`pulsar-scene` (legacy scene/capture helpers) and `pulsar-scene-switch`
+(transactional hot-lane Prepare/Take/Abort). Existing v5 tooling can use
+supported baseline requests after authentication; desktop-UI operations
+are not implied by the absence of a GUI.
 
-The reference client is [`@clodocapeo/pulsar-client`](../packages/pulsar-client/),
-which exposes typed wrappers over both surfaces.
+The reference [TypeScript client](../packages/pulsar-client/README.md)
+provides typed baseline/`pulsar` wrappers. Its `callVendor()` uses the fixed
+`pulsar` name; other vendors use a raw `CallVendorRequest`.
+
+For process boot, private runtime directories and wrapper lifecycle, see
+[architecture](ARCHITECTURE.md) and [embedding](PRISM-EMBEDDING.md).
 
 ## Scene-switch runtime vendor (v1)
 
@@ -1142,9 +1147,11 @@ capped by `max_size_mb` — ~23 MB at 30 s / 6 000 kbps.
 
 ## Environment variables (`PULSAR_*`)
 
-Every variable below is read once at process boot (`std::getenv`), never
-re-read live, and never reachable from a leaf / obs-websocket / network
-value — operator/env-controlled only.
+These are operator-controlled environment inputs, not values supplied by a
+scene leaf or remote vendor request. Media settings are generally selected
+at boot/output initialization; specific tracing and native switches may be
+read by their owning component. Changing the parent environment does not
+reconfigure an already running child.
 
 | Variable | Read by | Default | Effect |
 |---|---|---|---|
@@ -1156,30 +1163,13 @@ value — operator/env-controlled only.
 | `PULSAR_RESOLUTION` | `pulsar-headless` | `1920x1080` | Base/output resolution, format `<W>x<H>`, up to `7680x4320`. Boot-fixed. |
 | `PULSAR_CAPTURE_WINDOW` | `pulsar-frontend-stub` | unset | `window_capture` target, format `<title>:<class>:<exe>`. Unset ⇒ source produces black frames (pipeline still encodes/records). Superseded per-scene by `pulsar-scene:SetCaptureSource` when used. |
 | `PULSAR_VIDEO_BITRATE` | `pulsar-frontend-stub` | `6000` (kbps) | Boot video bitrate, `200..50000`. Mutable live afterwards via `pulsar:SetVideoSettings`. |
-| `PULSAR_VIDEO_ENCODER` | `pulsar-frontend-stub` | `x264` | Encoder family: `x264`\|`nvenc`\|`qsv`\|`amf`\|`auto`. Resolved against the live `obs_enum_encoder_types()` set; unavailable/unknown/null-create all fall back silently to `obs_x264`. Boot-fixed, no live swap (ADR 004 §3.1-3.2/§3.4). |
+| `PULSAR_VIDEO_ENCODER` | `pulsar-frontend-stub` | `x264` | Encoder family: `x264`\|`nvenc`\|`qsv`\|`amf`\|`auto`. Resolved against the live `obs_enum_encoder_types()` set; unavailable/unknown/null-create fall back to `obs_x264` with diagnostics. Boot-fixed, no live swap (ADR 004 §3.1-3.2/§3.4). |
 | `PULSAR_VIDEO_RATE_CONTROL` | `pulsar-frontend-stub` | `CBR` | `CBR`\|`VBR`\|`CQP`, only applied when a non-fallback encoder binds. |
 | `PULSAR_VIDEO_PROFILE` | `pulsar-frontend-stub` | `high` | `baseline`\|`main`\|`high`. |
 | `PULSAR_VIDEO_KEYINT_SEC` | `pulsar-frontend-stub` | `2` | Keyframe interval, `0..20` seconds. |
 | `PULSAR_VIDEO_PRESET` | `pulsar-frontend-stub` | family-specific | Validated against the preset set of the resolved encoder family — x264 `ultrafast..veryslow` (default `veryfast`), NVENC `p1..p7` (`p5`, written to `preset` on `obs_nvenc_h264_tex` but to **`preset2` on the compat ids `jim_nvenc` / `ffmpeg_nvenc`** — the property name is resolved per encoder id, not per family), **QSV `TU1..TU7` (`TU4`, written to the `target_usage` property, not `preset`)**, AMF `speed`/`balanced`/`quality` (`balanced`). Matched case-insensitively, applied in the canonical spelling `capabilities.encoder_families` publishes; unknown value ⇒ family default (logged). |
 | `PULSAR_NVENC_LOW_LATENCY` | `pulsar-frontend-stub` | enabled for NVENC | Selects NVENC `tune=ull` while preserving the historical preset, multipass, lookahead and B-frame compression tools. Explicit `0`, `false`, `off` or `no` restores the historical HQ tune; malformed values fail closed to HQ and are logged. This switch does not alter audio routing. |
 
-The local NVENC non-regression gate compares the historical HQ tune with the
-quality-safe ULL tune at identical 1080p60, preset and bitrate settings over
-broadcast, complex and chaotic deterministic sources. It fails independently
-on VMAF, PSNR-Y or SSIM regression:
-
-```powershell
-python scripts/probe-nvenc-quality.py --report nvenc-quality.json
-```
-
-The canonical local Full build is incremental and fingerprint-checked:
-
-```powershell
-.\scripts\build-win.ps1 -Stage build -Full
-```
-
-Use `-RefreshPatches` after explicitly requesting a patch-stack replay, and
-`-Clean` only when a cold CMake/object rebuild is required.
 | `PULSAR_AUDIO_BITRATE` | `pulsar-frontend-stub` | `160` (kbps) | Default `ffmpeg_aac` bitrate for every track, `32..512`. Mutable live via `pulsar:SetVideoSettings` while the audio encoders are idle. |
 | `PULSAR_AUDIO_TRACKS` | `pulsar-frontend-stub` | `1` | Number of audio encoders created, `1..6` (`MAX_AUDIO_MIXES`). Encoder *i* is bound to libobs mixer index *i*, i.e. track *i+1*. Out of range ⇒ warning + `1`. Boot-fixed. |
 | `PULSAR_AUDIO_BITRATE_<n>` | `pulsar-frontend-stub` | `PULSAR_AUDIO_BITRATE` | Per-track bitrate override for track *n* (`1..PULSAR_AUDIO_TRACKS`), `32..512`. |
@@ -1198,6 +1188,64 @@ Use `-RefreshPatches` after explicitly requesting a patch-stack replay, and
 | `PULSAR_DUAL_LANE_TRANSITIONS` | `pulsar-frontend-stub` | off | Truthy set `1`/`true`/`on`/`yes` enables the #250 Fade/Stinger composition above the stable dual-lane Cut. This is independent of `PULSAR_NATIVE_STINGER`; unset or malformed values preserve Cut and never rebind an active `video_t`. |
 | `PULSAR_ADAPTIVE_BITRATE` | `pulsar-multi-stream` | enabled | Set to `off`/`0`/`false` to disable the adaptive bitrate worker at start. |
 | `PULSAR_OUTPUT_VERIFY_MS` | `pulsar-websocket` | `250` (ms) | Upper bound of the post-action state poll behind the start/stop verification above (`0..2000`; out-of-range ⇒ default with a warning). Only the non-nominal paths ever reach it — an output that activates inside `obs_output_start` settles on the first read. |
+
+
+### Runtime isolation and diagnostics
+
+| Variable | Default / scope | Effect |
+|---|---|---|
+| `PULSAR_RUNTIME_INSTANCE_ID` | Generated native identity | Must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`; names runtime resources and excludes concurrent identity reuse. |
+| `PULSAR_RUNTIME_ROOT` | Native per-user state root | Root for runtime identity leases and default runtime directories. |
+| `PULSAR_RUNTIME_DIR` | Native `<state-root>/runtimes/<id>`; wrappers create a private temporary directory unless explicit | Private cwd/configuration. Explicit caller-owned directories are not removed by wrapper cleanup. |
+| `PULSAR_LEGACY_ALIAS` | Bootstrap policy | `dedicated` avoids the legacy camera singleton; `required` refuses startup if the alias lease cannot be acquired. See the canary runbook for modes. |
+| `PULSAR_LEGACY_ALIAS_LEASE_ROOT` | State-root leases directory | Selects the legacy alias lease location; ownership/collision rules still apply. |
+| `PULSAR_LOG_DIR` | Runtime `logs/`, then historical local-app-data fallback | Overrides the bounded native log sink. |
+| `PULSAR_DUAL_LANE_ENABLED` / `PULSAR_DISABLE_DUAL_LANE` | Dual lane enabled | Controlled compatibility/rollback selection; see [canary](runbooks/pulsar-dual-lane-canary.md). |
+| `PULSAR_DIRECTSHOW_LEASE_TELEMETRY` | Off | Watcher counters; no per-frame event open/wait. |
+| `PULSAR_DIRECTSHOW_TRACE_PATH` | Unset | Separate DirectShow trace sidecar. |
+
+Native startup defaults to port 4455 when not otherwise selected by its
+runtime policy. Node wrappers normally allocate a free port before spawn;
+their explicit per-call environment can pin it. Neither the port nor a
+directory name alone constitutes readiness: startup and authenticated
+WebSocket connection must succeed.
+
+`PULSAR_SESSION_ID` is the log/event correlation key; it is distinct from
+the validated resource namespace `PULSAR_RUNTIME_INSTANCE_ID`.
+
+The legacy Stinger fallback above is cwd-relative. With private cwd, use an
+**absolute** `PULSAR_STINGER_ASSET` path to a retained asset. Do not assume
+the package's data directory is resolved by that historical expression.
+
+### Performance and trace controls
+
+| Variable | 3.0.0 selection |
+|---|---|
+| `PULSAR_RAW_CURRENT_READBACK` | Unset: automatic only on qualified Windows physical-GPU CPU NV12 1080p60 mixes without GPU encoding. `0`: historical staging; `1`: explicit diagnostic override. |
+| `PULSAR_RETURN_TRANSPORT` | CPU default; `d3d11` requests the private-helper path with capability gates and CPU fallback. |
+| `PULSAR_DSHOW_FRESH_FRAME_POLL` | Experimental, off unless selected. |
+| `PULSAR_NVENC_READY_DRAIN` | Experimental, off unless selected. |
+| `PULSAR_NVENC_ASYNC_OUTPUT` | Experimental, off unless selected. |
+| `PULSAR_TRACE_PATH` | Unset: correlated producer trace disabled. |
+| `PULSAR_TRACE_SIGNALS` | `all`, `none`, or a validated CSV subset; unset selects all signals when tracing is otherwise enabled. |
+| `PULSAR_TRACE_PACKET_CONTENT` | Explicit diagnostic payload audit; adds work and is not a normal broadcast requirement. |
+
+Signal names are `program`, `preview`, `raw`, `borrowed`, `gpu`,
+`queues`, `encoder_frame_ready`, `program_return_readback`,
+`encode_callback_enqueue`, `output_mux_enqueue`,
+`interleaver_mutex_wait` and `socket_send`.
+
+The harness also configures trace session, host/GPU/topology, resource mode,
+append/interval, warmup and correlation-key inputs. Follow the
+[trace contract](runbooks/probe-take-latency.md) for a complete reproducible
+campaign. Never publish its HMAC key. Enabling one counter does not establish
+receiver arrival or decoded-content latency.
+
+See [libobs changes](LIBOBS-CHANGES.md) for exact patch ownership, selection
+gates and rollback, and the [NVENC quality study](issue-253-nvenc-chain-study.md)
+for measured limits. `PULSAR_NVENC_LOW_LATENCY` selects the ULL tune; it does
+not automatically enable the ready-drain/asynchronous experiments.
+
 
 ## Adaptive bitrate worker — operational notes
 
@@ -1224,7 +1272,7 @@ sustained drop event; they re-converge during recovery.
 ## Authentication details
 
 - v5 challenge/response — `sha256(base64(sha256(password + salt)) + challenge)`.
-- Pulsar binds `127.0.0.1` only. Connections from non-loopback addresses
+- By default Pulsar binds `127.0.0.1` only. Connections from non-loopback addresses
   are refused at the socket layer — there is no listener for them. This
   is enforced in `plugins/pulsar-websocket` (`Config.h` `BindAddress`,
   `WebSocketServer::Start`) and asserted by

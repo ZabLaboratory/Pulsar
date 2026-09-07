@@ -1,159 +1,58 @@
-# Runbook — Build failure: ATL headers missing (C1083)
+# Build failure: missing ATL headers
 
-**Applies to:** local Windows build without the VS2022 "C++ ATL" workload.
-**Fixed by:** commit `d634d35` (PR #43), now integrated in the pinned upstream,
-plus `scripts/build-win.ps1`.
+Applies to local Windows builds reporting C1083 for `atlbase.h`,
+`atlcomcli.h` or `atlstr.h`. The ATL gate is already integrated in the
+pinned OBS fork; it is not a missing patch to reintroduce.
 
----
+## Diagnose
 
-## Symptom
+ATL headers belong to the MSVC toolset, typically:
 
-`cmake --build` fails on one or more of:
-
-```
-error C1083: Cannot open include file: 'atlbase.h': No such file or directory
-error C1083: Cannot open include file: 'atlcomcli.h': No such file or directory
-error C1083: Cannot open include file: 'atlstr.h': No such file or directory
+```text
+<VS installation>/VC/Tools/MSVC/<toolset>/atlmfc/include/
 ```
 
-Faulting plugins: `obs-qsv11`, `win-dshow`, `virtualcam-module` (a sub-target of `win-dshow`).
-The error appears during the CMake build step, not during configure.
+Check the actual toolset selected by CMake, not merely whether another VS
+installation has ATL. `scripts/build-win.ps1` uses `Test-AtlAvailable` and
+injects `PULSAR_HAVE_ATL=OFF` when it cannot find the required headers.
+The pinned plugin CMake logic then disables the ATL-dependent registrations.
 
----
+Inspect the configure summary, `CMakeCache.txt` and the first compiler error.
+A successful reduced build does not mean all release capabilities are present.
 
-## Diagnostic
+## Capability consequences
 
-ATL headers live under the MSVC toolset, not the Windows SDK:
+Without ATL, QSV/DirectShow-related modules can be omitted. The CEF/x264
+headless path can still build, but dual-lane DirectShow return qualification
+and a complete release cannot be inferred from that reduced configuration.
+A Full browser build does not itself install ATL.
 
-```
-<VS root>\VC\Tools\MSVC\<version>\atlmfc\include\
-```
+Current native tests include return behavior. Do not reuse the historical
+claim that no probe exercises these modules, or treat hardware/absent-module
+skips as proof of the omitted path.
 
-Check whether the directory exists and contains the three headers:
+## Restore the toolchain
+
+Use Visual Studio Installer to modify the selected VS2022/Build Tools
+installation and add the C++ ATL component for its v143 toolset. This is a
+machine-level installation requiring the operator's authority.
+
+Re-run the normal configure/build after installation:
 
 ```powershell
-$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
-      -products '*' -property installationPath | Select-Object -First 1
-$msvcRoot = Join-Path $vs "VC\Tools\MSVC"
-Get-ChildItem $msvcRoot | ForEach-Object {
-    $atl = Join-Path $_.FullName "atlmfc\include\atlbase.h"
-    [PSCustomObject]@{ Toolset = $_.Name; AtlPresent = (Test-Path $atl) }
-}
+.\\scripts\\build-win.ps1 -Full
 ```
 
-If every row shows `AtlPresent = False`, ATL is not installed. This is the root cause.
+Verify the configure summary and expected module inventory, then run the
+native/DirectShow checks described in [development](../DEVELOPMENT.md).
+Use a clean rebuild only when the cache/artifact state actually requires it.
 
-`scripts/build-win.ps1` runs `Test-AtlAvailable` automatically and emits:
+`build-win.ps1` has no `-CMakeArgs` parameter. Do not paste the obsolete
+override command from older versions of this runbook. Do not remove the
+detection gate or force a missing toolchain to appear complete.
 
-```
-WARNING: ATL not found -> skipping qsv11/virtualcam/win-dshow ; headless browser_source path unaffected
-```
+## Release parity
 
-If you see that warning and the build succeeded anyway, the gate fired correctly — you are in the OFF branch (see below). If you see the warning and the build *still* fails with C1083, the gate was not applied — confirm you are running `scripts/build-win.ps1` and not invoking CMake directly.
-
----
-
-## Root cause
-
-The MSVC "C++ ATL" component (`Microsoft.VisualStudio.Component.VC.ATL`) is **not** part of the default "Desktop development with C++" workload install. It is an optional component. The CI runner (`windows-2022`) has it; a freshly installed VS2022 Build Tools box typically does not.
-
-`obs-qsv11`, `win-dshow`, and `win-dshow`'s `virtualcam-module` include ATL headers unconditionally in upstream. Installing ATL requires an elevated UAC prompt (VS installer) that cannot be satisfied in a non-interactive build context.
-
----
-
-## Fix — the `PULSAR_HAVE_ATL` gate (commit `d634d35`)
-
-The fix is already in place. Two artifacts implement it:
-
-**Pinned `upstream/plugins/CMakeLists.txt`**
-Wraps the three plugin registrations in `plugins/CMakeLists.txt` behind
-`if(PULSAR_HAVE_ATL) ... else()`. The `else()` branch registers each plugin
-as a disabled stub via `target_disable()` so CMake reports them in
-`OBS_MODULES_DISABLED` instead of failing configure. The CMake option
-defaults to `ON`. The former `patches/0002-*` file was removed after this
-change became part of the signed upstream revision.
-
-**`scripts/build-win.ps1` — `Test-AtlAvailable` function**
-Runs before the configure step. Uses `vswhere` to enumerate installed VS
-instances, then checks each MSVC toolset's `atlmfc\include\` for all three
-headers. Falls back to a fixed list of common VS install paths if `vswhere`
-is unavailable. Outcome:
-
-| Detection result | Flag injected | Effect |
-|---|---|---|
-| ATL headers found | `-DPULSAR_HAVE_ATL=ON` (or none — same as default) | All three plugins build normally |
-| ATL headers absent | `-DPULSAR_HAVE_ATL=OFF` | Three plugins registered as disabled stubs; build continues |
-
-Because the option defaults `ON`, CI builds (`windows-2022`) never receive the
-flag and build everything exactly as upstream — no coverage regression.
-
----
-
-## Verification (after the gate fires)
-
-After a local build with ATL absent:
-
-1. `scripts/build-win.ps1` exits 0.
-2. `upstream/build_x64/rundir/RelWithDebInfo/obs-plugins/64bit/` contains
-   `pulsar-browser.dll` and the encoder/capture plugins but **not**
-   `obs-qsv11.dll`, `win-dshow.dll`, or `win-dshow-virtualcam.dll`.
-3. `pulsar.exe` starts and prints the `PULSAR_READY` sentinel.
-4. The offline probe suite passes — `obs-qsv11`, `win-dshow`, and
-   `virtualcam-module` are not exercised by any probe (none are on the
-   headless `browser_source` → x264/nvenc → CEF path).
-
----
-
-## Rollback
-
-To revert to unconditional build of all plugins (equivalent to upstream
-before this fix), pass the flag explicitly:
-
-```powershell
-.\scripts\build-win.ps1 -CMakeArgs @("-DPULSAR_HAVE_ATL=ON")
-```
-
-This forces the ON branch regardless of detection. If ATL is genuinely
-absent the build will fail with C1083 — which is the correct signal that
-the toolchain is incomplete for a full build.
-
-Alternatively, remove the `-DPULSAR_HAVE_ATL=OFF` injection from
-`Test-AtlAvailable` in `scripts/build-win.ps1` to restore the old
-unconditional behavior (not recommended — reintroduces the original breakage).
-
----
-
-## Restoring local ↔ CI parity (optional)
-
-To build all three plugins locally — matching CI exactly — install the ATL component:
-
-**Via VS Installer (GUI):**
-Open "Visual Studio Installer" → Modify your VS2022 Build Tools installation →
-Individual components → search "ATL" → check
-"C++ ATL for latest v143 build tools (x86 & x64)" → Modify.
-
-**Via winget / `vs_buildtools.exe` (elevated PowerShell):**
-
-```powershell
-winget install Microsoft.VisualStudio.2022.BuildTools --override "--add Microsoft.VisualStudio.Component.VC.ATL --quiet --wait"
-```
-
-After install, `Test-AtlAvailable` will return `$true` on the next build and the three plugins will compile. No code change needed.
-
----
-
-## Local ↔ CI asymmetry note
-
-| | Local (ATL absent) | CI (`windows-2022`) |
-|---|---|---|
-| `obs-qsv11` | Disabled stub | Built |
-| `win-dshow` | Disabled stub | Built |
-| `virtualcam-module` | Disabled stub | Built |
-| `pulsar.exe` | Built, fully functional | Built, fully functional |
-| Probe suite | Passes (those plugins untested) | Passes |
-| Headless live path | Unaffected | Unaffected |
-
-The asymmetry is intentional and safe for Pulsar's use case. The three
-skipped plugins are capture/encode peripherals not required by the headless
-`browser_source` path. If a future feature requires QSV hardware encode or
-DirectShow capture in local development, install ATL (see above).
+Release CI must build the intended module set and package both variants.
+Record the actual toolchain and checks: a historical hosted-runner image
+containing ATL is not proof that a future image or local installation does.

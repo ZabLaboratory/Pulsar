@@ -1,5 +1,10 @@
 # Issue 253 — native CPU readback optimization
 
+> 3.0.0 qualification note: automatic current-readback selection additionally
+> requires a physical graphics adapter (patch 0056); software adapters retain
+> historical staging unless explicitly overridden. The measurements and original
+> delivery-state statements below are historical evidence, not new release tests.
+
 ## Delivered result
 
 On the qualified Windows 1920x1080, 60/1 fps, NV12 CPU-encoding path, the native libobs current-frame readback is now the default. It removes a staging-frame delay while preserving the audio/video media timeline. The GPU-encoding path retains its existing selection. No codec preset, bitrate, B-frame count, audio format or compression setting was reduced to obtain this gain.

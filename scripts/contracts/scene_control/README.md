@@ -1,5 +1,15 @@
 # `scene_control` cross-service contract (M10 — overlay form)
 
+## Scope in Pulsar 3.0.0
+
+This is the historical M10 **cross-service overlay leaf** contract. It remains
+a separate schema/ownership boundary from the native
+[pulsar.scene-switch.v1](../scene_switch_v1/README.md) Prepare/Take protocol.
+Its statements about overlay composition do not mean Pulsar 3.0.0 lacks the
+optional native dual-lane Fade/Stinger capability. Do not translate between
+these contracts implicitly or rewrite the approved leaf shape during a
+documentation refresh.
+
 **Owner:** Conduit (integration / contracts).
 **Authority:** ADR 003 **Amendment 4 §A4.2** (Pulsar `docs/adr/003-blue-driven-obs-scene-transition.md`)
 — the PIVOT-FINALISED leaf shape. §A4.2 is the authority; this package

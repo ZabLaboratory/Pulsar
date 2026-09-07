@@ -46,13 +46,27 @@ resolved at boot in `pulsar-frontend-stub.cpp::resolve_stinger_asset_path()`:
    the M10 probe (#61) and Prism consumer (#63) set it to the absolute path of
    this committed asset. **This is a local, operator-pinned value — never a
    path from a leaf/network value (R7 / C-PATH).**
-2. Fallback: `<cwd>/../../data/pulsar/stinger-demo.webm` (the bundle data root,
-   since `pulsar.exe` runs with `cwd=bin/64bit`).
+2. Legacy fallback: `<cwd>/../../data/pulsar/stinger-demo.webm`.
+   The source still uses this cwd-relative expression, but 3.0.0 runs with a
+   private runtime cwd. It is **not reliably the bundle data root**. Hosts
+   using a native stinger must provide the explicit absolute environment path.
 
-If the asset is absent, the stinger source simply decodes nothing and the fade
-fallback still composites — the encoder is never blanked.
+The current optional dual-lane Stinger path validates a readable local asset
+with a recognized container header before use. Missing/invalid input records
+explicit refusal/fallback to Cut; do not treat the legacy empty-decoder
+behavior as a successful current transition.
 
 The geometry: an opaque sweep bar enters left→right covering the whole frame at
 `t = 0.3 s` (the `transition_point`), then exits to reveal the destination
 scene. Outside the bar the frame is fully transparent so both scenes composite
 underneath — the standard stinger compositing the M10 transition relies on.
+
+
+## Current scope
+
+This README preserves the M10 demo asset's provenance. The older
+`PULSAR_NATIVE_STINGER` path and the 3.0.0
+`PULSAR_DUAL_LANE_TRANSITIONS` capability are distinct; both are off by default.
+The default production switch is atomic Cut. See
+[architecture](../../docs/ARCHITECTURE.md) and
+[protocol](../../docs/PROTOCOL.md) for current behavior.

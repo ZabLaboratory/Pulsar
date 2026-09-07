@@ -1,621 +1,319 @@
 # @clodocapeo/pulsar-bundle
 
-[![npm](https://img.shields.io/npm/v/%40clodocapeo%2Fpulsar-bundle?logo=npm&color=cb3837)](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle)
-[![Licence GPL-2.0-or-later](https://img.shields.io/badge/licence-GPL--2.0--or--later-blue)](./LICENSE)
-[![Platform](https://img.shields.io/badge/platform-windows--x64-0078d4)](https://github.com/ZabLaboratory/Pulsar/releases)
-[![Node ≥ 18](https://img.shields.io/badge/node-%E2%89%A518-339933)](https://nodejs.org)
+[![npm](https://img.shields.io/npm/v/%40clodocapeo%2Fpulsar-bundle)](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle)
 
-The **light** Pulsar bundle: ships `pulsar.exe` + libobs runtime +
-encoders + capture plugins, and exposes a Node `spawn()` API that
-returns a connected, typed
-[`PulsarClient`](https://www.npmjs.com/package/@clodocapeo/pulsar-client).
+The **light Windows x64 runtime bundle** and Node launcher for Pulsar 3.0.0.
+It downloads the matching native ZIP and returns a connected
+`PulsarClient` through `spawn()`. The package re-exports the client API.
 
-For HTML overlays / browser sources / native game capture / VLC media
-sources, install [`@clodocapeo/pulsar-bundle-full`](https://www.npmjs.com/package/@clodocapeo/pulsar-bundle-full)
-instead — same `spawn()` API, larger payload (CEF runtime).
-
-## Table of contents
-
-- [What's in the box](#whats-in-the-box)
-- [Install](#install)
-- [Quick start](#quick-start)
-- [`spawn()` API](#spawn-api)
-- [Spawn options](#spawn-options)
-- [Boot environment variables](#boot-environment-variables)
-- [Concurrent runtimes](#concurrent-runtimes)
-- [Lifecycle](#lifecycle)
-- [Talking to the running pulsar](#talking-to-the-running-pulsar)
-- [Bundling for distribution](#bundling-for-distribution)
-- [CI / offline / mirror](#ci--offline--mirror)
-- [Troubleshooting](#troubleshooting)
-- [Versioning](#versioning)
-- [Compatibility](#compatibility)
-- [Licence](#licence)
-
-## What's in the box
-
-| | Light bundle | Full bundle |
-|---|---|---|
-| Zip download | ~40 MB | ~150 MB |
-| Extracted | ~100 MB | ~370 MB |
-| `pulsar.exe` + libobs runtime | ✅ | ✅ |
-| Encoders (x264, NVENC, QSV, AMF, AAC, FFmpeg muxer) | ✅ | ✅ |
-| Capture (window, monitor, game-via-DLL-injection, dshow webcam) | ✅ | ✅ |
-| WASAPI audio (mic / desktop / per-process) | ✅ | ✅ |
-| Multi-destination (Twitch / RTMP / VOD MP4) | ✅ | ✅ |
-| Adaptive bitrate worker | ✅ | ✅ |
-| obs-websocket (v5 + `pulsar:*` vendor) | ✅ | ✅ |
-| `obs-browser` (CEF, HTML overlays, JS scenes) | ❌ | ✅ |
-| `obs-text` (native text sources) | ❌ | ✅ |
-| `vlc-video` (libVLC media playback) | ❌ | ✅ |
-
-**Use this package** if you only need streaming + recording + window /
-monitor / game capture + WASAPI audio. The 40 MB postinstall is one
-quarter of the full bundle.
-
-**Use the full bundle** if you need any of: HTML overlays, browser-based
-scene composition, native text sources, VLC-backed playlists.
-
-The two packages are interchangeable — same `spawn()` shape, same
-client surface. Switching is a `package.json` rename and a one-line
-import change; no code change.
+Use [pulsar-bundle-full](../pulsar-bundle-full/README.md) for CEF/browser,
+native text and VLC modules. Game/window/display capture belong to both
+variants. Use [pulsar-client](../pulsar-client/README.md) when another process
+already owns the runtime.
 
 ## Install
 
-```bash
-npm install @clodocapeo/pulsar-bundle
+```powershell
+npm install @clodocapeo/pulsar-bundle@3.0.0
 ```
 
-The `os: ["win32"]` + `cpu: ["x64"]` fields make `npm install` skip the
-package on every other platform without erroring out — safe to list as
-a dependency in a cross-platform repo.
+Native support is Windows x64; Node 18+ and ESM are required.
+A direct required dependency on an unsupported platform can produce npm
+`EBADPLATFORM`; `os`/`cpu` fields are not a universal silent-skip promise.
+Cross-platform hosts can use an optional dependency or deliberately install
+tooling with `--force` without attempting native execution.
 
-A `postinstall` step downloads
-`pulsar-windows-x64-v<VERSION>.zip` from the matching Pulsar GitHub
-Release and extracts it to
-`node_modules/@clodocapeo/pulsar-bundle/binaries/`. The download is
-cached: re-running `npm install` on an unchanged version is a no-op
-(checked via `binaries/.version-stamp`).
+Postinstall downloads
+`pulsar-windows-x64-v3.0.0.zip` from the matching GitHub release and extracts
+it under `binaries/`. A `.version-stamp` avoids a repeat download for the
+same version. The stamp is a cache marker, not a cryptographic integrity proof.
 
-If the download fails (network error, unpublished version, 404), the
-postinstall **soft-fails** with a warning — `npm install` completes,
-the package installs, but `spawn()` will throw a clear error pointing
-at the missing `pulsar.exe`. This is intentional: a CI matrix that
-never spawns pulsar shouldn't blow up just because the binary couldn't
-be fetched.
+Network/HTTP failure can **soft-fail with a warning**. npm success does not
+prove a binary was installed. `spawn()` reports a missing executable through
+`PulsarRuntimeError`. Extraction/filesystem failures can still fail installation.
 
-## Quick start
+The downloader can remove its old binaries before fetching a changed version.
+Do not use a release-preparation install as the only copy of a working native
+runtime. Use `PULSAR_BUNDLE_SKIP_POSTINSTALL=1` for source-only work.
 
-```ts
+## Distribution contents
+
+| Feature | Light | Full |
+|---|---|---|
+| Headless engine, patched libobs, WebSocket and production controller | Yes | Yes |
+| Window/display/game/DirectShow capture modules | Yes, subject to build/device capability | Yes, same caveat |
+| WASAPI, H.264 encoder families, recording/replay/RTMP | Yes | Yes |
+| Hot Preview/Program lanes and video-only returns | Yes | Yes |
+| Browser/CEF | No | Yes |
+| Native text / VLC module | No | Yes |
+| Gated nv-filters module | No | Yes; SDK/models not bundled |
+
+Consult the actual release assets for sizes, not historical estimates.
+Third-party module presence is not proof of hardware/SDK/runtime availability.
+NDI, arbitrary OBS plugins and Preview audio/AFV are not bundle promises.
+
+## First run
+
+Save as `hello-pulsar.mjs`:
+
+```js
 import { spawn } from "@clodocapeo/pulsar-bundle";
 
-const pulsar = await spawn({
-  env: {
-    PULSAR_FPS: "60",
-    PULSAR_VIDEO_BITRATE: "6000",
-    PULSAR_CAPTURE_WINDOW: "Untitled - Notepad:Notepad:notepad.exe",
-  },
-  onLog: (stream, line) => {
-    if (line.includes("error") || line.includes("warn")) {
-      console.log(`[pulsar/${stream}] ${line}`);
-    }
-  },
-});
-
-console.log(`pulsar booted: libobs ${pulsar.libobsVersion}, ws :${pulsar.port}`);
-
-// Multi-destination
-const dest = await pulsar.client.destinations.create({
-  kind: "twitch",
-  key: process.env.TWITCH_KEY!,
-});
-await pulsar.client.destinations.start(dest.id);
-
-// Watch the adaptive worker
-pulsar.client.on("bitrateAdjusted", (e) =>
-  console.log(`bitrate -> ${e.bitrate} kbps (${e.reason})`),
-);
-
-// ... your application's broadcast workflow ...
-
-await pulsar.client.destinations.stop(dest.id);
-await pulsar.client.destinations.remove(dest.id);
-await pulsar.shutdown();
-```
-
-Run with:
-
-```bash
-TWITCH_KEY=live_xxx node app.mjs
-```
-
-That's it. `spawn()` returns a connected, typed client. The full
-client surface (destinations / video / adaptive / record / stream / v5
-baseline / typed events / errors) is documented in
-[`@clodocapeo/pulsar-client`'s README](https://www.npmjs.com/package/@clodocapeo/pulsar-client) —
-this package re-exports every symbol so you don't need a second
-dependency line.
-
-## `spawn()` API
-
-```ts
-import { spawn } from "@clodocapeo/pulsar-bundle";
-
-function spawn(options?: SpawnOptions): Promise<SpawnedPulsar>;
-
-interface SpawnedPulsar {
-  /** Connected PulsarClient ready for v5 + vendor calls. */
-  client: PulsarClient;
-
-  /** Underlying ChildProcess. Most callers should use shutdown()
-   *  instead of touching this directly, but it's exposed for
-   *  advanced use cases (sending custom signals, reading stdio). */
-  child: ChildProcess;
-
-  /** WebSocket port the obs-websocket server bound to. */
-  port: number;
-
-  /** libobs version string parsed from the boot log
-   *  (e.g. "32.1.2-1-g8c23ba721-pulsar"). */
-  libobsVersion: string;
-
-  /** Validated identity of this isolated Pulsar process. */
-  runtimeInstanceId: string;
-
-  /** Process-local cwd/config/log/recording namespace. */
-  runtimeDir: string;
-
-  /** Disconnect the WS client and terminate pulsar.exe. Resolves once
-   *  the process has exited. Idempotent — call as many times as you
-   *  like, only the first one does work. */
-  shutdown(): Promise<void>;
+const pulsar = await spawn({ readyTimeoutMs: 60_000 });
+try {
+  console.log({
+    runtimeInstanceId: pulsar.runtimeInstanceId,
+    runtimeDir: pulsar.runtimeDir,
+    port: pulsar.port,
+    video: await pulsar.client.video.get(),
+  });
+} finally {
+  await pulsar.shutdown();
 }
 ```
 
-The promise resolves once **both** of these have happened:
+```powershell
+node hello-pulsar.mjs
+```
 
-1. `pulsar.exe` printed `pulsar-headless: libobs <version> ready, idling`
-   on stdout.
-2. The bundled `PulsarClient` connected to the WebSocket on the
-   session-random port and completed the v5 Identify handshake.
+This example does not start a broadcast or recording. In a production
+application, finalize outputs and retain needed files before shutdown.
 
-If either step fails (boot timeout, WS connect timeout, auth
-rejection), `spawn()` rejects with a typed error and the child process
-is killed.
-
-## Spawn options
+## Public API
 
 ```ts
 interface SpawnOptions {
-  /** Override the directory containing bin/64bit/pulsar.exe.
-   *  Default: <package>/binaries (populated by postinstall). */
   binariesPath?: string;
-
-  /** Extra env vars for pulsar.exe. See "Boot environment variables"
-   *  below. */
   env?: Record<string, string>;
-
-  /** How long to wait for "ready, idling" on stdout. Default 30 s. */
   readyTimeoutMs?: number;
-
-  /** Optional log forwarder. Receives one stdout/stderr line at a time.
-   *  Useful for piping into your application's log aggregator. */
   onLog?: (stream: "stdout" | "stderr", line: string) => void;
+  onPrismLog?: (event: PulsarPrismLogEvent) => void;
 }
+
+interface SpawnedPulsar {
+  client: PulsarClient;
+  child: ChildProcess;
+  port: number;
+  libobsVersion: string;
+  runtimeInstanceId: string;
+  runtimeDir: string;
+  shutdown(): Promise<void>;
+}
+
+function spawn(options?: SpawnOptions): Promise<SpawnedPulsar>;
 ```
 
-### `binariesPath`
+`launchCommand` in the source type is an internal fake-child test hook,
+not a normal alternative-runtime API.
 
-By default, `spawn()` looks under
-`<this package>/binaries/bin/64bit/pulsar.exe`. Override when:
+### Binary location
 
-- **Monorepo dev**: point at your local
-  `upstream/build_x64/rundir/RelWithDebInfo/` to spawn the binary you
-  just built without round-tripping through the postinstall download.
-- **Custom packaging**: when packaging your application with
-  electron-builder / pkg / oxc-pack, you may stage the binary
-  somewhere else and pass the path explicitly.
+`binariesPath` is the root containing `bin/64bit/pulsar.exe`, not the
+executable path or `bin/64bit` directory. Default: this package's `binaries/`.
 
-```ts
-import { resolve } from "node:path";
-import { app } from "electron";
+For local source work:
 
-const binariesPath = app.isPackaged
-  ? resolve(process.resourcesPath, "pulsar")          // app.asar.unpacked
-  : resolve(__dirname, "../../upstream/build_x64/rundir/RelWithDebInfo");
-
-const pulsar = await spawn({ binariesPath });
-```
-
-### `env`
-
-Merged on top of `process.env` for the child process. You can override
-boot-time configuration (FPS, resolution, bitrates, capture target,
-record dir) without touching the parent process's env.
-
-The two env vars you almost always want to set:
-
-```ts
-import { randomBytes } from "node:crypto";
-
+```js
 const pulsar = await spawn({
-  env: {
-    // Optional: pin credentials when an external supervisor owns them.
-    PULSAR_PASSWORD: randomBytes(16).toString("base64url"),
-  },
+  binariesPath: "D:/path/to/Pulsar/upstream/build_x64/rundir/RelWithDebInfo",
 });
 ```
 
-If you don't pin them, `spawn()` allocates a free loopback port for each
-child and Pulsar generates a fresh random password. The password ends up in
-`<runtimeDir>/obs-websocket/config.json`, which `spawn()` reads after the boot
-marker. The generated runtime directory is removed after a clean or failed
-shutdown; an explicitly supplied `PULSAR_RUNTIME_DIR` remains caller-owned.
+The executable and modules remain there, but cwd/config/logs/default
+recordings use a private session directory. Preserve the complete resource tree.
 
-### `readyTimeoutMs`
+`PULSAR_BUNDLE_FULL_BINARIES_PATH` belongs to the capture test harness.
+It is **not** a generic `spawn()` option or override; normal hosts pass
+`binariesPath`.
 
-A clean Pulsar boot reaches the ready marker in:
+### Environment and runtime ownership
 
-- ~3 s on a warm cache (libobs already loaded once this Windows session)
-- ~6 s on a cold start (first spawn after reboot)
+The child inherits the process environment plus per-call `env`, with
+explicit runtime identity/directory and per-child port behavior.
 
-The 30 s default leaves headroom for slow disks / antivirus scans /
-loaded systems. Bump it to 60 s on contended CI runners.
+| Variable | Behavior |
+|---|---|
+| `PULSAR_RUNTIME_INSTANCE_ID` | Per-call ID, or generated `node-...`; validated against `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. |
+| `PULSAR_RUNTIME_DIR` | Explicit directory is caller-owned; otherwise a private temporary directory is generated. |
+| `PULSAR_RUNTIME_ROOT` | Parent for generated directories; default system temp. |
+| `PULSAR_PORT` | Per-call nonzero value pins the port; omitted/empty/0 allocates a free loopback port. An inherited fixed port is not reused as the default. |
+| `PULSAR_PASSWORD` | Optional per-session password; absent/empty asks native bootstrap to generate one. |
+| `PULSAR_RECORD_DIR` | Persistent destination for recorder/replay; default is under the runtime directory. |
+| `PULSAR_LOG_DIR` | Explicit log destination; otherwise runtime logs are session-local. |
+| `PULSAR_LEGACY_ALIAS` | `required`, `dedicated`, `off`, or default opportunistic DirectShow compatibility policy. |
 
-### `onLog`
+Generated directories are removed on exit/shutdown/failure on a best-effort
+basis. Files retained by antivirus/CEF may delay cleanup. Explicit directories
+are never removed by this helper. Export media/logs before generated-directory
+cleanup, or choose persistent destinations from the start.
 
-Receives one line per `\n` boundary on stdout / stderr — line endings
-are stripped, so don't append `\n` when forwarding. Useful for piping
-the libobs / plugin boot log into your application's structured logger.
+Native startup independently rejects runtime-ID and physical-directory
+collisions. Distinct path spellings do not authorize concurrent use of the
+same directory.
 
-```ts
-const pulsar = await spawn({
-  onLog: (stream, line) => myLogger[stream === "stdout" ? "info" : "warn"]("pulsar", line),
+### Media configuration
+
+The [protocol environment reference](../../docs/PROTOCOL.md#environment-variables-pulsar_)
+is authoritative. Common settings include:
+
+- resolution/fps and encoder family at boot;
+- video bitrate live, audio bitrate only while affected encoders are idle;
+- optional capture-window descriptor;
+- opt-in microphone/process audio, audio track count and output track lists;
+- MP4/MKV record container and replay time/memory bounds;
+- optional transitions and explicitly experimental performance switches.
+
+The native engine defaults to 1080p60 x264, 6000 kbps video and 160 kbps AAC.
+Unset microphone ID means no microphone source. Preview audio/AFV is unsupported.
+An unavailable hardware encoder falls back with a warning; read the result.
+
+## Readiness and credentials
+
+The helper:
+
+1. Resolves/creates the per-child namespace and binary path.
+2. Spawns with private cwd, piped stdio and `windowsHide: true`.
+3. Waits for the native `pulsar-headless: libobs <version> ready, idling`
+   marker (default timeout 30 seconds).
+4. Reads the seeded `<runtimeDir>/obs-websocket/config.json`.
+5. Validates the port and connects the client with the seeded password.
+6. Returns only after authenticated v5 connection.
+
+Manual hosts can instead parse the separate `PULSAR_READY` sentinel.
+The bundle currently reads config after the idle marker; it does not use the
+sentinel password parser. Never read another session's config or persist raw
+READY output.
+
+`onLog` receives bounded redacted text. `onPrismLog` receives structured
+runtime/client observations. Raw access to `child.stdout` bypasses this
+redaction boundary. Readiness does not prove a source has rendered or an output
+is live.
+
+## Using the client
+
+All [client namespaces](../pulsar-client/README.md) are available:
+destinations, capabilities, video, adaptive, record, stream, audio and raw
+v5 passthrough. For example, with an existing handle:
+
+```js
+const state = await pulsar.client.obs.call("CallVendorRequest", {
+  vendorName: "pulsar-scene-switch",
+  requestType: "GetState",
+  requestData: {},
 });
+console.log(state.responseData);
 ```
 
-The `onLog` callback fires for **every** line — including the
-`PULSAR_READY ` sentinel — even before `spawn()` resolves. Credential values
-in native boot lines (including `password`, `token`, `secret` and stream keys)
-are replaced with `[redacted]`; the bundle keeps the unmodified data only for
-its private boot/config parsing.
+Use the complete scene-switch envelope and revision rules for Prepare/Take.
+Do not invent top-level v5 Take requests or assume a typed scene-switch
+namespace exists in this SDK.
 
-## Boot environment variables
+## Lifecycle and restart policy
 
-All `PULSAR_*` env vars recognised by `pulsar.exe` are passed through
-via `opts.env`.
+`shutdown()` is idempotent and shares one promise. It disconnects the client,
+terminates the owned child, waits with a five-second force fallback, and
+attempts generated-directory cleanup.
 
-| Var | Type | Default | Purpose |
-|---|---|---|---|
-| `PULSAR_RUNTIME_INSTANCE_ID` | identifier | generated per spawn | Stable `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` identity used by runtime logs, leases and dedicated DirectShow mappings. |
-| `PULSAR_RUNTIME_DIR` | path | generated private directory | Working directory and namespace for config, logs and recordings. Explicit paths are caller-owned and are never removed by `spawn()`. |
-| `PULSAR_RUNTIME_ROOT` | path | system temp directory (bundle) | Parent for generated runtime directories. The native executable also uses it as the shared lease root when supplied. |
-| `PULSAR_PORT` | port | free loopback port | obs-websocket port. `spawn()` allocates one per child when omitted, empty or `0`; an explicit value pins it. |
-| `PULSAR_PASSWORD` | string | random 22-char URL-safe | obs-websocket auth password. Pin via `randomBytes(...)` per session. |
-| `PULSAR_LEGACY_ALIAS` | `required`\|`dedicated`\|`off` | opportunistic | Claim the historical DirectShow aliases, refuse boot if unavailable, or force dedicated names. Other values keep opportunistic compatibility. |
-| `PULSAR_FPS` | int | `60` | Output frame rate. Common: 24 / 30 / 48 / 60 / 120. |
-| `PULSAR_RESOLUTION` | `<W>x<H>` | `1920x1080` | Output canvas size. Up to 8K. |
-| `PULSAR_VIDEO_BITRATE` | kbps | `6000` | x264 / NVENC bitrate. Range 200..50000. |
-| `PULSAR_AUDIO_BITRATE` | kbps | `160` | Default AAC bitrate for every track. Range 32..512. |
-| `PULSAR_AUDIO_TRACKS` | count | `1` | Number of AAC encoders created (1..6). Encoder *i* encodes libobs mixer index *i* (track *i+1*). |
-| `PULSAR_AUDIO_BITRATE_<n>` | kbps | inherits | Per-track bitrate override for track *n*. Range 32..512. |
-| `PULSAR_STREAM_AUDIO_TRACKS` | list | `1` | Tracks the streaming output carries, e.g. `1,3`. |
-| `PULSAR_RECORD_AUDIO_TRACKS` | list | `1` | Tracks the recording output carries. |
-| `PULSAR_REPLAY_AUDIO_TRACKS` | list | `1` | Tracks the replay buffer carries. |
-| `PULSAR_CAPTURE_WINDOW` | `<title>:<class>:<exe>` | unset (no window source) | Window descriptor for `window_capture`. Find it via `obs.call("GetSourceFilterList")` after a one-shot enumerate, or with [Spy++](https://learn.microsoft.com/en-us/visualstudio/debugger/introducing-spy-increment) for a manual lookup. |
-| `PULSAR_RECORD_DIR` | path | `<runtimeDir>/recordings/` | Output dir for the singleton recorder + the auto-named file. An explicit path remains caller-owned. |
-| `PULSAR_RECORD_CONTAINER` | `mp4`\|`mkv` | `mp4` | Recording container, case-insensitive; unknown values warn and keep `mp4`. Boot-fixed (issue #166). |
-| `PULSAR_DESKTOP_AUDIO_DEVICE_ID` | device id | system default | Pin desktop loopback device. |
-| `PULSAR_MIC_DEVICE_ID` | device id | system default | Pin mic device. |
-| `PULSAR_PROCESS_AUDIO_NAME` | exe name (`chrome.exe`, etc.) | unset (off) | Per-process loopback target. |
-| `PULSAR_ADAPTIVE_BITRATE` | `on` / `off` | `on` | Disable the adaptive worker if you want a fully manual bitrate. |
+**On Windows, child termination is not proof of graceful libobs shutdown.**
+Stop/save replay, finalize recording/stream/destinations and retain files
+first. Closing only the WebSocket does not stop the native engine.
+The native anonymous-event shutdown harness is a different control path,
+not currently a public bundle option.
 
-Anything else you set on `opts.env` is passed through to the child
-process unchanged (e.g. `OBS_LOG_LEVEL=DEBUG` for verbose libobs
-logging).
+The helper does not automatically restart, reconstruct scenes or persist
+destinations. A connection drop can leave the engine on air; inspect its state
+before replacing it. A host restart loop must distinguish intentional shutdown,
+bound retries/backoff, attach handlers to each new client and restore only
+the intended state. Avoid an unguarded recursive respawn handler.
 
-## Concurrent runtimes
+The helper does not promise process-tree `taskkill`. If a helper remains,
+identify the exact owned process; never kill all CEF helper processes by name
+when several runtimes may be active.
 
-Every `spawn()` call receives a private runtime directory and a validated
-`runtimeInstanceId`. The executable keeps OS-backed identity and cwd leases
-before loading libobs; a second process cannot silently reuse the same
-identity or explicit runtime directory. The default WebSocket port, config,
-logs and recordings therefore do not collide when several Pulsar processes
-are started concurrently.
+## DirectShow readers
 
-The historical DirectShow aliases are a compatibility singleton. One runtime
-may hold them; other runtimes are logged as `alias_lease=refused` and continue
-with instance-specific mapping names. Set `PULSAR_LEGACY_ALIAS=required` when
-the caller must own the old names, or `PULSAR_LEGACY_ALIAS=dedicated` / `off`
-to avoid claiming them. The returned `runtimeInstanceId` is the value an
-external DirectShow consumer must receive as `PULSAR_RUNTIME_INSTANCE_ID`,
-together with `PULSAR_DIRECTSHOW_LEGACY_ALIAS=0`, to open a dedicated mapping.
-At the DirectShow boundary, legacy mapping names are used only when both
-variables are truly absent. A valid runtime ID with an absent, false, or
-unrecognised alias selects dedicated mapping names; any present invalid/empty
-runtime ID, or an alias without a valid runtime ID, is rejected before either
-side opens or creates a named queue.
+One runtime can own the legacy aliases. Others use dedicated mappings.
+A dedicated reader uses the same `PULSAR_RUNTIME_INSTANCE_ID` and
+`PULSAR_DIRECTSHOW_LEGACY_ALIAS=0`. Invalid/ambiguous namespace selection
+refuses rather than selecting another session.
 
-The native logs expose `PULSAR_RUNTIME_INSTANCE`, `PULSAR_RUNTIME_COLLISION`
-and `PULSAR_LEGACY_ALIAS` records with the identity, paths and lease outcome;
-these records are the correlation points for a supervisor or audit trail.
+The public Program/Preview samples remain CPU NV12 even with the optional
+private D3D11 helper. See [embedding](../../docs/PRISM-EMBEDDING.md).
 
-## Lifecycle
+## Electron and offline distribution
 
-```ts
-const pulsar = await spawn();          // (1) boot + connect
-// pulsar.client is connected and ready
+Keep native binaries unpacked. A typical electron-builder excerpt is:
 
-// ... application work ...
-
-await pulsar.shutdown();               // (2) clean shutdown
-```
-
-### Boot (`spawn()`)
-
-1. Resolve the binary path (default = bundled, or `binariesPath`).
-2. `child_process.spawn(exe, [], { cwd: runtimeDir, env, stdio, windowsHide: true })`.
-   - `exe` is resolved from `<binariesPath>/bin/64bit` while `cwd` is a
-     generated private runtime directory. The native bootstrap resolves OBS
-     modules/data from the executable and uses `cwd` for process-local state.
-   - `windowsHide: true` is set even though `pulsar.exe` is built
-     `/SUBSYSTEM:WINDOWS` (no console alloc). It costs nothing and
-     makes intent explicit on older Windows / certain antivirus
-     drivers.
-3. Stream stdout / stderr into a line reader; forward to `onLog`.
-4. Watch for `pulsar-headless: libobs <ver> ready, idling`.
-5. Read `<runtimeDir>/obs-websocket/config.json` to recover the seeded
-   `server_port` + `server_password`.
-6. Construct a `PulsarClient`, connect to `ws://127.0.0.1:<port>`
-   with the recovered password, complete the v5 Identify handshake.
-7. Resolve `{ client, child, port, libobsVersion, runtimeInstanceId,
-   runtimeDir, shutdown }`.
-
-### Shutdown (`shutdown()`)
-
-1. `client.disconnect()` — sends a clean WebSocket close frame.
-2. If the child is still alive, `child.kill()` (SIGTERM-equivalent on
-   Windows, which `pulsar-headless` translates to a graceful
-   `obs_shutdown` via the console-control handler).
-3. Wait up to 5 s for the child to exit.
-4. If still alive, `child.kill("SIGKILL")` as a safety net.
-
-The shutdown promise is cached — call it as many times as you like;
-only the first call does work. Multiple subscribers all receive the
-same eventual resolution.
-
-### Crash recovery
-
-`spawn()` does **not** auto-restart on child crash. Listen for
-`pulsar.client.on("connectionClosed", ...)` and decide your policy:
-
-```ts
-let pulsar = await spawn();
-
-pulsar.client.on("connectionClosed", async (e) => {
-  if (shuttingDown) return;            // expected during your own shutdown
-  console.error(`pulsar disconnect (code=${e.code}): respawning...`);
-  await pulsar.shutdown().catch(() => {});
-  pulsar = await spawn(/* same opts */);
-  // Re-issue any state your app depends on (destinations, scenes, ...)
-});
-```
-
-## Talking to the running pulsar
-
-`pulsar.client` is a fully-typed `PulsarClient`. The full surface — six
-namespaces (`destinations`, `video`, `adaptive`, `record`, `stream`,
-plus the v5 baseline passthrough on `pulsar.client.obs`), typed events,
-typed errors — is documented in the
-[`@clodocapeo/pulsar-client` README](https://www.npmjs.com/package/@clodocapeo/pulsar-client).
-
-This package **re-exports every symbol** from `pulsar-client`, so a
-single import line gets you both the spawn API and the client types:
-
-```ts
-import {
-  spawn,
-  PulsarClient,                 // re-export
-  PulsarVendorError,            // re-export
-  PulsarNotConnectedError,      // re-export
-  type Destination,             // re-export
-  type CreateDestinationInput,  // re-export
-  type AdaptiveState,           // re-export
-  // ... and so on
-} from "@clodocapeo/pulsar-bundle";
-```
-
-## Bundling for distribution
-
-When you package your application (electron-builder, pkg, oxc-pack,
-nexe, …), the bundled `pulsar.exe` + DLLs need to ship as
-**unpacked resources** — `app.asar` and most other archive formats
-break the relative-path lookups libobs uses to resolve its plugin
-DLLs and effect files.
-
-### electron-builder
-
-```jsonc
-// electron-builder.json (excerpt)
+```json
 {
   "asar": true,
   "asarUnpack": [
     "node_modules/@clodocapeo/pulsar-bundle/binaries/**/*"
-  ],
-  "files": [
-    "dist/**/*",
-    "node_modules/@clodocapeo/pulsar-bundle/**/*"
   ]
 }
 ```
 
-Then in your Electron main process:
+Resolve the installed path explicitly:
 
 ```ts
 import { app } from "electron";
-import { spawn } from "@clodocapeo/pulsar-bundle";
 import { resolve } from "node:path";
+import { spawn } from "@clodocapeo/pulsar-bundle";
 
 const binariesPath = app.isPackaged
-  ? resolve(process.resourcesPath, "app.asar.unpacked", "node_modules", "@clodocapeo", "pulsar-bundle", "binaries")
-  : undefined;  // dev: use the postinstall'd binaries
-
+  ? resolve(process.resourcesPath, "app.asar.unpacked", "node_modules",
+      "@clodocapeo", "pulsar-bundle", "binaries")
+  : undefined;
 const pulsar = await spawn({ binariesPath });
 ```
 
-### pkg / nexe
+Verify the final installer actually includes the dependency/native tree.
+For single-file Node packagers, ship Pulsar as an unpacked sidecar and pass
+that location; it cannot execute from an embedded virtual filesystem.
 
-These bundle a Node runtime + your code into a single executable. The
-`pulsar.exe` payload **cannot** live inside that bundle — ship it
-alongside as a sidecar resource:
+## Download controls
 
-```
-my-app.exe                   # pkg-bundled Node + your code
-resources/
-└── pulsar/                  # extracted from pulsar-bundle's binaries/
-    └── bin/64bit/pulsar.exe
-    └── obs-plugins/64bit/...
-    └── data/...
-```
-
-Then `spawn({ binariesPath: resolve(__dirname, "resources/pulsar") })`.
-
-## CI / offline / mirror
-
-Three env vars control postinstall behaviour:
-
-| Var | Effect |
+| Variable | Effect |
 |---|---|
-| `PULSAR_BUNDLE_SKIP_POSTINSTALL=1` | Skip the binary download entirely. Useful for `npm install` in a CI matrix that never spawns pulsar (lint-only, type-check-only jobs), or for offline builds with a vendored copy. |
-| `PULSAR_BUNDLE_DOWNLOAD_URL=<url>` | Override the download URL. Use for an internal mirror, a private CDN, or a pre-signed S3 URL. The downloaded zip must be the matching `pulsar-windows-x64-v<VERSION>.zip` shape. |
+| `PULSAR_BUNDLE_SKIP_POSTINSTALL=1` | Skip native download for source-only/offline tooling. |
+| `PULSAR_BUNDLE_DOWNLOAD_URL` | Replace the release URL; supply a trusted matching light ZIP. |
 
-```bash
-# CI: install but skip the 40 MB download
-PULSAR_BUNDLE_SKIP_POSTINSTALL=1 npm ci
-
-# Internal mirror
-PULSAR_BUNDLE_DOWNLOAD_URL=https://my-mirror.internal/pulsar/v1.0.0.zip npm install
+```powershell
+$env:PULSAR_BUNDLE_SKIP_POSTINSTALL = "1"
+npm ci
 ```
 
-If your CI installs on Linux / macOS to lint a cross-platform repo,
-the `os: ["win32"]` field already prevents the postinstall from
-running there. If you need to force-install on a non-target platform
-anyway, pass `--force` to npm — the postinstall detects the platform
-mismatch and exits cleanly.
+The same download override name is read by **both** bundle packages.
+Do not install light and full together under one variant-specific mirror URL.
+Choose an explicit matching payload or separate installation environments.
 
-## Troubleshooting
+For controlled distribution, verify the release manifest/hash externally;
+postinstall's version stamp is not that verification.
 
-### `pulsar.exe did not signal ready within 30000ms`
+## Errors and troubleshooting
 
-Most common causes, in order:
-
-1. **Antivirus quarantine.** A freshly-extracted `pulsar.exe` can
-   trigger heuristics on Defender / corporate AV. Whitelist the
-   `binaries/` directory or pre-extract before the first run.
-2. **Runtime directory unavailable.** The built-in `spawn()` creates a
-   private directory. If you supply `PULSAR_RUNTIME_DIR`, make sure its
-   parent is writable and that no other process is using the same identity or
-   explicit directory.
-3. **Port conflict.** `spawn()` asks the OS for a free loopback port by
-   default. A conflict usually means an explicitly pinned `PULSAR_PORT` is
-   already in use; remove the override or choose another port.
-4. **Loaded system / cold cache.** Bump `readyTimeoutMs` to 60_000.
-
-The `onLog` callback receives every boot line — capture them and look
-at the last few lines before the timeout to see where pulsar got stuck.
-
-### `pulsar.exe not found at <path>`
-
-The postinstall didn't fetch the binary (network failure, unpublished
-version). Re-run `npm install` with network access, or set
-`binariesPath` to a local checkout
-(`upstream/build_x64/rundir/RelWithDebInfo/`).
-
-### `obs-websocket config not found at <path> (boot incomplete?)`
-
-Pulsar reached the ready marker but didn't write its config.json.
-Almost always means the obs-websocket plugin failed to load — check
-the boot log for `Failed to load plugin obs-websocket.dll`. Usually a
-missing dependency in the bundle (Qt6Core.dll absent, an antivirus
-removed a DLL, etc.).
-
-### Auth rejected on connect
-
-The seeded password didn't match what obs-websocket persisted. Two
-known causes:
-
-1. A stale `obs-websocket/config.json` from a prior run — Pulsar
-   rewrites the file inside the per-spawn runtime directory before plugin
-   load. If a caller-owned runtime directory is corrupted, remove only its
-   `obs-websocket/config.json` after stopping its owner, then re-spawn.
-2. You set `PULSAR_PASSWORD=""` (empty string) on `opts.env`. Pulsar
-   treats empty as "generate a random password" and the bundle then
-   reads what was generated — your `""` is ignored. Either pass a
-   non-empty value or leave the var unset.
-
-### `pulsar.exe exited prematurely (code=N, signal=...)`
-
-Look at the boot log captured via `onLog`. The most common patterns:
-
-- `code=-1073740940` (`0xC0000374`) — heap corruption. File a bug
-  with the boot log.
-- `code=3221225477` (`0xC0000005`) — access violation. Same — file a bug.
-- `code=1` with `Failed to find file 'default.effect'` — the bundle's
-  executable-relative `data/` tree is missing or the binary was built without
-  the #243 libobs data-path patch. Ensure `binariesPath` contains
-  `bin/64bit/` + `data/` + `obs-plugins/64bit/` from the matching bundle.
-
-## Versioning
-
-Tracks `pulsar-client` and `pulsar.exe` in lockstep. `1.0.0` of this
-package downloads `pulsar-windows-x64-v1.0.0.zip` and depends on
-`@clodocapeo/pulsar-client@1.0.0`.
-
-The matching GitHub Release must exist for postinstall to succeed.
-When upgrading, bump all three packages together — npm semver
-resolution will reject mixed versions.
-
-## Compatibility
-
-| | |
+| Signal | Meaning / next check |
 |---|---|
-| OS | Windows 10/11 x64 only |
-| Node | ≥ 18 |
-| Module system | ESM only (`"type": "module"`) |
-| TypeScript | ≥ 5.0 — strict mode supported |
-| Antivirus | Whitelist the `binaries/` directory if you see boot timeouts |
+| `PULSAR_BINARY_UNAVAILABLE` | Missing executable: check download warning and binary root. |
+| `PULSAR_RUNTIME_ID_INVALID` | Invalid per-call identity before launch. |
+| `PULSAR_READY_TIMEOUT` | Read the first native boot failure, namespace collision, listener or module error. |
+| `PULSAR_CONFIG_MISSING` / `PULSAR_CONFIG_INVALID` | Idle marker did not yield usable per-session config. |
+| `PULSAR_PROCESS_ERROR` / `PULSAR_PROCESS_EXITED` | Process launch/exit observation; inspect bounded native logs. |
+| Authentication/connect failure | Check listener/config/version consistency; empty password requests generation, not no-auth mode. |
+| Missing `default.effect` | Check executable-relative data layout and matching native stack, not a shared cwd workaround. |
 
-## Licence
+If a file is quarantined, verify its release provenance and follow local
+security policy; do not blanket-disable protection. A timeout alone does not
+establish antivirus as the cause.
 
-[GPL-2.0-or-later](./LICENSE).
+## Versioning and license
 
-This package bundles `pulsar.exe` and its DLLs (libobs + Pulsar
-plugins), all of which are GPL-2.0-or-later. The aggregate distributed
-by this npm package is therefore covered by the GPL.
+3.0.0 downloads the v3.0.0 light ZIP and pins pulsar-client 3.0.0.
+Keep all deployed runtime/client/bundle artifacts matched. npm can install
+multiple versions; it does not universally reject a mixed runtime setup.
 
-Source for the bundled binaries is available at
-<https://github.com/ZabLaboratory/Pulsar> at the matching version tag.
-
-### Bundling Pulsar in a non-GPL application
-
-The process boundary keeps your application's licence under
-**mere aggregation** — the GPL does not propagate. Four invariants must
-be honoured:
-
-1. **Process boundary.** Always spawn `pulsar.exe` as a separate OS
-   process. Never `LoadLibrary` / `dlopen` it.
-2. **WebSocket-only IPC.** No FFI, no shared memory, no native bindings.
-3. **No FFI surface on Pulsar's side.** Don't add `__declspec(dllexport)`
-   to any plugin. Pulsar's CI gates this.
-4. **No source copy-paste.** Don't include lines copied from the libobs
-   / obs-websocket / obs-browser source trees in your application.
-
-Read [`LICENSE-INVARIANTS.md`](https://github.com/ZabLaboratory/Pulsar/blob/main/LICENSE-INVARIANTS.md)
-on the Pulsar repo for the full contract, then
-[`CONSUMER-AUDIT.md`](https://github.com/ZabLaboratory/Pulsar/blob/main/CONSUMER-AUDIT.md)
-for the empirical checklist your application's CI must enforce.
-
-If you only need the typed client without any GPL binary (e.g. you
-talk to a Pulsar already running elsewhere), use
-[`@clodocapeo/pulsar-client`](https://www.npmjs.com/package/@clodocapeo/pulsar-client)
-instead — it's MIT.
+The bundle/native runtime is [GPL-2.0-or-later](LICENSE); the re-exported
+client retains its MIT license. Preserve component notices and matching source
+links. Read the [distribution constraints](../../LICENSE-INVARIANTS.md) and
+[consumer audit](../../CONSUMER-AUDIT.md); process separation is not a blanket
+legal guarantee for arbitrary host integrations.

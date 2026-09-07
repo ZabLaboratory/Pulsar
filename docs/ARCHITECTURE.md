@@ -1,235 +1,364 @@
-# Pulsar — Architecture
+# Pulsar — architecture (3.0.0)
 
-This document describes the V1 architecture as actually shipped. Phase
-plans and historical notes live in `CHANGELOG.md` and
-`docs/DEVELOPMENT.md`.
+Pulsar is a headless Windows x64 media engine built from a pinned OBS fork,
+an ordered native patch stack, Pulsar-owned C++ components and a pure
+WebSocket TypeScript SDK. It is designed for application-controlled live
+production, not for hosting the OBS Studio desktop interface.
 
-## Process model
+This document describes the **current implementation**. Approved ADRs retain
+their decision history; they are not rewritten to make old milestones look
+current. Start with the [README](../README.md) for usage, the
+[protocol](PROTOCOL.md) for wire fields and the
+[libobs change reference](LIBOBS-CHANGES.md) for every native patch.
 
-Pulsar is a long-running headless service. The reference embedder
-(Prism) spawns it at boot, talks to it over a localhost WebSocket, and
-shuts it down on exit. From the operator's point of view there is one
-application; from the OS's point of view there are two processes.
+## 1. System and process boundaries
 
-```
-┌────────────────────────────────────┐
-│  Consumer (Prism, your app, ...)   │
-│  separate licence — UI / scenes /  │
-│  automation                        │
-└──────────┬─────────────────────────┘
-           │ WebSocket on 127.0.0.1:<random>
-           │ obs-websocket v5 + pulsar:* vendor
-           ▼
-┌────────────────────────────────────┐
-│  pulsar.exe   (single Win32 process, GPL-2.0-or-later)
-│                                    │
-│  ┌─────────────────────────────┐   │
-│  │ pulsar-headless             │   │  service-mode lifecycle, idle loop,
-│  │  (= the executable's main)  │   │  AttachConsole stdio, READY sentinel
-│  ├─────────────────────────────┤   │
-│  │ pulsar-frontend-stub        │   │  obs_frontend_callbacks vtable,
-│  │  (static lib)               │   │  scene + encoder + output bring-up
-│  ├─────────────────────────────┤   │
-│  │ pulsar-multi-stream.dll     │   │  destinations registry (rtmp_custom,
-│  │                             │   │  vod_local, twitch), encoder fan-out,
-│  │                             │   │  adaptive bitrate worker
-│  ├─────────────────────────────┤   │
-│  │ pulsar-websocket.dll        │   │  forked obs-websocket v5.7.3 with
-│  │                             │   │  Qt/forms stripped, pulsar:* vendor
-│  │                             │   │  namespace dispatcher
-│  ├─────────────────────────────┤   │
-│  │ pulsar-browser.dll          │   │  forked obs-browser (full bundle only),
-│  │  + pulsar-browser-page.exe  │   │  CEF helper exe in obs-plugins/64bit/
-│  ├─────────────────────────────┤   │
-│  │ libobs + obs-studio plugins │   │  capture · audio · encode · output
-│  └─────────────────────────────┘   │
-└──────────┬─────────────────────────┘
-           │ NVENC / x264 / QSV / AMF
-           ▼
-   Twitch · RTMP custom · local MP4
+```text
+Host application / automation
+  ├─ owns UI, scene authoring, credentials, lifecycle and persistent files
+  └─ obs-websocket v5 + vendor requests over authenticated loopback WS
+       |
+       v
+pulsar.exe
+  ├─ headless bootstrap + minimal Qt application
+  ├─ frontend callback implementation + dual-lane production controller
+  ├─ obs-websocket.dll
+  ├─ pulsar-multi-stream.dll / pulsar-scene-source.dll
+  ├─ patched libobs + D3D11 + capture / audio / encode / output modules
+  ├─ pulsar-browser.dll ── CEF helper processes (full distribution)
+  └─ private D3D11 return helper (optional internal transport)
+       |
+       ├─ RTMP/RTMPS destinations
+       ├─ recording / replay files
+       └─ read-only CPU NV12 ProgramReturn / PreviewReturn → DirectShow reader
 ```
 
-## Licence boundary
+“Headless” means **no OBS Studio window or operator UI**. It does not mean
+“no Qt”: the bootstrap creates a `QApplication` with
+`QT_QPA_PLATFORM=minimal`, and the WebSocket integration uses Qt facilities.
+The separately maintained browser plugin removes its own Qt UI coupling.
 
-The split into two processes is **the legal boundary** that keeps the
-GPL of libobs from propagating to consumers. Pulsar therefore exposes
-itself only as a stand-alone executable; never as a library, FFI, or
-native module. The only sanctioned channel is the WebSocket protocol
-on a loopback socket.
+There are three different channel classes:
 
-Four invariants enforce this. They live in
-[`LICENSE-INVARIANTS.md`](../LICENSE-INVARIANTS.md) and are gated by
-the `lint` + `binary-gate` jobs in `.github/workflows/pipeline.yml`:
+| Channel | Boundary and purpose |
+|---|---|
+| Host control | Authenticated obs-websocket v5 on loopback by default. The host does not link/load libobs as its application API. |
+| Media egress | RTMP/RTMPS, local media files and ordinary DirectShow samples. These are media, not a second command protocol. |
+| Runtime-internal native transport | libobs module calls, private helper handles/pipes and producer-owned return queues. These exist inside the native implementation and are not a public host FFI. |
 
-1. **Process boundary.** `pulsar.exe` is always a separate OS process.
-   Nobody loads `pulsar.exe`, `pulsar-*.dll`, `libcef.dll`, or any
-   libobs binary into another address space.
-2. **WebSocket-only IPC.** No FFI, no shared memory, no native bindings.
-3. **No FFI surface on Pulsar's side.** `pulsar.exe` and
-   `pulsar-browser-page.exe` export zero symbols. Plugin DLLs export
-   only the OBS module ABI (12-symbol whitelist in
-   `scripts/check-binary-exports.ps1`).
-4. **No source copy-paste.** Consumer code never includes lines copied
-   from libobs / obs-websocket / obs-browser source trees.
+The project distribution constraints are recorded in
+[LICENSE-INVARIANTS.md](../LICENSE-INVARIANTS.md) and the
+[consumer audit](../CONSUMER-AUDIT.md). They are engineering/distribution
+requirements, not a blanket legal determination about every possible
+consumer. The runtime remains GPL-2.0-or-later; the WebSocket client is MIT.
 
-## Repo layout
+## 2. Component ownership
 
-```
-Pulsar/
-├── upstream/         git submodule → obsproject/obs-studio @ pinned tag
-├── patches/          NNNN-name.patch — applied to upstream/ at build time
-├── plugins/          Pulsar-owned plugins, additive features
-│   ├── pulsar-headless/        the pulsar.exe entry point
-│   ├── pulsar-frontend-stub/   obs_frontend_callbacks + scene/encoder bring-up
-│   ├── pulsar-websocket/       fork of obs-websocket v5
-│   ├── pulsar-multi-stream/    destinations + adaptive bitrate
-│   └── pulsar-browser/         fork of obs-browser (full bundle only)
-├── packages/         npm packages
-│   ├── pulsar-client/          MIT, no native deps
-│   ├── pgm-correlator/         MIT, no native deps -- PGM/Orion-identity time correlation (#230)
-│   ├── pulsar-bundle/          GPL, ships pulsar.exe (light)
-│   └── pulsar-bundle-full/     GPL, ships pulsar.exe (with CEF)
-├── scripts/          build, package, probes, CI orchestration
-├── docs/             this directory
-└── .github/workflows/pipeline.yml
-```
-
-## Fork strategy
-
-Three layers, each with a clear discipline. Prefer the topmost layer
-that can express a change.
-
-| Layer | When to use it | Cost |
+| Component | Artifact / owner | Responsibilities |
 |---|---|---|
-| **Plugin** under `plugins/` | New feature that fits libobs's plugin model (a new source kind, output kind, vendor request handler, signal listener). | Cheap. No upstream coordination. |
-| **Patch** under `patches/` | Change that cannot live as a plugin: a tweak to libobs's build, a license metadata update, a hook into headless boot. | Each patch is one more thing to maintain across upstream rebases. Aim to upstream it. |
-| **Upstream PR** | Anything generally useful to OBS Studio. | Wait for upstream review, but the patch goes away once merged. |
+| `pulsar-headless` | `bin/64bit/pulsar.exe` | Runtime identity and physical-directory leases, log/config initialization, video/audio bootstrap, module load, readiness and teardown barriers. |
+| `pulsar-frontend-stub` | Static library linked into the executable | Frontend callback table, live scene inventory, encoders and singleton outputs, hot lanes/views, common Program audio, scene-switch vendor adapter, transition controller and runtime observations. |
+| `pulsar-websocket` | `obs-plugins/64bit/obs-websocket.dll` | v5 framing/authentication, baseline handlers/events, vendor dispatch, verified output-attempt feedback and bounded shutdown. |
+| `pulsar-multi-stream` | `pulsar-multi-stream.dll` | Destination registry, shared-encoder fan-out, adaptive bitrate, capabilities, audio/monitoring/diagnostic vendor requests. Owns vendor `pulsar`. |
+| `pulsar-scene-source` | `pulsar-scene-source.dll` | Legacy single browser-capture replacement. Owns vendor `pulsar-scene`. |
+| `pulsar-browser` | `pulsar-browser.dll` + `pulsar-browser-page.exe` | CEF browser source, accelerated/software rendering callbacks, source-task lifecycle and browser shutdown fence. Full distribution only. |
+| `pulsar-output-classify` | Header-only interface target | Shared stable output-failure classification used by frontend and registry. |
+| `pulsar-nv-secure-load` | Header-only interface target | Shared validated SDK-directory/loading policy used by upstream effect module, capability probe and native tests. |
+| Patched OBS | `obs.dll`, graphics and upstream module binaries | Rendering/audio/video I/O, atomic view swap, encoders, output interleaving, capture and return transport. |
 
-The discipline: **plugin → upstream PR → patch**, in that order.
-`patches/` is intended to shrink as we upstream what we can. `plugins/`
-is where Pulsar's identity lives.
+Source-directory names and deployed filenames are not always identical.
+In particular, the directory `pulsar-websocket` emits
+`obs-websocket.dll`; it does not emit a second `pulsar-websocket.dll`.
+The full package removes the upstream browser loader so two modules cannot
+race to register `browser_source`.
 
-## Build pipeline
+## 3. Boot and readiness
 
-Implemented in `scripts/build-win.ps1`. Idempotent — every run resets
-`upstream/` to the recorded SHA, replays patches, and rebuilds.
+The native sequence in
+[main.cpp](../plugins/pulsar-headless/main.cpp) is:
 
-1. `git submodule update --init --recursive` initialises `upstream/`.
-2. Reset `upstream/` to `git submodule status --cached`.
-3. Replay every `patches/*.patch` in lexical order via `git am`.
-4. Configure: `cmake --preset windows-x64 -S upstream` plus Pulsar
-   overrides (`ENABLE_FRONTEND=OFF`, `ENABLE_UI=OFF`,
-   `ENABLE_BROWSER=OFF` in light mode; `-Full` flips them on for the
-   full bundle).
-5. Build: `cmake --build --preset windows-x64 --config RelWithDebInfo`.
-6. Pulsar plugins compile against the freshly built libobs.
-7. Output lands under
-   `upstream/build_x64/rundir/RelWithDebInfo/{bin,obs-plugins,data}/`.
+1. Preserve redirected stdio or attach the parent console for direct use.
+2. Resolve and validate the runtime identity and directory; acquire instance,
+   physical-directory and optional legacy-alias ownership before native state
+   is created. Adopt an explicitly inherited shutdown control when provided.
+3. Construct the minimal Qt application; resolve the log session ID and
+   install the durable redacted log handler.
+4. Initialize libobs with the private runtime directory as module config root,
+   then configure video and audio.
+5. Install frontend callbacks **before** module loading, so plugins can
+   register their event callbacks against a real frontend.
+6. Seed a trustworthy per-session WebSocket configuration before loading the
+   WebSocket plugin. A protected-config failure aborts startup.
+7. Load modules and check that the configured WebSocket listener is active.
+8. Complete frontend state creation: sources, hot lanes, views, encoders,
+   singleton outputs, vendor adapters and capability-dependent features.
+9. Print the separate `PULSAR_SESSION` line, the stable
+   `PULSAR_READY ws=<url> password=<password>` sentinel, then the
+   `pulsar-headless: libobs <version> ready, idling` marker.
+10. Enter the service loop, maintain lease metadata and wait for shutdown.
 
-For local runtime loops only, `scripts/build-win.ps1 -Fast` skips a redundant
-configure when the existing cache is provably headless, then builds the
-`libobs`, `win-dshow`, 32/64-bit virtual-camera, NVENC, x264 and
-`pulsar-headless` targets. The complete path above remains the default and is
-required for CI, packaging, release, browser/CEF changes and patch-stack
-qualification.
+READY is a native-service/listener signal. It is not proof that a URL has
+rendered, a camera is supplying frames or Twitch is live. Those have their
+own readiness and output observations.
 
-First run is ~25–30 min on a typical machine (obs-deps + Qt6 + CEF
-download once into the cache); incremental rebuilds are seconds.
+The Node bundles currently wait for the **idle marker**, then read the
+seeded config inside the private runtime directory and complete the
+authenticated v5 handshake. Manual hosts can parse the READY sentinel.
+These are two implemented launch paths; documentation must not claim the
+bundle parses the sentinel password when its code reads config.
 
-`scripts/package-win.ps1 -Zip [-Full]` wraps a curated subset of the
-rundir into the distributable zip:
+## 4. Production video graph
 
-| Variant | Size | Plugins included |
-|---|---|---|
-| **light** (`pulsar-windows-x64-v<version>.zip`) | ~40 MB compressed, ~100 MB extracted | encoders, capture (window/monitor/game/dshow), WASAPI, ffmpeg muxer, multi-stream, websocket |
-| **full** (`pulsar-windows-x64-full-v<version>.zip`) | ~150 MB compressed, ~370 MB extracted | the above + obs-browser + CEF + obs-text + text-freetype2 + vlc-video |
+```text
+                         two persistent producers
+                         Lane A          Lane B
+                            |              |
+                        logical On-Air / Preview roles
+                            |              |
+                         ProgramView    PreviewView
+                         main canvas    auxiliary mix
+                            |              |
+                         programVideo   previewVideo
+                            |              |
+           +----------------+---+          +---- PreviewReturn
+           |                    |
+        encoder(s)         ProgramReturn
+           |
+      stream / record / replay / destination fan-out
+```
 
-Both variants share an always-stripped list (obs-vst, nv-filters,
-obs-webrtc, decklink, frontend-tools, obs-libfdk) — those are deliberate
-omissions documented in `scripts/package-win.ps1`.
+ProgramView aliases libobs's main canvas; PreviewView is one distinct active
+auxiliary mix. The frontend binds the video encoder once to the stable
+Program video object. Return outputs similarly receive their media identities
+during setup, not once per Take.
 
-## Boot sequence
+The mutable part is the root-source role assignment. A Cut exchanges two
+roots at one video boundary while preserving:
 
-1. `pulsar.exe` starts. `wWinMain` calls `AttachConsole(ATTACH_PARENT_PROCESS)`
-   so direct invocation from cmd.exe / PowerShell still prints to the
-   operator's terminal. Spawned with piped stdio, the inherited pipes
-   take precedence and AttachConsole is a no-op.
-2. The bootstrap resolves a validated `runtime_instance_id`, creates its
-   private runtime directory, acquires OS-backed identity and cwd leases, and
-   opportunistically acquires the singleton DirectShow legacy-alias lease. A
-   second claimant remains usable through namespaced mappings and emits a
-   correlated refusal record.
-3. A `QApplication` is constructed with `QT_QPA_PLATFORM=minimal` (no
-   display, no platform plugin DLL).
-4. `obs_startup()` initialises libobs with the runtime directory as its
-   module-config path.
-5. `seed_websocket_config()` writes `<runtime-dir>/obs-websocket/config.json`
-   from `PULSAR_PORT` + `PULSAR_PASSWORD` env vars (or defaults: an
-   allocated loopback port + a fresh 22-char URL-safe random string). This happens *before*
-   plugins load so `obs-websocket.dll`'s config loader reads the
-   seeded values rather than a stale on-disk copy from a prior run.
-6. `obs_load_all_modules()` loads ~25 OBS plugins + the Pulsar plugins.
-7. `pulsar-frontend-stub` brings up the scene graph: a `Default` scene
-   with WASAPI mic + desktop capture + (optional) window capture, an
-   x264 video encoder + AAC audio encoder, a singleton `PulsarStream`
-   rtmp_output, a singleton `PulsarRecord` ffmpeg_muxer.
-8. `pulsar-multi-stream` initialises its registry + adaptive bitrate
-   worker.
-9. `pulsar-websocket` binds the configured port on `127.0.0.1` (and
-   `::1`) and starts accepting v5 handshakes.
-10. `pulsar-headless` prints the sentinel:
-   `PULSAR_READY ws=ws://127.0.0.1:<port> password=<pw>`
-11. The idle loop polls a graceful-shutdown atomic every 100 ms and renews
-     the identity/cwd/alias lease metadata. On shutdown, libobs is stopped
-     before all leases are released.
-    `Ctrl-C` (in a real terminal) or `WM_CLOSE` (from a parent
-    process's `taskkill` / `child.kill()`) flips the flag; the loop
-    exits and `obs_shutdown()` runs to completion.
+- lane/source lifetime and activation;
+- ProgramView and PreviewView identity;
+- their video objects and downstream binding;
+- encoder/output objects;
+- common Program audio.
 
-## Embedding contract
+The core swap primitive is in the patched libobs view/video path. Command
+admission, revision guards, deadlines and policy live in the frontend.
+A graphics callback records actual frame/PTS and queues state work; it does
+not perform filesystem/media analysis in the rendering critical section.
 
-A consumer (Prism today, others later) must:
+### Prepare, Take, Abort
 
-- Bundle the chosen variant under `resources/pulsar/`, preserving the
-  rundir layout (`bin/64bit/`, `obs-plugins/64bit/`, `data/`).
-- Resolve the executable from `bin/64bit/pulsar.exe`, but give each process
-  a private runtime cwd and pass a validated `PULSAR_RUNTIME_INSTANCE_ID`.
-  The native bootstrap resolves OBS modules/data from the executable and
-  uses the runtime cwd for config, logs and recordings.
-- Pass `PULSAR_PORT` + `PULSAR_PASSWORD` env vars to pin per-session
-  credentials when required; otherwise the bundle allocates a free loopback
-  port and parses the generated values from the READY sentinel.
-- Treat the returned runtime identity as the correlation key. If an external
-  DirectShow consumer needs a non-holder's dedicated mapping, launch it with
-  the same `PULSAR_RUNTIME_INSTANCE_ID` and
-  `PULSAR_DIRECTSHOW_LEGACY_ALIAS=0`. The DirectShow producer and consumer
-  share one fail-closed tri-state decision: legacy names are allowed only
-  when **both** variables are absent; a valid runtime ID selects a dedicated
-  mapping unless the alias is explicitly truthy; any present invalid/empty
-  runtime ID, or any alias without a valid ID, disables the mapping rather
-  than opening a legacy queue.
-- Read stdout line-by-line until `^PULSAR_READY ` arrives; extract
-  `url` + `password`; open the obs-websocket v5 session.
-- Hold the connection open for the lifetime of broadcast work.
-  Reconnect with the same password on transient drops.
-- Stop via WebSocket close + process termination on shutdown. Never
-  `taskkill /F` first — it skips `obs_shutdown` and leaks encoder
-  threads.
+The frontend owns vendor `pulsar-scene-switch`. Requests arrive through
+v5 `CallVendorRequest`, not top-level `Prepare`/`Take` messages.
 
-The full step-by-step contract — including the exact file listing the
-consumer must ship and the spawn-helper pseudocode — lives in
-[`PRISM-EMBEDDING.md`](PRISM-EMBEDDING.md).
+- **Prepare** targets the current Preview lane and a scene, checks expected
+  revisions, stages the candidate and waits for an actual Preview-mix frame.
+- **PreviewReady** reports that observed frame and PTS.
+- **Take** freezes that candidate and queues the atomic commit.
+- **TakeCommitted** reports the real committed role map, revision changes,
+  frame ID and PTS.
+- **Abort/timeout** can cancel a still-pending commit. If the frame callback
+  already won, the commit remains authoritative; there is no second terminal
+  route mutation.
 
-## Non-goals
+The contract uses monotone server sequence and three revision streams
+(`program`, `preview`, `role_map`). Idempotence is scoped by runtime and
+command ID over normalized payloads. Exact retries replay their original
+outcome; conflicting reuse rejects without mutation.
 
-- **Cloud rendering.** Pulsar runs on the operator's machine. Cloud
-  broadcast pipelines belong elsewhere.
-- **Mobile.** No iOS / Android targets. Mobile companion apps drive
-  Pulsar remotely via the protocol, they do not embed it.
-- **Replacement for OBS Studio.** Pulsar targets programmatic /
-  embedded use cases. Operators who want a desktop UI keep using OBS
-  — this fork actively excludes Qt to make the headless cost cheap.
-- **macOS / Linux for V1.** Windows x64 only. Mac and Linux are
-  deferred until a consumer needs them; the process model and
-  patches/plugins discipline are platform-agnostic, but the build
-  scripts are not yet ported.
+The bounded runtime cache retains up to 4096 outcomes without eviction.
+Capacity exhaustion refuses new commands until restart; clients must not
+assume indefinite command admission in one process.
+
+### Optional transitions and rollback
+
+Atomic Cut is the default. `PULSAR_DUAL_LANE_TRANSITIONS=1` permits
+Fade/Stinger composition on the stable Program view, followed by a final
+frame-boundary role exchange. Invalid assets, invalid duration or unavailable
+transition resources have explicit refusal/fallback behavior. An interruption
+must preserve one winning terminal result and a coherent role map.
+
+This flag is independent of the older `PULSAR_NATIVE_STINGER` path.
+Neither means that arbitrary network-provided media paths are admitted.
+
+The operational rollback/freeze drill is separate from a normal scene-switch
+command. Once frozen, `GetState` reports `operational=false` and
+`frozen=true`, while the committed Program route remains live. See the
+[canary runbook](runbooks/pulsar-dual-lane-canary.md).
+
+## 5. Audio, encoders and outputs
+
+### Common Program audio
+
+The frontend captures the process-wide libobs audio identity once.
+Audio-capable frontend encoders share that route across video Cuts.
+Desktop loopback, opt-in process loopback and opt-in microphone occupy
+separate main-mixer channels; the mutable video root is omitted from the
+common-audio source inventory.
+
+Up to six AAC encoders map to mixer indexes. Stream/record/replay track lists
+select which encoders each output carries. Output slot rank and mixer/track
+identity are different and are exposed accordingly.
+
+`GetProgramAudioRoute` reports actual route/output/source identities and
+bounded encoder-fed PTS observations. PreviewReturn and ProgramReturn are
+video-only. Preview audio and audio-follow-video remain explicitly unsupported.
+
+### Encoder selection and sharing
+
+Video family, resolution and frame rate are boot-fixed. The frontend resolves
+x264/NVENC/QSV/AMF/auto against live encoder registration and falls back to
+x264 with a warning when selection is unavailable. Bitrate can change live;
+audio bitrate writes require idle affected encoders.
+
+The singleton stream, record and replay outputs and the destination registry
+reuse encoders rather than creating one video encoder per destination.
+This is shared compression, not independent quality per destination or
+unlimited capacity.
+
+### Output ownership
+
+| Output | Owner / behavior |
+|---|---|
+| Singleton stream | Frontend v5 compatibility output; requires configured service and verified state. |
+| Singleton recording | Frontend recorder; auto-generated path, MP4/MKV boot choice, split/marker support as advertised. |
+| Replay buffer | Frontend; taps already-active encoders, bounded time/memory, no off-air encoder startup. |
+| Destinations | Registry; Twitch, YouTube, custom RTMP/RTMPS or caller-named local file. |
+| Program/Preview returns | Stable frontend media bindings; consumer-gated publication independent of RTMP. |
+| Compatibility virtual camera | Separate frontend output; do not confuse it with the two stable production returns. |
+
+Output-attempt settlement and a later output failure are distinct events.
+Wire acceptance must be checked against effective state; error classification
+is shared between frontend and registry to avoid contradictory reason classes.
+
+## 6. Browser ownership and shutdown
+
+The browser fork runs CEF offscreen without browser docks/Qt UI.
+Accelerated callbacks use D3D11 textures when available; software callbacks
+have their own deterministic behavior. A source owns its asynchronous task
+state and callback admission gate.
+
+Pulsar-managed browser content has webpage control pinned to None.
+Replacing a managed capture source removes its prior managed scene items.
+This legacy replacement helper is not the dual-lane Prepare path: hot
+production lanes intentionally preserve producers during role exchange.
+
+Native shutdown quiesces WebSocket callbacks, drains browser work, tears down
+frontend sources/outputs, then calls libobs shutdown and releases leases.
+If a required barrier fails, the runtime does not continue unsafe teardown
+under a still-live callback.
+
+The native redirected-stdio harness uses an explicitly inherited anonymous
+event for graceful shutdown. The current Node bundle instead disconnects
+and invokes child termination, with a bounded force fallback. On Windows
+this is **not** proof of graceful libobs teardown. Applications must finalize
+recording/replay/stream outputs and export durable files before calling
+`shutdown()`; native lifecycle tests exercise a different control path.
+
+## 7. Isolation and return transport
+
+Runtime ID and cwd leases are backed by OS ownership, not merely a lock-file
+timestamp. Physical directory identity prevents case aliases/junction spellings
+from acquiring two independent owners. Runtime files are configuration and
+diagnostics; changing a metadata root does not create a new authority.
+
+Legacy DirectShow names have one compatibility owner. Other runtimes use
+dedicated namespaces. An invalid/empty identity or an alias selector without
+a valid identity fails closed rather than silently opening the singleton.
+
+The default return queue publishes latest-frame CPU NV12 with coherent
+metadata. Consumer liveness is maintained by a watcher so the render callback
+does not perform named-object I/O per frame. Unused return copies are skipped.
+
+The D3D11 option is limited to the supported format/capability path and uses
+a private producer-launched helper with authenticated bootstrap. GPU handles
+are not handed to an arbitrary DirectShow client. The helper readback is
+relayed through the producer-owned CPU queue; external clients remain
+read-only. ABI mismatch, liveness/capability/format/timeout failure is
+observable and falls back without changing Program/audio/encoder ownership.
+This is not a zero-copy consumer API.
+
+## 8. Performance and observability
+
+The native stack separates rendering, conversion, borrowed publication,
+encoder callback, interleaver lock wait, output enqueue, receiver packet and
+decoded-picture observations. A content timestamp is not interchangeable
+with an encoder cadence timestamp or a decoder frame index.
+
+Qualified automatic current-surface readback is limited to Windows CPU
+NV12 1080p60 with a physical graphics adapter. GPU encoding and unqualified
+modes keep their prior automatic path. The explicit rollback is
+`PULSAR_RAW_CURRENT_READBACK=0`.
+
+Fresh-frame polling, NVENC ready drain and asynchronous output are retained
+as opt-in experiments, not promoted as universal improvements.
+See [LIBOBS-CHANGES](LIBOBS-CHANGES.md) for defaults and all 52 patches and
+the [native study](issue-253-native-optimized.md) for measured results/limits.
+
+Trace signals are individually selectable. Producer and DirectShow sidecar
+observations remain distinct; trace/report tools preserve clock and media
+identity instead of joining unrelated timestamps into an apparent gain.
+
+## 9. Source, build and distribution graph
+
+```text
+OBS fork pin + 51 root patches + 1 nested browser patch
+                         |
+                 upstream CMake build
+                         |
+        Pulsar CMake components + matching headers/libs
+                         |
+             full validated runtime directory
+                         |
+         +---------------+---------------+
+         |                               |
+      light ZIP                       full ZIP
+         |                               |
+   pulsar-bundle                    pulsar-bundle-full
+         +---------------+---------------+
+                         |
+                 pulsar-client (MIT)
+```
+
+The build reuses only exact fingerprinted patched checkouts. The default
+complete build is required for CI/release qualification; `-Fast` is a
+narrow local target loop, not a replacement for the whole pipeline.
+
+The full variant adds CEF/browser, native text, VLC module and nv-filters.
+NVIDIA SDK binaries/models are not redistributed; the effect module may
+remain inert on a machine without a validated SDK. Module presence is not
+operational availability. Light strips those optional families.
+
+Both variants exclude OBS Studio UI, AJA/DeckLink, VST, WebRTC and other
+modules selected by [package-win.ps1](../scripts/package-win.ps1).
+Use actual release asset sizes and manifests rather than old approximate
+file counts. Preserve `bin/64bit/`, `obs-plugins/64bit/` and `data/`.
+
+CI separates source/contract checks, Windows build, binary exports, native
+CTest/offline probes and real CEF-to-recorded-PGM checks. A tag additionally
+runs the real broadcast, packages, npm publication and release attachment.
+A green unit test is not a deployed binary; a published npm package is not
+proof that its matching ZIP exists.
+
+## 10. Scope and non-goals
+
+- Supported native platform: Windows x64. The TypeScript client can run
+  elsewhere against a managed runtime; native bundles cannot.
+- No bundled operator desktop UI, cloud render service or mobile runtime.
+- No Preview audio/AFV contract, arbitrary public native-handle API or
+  automatic cross-consumer deployment.
+- No claim that every OBS plugin, device, codec or extension is supported.
+- No universal NVENC latency gain, physical-display timing guarantee, or
+  4K/multi-camera capacity qualification derived from the 1080p60 study.
+
+## Source map
+
+| Topic | Source |
+|---|---|
+| Bootstrap/lifecycle | [headless component](../plugins/pulsar-headless/README.md) |
+| Production graph | [frontend component](../plugins/pulsar-frontend-stub/README.md) |
+| Wire | [protocol](PROTOCOL.md), [scene-switch contract](../scripts/contracts/scene_switch_v1/README.md) |
+| Native changes | [complete OBS/libobs inventory](LIBOBS-CHANGES.md) |
+| Host lifecycle | [embedding](PRISM-EMBEDDING.md), [bundle API](../packages/pulsar-bundle/README.md) |
+| Build/release | [development](DEVELOPMENT.md), [release runbook](runbooks/cut-a-release-and-propagate.md) |
+| Other guides and historical records | [documentation index](README.md) |

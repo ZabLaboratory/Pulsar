@@ -1,99 +1,142 @@
 # pulsar-frontend-stub
 
-Frontend callbacks for Pulsar's headless service.
+The name is historical: in 3.0.0 this is Pulsar's **headless frontend and
+production controller**, not a frozen single-scene mock.
 
-`libobs` exposes a `frontend-api` layer (`obs-frontend-api.dll`) whose
-function table is filled by whichever frontend is running — the OBS
-Studio Qt UI in upstream, this stub in Pulsar. Without callbacks set,
-every `obs_frontend_*` call logs `"Tried to call X with no callbacks"`
-and returns null. obs-websocket's `EventHandler` registers an event
-callback through this layer; if no frontend is in place its events
-never fire and v5 clients see a frozen state.
+It is a static C++ library linked into `pulsar.exe`, not a loadable OBS
+plugin. It implements `obs_frontend_callbacks` so obs-websocket and other
+modules can use frontend state without the OBS Studio UI.
 
-This component is **not** an OBS plugin. It is a static library linked
-into `pulsar.exe` and orchestrated by `pulsar-headless`'s `main()` in
-two phases: the vtable is installed *before* `obs_load_all_modules()`
-so plugins find populated callbacks during their own `obs_module_load`,
-then the heavy state (encoders, sources, outputs that depend on
-plugin-registered factories) is built *after* `obs_post_load_modules()`.
+## Initialization and ownership
 
-## Surface
-
-| API | Purpose |
+| Entry point | Responsibility |
 |---|---|
-| `pulsar_frontend_init()` | Construct the callbacks object, install it via `obs_frontend_set_callbacks_internal`, and register an `obs_set_ui_task_handler`. **No state creation here** — `obs_x264`, `ffmpeg_aac`, `window_capture`, `rtmp_common`, `ffmpeg_muxer` factories are owned by plugins not yet loaded. |
-| `pulsar_frontend_finished_loading()` | Run `setup()` (Default scene + fade transition + x264/aac encoders + outputs with encoders attached + window_capture source + record directory) then emit `OBS_FRONTEND_EVENT_FINISHED_LOADING`. |
-| `pulsar_frontend_shutdown()` | Emit `OBS_FRONTEND_EVENT_EXIT`, then hand the object back to `obs-frontend-api` (which deletes it). The destructor runs `teardown()` which gracefully stops any active output (poll-with-timeout-then-force_stop), unbinds the main video mixer channel, and releases all libobs handles. |
+| `pulsar_frontend_init()` | Install callbacks/UI-task routing before modules load; do not create plugin-owned factories prematurely. |
+| `pulsar_frontend_finished_loading()` | Create sources, views, encoders, outputs and adapters after factories are registered; emit finished-loading. |
+| `pulsar_frontend_shutdown()` | Stop/release owned state and signal exit after upstream WebSocket/browser barriers have quiesced. |
+| `pulsar_frontend_cleanup_succeeded()` | Expose whether cleanup completed safely before the bootstrap continues to libobs shutdown. |
 
-## Event sources
+The implementation is [src/pulsar-frontend-stub.cpp](src/pulsar-frontend-stub.cpp).
+Public shared headers under `include/` define production, audio, telemetry,
+transition and egress contracts for other targets.
 
-| `obs_frontend_event` | Triggered by |
-|---|---|
-| `FINISHED_LOADING` | Explicit, from `pulsar_frontend_finished_loading()`. |
-| `EXIT` | Explicit, from `pulsar_frontend_shutdown()`. |
-| `SCENE_CHANGED` | `set_current_scene()` mutation. Also rebinds main mixer channel 0. |
-| `TRANSITION_CHANGED` | `set_current_transition()`. |
-| `TRANSITION_DURATION_CHANGED` | `set_transition_duration()`. |
-| `STREAMING_STARTING` | Manual, before `obs_output_start` on stream output. |
-| `STREAMING_STARTED` | Signal `start` on stream output. |
-| `STREAMING_STOPPING` | Manual, before `obs_output_stop`. |
-| `STREAMING_STOPPED` | Signal `stop` on stream output. |
-| `RECORDING_*` | Same pattern, on recording output. |
-| `RECORDING_PAUSED` / `UNPAUSED` | Signals `pause` / `unpause`. |
-| `REPLAY_BUFFER_*` | Same pattern, on replay buffer output. |
-| `REPLAY_BUFFER_SAVED` | Signal `saved`. |
-| `VIRTUALCAM_*` | Same pattern, on virtualcam output. |
-| `STUDIO_MODE_ENABLED` / `DISABLED` | `set_preview_program_mode()`. |
-| `PREVIEW_SCENE_CHANGED` | `set_current_preview_scene()`. |
-| `TBAR_VALUE_CHANGED` | `set_tbar_position()`. |
-| `SCENE_LIST_CHANGED`, `SCENE_COLLECTION_*`, `PROFILE_*` | Single Default scene/collection/profile in current phases; mutations no-op. Phase 7+ may wire these once `pulsar-multi-stream` introduces multi-scene routing. |
+## Production video graph
 
-## Phase 5 / Phase 6 / Phase 9 / Phase 12a scope
+- Two persistent hot lane roots, A and B, exchange logical On-Air/Preview roles.
+- ProgramView aliases the main canvas; PreviewView is a separate active mix.
+- The video encoder binds once to the stable Program video object.
+- ProgramReturn/PreviewReturn keep their stable media binding across Takes.
+- A queued libobs two-view swap commits at an actual video-frame boundary.
+- Equal-view role exchange preserves show/activation ownership, including
+  shared descendants; it does not restart hot browser/capture producers.
 
-- One scene `Default` with one `window_capture` source (target read from `PULSAR_CAPTURE_WINDOW` env var, format `<title>:<class>:<exe>`, method=WGC). Unset = source emits black frames.
-- One `fade_transition`.
-- **Native stinger compositing — DORMANT by default (ADR 003 §A4.3, #73).** The
-  OBS-native stinger path added in #67 (a registered `obs_stinger_transition`
-  source + the transition-through-output compositing on a program-scene change)
-  is gated behind the boot env flag `PULSAR_NATIVE_STINGER` (**default off**).
-  Flag **off** (default): no stinger source is registered, no transition is bound
-  to the program output, and a `SetCurrentProgramScene` performs a brute hard cut
-  (`obs_set_output_source(0, scene)`, the pre-#67 behaviour) — the M10 animated
-  transition is rendered by Solar/CEF as an overlay, never by OBS (C-MECH). Flag
-  **on** (`1`/`true`/`on`/`yes`): the #67 compositing runs, kept for a future
-  capability. The flag is **operator/env-controlled only**, resolved once at boot
-  in `setup()` from `std::getenv` — it is **never** derived from or reachable by a
-  leaf / obs-websocket / network value (Bastion #76 invariant). The
-  `stinger-demo.webm` asset (#64, sha256-pinned) is retained but only decoded
-  under the flag.
-- Single immutable `Default` scene_collection and profile.
-- Video pipeline at **1080p60** by default (Phase 12a). `PULSAR_FPS` (24/30/48/60/120) and `PULSAR_RESOLUTION` (`<W>x<H>`) override at boot.
-- **Video encoder** selected at boot (ADR 004 §3.1-3.2). `PULSAR_VIDEO_ENCODER` picks a family — `x264` (default) \| `nvenc` \| `qsv` \| `amf` \| `auto` — resolved against the live `obs_enum_encoder_types()` set (H.264 only). If the family is absent on the machine, `obs_video_encoder_create` returns null, or a knob is invalid, boot degrades silently to `obs_x264` with a logged warning — the spawn never fails on encoder choice. No live encoder swap (boot-fixed tier, like `PULSAR_FPS`). Knobs: `PULSAR_VIDEO_PRESET` (validated per family, unknown → family default), `PULSAR_VIDEO_PROFILE` (`baseline`/`main`/`high`, default `high`), `PULSAR_VIDEO_RATE_CONTROL` (`CBR`/`VBR`/`CQP`, default `CBR`), `PULSAR_VIDEO_KEYINT_SEC` (0..20, default 2).
-- Default / x264 fallback path: `obs_x264` CBR at **6000 kbps**, keyint 2 s, preset `veryfast`, profile `high`, tune `zerolatency` (byte-identical to prior behaviour). `PULSAR_VIDEO_BITRATE` (200..50000 kbps) overrides at boot. `pulsar-multi-stream` exposes `GetVideoSettings` / `SetVideoSettings` to mutate the bitrate live via `obs_encoder_update`.
-- **Audio encoders** — `ffmpeg_aac` at **160 kbps** by default, `PULSAR_AUDIO_BITRATE` (32..512 kbps) overrides at boot. `PULSAR_AUDIO_TRACKS` (1..6, default 1) creates that many encoders, encoder *i* on libobs mixer index *i* (track *i+1*), each overridable via `PULSAR_AUDIO_BITRATE_<n>`. `PULSAR_{STREAM,RECORD,REPLAY}_AUDIO_TRACKS` (comma-separated 1-based track numbers, default `1`) choose which tracks each output carries; the slot an encoder lands on is its **rank in that list**, not its track number, so reading the track back means reading the encoder's mixer index (`pulsar:GetAudioTracks`). Defaults reproduce the pre-#168 single-encoder wiring exactly.
-- Both encoders are bound to both `recordOutput` (`ffmpeg_muxer`) and `streamOutput` (`rtmp_output`); `pulsar-multi-stream` (Phase 7) fans out destinations on the same encoder pair.
-- **Audio** (Phase 9) — `wasapi_output_capture` on channel 1 (desktop), `wasapi_input_capture` on channel 3 (mic). Both use `device_id="default"` unless overridden via `PULSAR_DESKTOP_AUDIO_DEVICE_ID` / `PULSAR_MIC_DEVICE_ID`. Channel 2 is reserved for `wasapi_process_output_capture` (per-process loopback, e.g. a Google Meet tab in Chrome) — created only when `PULSAR_PROCESS_AUDIO_NAME` is set. On Windows, Pulsar converts that executable basename to an exe-priority OBS descriptor (`::<exe>`) so tab-title changes do not make the source silently initialize against an empty target. The source remains tolerated as missing on Windows builds older than 10 19041 where the ID isn't registered.
-- **Common Program audio route** (r2, issue #245) — `programAudio` captures the process-wide libobs `audio_t` once at setup. Every frontend-owned audio encoder reuses that identity; video Cuts only swap the dual-lane video roots. `pulsar:GetProgramAudioRoute` exposes the route/output/source identities and actual encoder-fed PTS counters. The Program/Preview return surfaces are video-only, and Preview audio/AFV is explicitly unsupported in r2.
-- **Dual-lane Fade/Stinger (issue #250)** — opt in with `PULSAR_DUAL_LANE_TRANSITIONS=1`. The default remains the validated atomic Cut. An enabled Fade or Stinger first installs an OBS transition source on `ProgramView` through an atomic frame-boundary swap, then commits the prepared Preview lane through the same two-view atomic swap when the requested duration elapses. `video_t`, encoders, outputs, and stable surfaces are never rebound. The transition controller records `queued`, `running`, `final_queued`, `committed`, and `aborted` phases with start/end frame IDs, PTS and duration metrics, plus bounded count/p50/p95/p99 aggregates per kind. A Stinger asset must be a readable local file with a recognized container header before its source is used or started; an unavailable/invalid asset or queue/start failure records `fallback_to_cut=1` and falls back to Cut (the descriptor remains listed so the Take can fail closed). An interruption queues a frame-boundary return to the pre-transition role map and logs observed role-map, surface, `video_t`, and invariant postconditions. The public scene-switch API rejects durations below 50 ms without mutating state; the internal controller remains fail-closed for direct invalid calls.
-- `recording_start()` resolves `<recordDir>/pulsar-<YYYYMMDD-HHMMSS>.<ext>`, mkdir-p the directory, `obs_output_update({path})`, then `obs_output_start`. `recordDir` defaults to `<cwd>/recordings`, override via `PULSAR_RECORD_DIR`. `<ext>` is `mp4` (default) or `mkv`, chosen once at `setup()` via `PULSAR_RECORD_CONTAINER` (issue #166) and applied identically to `SplitRecordFile`'s subsequent files — a single point of truth, not two literals that could drift apart mid-archive.
-- `streaming_start()` returns without effect until `pulsar-multi-stream` configures a real destination URL via `set_streaming_service`.
-- **Replay buffer** (ADR Prism 024 §3.1) — `replayOutput` borrows the *same* video + audio encoders as the record/stream outputs (encode-once / fan-out, no extra encoding) and carries real settings: `directory` = `recordDir`, filename template `pulsar-replay-%CCYY%MM%DD-%hh%mm%ss.mp4`, `max_time_sec` (`PULSAR_REPLAY_MAX_TIME_SEC`, 10..300, default 30), `max_size_mb` (`PULSAR_REPLAY_MAX_SIZE_MB`, 16..8192, default 512). `replay_buffer_start()` **refuses and logs** when the encoders are idle — no off-air replay, an explicit no-go: the buffer taps the live encoders, it never starts them. On the output's `saved` signal the stub pulls the path from the `get_last_replay` proc handler into `lastReplay`, so `GetLastReplayBufferReplay` returns a real path.
-- Virtual camera output created but inactive — no encoders wired to it yet.
+The baseline scene inventory comes from live libobs scenes, not a cached
+single-Default list. Profile/scene-collection compatibility should not be
+confused with a complete OBS Studio profile-management UI.
 
-### Audio mixer convention
+## Deterministic scene-switch vendor
 
-Pulsar follows OBS Studio's main-mixer channel layout:
+This component owns `pulsar-scene-switch`, reached through v5
+`CallVendorRequest`. It implements Prepare, Take, Abort, GetState and the
+compatibility Dispatch adapter for
+[pulsar.scene-switch.v1](../../scripts/contracts/scene_switch_v1/README.md).
 
-| Channel | Source | env override |
+Preparation targets Preview and waits for an observed Preview-mix frame.
+Take freezes the candidate and commits one role swap. Abort/timeout can cancel
+a pending swap; a frame-boundary callback that already won remains the single
+commit. Revisions/server sequence and canonical payload hashes enforce
+ordering/idempotence. The runtime retains 4096 outcomes and refuses new
+command IDs when full rather than evicting earlier results.
+
+Operational rollback freezes new Takes while leaving committed Program live.
+The state API reports that freeze explicitly.
+
+## Transitions
+
+Cut is the default. `PULSAR_DUAL_LANE_TRANSITIONS=1` enables the optional
+Fade/Stinger controller above the same stable views. It tracks queued,
+running, final-queued and terminal phases with actual frame/PTS observations.
+Missing/invalid local media or start/queue failures have explicit fallback;
+an out-of-contract duration is rejected before mutation.
+
+The older `PULSAR_NATIVE_STINGER` switch is a distinct dormant compatibility
+path. Do not equate it with the dual-lane transition capability or suggest that
+all program-scene changes still use the early direct-rebind implementation.
+Asset selection is local/operator-controlled.
+
+## Encoders and settings
+
+The default is x264 H.264, 1080p60, 6000 kbps, veryfast/high/zerolatency and
+AAC at 160 kbps. Family selection accepts x264, NVENC, QSV, AMF or auto and
+falls back to x264 with a warning when the requested choice is unavailable.
+Read the actual selected encoder; a fallback is a different workload.
+
+Family/resolution/fps are boot-fixed. Video bitrate is mutable live.
+NVENC ULL selection preserves configured compression tools; later ready-drain
+and asynchronous modes are separate off-by-default experiments.
+Current-surface CPU readback is automatic only for the qualified configuration
+and physical adapter documented in [LIBOBS-CHANGES](../../docs/LIBOBS-CHANGES.md).
+
+Audio bitrate can be changed only while affected encoders are idle.
+
+## Common Program audio
+
+The process-wide libobs audio identity is captured once. Frontend audio
+encoders reuse it across video Cuts. Source channel 0 is the mutable video
+root and is omitted from the common-audio source inventory.
+
+| Channel | Source | Boot selection |
 |---|---|---|
-| 0 | Default scene (video) | — |
-| 1 | Desktop audio (system playback loopback) | `PULSAR_DESKTOP_AUDIO_DEVICE_ID` |
-| 2 | Process audio (per-process loopback) — opt-in | `PULSAR_PROCESS_AUDIO_NAME` |
-| 3 | Microphone | `PULSAR_MIC_DEVICE_ID` |
+| 1 | Desktop loopback | Default device or `PULSAR_DESKTOP_AUDIO_DEVICE_ID`. |
+| 2 | Process loopback | Opt-in `PULSAR_PROCESS_AUDIO_NAME`; Windows/source availability required. |
+| 3 | Microphone | Opt-in `PULSAR_MIC_DEVICE_ID`; absent means no microphone source. |
 
-Channels 4-5 are unused; Phase 12+ may grow them for guest mics or VST chains.
+`PULSAR_AUDIO_TRACKS` creates 1–6 AAC encoders, one per mixer index.
+Per-track bitrate overrides and stream/record/replay track lists choose the
+actual encoder slots. Slot rank is not track number.
 
-## Validation
+`GetProgramAudioRoute` exposes route/output/source identity and actual
+encoder-fed PTS evidence. ProgramReturn/PreviewReturn are video-only.
+Preview audio and AFV are explicitly unsupported.
 
-- `scripts/probe-events.py` — `SetStudioModeEnabled` round-trip → `StudioModeStateChanged` event end-to-end.
-- `scripts/probe-record.py` — `StartRecord` → 3 s capture → `StopRecord` → file ≥ 100 KB on disk.
+## Outputs
+
+- Singleton stream: compatibility v5 output with a configured service.
+- Singleton recorder: auto-generated file under `PULSAR_RECORD_DIR`,
+  MP4/MKV boot choice, split and chapter-marker surfaces where supported.
+- Replay: shared active encoders, bounded time/memory, actual last-saved path;
+  refuses off-air encoder startup.
+- Registry destinations: created by multi-stream and sharing frontend encoders.
+- Program/Preview return outputs: stable production views.
+- Compatibility virtual camera: separate output/source selection, not a
+  synonym for either stable return.
+
+The component emits effective stream/record/replay/virtual-camera events from
+output signals and shares stable failure classification with multi-stream.
+A successful request dispatch is not itself a STARTED state.
+
+## Browser/source lifetime and telemetry
+
+Hot-lane role changes preserve producers. Actual source replacement and
+shutdown release owned references only after relevant callback/task fences.
+The legacy managed browser-source replacement lives in
+`pulsar-scene-source`; it is not the Prepare implementation.
+
+Opt-in telemetry observes Program/Preview, raw/borrowed frames, queue/GPU
+stages, packet enqueue/interleaver and downstream identities. Signal selection
+is defined in `include/pulsar-runtime-telemetry-signals.h`; malformed selector
+lists fail validation. Graphics callbacks do not run filesystem/decode work.
+
+## Validation and references
+
+Native tests cover view activation, queue safety, transition control, shutdown,
+audio/encoder behavior and runtime contracts. Offline probes cover scene truth,
+events, capabilities, multi-track audio, recording and service state.
+Hardware canaries separately cover real WGC/CEF lanes and media observations.
+
+- [Architecture](../../docs/ARCHITECTURE.md)
+- [Protocol and environment](../../docs/PROTOCOL.md)
+- [Dual-lane canary](../../docs/runbooks/pulsar-dual-lane-canary.md)
+- [All libobs changes](../../docs/LIBOBS-CHANGES.md)
+
+License: GPL-2.0-or-later.
