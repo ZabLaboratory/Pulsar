@@ -1,4 +1,4 @@
-From 7c98c4b872c680488c99671a0dbb4230936d48f0 Mon Sep 17 00:00:00 2001
+From d1d836f1634efa6ae012c533c429fc496e03e46a Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?ClodoCap=C3=A9o?=
  <159788250+ClodoCapeo@users.noreply.github.com>
 Date: Mon, 7 Sep 2026 14:36:12 +0200
@@ -20,8 +20,8 @@ Evidence: preserve cadence counts and timestamps, reject precommit DirectShow co
  libobs/obs-encoder.c           |  3 ++-
  libobs/obs-encoder.h           |  1 +
  libobs/obs-video.c             | 22 +++++++++++++++++++---
- plugins/win-dshow/virtualcam.c |  8 ++++----
- 6 files changed, 37 insertions(+), 8 deletions(-)
+ plugins/win-dshow/virtualcam.c |  6 +++---
+ 6 files changed, 36 insertions(+), 7 deletions(-)
 
 diff --git a/libobs/media-io/video-io.c b/libobs/media-io/video-io.c
 index ec6b4243f..7aeb7fc42 100644
@@ -162,7 +162,7 @@ index ed0d4b3bf..8b1542a23 100644
  		output_borrowed_video_data(video, &frame);
  		obs_pipeline_stats_add_u64(&video->pipeline_stats.borrowed_schedule_ns,
 diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
-index 49464e4cd..444e9f703 100644
+index 49464e4cd..a2e7fecd6 100644
 --- a/plugins/win-dshow/virtualcam.c
 +++ b/plugins/win-dshow/virtualcam.c
 @@ -556,7 +556,7 @@ static bool copy_telemetry_counter(uint64_t *destination, long long value)
@@ -174,7 +174,7 @@ index 49464e4cd..444e9f703 100644
  {
  	memset(metadata, 0, sizeof(*metadata));
  	proc_handler_t *ph = obs_get_proc_handler();
-@@ -583,14 +583,14 @@ static void snapshot_runtime_frame(struct video_queue_frame_metadata *metadata)
+@@ -583,7 +583,7 @@ static void snapshot_runtime_frame(struct video_queue_frame_metadata *metadata)
  		copy_telemetry_counter(&program_revision, calldata_int(&cd, "program_revision")) &&
  		copy_telemetry_counter(&preview_revision, calldata_int(&cd, "preview_revision")) &&
  		copy_telemetry_counter(&role_map_revision, calldata_int(&cd, "role_map_revision"));
@@ -183,14 +183,6 @@ index 49464e4cd..444e9f703 100644
  		calldata_free(&cd);
  		return;
  	}
- 
- 	metadata->server_seq = server_seq;
- 	metadata->frame_id = frame_id;
--	metadata->pts_ns = pts_ns;
-+	metadata->pts_ns = content_pts_ns;
- 	metadata->program_revision = program_revision;
- 	metadata->preview_revision = preview_revision;
- 	metadata->role_map_revision = role_map_revision;
 @@ -817,7 +817,7 @@ static void virtual_video(void *param, struct video_data *frame)
  	}
  
@@ -202,4 +194,3 @@ index 49464e4cd..444e9f703 100644
  		const bool published = pulsar_d3d11_return_producer_write(vcam->d3d11, frame->data, frame->linesize,
 -- 
 2.54.0.windows.1
-

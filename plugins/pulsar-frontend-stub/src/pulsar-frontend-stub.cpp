@@ -1312,7 +1312,6 @@ public:
         event.kind = SignalKind::RawObservation;
         event.observedNs = nowNs();
         copyContextToEvent(event, *context);
-        event.ptsNs = contentPts;
         enqueueSignal(event);
     }
 
