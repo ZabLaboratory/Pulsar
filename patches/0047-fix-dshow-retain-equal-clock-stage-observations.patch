@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ClodoCapeo <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 11:30:00 +0000
+Subject: [PATCH] fix(dshow): retain stages with equal clock readings
+
+Finite clock resolution does not guarantee strictly increasing readings.
+Keep complete nondecreasing positive timestamps instead of omitting fast
+operations. The observation boundary remains sample delivery completion.
+
+---
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index 3e60f639f..cde3ba240 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -569,11 +569,11 @@ void VCamFilter::EmitDirectShowObservation(const struct video_queue_frame_metada
+ 
+ 	const uint64_t emission_monotonic_ns = trace_monotonic_ns();
+ 	const bool timing_complete = timing.frame_entry_monotonic_ns > 0 &&
+-		timing.lock_sample_data_acquired_monotonic_ns > timing.frame_entry_monotonic_ns &&
+-		timing.queue_read_start_monotonic_ns > timing.lock_sample_data_acquired_monotonic_ns &&
+-		timing.queue_read_completed_monotonic_ns > timing.queue_read_start_monotonic_ns &&
+-		timing.unlock_sample_data_completed_monotonic_ns > timing.queue_read_completed_monotonic_ns &&
+-		emission_monotonic_ns > timing.unlock_sample_data_completed_monotonic_ns;
++		timing.lock_sample_data_acquired_monotonic_ns >= timing.frame_entry_monotonic_ns &&
++		timing.queue_read_start_monotonic_ns >= timing.lock_sample_data_acquired_monotonic_ns &&
++		timing.queue_read_completed_monotonic_ns >= timing.queue_read_start_monotonic_ns &&
++		timing.unlock_sample_data_completed_monotonic_ns >= timing.queue_read_completed_monotonic_ns &&
++		emission_monotonic_ns >= timing.unlock_sample_data_completed_monotonic_ns;
+ 	const uint64_t observed_at_monotonic_ns = timing.unlock_sample_data_completed_monotonic_ns;
+ 
+ 	std::ostringstream observation;

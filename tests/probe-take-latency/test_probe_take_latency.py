@@ -1134,7 +1134,7 @@ def test_telemetry_patch_captures_directshow_stage_timing_without_changing_bound
     assert "EmitDirectShowObservation(metadata, timing)" in patch_text
 
 
-def test_directshow_stage_timing_requires_complete_strictly_ordered_metadata():
+def test_directshow_stage_timing_requires_complete_nondecreasing_metadata():
     records = _take_records(3)
     directshow = next(
         item
@@ -1152,7 +1152,12 @@ def test_directshow_stage_timing_requires_complete_strictly_ordered_metadata():
         if item.get("record_type") == "observation" and item.get("boundary") == "directshow_return"
     )
     directshow["queue_read_completed_monotonic_ns"] = directshow["queue_read_start_monotonic_ns"]
-    with pytest.raises(probe.EvidenceError, match="strictly ordered"):
+    probe.parse_records(records)  # finite clock resolution can yield equal readings
+    directshow["queue_read_completed_monotonic_ns"] -= 1
+    with pytest.raises(probe.EvidenceError, match="nondecreasing"):
+        probe.parse_records(records)
+    directshow["queue_read_completed_monotonic_ns"] = 0
+    with pytest.raises(probe.EvidenceError, match="positive"):
         probe.parse_records(records)
 
     records = _take_records(3)

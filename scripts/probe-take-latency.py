@@ -773,11 +773,11 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
         if all(present_timing):
             timing = [_integer(obj[key], f"observation.{key}", line=line) for key in DIRECTSHOW_TIMING_FIELDS]
             if any(value <= 0 for value in timing) or any(
-                left >= right for left, right in zip(timing, timing[1:])
+                left > right for left, right in zip(timing, timing[1:])
             ):
                 raise EvidenceError(
                     "CLOCK_INVALID",
-                    "DirectShow stage timing must be strictly ordered and positive",
+                    "DirectShow stage timing must be nondecreasing and positive",
                     line=line,
                 )
             if obj["observed_at_monotonic_ns"] != obj["unlock_sample_data_completed_monotonic_ns"]:
