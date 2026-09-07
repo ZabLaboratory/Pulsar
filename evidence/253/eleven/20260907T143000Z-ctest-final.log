@@ -1,0 +1,64 @@
+Test project D:/Documents/Zab/Pulsar/.worktrees/eleven-253-latency/build
+      Start  1: pulsar-offline-probes
+ 1/20 Test  #1: pulsar-offline-probes ...................   Passed  167.78 sec
+      Start  2: pulsar-headless-graceful-shutdown
+ 2/20 Test  #2: pulsar-headless-graceful-shutdown .......   Passed    7.88 sec
+      Start  3: pulsar-nv-probe
+ 3/20 Test  #3: pulsar-nv-probe .........................   Passed    2.26 sec
+      Start  4: pulsar-ws-debug-probe
+ 4/20 Test  #4: pulsar-ws-debug-probe ...................   Passed    0.04 sec
+      Start  5: pulsar-log-handler-probe
+ 5/20 Test  #5: pulsar-log-handler-probe ................   Passed    0.08 sec
+      Start  6: pulsar-dir-hardening-probe
+ 6/20 Test  #6: pulsar-dir-hardening-probe ..............***Failed    0.13 sec
+pulsar-dir-hardening: C:\Users\Mathias\AppData\Local\Temp\pulsar-dir-hardening-test-reparse-7054276521075630972\obs-websocket is a reparse point (junction/symlink); refusing (fail closed, #201 N1); test
+dir-hardening-probe-test: WARN gesture NOT RUN: gesture-3:different-owner-refusal
+dir-hardening-probe-test: WARN gesture NOT RUN: gesture-4:post-rename-substitution-detection
+dir-hardening-probe-test: FAIL -- 2 named gesture(s) could not be exercised on this runner; a security assertion that silently does not run must not report success
+dir-hardening-probe-test: reparse-point gesture: mklink /J rc=0 junction_exists=1
+dir-hardening-probe-test: reparse-point gesture: junction refusal confirmed
+dir-hardening-probe-test: NOT RUN -- different-owner refusal case (gesture 3, #201 N1, A2.RC2 #213) cannot be exercised on this runner: SeRestorePrivilege is not held by this runner's token (ERROR_NOT_ALL_ASSIGNED) -- reassigning ownership to a different principal requires it in the absence of a second real Windows account
+dir-hardening-probe-test: NOT RUN -- post-rename substitution detection case (gesture 4, #201 N1, A2.RC2 #213) cannot be exercised on this runner: SeRestorePrivilege is not held by this runner's token (ERROR_NOT_ALL_ASSIGNED) -- reassigning ownership to a different principal requires it in the absence of a second real Windows account
+
+      Start  7: pulsar-runtime-isolation-probe
+ 7/20 Test  #7: pulsar-runtime-isolation-probe ..........   Passed    0.47 sec
+      Start  8: pulsar-directshow-namespace-probe
+ 8/20 Test  #8: pulsar-directshow-namespace-probe .......   Passed    0.04 sec
+      Start  9: pulsar-lease-registration-pipe-probe
+ 9/20 Test  #9: pulsar-lease-registration-pipe-probe ....   Passed    0.03 sec
+      Start 10: pulsar-output-classify-probe
+10/20 Test #10: pulsar-output-classify-probe ............   Passed    0.03 sec
+      Start 11: pulsar-output-attempt-settled-probe
+11/20 Test #11: pulsar-output-attempt-settled-probe .....   Passed    0.04 sec
+      Start 12: pulsar-dual-lane-config-probe
+12/20 Test #12: pulsar-dual-lane-config-probe ...........   Passed    0.04 sec
+      Start 13: pulsar-transition-controller-probe
+13/20 Test #13: pulsar-transition-controller-probe ......   Passed    0.05 sec
+      Start 14: equal-view-swap
+14/20 Test #14: equal-view-swap .........................   Passed    0.05 sec
+      Start 15: return-queue-runtime
+15/20 Test #15: return-queue-runtime ....................   Passed   15.71 sec
+      Start 16: video-content-runtime
+16/20 Test #16: video-content-runtime ...................   Passed    0.06 sec
+      Start 17: ready-drain-runtime
+17/20 Test #17: ready-drain-runtime .....................   Passed    0.05 sec
+      Start 18: pulsar-audio-callback-gate-test
+18/20 Test #18: pulsar-audio-callback-gate-test .........   Passed    0.04 sec
+      Start 19: pulsar-browser-source-task-state-test
+19/20 Test #19: pulsar-browser-source-task-state-test ...   Passed    0.04 sec
+      Start 20: pulsar-headless-websocket-quiesce
+20/20 Test #20: pulsar-headless-websocket-quiesce .......   Passed   12.24 sec
+
+95% tests passed, 1 tests failed out of 20
+
+Label Time Summary:
+integration    = 188.37 sec*proc (4 tests)
+runtime        =  20.66 sec*proc (5 tests)
+security       =   2.58 sec*proc (6 tests)
+unit           =   3.28 sec*proc (13 tests)
+
+Total Test time (real) = 207.75 sec
+
+The following tests FAILED:
+	  6 - pulsar-dir-hardening-probe (Failed)               security unit
+Errors while running CTest

@@ -376,7 +376,7 @@ RTMP_CORRELATION_FIELDS = {
     "mux_offset_max_den",
     "correlated_packet_count",
 }
-RTMP_RECEIVER_ALLOWED = RTMP_RECEIVER_REQUIRED | RTMP_CORRELATION_FIELDS
+RTMP_RECEIVER_ALLOWED = RTMP_RECEIVER_REQUIRED | RTMP_CORRELATION_FIELDS | {"decoder_mode"}
 RTMP_CLOCK_SOURCES = ("perf_counter_ns/qpc", "qpc")
 RTMP_CLOCK_BOUND_MAX_NS = 5_000_000
 ENCODER_TIMING_FIELDS = (
@@ -484,6 +484,8 @@ def _validate_rtmp_receiver(value: Any, *, line: int | None = None) -> dict[str,
         )
     if obj["clock_source"] not in RTMP_CLOCK_SOURCES:
         raise EvidenceError("SCHEMA_INVALID", "session.rtmp_receiver.clock_source is unsupported", line=line)
+    if obj.get("decoder_mode", "software") not in ("software", "nvdec-lowdelay"):
+        raise EvidenceError("SCHEMA_INVALID", "session.rtmp_receiver.decoder_mode is unsupported", line=line)
     _integer(obj["clock_offset_ns"], "session.rtmp_receiver.clock_offset_ns", non_negative=False, line=line)
     bound = _integer(obj["clock_bound_ns"], "session.rtmp_receiver.clock_bound_ns", line=line)
     if bound <= 0 or bound > RTMP_CLOCK_BOUND_MAX_NS:
@@ -747,7 +749,7 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
         decoder = _object(obj.get("decoder"), "decoder", line=line)
         fields = {"kind", "frame_index", "frame_pts_ms", "packet_index", "packet_pts", "packet_dts",
                   "packet_identity", "demux_observed_monotonic_ns", "clock_bound_ns", "marker_lane"}
-        _exact_keys(decoder, fields, fields, "decoder", line=line)
+        _exact_keys(decoder, fields, fields | {"decoder_mode"}, "decoder", line=line)
         expected_kind = "selected_candidate" if obj["boundary"] == "decoded_candidate_frame" else "first_changed_marker"
         if decoder["kind"] != expected_kind:
             raise EvidenceError("BOUNDARY_INVALID", "decoder observation kind does not match boundary", line=line)
@@ -762,6 +764,8 @@ def _validate_observation(value: Any, session: Mapping[str, Any], *, line: int |
         if not 0 < decoder["demux_observed_monotonic_ns"] <= obj["observed_at_monotonic_ns"]:
             raise EvidenceError("CORRELATION_INVALID", "decoded frame precedes its demux packet", line=line)
         receiver = session.get("rtmp_receiver") or {}
+        if decoder.get("decoder_mode", "software") != receiver.get("decoder_mode", "software"):
+            raise EvidenceError("CORRELATION_INVALID", "decoder mode differs from receiver", line=line)
         if decoder["clock_bound_ns"] <= 0 or decoder["clock_bound_ns"] != receiver.get("clock_bound_ns"):
             raise EvidenceError("CORRELATION_INVALID", "decoder clock bound differs from receiver", line=line)
         lanes = ("A", "B") if expected_kind == "first_changed_marker" else ("A", "B", "unobserved")

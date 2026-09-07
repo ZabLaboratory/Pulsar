@@ -1,0 +1,671 @@
+C:\Users\Mathias\AppData\Local\Programs\Python\Python311\Lib\site-packages\pytest_asyncio\plugin.py:299: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+.....................F......s.....................FF................F..F [ 41%]
+........................................................................ [ 83%]
+............................                                             [100%]
+================================== FAILURES ===================================
+__________ test_rtmp_receiver_preserves_default_live_input_buffering __________
+
+    def test_rtmp_receiver_preserves_default_live_input_buffering():
+        source = SCRIPT.read_text(encoding="utf-8")
+        receiver_start = source.index("class RtmpReceiver:")
+        receiver_end = source.index("class PulsarProcess:", receiver_start)
+        receiver_source = source[receiver_start:receiver_end]
+        # Keep the RTMP receiver's established default buffering policy.  The
+        # DirectShow consumer has a separate low-latency path; applying those
+        # input flags here changes FLV packet timing/correlation and can turn a
+        # live packet into a fixed multi-hundred-millisecond offset.
+        command_start = receiver_source.index("command = [")
+        command_end = receiver_source.index("self.proc = subprocess.Popen", command_start)
+        command_source = receiver_source[command_start:command_end]
+        assert '"-loglevel",\n            "info"' in command_source
+        assert '"-loglevel",\n            "verbose"' not in command_source
+        assert '"-debug_ts"' in command_source
+        assert '"-listen"' in command_source
+        assert '"-fflags"' not in command_source
+>       assert '"-flags"' not in command_source
+E       assert '"-flags"' not in 'command = [...])\n        '
+E         
+E         '"-flags"' is contained here:
+E           4_cuvid", "-flags", "low_delay"]
+E         ?           ++++++++
+E                       decoder_filter = "settb=expr=1/1000,"
+E                       if self.audit_marker:
+E                           decoder_filter += "crop=32:32:1888:508,signalstats,metadata=mode=print:file='pipe\\:1':direct=1"...
+E         
+E         ...Full output truncated (7 lines hidden), use '-vv' to show
+
+tests\probe-dual-lane\test_probe_dual_lane.py:154: AssertionError
+___ test_fusion_emits_receiver_observation_only_after_unique_pts_match[off] ___
+
+self = <probe_dual_lane_contract.RtmpReceiver object at 0x0000019DCF9E8390>
+records = [{'build_revision': 'fixture-build', 'capture_paths': ['encoder_input_raw', 'directshow_return', 'encoded_first_packet...ded_first_packet', 'clock_domain': 'monotonic_ns', 'command_id': 'take-001', 'consumer': 'encoder_callback', ...}, ...]
+output_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_fusion_emits_receiver_obs0/final.jsonl')
+
+    def _install_fused_records(self, records: list[dict[str, object]], output_path: pathlib.Path) -> None:
+        """Atomically install a re-authenticated trace after receiver fusion."""
+    
+        if self._trace_key_hex is None and self._trace_key_path is None:
+            raise ProbeFailure("RTMP fusion has no out-of-band trace key")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.fused.tmp")
+        temp_key_path = trace_integrity.key_path_for(temp_path) if self._trace_key_hex is None else None
+        temp_manifest_path = trace_integrity.manifest_path_for(temp_path)
+        if temp_path.exists() or (temp_key_path is not None and temp_key_path.exists()) or temp_manifest_path.exists():
+            raise ProbeFailure(f"RTMP fusion temporary path already exists: {temp_path}")
+        try:
+            if self._trace_key_hex is not None:
+                trace_integrity.write_trace(temp_path, records, key_hex=self._trace_key_hex)
+            else:
+                # This branch is reserved for explicit non-runtime fixtures;
+                # runtime fusion always uses the operator-held environment key.
+                assert self._trace_key_path is not None and temp_key_path is not None
+                shutil.copyfile(self._trace_key_path, temp_key_path)
+                trace_integrity.write_trace(temp_path, records, temp_key_path)
+    
+            parser_path = pathlib.Path(__file__).with_name("probe-take-latency.py")
+            parser_spec = importlib.util.spec_from_file_location("pulsar_take_latency_fusion", parser_path)
+            if parser_spec is None or parser_spec.loader is None:
+                raise ProbeFailure("cannot load the latency parser for RTMP fusion validation")
+            parser_module = importlib.util.module_from_spec(parser_spec)
+            previous_module = sys.modules.get(parser_spec.name)
+            sys.modules[parser_spec.name] = parser_module
+            try:
+                parser_spec.loader.exec_module(parser_module)
+>               fused_trace = parser_module.parse_trace(temp_path, key_path=temp_key_path)
+
+scripts\probe-dual-lane.py:1289: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+scripts\probe-take-latency.py:1261: in parse_trace
+    return parse_records(records, source=str(path))
+scripts\probe-take-latency.py:1154: in parse_records
+    session = _validate_session(raw, line=line_number)
+scripts\probe-take-latency.py:615: in _validate_session
+    result["rtmp_receiver"] = _validate_rtmp_receiver(obj["rtmp_receiver"], line=line)
+scripts\probe-take-latency.py:464: in _validate_rtmp_receiver
+    _exact_keys(obj, RTMP_RECEIVER_REQUIRED, RTMP_RECEIVER_ALLOWED, "session.rtmp_receiver", line=line)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+value = {'clock_bound_ns': 42, 'clock_offset_ns': 0, 'clock_source': 'perf_counter_ns/qpc', 'correlated_packet_count': 1, ...}
+required = {'clock_bound_ns', 'clock_offset_ns', 'clock_source', 'endpoint', 'packet_timebase_den', 'packet_timebase_num', ...}
+allowed = {'clock_bound_ns', 'clock_offset_ns', 'clock_source', 'correlated_packet_count', 'correlation_method', 'endpoint', ...}
+name = 'session.rtmp_receiver'
+
+    def _exact_keys(
+        value: Mapping[str, Any], required: set[str], allowed: set[str], name: str, *, line: int | None = None
+    ) -> None:
+        missing = sorted(required - set(value))
+        unknown = sorted(set(value) - allowed)
+        if missing:
+            raise EvidenceError("SCHEMA_INVALID", f"{name} is missing {missing}", line=line)
+        if unknown:
+>           raise EvidenceError("SCHEMA_INVALID", f"{name} contains unknown fields {unknown}", line=line)
+E           pulsar_take_latency_fusion.EvidenceError: SCHEMA_INVALID (line 1): session.rtmp_receiver contains unknown fields ['decoder_mode']
+
+scripts\probe-take-latency.py:427: EvidenceError
+
+The above exception was the direct cause of the following exception:
+
+tmp_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_fusion_emits_receiver_obs0')
+decode_case = 'off'
+
+    @pytest.mark.parametrize("decode_case", ["off", "valid", "missing", "duplicate", "wrong_pts", "before_packet"])
+    def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path, decode_case):
+        all_records = _latency_fixture_records()
+        all_records = [record for record in all_records if record.get("boundary") != "decoded_first_frame"]
+        records = [
+            record
+            for record in all_records
+            if not (
+                record.get("record_type") == "observation"
+                and record.get("boundary") in {"rtmp_first_packet", "directshow_return"}
+            )
+        ]
+        producer = tmp_path / "producer.jsonl"
+        producer.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        final = tmp_path / "final.jsonl"
+        receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id="runtime-fixture-001", stream_id="runtime-fixture-001-nvenc")
+        receiver.calibration = {"source": "perf_counter_ns/qpc", "qpc_delta_ns": 0, "qpc_bound_ns": 42}
+        receiver.packets = [
+            {
+                "packet_index": 0,
+                "packet_pts": 1500,
+                "packet_dts": 1500,
+                "packet_pts_time_ms": 1500,
+                "packet_dts_time_ms": 1500,
+                "observed_at_monotonic_ns": 1_020_000_000,
+                "packet_identity": "runtime-fixture-001-nvenc-video-0-1500-1500",
+            }
+        ]
+        sidecar = _write_directshow_sidecar(tmp_path, all_records)
+        receiver.decode_frames = decode_case != "off"
+        if decode_case != "missing":
+            receiver.decoded_frames = [{
+                "frame_index": 0,
+                "pts_ms": 1501 if decode_case == "wrong_pts" else 1500,
+                "observed_at_monotonic_ns": 1_019_000_000 if decode_case == "before_packet" else 1_040_000_000,
+            }]
+        if decode_case == "duplicate":
+            receiver.decoded_frames *= 2
+        if decode_case in {"missing", "duplicate", "wrong_pts", "before_packet"}:
+            final.write_bytes(b"preserved-final")
+            with pytest.raises(probe.ProbeFailure, match="decoded"):
+                receiver.fuse_trace(producer, final, directshow_path=sidecar)
+            assert final.read_bytes() == b"preserved-final"
+            return
+>       receiver.fuse_trace(producer, final, directshow_path=sidecar)
+
+tests\probe-dual-lane\test_probe_dual_lane.py:839: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+scripts\probe-dual-lane.py:1584: in fuse_trace
+    self._install_fused_records(merged, output_path)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <probe_dual_lane_contract.RtmpReceiver object at 0x0000019DCF9E8390>
+records = [{'build_revision': 'fixture-build', 'capture_paths': ['encoder_input_raw', 'directshow_return', 'encoded_first_packet...ded_first_packet', 'clock_domain': 'monotonic_ns', 'command_id': 'take-001', 'consumer': 'encoder_callback', ...}, ...]
+output_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_fusion_emits_receiver_obs0/final.jsonl')
+
+    def _install_fused_records(self, records: list[dict[str, object]], output_path: pathlib.Path) -> None:
+        """Atomically install a re-authenticated trace after receiver fusion."""
+    
+        if self._trace_key_hex is None and self._trace_key_path is None:
+            raise ProbeFailure("RTMP fusion has no out-of-band trace key")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.fused.tmp")
+        temp_key_path = trace_integrity.key_path_for(temp_path) if self._trace_key_hex is None else None
+        temp_manifest_path = trace_integrity.manifest_path_for(temp_path)
+        if temp_path.exists() or (temp_key_path is not None and temp_key_path.exists()) or temp_manifest_path.exists():
+            raise ProbeFailure(f"RTMP fusion temporary path already exists: {temp_path}")
+        try:
+            if self._trace_key_hex is not None:
+                trace_integrity.write_trace(temp_path, records, key_hex=self._trace_key_hex)
+            else:
+                # This branch is reserved for explicit non-runtime fixtures;
+                # runtime fusion always uses the operator-held environment key.
+                assert self._trace_key_path is not None and temp_key_path is not None
+                shutil.copyfile(self._trace_key_path, temp_key_path)
+                trace_integrity.write_trace(temp_path, records, temp_key_path)
+    
+            parser_path = pathlib.Path(__file__).with_name("probe-take-latency.py")
+            parser_spec = importlib.util.spec_from_file_location("pulsar_take_latency_fusion", parser_path)
+            if parser_spec is None or parser_spec.loader is None:
+                raise ProbeFailure("cannot load the latency parser for RTMP fusion validation")
+            parser_module = importlib.util.module_from_spec(parser_spec)
+            previous_module = sys.modules.get(parser_spec.name)
+            sys.modules[parser_spec.name] = parser_module
+            try:
+                parser_spec.loader.exec_module(parser_module)
+                fused_trace = parser_module.parse_trace(temp_path, key_path=temp_key_path)
+                parser_module.analyze_trace(
+                    fused_trace,
+                    minimum_takes=1,
+                    minimum_warmup=0,
+                    minimum_resource_samples=1,
+                )
+            except Exception as exc:
+>               raise ProbeFailure(f"RTMP fused trace parser validation failed: {exc}") from exc
+E               probe_dual_lane_contract.ProbeFailure: RTMP fused trace parser validation failed: SCHEMA_INVALID (line 1): session.rtmp_receiver contains unknown fields ['decoder_mode']
+
+scripts\probe-dual-lane.py:1297: ProbeFailure
+__ test_fusion_emits_receiver_observation_only_after_unique_pts_match[valid] __
+
+self = <probe_dual_lane_contract.RtmpReceiver object at 0x0000019DD0FFB850>
+records = [{'build_revision': 'fixture-build', 'capture_paths': ['encoder_input_raw', 'directshow_return', 'encoded_first_packet...ded_first_packet', 'clock_domain': 'monotonic_ns', 'command_id': 'take-001', 'consumer': 'encoder_callback', ...}, ...]
+output_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_fusion_emits_receiver_obs1/final.jsonl')
+
+    def _install_fused_records(self, records: list[dict[str, object]], output_path: pathlib.Path) -> None:
+        """Atomically install a re-authenticated trace after receiver fusion."""
+    
+        if self._trace_key_hex is None and self._trace_key_path is None:
+            raise ProbeFailure("RTMP fusion has no out-of-band trace key")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.fused.tmp")
+        temp_key_path = trace_integrity.key_path_for(temp_path) if self._trace_key_hex is None else None
+        temp_manifest_path = trace_integrity.manifest_path_for(temp_path)
+        if temp_path.exists() or (temp_key_path is not None and temp_key_path.exists()) or temp_manifest_path.exists():
+            raise ProbeFailure(f"RTMP fusion temporary path already exists: {temp_path}")
+        try:
+            if self._trace_key_hex is not None:
+                trace_integrity.write_trace(temp_path, records, key_hex=self._trace_key_hex)
+            else:
+                # This branch is reserved for explicit non-runtime fixtures;
+                # runtime fusion always uses the operator-held environment key.
+                assert self._trace_key_path is not None and temp_key_path is not None
+                shutil.copyfile(self._trace_key_path, temp_key_path)
+                trace_integrity.write_trace(temp_path, records, temp_key_path)
+    
+            parser_path = pathlib.Path(__file__).with_name("probe-take-latency.py")
+            parser_spec = importlib.util.spec_from_file_location("pulsar_take_latency_fusion", parser_path)
+            if parser_spec is None or parser_spec.loader is None:
+                raise ProbeFailure("cannot load the latency parser for RTMP fusion validation")
+            parser_module = importlib.util.module_from_spec(parser_spec)
+            previous_module = sys.modules.get(parser_spec.name)
+            sys.modules[parser_spec.name] = parser_module
+            try:
+                parser_spec.loader.exec_module(parser_module)
+>               fused_trace = parser_module.parse_trace(temp_path, key_path=temp_key_path)
+
+scripts\probe-dual-lane.py:1289: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+scripts\probe-take-latency.py:1261: in parse_trace
+    return parse_records(records, source=str(path))
+scripts\probe-take-latency.py:1154: in parse_records
+    session = _validate_session(raw, line=line_number)
+scripts\probe-take-latency.py:615: in _validate_session
+    result["rtmp_receiver"] = _validate_rtmp_receiver(obj["rtmp_receiver"], line=line)
+scripts\probe-take-latency.py:464: in _validate_rtmp_receiver
+    _exact_keys(obj, RTMP_RECEIVER_REQUIRED, RTMP_RECEIVER_ALLOWED, "session.rtmp_receiver", line=line)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+value = {'clock_bound_ns': 42, 'clock_offset_ns': 0, 'clock_source': 'perf_counter_ns/qpc', 'correlated_packet_count': 1, ...}
+required = {'clock_bound_ns', 'clock_offset_ns', 'clock_source', 'endpoint', 'packet_timebase_den', 'packet_timebase_num', ...}
+allowed = {'clock_bound_ns', 'clock_offset_ns', 'clock_source', 'correlated_packet_count', 'correlation_method', 'endpoint', ...}
+name = 'session.rtmp_receiver'
+
+    def _exact_keys(
+        value: Mapping[str, Any], required: set[str], allowed: set[str], name: str, *, line: int | None = None
+    ) -> None:
+        missing = sorted(required - set(value))
+        unknown = sorted(set(value) - allowed)
+        if missing:
+            raise EvidenceError("SCHEMA_INVALID", f"{name} is missing {missing}", line=line)
+        if unknown:
+>           raise EvidenceError("SCHEMA_INVALID", f"{name} contains unknown fields {unknown}", line=line)
+E           pulsar_take_latency_fusion.EvidenceError: SCHEMA_INVALID (line 1): session.rtmp_receiver contains unknown fields ['decoder_mode']
+
+scripts\probe-take-latency.py:427: EvidenceError
+
+The above exception was the direct cause of the following exception:
+
+tmp_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_fusion_emits_receiver_obs1')
+decode_case = 'valid'
+
+    @pytest.mark.parametrize("decode_case", ["off", "valid", "missing", "duplicate", "wrong_pts", "before_packet"])
+    def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path, decode_case):
+        all_records = _latency_fixture_records()
+        all_records = [record for record in all_records if record.get("boundary") != "decoded_first_frame"]
+        records = [
+            record
+            for record in all_records
+            if not (
+                record.get("record_type") == "observation"
+                and record.get("boundary") in {"rtmp_first_packet", "directshow_return"}
+            )
+        ]
+        producer = tmp_path / "producer.jsonl"
+        producer.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        final = tmp_path / "final.jsonl"
+        receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id="runtime-fixture-001", stream_id="runtime-fixture-001-nvenc")
+        receiver.calibration = {"source": "perf_counter_ns/qpc", "qpc_delta_ns": 0, "qpc_bound_ns": 42}
+        receiver.packets = [
+            {
+                "packet_index": 0,
+                "packet_pts": 1500,
+                "packet_dts": 1500,
+                "packet_pts_time_ms": 1500,
+                "packet_dts_time_ms": 1500,
+                "observed_at_monotonic_ns": 1_020_000_000,
+                "packet_identity": "runtime-fixture-001-nvenc-video-0-1500-1500",
+            }
+        ]
+        sidecar = _write_directshow_sidecar(tmp_path, all_records)
+        receiver.decode_frames = decode_case != "off"
+        if decode_case != "missing":
+            receiver.decoded_frames = [{
+                "frame_index": 0,
+                "pts_ms": 1501 if decode_case == "wrong_pts" else 1500,
+                "observed_at_monotonic_ns": 1_019_000_000 if decode_case == "before_packet" else 1_040_000_000,
+            }]
+        if decode_case == "duplicate":
+            receiver.decoded_frames *= 2
+        if decode_case in {"missing", "duplicate", "wrong_pts", "before_packet"}:
+            final.write_bytes(b"preserved-final")
+            with pytest.raises(probe.ProbeFailure, match="decoded"):
+                receiver.fuse_trace(producer, final, directshow_path=sidecar)
+            assert final.read_bytes() == b"preserved-final"
+            return
+>       receiver.fuse_trace(producer, final, directshow_path=sidecar)
+
+tests\probe-dual-lane\test_probe_dual_lane.py:839: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+scripts\probe-dual-lane.py:1584: in fuse_trace
+    self._install_fused_records(merged, output_path)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <probe_dual_lane_contract.RtmpReceiver object at 0x0000019DD0FFB850>
+records = [{'build_revision': 'fixture-build', 'capture_paths': ['encoder_input_raw', 'directshow_return', 'encoded_first_packet...ded_first_packet', 'clock_domain': 'monotonic_ns', 'command_id': 'take-001', 'consumer': 'encoder_callback', ...}, ...]
+output_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_fusion_emits_receiver_obs1/final.jsonl')
+
+    def _install_fused_records(self, records: list[dict[str, object]], output_path: pathlib.Path) -> None:
+        """Atomically install a re-authenticated trace after receiver fusion."""
+    
+        if self._trace_key_hex is None and self._trace_key_path is None:
+            raise ProbeFailure("RTMP fusion has no out-of-band trace key")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.fused.tmp")
+        temp_key_path = trace_integrity.key_path_for(temp_path) if self._trace_key_hex is None else None
+        temp_manifest_path = trace_integrity.manifest_path_for(temp_path)
+        if temp_path.exists() or (temp_key_path is not None and temp_key_path.exists()) or temp_manifest_path.exists():
+            raise ProbeFailure(f"RTMP fusion temporary path already exists: {temp_path}")
+        try:
+            if self._trace_key_hex is not None:
+                trace_integrity.write_trace(temp_path, records, key_hex=self._trace_key_hex)
+            else:
+                # This branch is reserved for explicit non-runtime fixtures;
+                # runtime fusion always uses the operator-held environment key.
+                assert self._trace_key_path is not None and temp_key_path is not None
+                shutil.copyfile(self._trace_key_path, temp_key_path)
+                trace_integrity.write_trace(temp_path, records, temp_key_path)
+    
+            parser_path = pathlib.Path(__file__).with_name("probe-take-latency.py")
+            parser_spec = importlib.util.spec_from_file_location("pulsar_take_latency_fusion", parser_path)
+            if parser_spec is None or parser_spec.loader is None:
+                raise ProbeFailure("cannot load the latency parser for RTMP fusion validation")
+            parser_module = importlib.util.module_from_spec(parser_spec)
+            previous_module = sys.modules.get(parser_spec.name)
+            sys.modules[parser_spec.name] = parser_module
+            try:
+                parser_spec.loader.exec_module(parser_module)
+                fused_trace = parser_module.parse_trace(temp_path, key_path=temp_key_path)
+                parser_module.analyze_trace(
+                    fused_trace,
+                    minimum_takes=1,
+                    minimum_warmup=0,
+                    minimum_resource_samples=1,
+                )
+            except Exception as exc:
+>               raise ProbeFailure(f"RTMP fused trace parser validation failed: {exc}") from exc
+E               probe_dual_lane_contract.ProbeFailure: RTMP fused trace parser validation failed: SCHEMA_INVALID (line 1): session.rtmp_receiver contains unknown fields ['decoder_mode']
+
+scripts\probe-dual-lane.py:1297: ProbeFailure
+_____ test_resource_fusion_allows_warmup_false_then_observed_nvenc_active _____
+
+self = <probe_dual_lane_contract.RtmpReceiver object at 0x0000019DD118D910>
+records = [{'build_revision': 'fixture-build', 'capture_paths': ['encoder_input_raw', 'directshow_return', 'encoded_first_packet..._revision': 'fixture-build', 'callback_backlog_estimate': 1, 'clock_domain': 'monotonic_ns', 'dropped_frames': 1, ...}]
+output_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_resource_fusion_allows_wa0/reference.jsonl')
+
+    def _install_fused_records(self, records: list[dict[str, object]], output_path: pathlib.Path) -> None:
+        """Atomically install a re-authenticated trace after receiver fusion."""
+    
+        if self._trace_key_hex is None and self._trace_key_path is None:
+            raise ProbeFailure("RTMP fusion has no out-of-band trace key")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.fused.tmp")
+        temp_key_path = trace_integrity.key_path_for(temp_path) if self._trace_key_hex is None else None
+        temp_manifest_path = trace_integrity.manifest_path_for(temp_path)
+        if temp_path.exists() or (temp_key_path is not None and temp_key_path.exists()) or temp_manifest_path.exists():
+            raise ProbeFailure(f"RTMP fusion temporary path already exists: {temp_path}")
+        try:
+            if self._trace_key_hex is not None:
+                trace_integrity.write_trace(temp_path, records, key_hex=self._trace_key_hex)
+            else:
+                # This branch is reserved for explicit non-runtime fixtures;
+                # runtime fusion always uses the operator-held environment key.
+                assert self._trace_key_path is not None and temp_key_path is not None
+                shutil.copyfile(self._trace_key_path, temp_key_path)
+                trace_integrity.write_trace(temp_path, records, temp_key_path)
+    
+            parser_path = pathlib.Path(__file__).with_name("probe-take-latency.py")
+            parser_spec = importlib.util.spec_from_file_location("pulsar_take_latency_fusion", parser_path)
+            if parser_spec is None or parser_spec.loader is None:
+                raise ProbeFailure("cannot load the latency parser for RTMP fusion validation")
+            parser_module = importlib.util.module_from_spec(parser_spec)
+            previous_module = sys.modules.get(parser_spec.name)
+            sys.modules[parser_spec.name] = parser_module
+            try:
+                parser_spec.loader.exec_module(parser_module)
+>               fused_trace = parser_module.parse_trace(temp_path, key_path=temp_key_path)
+
+scripts\probe-dual-lane.py:1289: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+scripts\probe-take-latency.py:1261: in parse_trace
+    return parse_records(records, source=str(path))
+scripts\probe-take-latency.py:1154: in parse_records
+    session = _validate_session(raw, line=line_number)
+scripts\probe-take-latency.py:615: in _validate_session
+    result["rtmp_receiver"] = _validate_rtmp_receiver(obj["rtmp_receiver"], line=line)
+scripts\probe-take-latency.py:464: in _validate_rtmp_receiver
+    _exact_keys(obj, RTMP_RECEIVER_REQUIRED, RTMP_RECEIVER_ALLOWED, "session.rtmp_receiver", line=line)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+value = {'clock_bound_ns': 42, 'clock_offset_ns': 0, 'clock_source': 'perf_counter_ns/qpc', 'decoder_mode': 'software', ...}
+required = {'clock_bound_ns', 'clock_offset_ns', 'clock_source', 'endpoint', 'packet_timebase_den', 'packet_timebase_num', ...}
+allowed = {'clock_bound_ns', 'clock_offset_ns', 'clock_source', 'correlated_packet_count', 'correlation_method', 'endpoint', ...}
+name = 'session.rtmp_receiver'
+
+    def _exact_keys(
+        value: Mapping[str, Any], required: set[str], allowed: set[str], name: str, *, line: int | None = None
+    ) -> None:
+        missing = sorted(required - set(value))
+        unknown = sorted(set(value) - allowed)
+        if missing:
+            raise EvidenceError("SCHEMA_INVALID", f"{name} is missing {missing}", line=line)
+        if unknown:
+>           raise EvidenceError("SCHEMA_INVALID", f"{name} contains unknown fields {unknown}", line=line)
+E           pulsar_take_latency_fusion.EvidenceError: SCHEMA_INVALID (line 1): session.rtmp_receiver contains unknown fields ['decoder_mode']
+
+scripts\probe-take-latency.py:427: EvidenceError
+
+The above exception was the direct cause of the following exception:
+
+tmp_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_resource_fusion_allows_wa0')
+
+    def test_resource_fusion_allows_warmup_false_then_observed_nvenc_active(tmp_path):
+        records = [
+            record
+            for record in _latency_fixture_records()
+            if record.get("record_type") == "session" or record.get("record_type") == "resource_sample"
+        ]
+        samples = [record for record in records if record.get("record_type") == "resource_sample"]
+        samples[0]["encoder_active"] = False
+        samples[0]["rtmp_load_active"] = False
+        samples[1]["encoder_active"] = True
+        samples[1]["encoder_family"] = "nvenc"
+        samples[1]["rtmp_load_active"] = True
+        producer = tmp_path / "producer.jsonl"
+        producer.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        final = tmp_path / "reference.jsonl"
+        receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id="runtime-fixture-001", stream_id="runtime-fixture-001-nvenc")
+        receiver.calibration = {"source": "perf_counter_ns/qpc", "qpc_delta_ns": 0, "qpc_bound_ns": 42}
+        receiver.packets = [{"packet_index": 1, "packet_pts": 0, "packet_dts": 0}]
+>       receiver.fuse_resource_trace(producer, final, minimum_samples=1)
+
+tests\probe-dual-lane\test_probe_dual_lane.py:1156: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+scripts\probe-dual-lane.py:1377: in fuse_resource_trace
+    self._install_fused_records([session, *records[1:]], output_path)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <probe_dual_lane_contract.RtmpReceiver object at 0x0000019DD118D910>
+records = [{'build_revision': 'fixture-build', 'capture_paths': ['encoder_input_raw', 'directshow_return', 'encoded_first_packet..._revision': 'fixture-build', 'callback_backlog_estimate': 1, 'clock_domain': 'monotonic_ns', 'dropped_frames': 1, ...}]
+output_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_resource_fusion_allows_wa0/reference.jsonl')
+
+    def _install_fused_records(self, records: list[dict[str, object]], output_path: pathlib.Path) -> None:
+        """Atomically install a re-authenticated trace after receiver fusion."""
+    
+        if self._trace_key_hex is None and self._trace_key_path is None:
+            raise ProbeFailure("RTMP fusion has no out-of-band trace key")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.fused.tmp")
+        temp_key_path = trace_integrity.key_path_for(temp_path) if self._trace_key_hex is None else None
+        temp_manifest_path = trace_integrity.manifest_path_for(temp_path)
+        if temp_path.exists() or (temp_key_path is not None and temp_key_path.exists()) or temp_manifest_path.exists():
+            raise ProbeFailure(f"RTMP fusion temporary path already exists: {temp_path}")
+        try:
+            if self._trace_key_hex is not None:
+                trace_integrity.write_trace(temp_path, records, key_hex=self._trace_key_hex)
+            else:
+                # This branch is reserved for explicit non-runtime fixtures;
+                # runtime fusion always uses the operator-held environment key.
+                assert self._trace_key_path is not None and temp_key_path is not None
+                shutil.copyfile(self._trace_key_path, temp_key_path)
+                trace_integrity.write_trace(temp_path, records, temp_key_path)
+    
+            parser_path = pathlib.Path(__file__).with_name("probe-take-latency.py")
+            parser_spec = importlib.util.spec_from_file_location("pulsar_take_latency_fusion", parser_path)
+            if parser_spec is None or parser_spec.loader is None:
+                raise ProbeFailure("cannot load the latency parser for RTMP fusion validation")
+            parser_module = importlib.util.module_from_spec(parser_spec)
+            previous_module = sys.modules.get(parser_spec.name)
+            sys.modules[parser_spec.name] = parser_module
+            try:
+                parser_spec.loader.exec_module(parser_module)
+                fused_trace = parser_module.parse_trace(temp_path, key_path=temp_key_path)
+                parser_module.analyze_trace(
+                    fused_trace,
+                    minimum_takes=1,
+                    minimum_warmup=0,
+                    minimum_resource_samples=1,
+                )
+            except Exception as exc:
+>               raise ProbeFailure(f"RTMP fused trace parser validation failed: {exc}") from exc
+E               probe_dual_lane_contract.ProbeFailure: RTMP fused trace parser validation failed: SCHEMA_INVALID (line 1): session.rtmp_receiver contains unknown fields ['decoder_mode']
+
+scripts\probe-dual-lane.py:1297: ProbeFailure
+___________ test_resource_fusion_preserves_observed_active_samples ____________
+
+self = <probe_dual_lane_contract.RtmpReceiver object at 0x0000019DD0AA1210>
+records = [{'build_revision': 'fixture-build', 'capture_paths': ['encoder_input_raw', 'directshow_return', 'encoded_first_packet..._revision': 'fixture-build', 'callback_backlog_estimate': 1, 'clock_domain': 'monotonic_ns', 'dropped_frames': 1, ...}]
+output_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_resource_fusion_preserves0/reference.jsonl')
+
+    def _install_fused_records(self, records: list[dict[str, object]], output_path: pathlib.Path) -> None:
+        """Atomically install a re-authenticated trace after receiver fusion."""
+    
+        if self._trace_key_hex is None and self._trace_key_path is None:
+            raise ProbeFailure("RTMP fusion has no out-of-band trace key")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.fused.tmp")
+        temp_key_path = trace_integrity.key_path_for(temp_path) if self._trace_key_hex is None else None
+        temp_manifest_path = trace_integrity.manifest_path_for(temp_path)
+        if temp_path.exists() or (temp_key_path is not None and temp_key_path.exists()) or temp_manifest_path.exists():
+            raise ProbeFailure(f"RTMP fusion temporary path already exists: {temp_path}")
+        try:
+            if self._trace_key_hex is not None:
+                trace_integrity.write_trace(temp_path, records, key_hex=self._trace_key_hex)
+            else:
+                # This branch is reserved for explicit non-runtime fixtures;
+                # runtime fusion always uses the operator-held environment key.
+                assert self._trace_key_path is not None and temp_key_path is not None
+                shutil.copyfile(self._trace_key_path, temp_key_path)
+                trace_integrity.write_trace(temp_path, records, temp_key_path)
+    
+            parser_path = pathlib.Path(__file__).with_name("probe-take-latency.py")
+            parser_spec = importlib.util.spec_from_file_location("pulsar_take_latency_fusion", parser_path)
+            if parser_spec is None or parser_spec.loader is None:
+                raise ProbeFailure("cannot load the latency parser for RTMP fusion validation")
+            parser_module = importlib.util.module_from_spec(parser_spec)
+            previous_module = sys.modules.get(parser_spec.name)
+            sys.modules[parser_spec.name] = parser_module
+            try:
+                parser_spec.loader.exec_module(parser_module)
+>               fused_trace = parser_module.parse_trace(temp_path, key_path=temp_key_path)
+
+scripts\probe-dual-lane.py:1289: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+scripts\probe-take-latency.py:1261: in parse_trace
+    return parse_records(records, source=str(path))
+scripts\probe-take-latency.py:1154: in parse_records
+    session = _validate_session(raw, line=line_number)
+scripts\probe-take-latency.py:615: in _validate_session
+    result["rtmp_receiver"] = _validate_rtmp_receiver(obj["rtmp_receiver"], line=line)
+scripts\probe-take-latency.py:464: in _validate_rtmp_receiver
+    _exact_keys(obj, RTMP_RECEIVER_REQUIRED, RTMP_RECEIVER_ALLOWED, "session.rtmp_receiver", line=line)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+value = {'clock_bound_ns': 42, 'clock_offset_ns': 0, 'clock_source': 'perf_counter_ns/qpc', 'decoder_mode': 'software', ...}
+required = {'clock_bound_ns', 'clock_offset_ns', 'clock_source', 'endpoint', 'packet_timebase_den', 'packet_timebase_num', ...}
+allowed = {'clock_bound_ns', 'clock_offset_ns', 'clock_source', 'correlated_packet_count', 'correlation_method', 'endpoint', ...}
+name = 'session.rtmp_receiver'
+
+    def _exact_keys(
+        value: Mapping[str, Any], required: set[str], allowed: set[str], name: str, *, line: int | None = None
+    ) -> None:
+        missing = sorted(required - set(value))
+        unknown = sorted(set(value) - allowed)
+        if missing:
+            raise EvidenceError("SCHEMA_INVALID", f"{name} is missing {missing}", line=line)
+        if unknown:
+>           raise EvidenceError("SCHEMA_INVALID", f"{name} contains unknown fields {unknown}", line=line)
+E           pulsar_take_latency_fusion.EvidenceError: SCHEMA_INVALID (line 1): session.rtmp_receiver contains unknown fields ['decoder_mode']
+
+scripts\probe-take-latency.py:427: EvidenceError
+
+The above exception was the direct cause of the following exception:
+
+tmp_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_resource_fusion_preserves0')
+
+    def test_resource_fusion_preserves_observed_active_samples(tmp_path):
+        records = [
+            record
+            for record in _latency_fixture_records()
+            if record.get("record_type") == "session" or record.get("record_type") == "resource_sample"
+        ]
+        producer = tmp_path / "producer.jsonl"
+        producer.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        final = tmp_path / "reference.jsonl"
+        receiver = probe.RtmpReceiver("ffmpeg.exe", runtime_id="runtime-fixture-001", stream_id="runtime-fixture-001-nvenc")
+        receiver.calibration = {"source": "perf_counter_ns/qpc", "qpc_delta_ns": 0, "qpc_bound_ns": 42}
+        receiver.packets = [{"packet_index": 1, "packet_pts": 0, "packet_dts": 0}]
+>       receiver.fuse_resource_trace(producer, final, minimum_samples=2)
+
+tests\probe-dual-lane\test_probe_dual_lane.py:1220: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+scripts\probe-dual-lane.py:1377: in fuse_resource_trace
+    self._install_fused_records([session, *records[1:]], output_path)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <probe_dual_lane_contract.RtmpReceiver object at 0x0000019DD0AA1210>
+records = [{'build_revision': 'fixture-build', 'capture_paths': ['encoder_input_raw', 'directshow_return', 'encoded_first_packet..._revision': 'fixture-build', 'callback_backlog_estimate': 1, 'clock_domain': 'monotonic_ns', 'dropped_frames': 1, ...}]
+output_path = WindowsPath('C:/Users/Mathias/AppData/Local/Temp/pytest-of-Mathias/pytest-4334/test_resource_fusion_preserves0/reference.jsonl')
+
+    def _install_fused_records(self, records: list[dict[str, object]], output_path: pathlib.Path) -> None:
+        """Atomically install a re-authenticated trace after receiver fusion."""
+    
+        if self._trace_key_hex is None and self._trace_key_path is None:
+            raise ProbeFailure("RTMP fusion has no out-of-band trace key")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = output_path.with_name(f".{output_path.name}.{os.getpid()}.fused.tmp")
+        temp_key_path = trace_integrity.key_path_for(temp_path) if self._trace_key_hex is None else None
+        temp_manifest_path = trace_integrity.manifest_path_for(temp_path)
+        if temp_path.exists() or (temp_key_path is not None and temp_key_path.exists()) or temp_manifest_path.exists():
+            raise ProbeFailure(f"RTMP fusion temporary path already exists: {temp_path}")
+        try:
+            if self._trace_key_hex is not None:
+                trace_integrity.write_trace(temp_path, records, key_hex=self._trace_key_hex)
+            else:
+                # This branch is reserved for explicit non-runtime fixtures;
+                # runtime fusion always uses the operator-held environment key.
+                assert self._trace_key_path is not None and temp_key_path is not None
+                shutil.copyfile(self._trace_key_path, temp_key_path)
+                trace_integrity.write_trace(temp_path, records, temp_key_path)
+    
+            parser_path = pathlib.Path(__file__).with_name("probe-take-latency.py")
+            parser_spec = importlib.util.spec_from_file_location("pulsar_take_latency_fusion", parser_path)
+            if parser_spec is None or parser_spec.loader is None:
+                raise ProbeFailure("cannot load the latency parser for RTMP fusion validation")
+            parser_module = importlib.util.module_from_spec(parser_spec)
+            previous_module = sys.modules.get(parser_spec.name)
+            sys.modules[parser_spec.name] = parser_module
+            try:
+                parser_spec.loader.exec_module(parser_module)
+                fused_trace = parser_module.parse_trace(temp_path, key_path=temp_key_path)
+                parser_module.analyze_trace(
+                    fused_trace,
+                    minimum_takes=1,
+                    minimum_warmup=0,
+                    minimum_resource_samples=1,
+                )
+            except Exception as exc:
+>               raise ProbeFailure(f"RTMP fused trace parser validation failed: {exc}") from exc
+E               probe_dual_lane_contract.ProbeFailure: RTMP fused trace parser validation failed: SCHEMA_INVALID (line 1): session.rtmp_receiver contains unknown fields ['decoder_mode']
+
+scripts\probe-dual-lane.py:1297: ProbeFailure
+=========================== short test summary info ===========================
+FAILED tests/probe-dual-lane/test_probe_dual_lane.py::test_rtmp_receiver_preserves_default_live_input_buffering
+FAILED tests/probe-dual-lane/test_probe_dual_lane.py::test_fusion_emits_receiver_observation_only_after_unique_pts_match[off]
+FAILED tests/probe-dual-lane/test_probe_dual_lane.py::test_fusion_emits_receiver_observation_only_after_unique_pts_match[valid]
+FAILED tests/probe-dual-lane/test_probe_dual_lane.py::test_resource_fusion_allows_warmup_false_then_observed_nvenc_active
+FAILED tests/probe-dual-lane/test_probe_dual_lane.py::test_resource_fusion_preserves_observed_active_samples
+5 failed, 166 passed, 1 skipped in 7.29s

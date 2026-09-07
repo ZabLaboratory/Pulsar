@@ -37,6 +37,18 @@ def summarize(directory, codec):
     candidates = {r["take_command_id"]: r for r in observations
                   if r["boundary"] in ("decoded_candidate_frame", "decoded_first_frame")}
     markers = {r["take_command_id"]: r for r in observations if r["boundary"] == "decoded_marker_first_frame"}
+    accepted = {r["event"]["take_command_id"]: r["event"] for r in records
+                if r.get("record_type") == "event" and r["event"].get("event_type") == "TakeAccepted"}
+    # These are the marker's own packet timestamps, not those of the later
+    # encoded candidate. Distribution percentiles cannot be added together.
+    marker_stages = {
+        "accepted_to_marker_demux": stats([
+            (r["decoder"]["demux_observed_monotonic_ns"] - accepted[take]["observed_at_monotonic_ns"]) / 1e6
+            for take, r in markers.items()]),
+        "marker_demux_to_decoded_observation": stats([
+            (r["observed_at_monotonic_ns"] - r["decoder"]["demux_observed_monotonic_ns"]) / 1e6
+            for r in markers.values()]),
+    }
     marker_gap = stats([(candidates[take]["observed_at_monotonic_ns"] - sample["observed_at_monotonic_ns"]) / 1e6
                         for take, sample in markers.items() if take in candidates])
     content_gap = stats([(r["packet_content_pts_monotonic_ns"] - r["packet_cts_monotonic_ns"]) / 1e6
@@ -67,6 +79,7 @@ def summarize(directory, codec):
         "directshow_stages": stages, "queue_counters": counters,
         "selected_packet_cts_minus_commit_pts_frames": dict(sorted(pts_offset_frames.items())),
         "decoded_candidate_minus_first_marker": marker_gap,
+        "first_changed_marker_stages": marker_stages,
         "encoded_content_minus_cadence_cts": content_gap,
         "run_settings": json.loads(settings_path.read_text(encoding="utf-8-sig")) if settings_path.exists() else None,
         "trace_sha256": hashlib.sha256(trace_path.read_bytes()).hexdigest(),

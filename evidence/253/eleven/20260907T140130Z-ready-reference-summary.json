@@ -1,0 +1,318 @@
+{
+  "schema": "pulsar.issue253.study.v1",
+  "runs": [
+    {
+      "run": "20260907T135947Z-ready-reference",
+      "codec": "nvenc",
+      "build_revision": "5c5757e62c7c701057fdd3386808bee8c2c69288",
+      "runtime_id": "runtime-cd99232f5ed2cfb8",
+      "hardware": {
+        "gpu": "NVIDIA GeForce RTX 3070",
+        "host": "DESKTOP-6DJBJGG"
+      },
+      "takes": {
+        "aborted": 0,
+        "accepted": 200,
+        "committed": 200,
+        "measured_takes_observed": 100,
+        "minimum_measurements_required": 100,
+        "minimum_warmup_required": 100,
+        "total_committed_takes": 200,
+        "warmup_takes_declared": 100,
+        "warmup_takes_observed": 100
+      },
+      "latency": {
+        "antenna_first_frame": {
+          "count": 0,
+          "max_ms": null,
+          "min_ms": null,
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null,
+          "separate_boundary": true,
+          "slo_p95_ms": null,
+          "status": "NOT_REQUIRED"
+        },
+        "decoded_candidate_frame": {
+          "count": 100,
+          "max_ms": 151.83245,
+          "min_ms": 80.06445,
+          "p50_ms": 100.7621,
+          "p95_ms": 140.5534,
+          "p99_ms": 150.831956,
+          "separate_boundary": true,
+          "slo_p95_ms": null,
+          "status": "PASS"
+        },
+        "decoded_first_frame": {
+          "count": 0,
+          "max_ms": null,
+          "min_ms": null,
+          "p50_ms": null,
+          "p95_ms": null,
+          "p99_ms": null,
+          "separate_boundary": true,
+          "slo_p95_ms": null,
+          "status": "NOT_REQUIRED"
+        },
+        "decoded_marker_first_frame": {
+          "count": 100,
+          "max_ms": 78.31755,
+          "min_ms": 55.68745,
+          "p50_ms": 68.00535,
+          "p95_ms": 76.911755,
+          "p99_ms": 77.702562,
+          "separate_boundary": true,
+          "slo_p95_ms": null,
+          "status": "PASS"
+        },
+        "directshow_return": {
+          "count": 100,
+          "max_ms": 41.1285,
+          "min_ms": 23.8209,
+          "p50_ms": 33.5749,
+          "p95_ms": 40.057985,
+          "p99_ms": 41.062467,
+          "separate_boundary": true,
+          "slo_p95_ms": 75.0,
+          "status": "PASS"
+        },
+        "encoded_first_packet": {
+          "count": 100,
+          "max_ms": 76.3845,
+          "min_ms": 26.7183,
+          "p50_ms": 48.4965,
+          "p95_ms": 74.65323,
+          "p99_ms": 75.531912,
+          "separate_boundary": true,
+          "slo_p95_ms": null,
+          "status": "PASS"
+        },
+        "encoder_input_raw": {
+          "count": 100,
+          "max_ms": 24.8342,
+          "min_ms": 6.8112,
+          "p50_ms": 16.21125,
+          "p95_ms": 22.731155,
+          "p99_ms": 23.340686,
+          "separate_boundary": false,
+          "slo_p95_ms": 50.0,
+          "status": "PASS"
+        },
+        "rtmp_first_packet": {
+          "clock_bound_ms": 0.0492,
+          "count": 100,
+          "max_ms": 23.19145,
+          "min_ms": 0.29065,
+          "p50_ms": 0.50735,
+          "p95_conservative_ms": 11.93281,
+          "p95_ms": 11.88361,
+          "p99_ms": 22.687738,
+          "separate_boundary": true,
+          "slo_p95_ms": 15.0,
+          "status": "PASS"
+        }
+      },
+      "ac12a": {
+        "boundary": "packet_callback_monotonic_ns_to_receiver_observed_normalized_ns",
+        "clock_bound_included": true,
+        "clock_bound_ms": 0.0492,
+        "correlated_packet_count": 200,
+        "correlation_complete": true,
+        "count": 100,
+        "max_ms": 23.19145,
+        "min_ms": 0.29065,
+        "p50_ms": 0.50735,
+        "p95_conservative_ms": 11.93281,
+        "p95_ms": 11.88361,
+        "p99_ms": 22.687738,
+        "separate_boundary": true,
+        "slo_p95_ms": 15.0,
+        "status": "PASS"
+      },
+      "ac12b": {
+        "boundary": "take_accepted_to_receiver",
+        "count": 100,
+        "max_ms": 76.67805,
+        "minimum_measurements_required": 100,
+        "p50_ms": 51.9497,
+        "p95_ms": 74.9965,
+        "p99_ms": 75.907632,
+        "packet_selection_diagnostic": {
+          "committed_media_pts_to_selected_packet_cts": {
+            "count": 100,
+            "max_ms": 33.333332,
+            "min_ms": 0.0,
+            "p50_ms": 16.666666,
+            "p95_ms": 33.333332,
+            "p99_ms": 33.333332
+          },
+          "notes": "Media-timestamp decomposition, not wall-clock callback duration. The first encoded packet passing the commit CTS floor may represent a later presentation frame when B-frames reorder packet output. Its CTS gap must not be attributed entirely to command handling or graphics scheduling.",
+          "take_accepted_to_committed_media_pts": {
+            "count": 100,
+            "max_ms": 17.899346,
+            "min_ms": 1.155284,
+            "p50_ms": 10.172953,
+            "p95_ms": 16.951389,
+            "p99_ms": 17.498644
+          }
+        },
+        "same_packet_count": 100,
+        "stage_distributions": {
+          "callback_to_receiver": {
+            "count": 100,
+            "max_ms": 23.19145,
+            "min_ms": 0.29065,
+            "p50_ms": 0.50735,
+            "p95_ms": 11.88361,
+            "p99_ms": 22.687738
+          },
+          "cts_to_fer": {
+            "count": 100,
+            "max_ms": 18.305632,
+            "min_ms": 17.024032,
+            "p50_ms": 17.441531,
+            "p95_ms": 17.995649,
+            "p99_ms": 18.206089
+          },
+          "fer_to_ferc": {
+            "count": 100,
+            "max_ms": 10.9795,
+            "min_ms": 2.2282,
+            "p50_ms": 7.81755,
+            "p95_ms": 9.17634,
+            "p99_ms": 10.592608
+          },
+          "ferc_to_pir": {
+            "count": 100,
+            "max_ms": 33.2206,
+            "min_ms": 0.0048,
+            "p50_ms": 0.0143,
+            "p95_ms": 0.02915,
+            "p99_ms": 16.768384
+          },
+          "pir_to_callback": {
+            "count": 100,
+            "max_ms": 0.0108,
+            "min_ms": 0.0012,
+            "p50_ms": 0.0037,
+            "p95_ms": 0.006405,
+            "p99_ms": 0.008622
+          },
+          "take_accepted_to_cts": {
+            "count": 100,
+            "max_ms": 50.515926,
+            "min_ms": 2.1155,
+            "p50_ms": 24.925526,
+            "p95_ms": 49.773694,
+            "p99_ms": 50.500155
+          }
+        },
+        "status": "PASS",
+        "threshold": null,
+        "threshold_status": "NOT_APPLICABLE"
+      },
+      "directshow_stages": {
+        "entry_to_sample_lock": {
+          "count": 100,
+          "p50_ms": 0.2617,
+          "p95_ms": 0.324775,
+          "p99_ms": 0.364475,
+          "complete_coverage": true,
+          "eligible_frames": 100
+        },
+        "queue_read": {
+          "count": 100,
+          "p50_ms": 0.75225,
+          "p95_ms": 0.95837,
+          "p99_ms": 1.228174,
+          "complete_coverage": true,
+          "eligible_frames": 100
+        },
+        "sample_delivery": {
+          "count": 100,
+          "p50_ms": 1.24235,
+          "p95_ms": 1.90768,
+          "p99_ms": 2.211403,
+          "complete_coverage": true,
+          "eligible_frames": 100
+        },
+        "filter_total": {
+          "count": 100,
+          "p50_ms": 2.2815,
+          "p95_ms": 2.992,
+          "p99_ms": 3.460121,
+          "complete_coverage": true,
+          "eligible_frames": 100
+        }
+      },
+      "queue_counters": {
+        "duplicate_count": {
+          "first": 116,
+          "last": 228,
+          "delta": 112
+        },
+        "gap_count": {
+          "first": 106,
+          "last": 218,
+          "delta": 112
+        },
+        "retry_count": {
+          "first": 0,
+          "last": 0,
+          "delta": 0
+        },
+        "torn_count": {
+          "first": 0,
+          "last": 0,
+          "delta": 0
+        }
+      },
+      "selected_packet_cts_minus_commit_pts_frames": {
+        "0": 34,
+        "1": 37,
+        "2": 29
+      },
+      "decoded_candidate_minus_first_marker": {
+        "count": 100,
+        "p50_ms": 36.63995,
+        "p95_ms": 69.532735,
+        "p99_ms": 75.006348
+      },
+      "encoded_content_minus_cadence_cts": {
+        "count": 100,
+        "p50_ms": 16.666666,
+        "p95_ms": 16.666666,
+        "p99_ms": 16.666666
+      },
+      "run_settings": {
+        "takes_per_codec": 100,
+        "nvenc_ready_drain": false,
+        "fresh_frame_poll": false,
+        "binary_revision": "5c5757e62c7c701057fdd3386808bee8c2c69288",
+        "workload_layout": "visible-wgc-left-cef-right-v1",
+        "receiver_mode": "marker",
+        "scripts": [
+          {
+            "Algorithm": "SHA256",
+            "Hash": "46D0E22EA65A34C231281D630C0D0DD7F90E2D5E6A31F0298DE9153DDA969CF2",
+            "Path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-253-latency\\scripts\\probe-dual-lane.py"
+          },
+          {
+            "Algorithm": "SHA256",
+            "Hash": "EB18890F346F97A6A83B2DB9DD7ECB7A403B2C1558665CA0D36DD66A66105FD5",
+            "Path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-253-latency\\scripts\\probe-take-latency.py"
+          }
+        ],
+        "current_readback": false
+      },
+      "trace_sha256": "1b48e5e348052138f9ffc0150f05465e6c9b363d23f21809b7e3436fd7bcb758",
+      "report_sha256": "0ca2bda2939e11bd14a0025bd5c95ffb03b603b9ac54ee1b3dc847015b9e8e1e",
+      "limitations": [
+        "Decoded candidate is a selected picture; marker boundary certifies only the first changed probe marker, neither certifies display.",
+        "DirectShow duplicate/gap counters concern the return consumer, not encoder dropped frames.",
+        "No single-lane or external network campaign; resource comparison not inferred."
+      ]
+    }
+  ]
+}

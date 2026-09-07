@@ -903,6 +903,47 @@ def first_changed_marker(frames: list[dict[str, int]], *, expected_pts_ms: float
     raise ProbeFailure("decoded marker did not change within two frames of committed PTS")
 
 
+class DecodedMarkerMetadata:
+    """One dedicated metadata writer; never infer missing pixels from log text.
+
+    FFmpeg showinfo emits each plane mean in separate av_log calls, allowing
+    other threads to interleave inside a frame's diagnostic line. The metadata
+    filter instead writes complete key/value lines through direct AVIO. Keep
+    it on the same pipe as demux observations to retain observation ordering.
+    """
+
+    def __init__(self) -> None:
+        self.pending: dict[str, int] | None = None
+
+    def feed(self, line: str, observed_ns: int) -> dict[str, int] | None:
+        header = re.search(r"\bframe:\s*(\d+)\s+pts:\s*(-?\d+)\s+pts_time:", line)
+        if header:
+            if self.pending is not None:
+                raise ProbeFailure("decoded metadata frame ended before all three plane means")
+            self.pending = {"frame_index": int(header.group(1)), "pts_ms": int(header.group(2))}
+        for plane, raw in re.findall(r"lavfi\.signalstats\.([YUV])AVG=([^\s]+)", line):
+            if self.pending is None:
+                raise ProbeFailure("decoded metadata plane mean has no frame identity")
+            key = plane.lower() + "_mean"
+            if key in self.pending:
+                raise ProbeFailure("decoded metadata repeats a plane mean")
+            try:
+                value = Decimal(raw)
+                if not value.is_finite() or not 0 <= value <= 255:
+                    raise ValueError("out of range")
+                # Match showinfo's integer rounding, retaining the existing
+                # strict neutral black/white classifier and thresholds.
+                self.pending[key] = int((value + Decimal("0.5")).to_integral_value(rounding="ROUND_FLOOR"))
+            except (InvalidOperation, ValueError) as exc:
+                raise ProbeFailure("decoded metadata plane mean is invalid") from exc
+        if self.pending is not None and all(key in self.pending for key in ("y_mean", "u_mean", "v_mean")):
+            frame = self.pending
+            frame["observed_at_monotonic_ns"] = observed_ns
+            self.pending = None
+            return frame
+        return None
+
+
 class RtmpReceiver:
     """Own a real FFmpeg RTMP loopback receiver for AC-12 evidence.
 
@@ -916,13 +957,19 @@ class RtmpReceiver:
     """
 
     def __init__(self, ffmpeg: str, *, runtime_id: str, stream_id: str, decode_frames: bool = False,
-                 audit_marker: bool = False) -> None:
+                 audit_marker: bool = False, decoder_mode: str = "software") -> None:
         self.ffmpeg = ffmpeg
         self.decode_frames = decode_frames
+        if decoder_mode not in ("software", "nvdec-lowdelay"):
+            raise ProbeFailure("unsupported decoder mode")
+        if decoder_mode != "software" and not decode_frames:
+            raise ProbeFailure("NVDEC receiver mode requires decoding")
+        self.decoder_mode = decoder_mode
         if audit_marker and not decode_frames:
             raise ProbeFailure("decoded marker audit requires decoding")
         self.audit_marker = audit_marker
         self.decoded_frames: list[dict[str, int]] = []
+        self.marker_metadata = DecodedMarkerMetadata()
         self.runtime_id = runtime_id
         if ID_RE.fullmatch(stream_id) is None:
             raise ProbeFailure("RTMP stream_id must be a non-empty identifier of at most 128 characters")
@@ -961,6 +1008,7 @@ class RtmpReceiver:
             "stream_key": self.stream_key,
             "endpoint": self.endpoint,
             "receiver_id": "ffmpeg-rtmp-receiver",
+            "decoder_mode": self.decoder_mode,
             "stream_id": self.stream_id,
             "clock_source": str(source),
             "clock_offset_ns": offset,
@@ -968,6 +1016,15 @@ class RtmpReceiver:
             "packet_timebase_num": RTMP_PACKET_TIMEBASE_NUM,
             "packet_timebase_den": RTMP_PACKET_TIMEBASE_DEN,
         }
+
+    def decoder_input_options(self) -> list[str]:
+        options = ["-copyts", "-threads", "1"]
+        if self.decoder_mode == "nvdec-lowdelay":
+            # CUVID sets parser ulMaxDisplayDelay=0. This does NOT enable the
+            # software decoder's reorder bypass. Qualification compares full
+            # decoded PTS and pixel hashes with two-B-frame input.
+            options += ["-c:v", "h264_cuvid", "-flags", "low_delay"]
+        return options
 
     def start(self) -> None:
         if self.proc is not None:
@@ -1009,11 +1066,12 @@ class RtmpReceiver:
             # thread avoids FFmpeg frame-thread queueing; codec reordering is
             # retained. This changes receiver workload, not the encoded stream.
             input_index = command.index("-i")
-            command[input_index:input_index] = ["-copyts", "-threads", "1"]
+            command[input_index:input_index] = self.decoder_input_options()
             decoder_filter = "settb=expr=1/1000,"
             if self.audit_marker:
-                decoder_filter += "crop=32:32:1888:508,"
-            decoder_filter += "showinfo"
+                decoder_filter += "crop=32:32:1888:508,signalstats,metadata=mode=print:file='pipe\\:1':direct=1"
+            else:
+                decoder_filter += "showinfo"
             command.extend([
                 "-map", "0:v:0", "-an", "-vf", decoder_filter,
                 "-fps_mode", "passthrough", "-f", "null", "-",
@@ -1055,7 +1113,16 @@ class RtmpReceiver:
             clean = line.rstrip("\r\n")
             with self._lock:
                 self.lines.append(clean)
-            if self.decode_frames and "showinfo" in clean:
+            if self.audit_marker:
+                try:
+                    decoded_frame = self.marker_metadata.feed(clean, received_at)
+                    if decoded_frame is not None:
+                        with self._lock:
+                            self.decoded_frames.append(decoded_frame)
+                except ProbeFailure as exc:
+                    with self._lock:
+                        self.failure = str(exc)
+            if self.decode_frames and not self.audit_marker and "showinfo" in clean:
                 decoded = re.search(r"\bn:\s*(\d+)\s+pts:\s*(-?\d+)\s+pts_time:", clean)
                 if decoded:
                     with self._lock:
@@ -1064,10 +1131,6 @@ class RtmpReceiver:
                             "pts_ms": int(decoded.group(2)),
                             "observed_at_monotonic_ns": received_at,
                         }
-                        if self.audit_marker:
-                            mean = re.search(r"\bmean:\[\s*(\d+)\s+(\d+)\s+(\d+)\s*\]", clean)
-                            if mean:
-                                decoded_frame.update(zip(("y_mean", "u_mean", "v_mean"), map(int, mean.groups())))
                         self.decoded_frames.append(decoded_frame)
             match = RTMP_PACKET_RE.search(clean)
             if match is None:
@@ -1474,7 +1537,7 @@ class RtmpReceiver:
                     "valid": True, "surface": "RTMP", "consumer": "decoder",
                     "decoder": self._decoder_identity(frame, packet, "selected_candidate"),
                     "notes": (
-                        f"FFmpeg showinfo pipe observation; decoder_threads=1; "
+                        f"FFmpeg {'direct signalstats metadata' if self.audit_marker else 'showinfo'} pipe observation; decoder_threads=1; "
                         f"frame_index={frame['frame_index']}; packet_index={packet['packet_index']}; "
                         f"pts_ms={frame['pts_ms']}; includes decoder reorder and log delivery; "
                         "same RTMP PTS as correlated encoded candidate; not display/antenna latency"
@@ -1530,7 +1593,8 @@ class RtmpReceiver:
                               "runtime_instance_id": self.runtime_id, "session_id": session["session_id"],
                               "marker_crop": "32:32:1888:508" if self.audit_marker else None,
                               "decoder_threads": 1, "clock": self.metadata(),
-                              "boundary": "showinfo_pipe_not_display"}]
+                              "decoder_mode": self.decoder_mode,
+                              "boundary": "signalstats_metadata_pipe_not_display" if self.audit_marker else "showinfo_pipe_not_display"}]
             audit_records.extend({"record_type": "frame", **item} for item in self.decoded_frames)
             audit_records.extend({"record_type": "packet", **item} for item in receiver_packets)
             trace_integrity.write_trace(output_path.with_name(output_path.name + ".decoder-audit.jsonl"),
@@ -1539,6 +1603,7 @@ class RtmpReceiver:
     def _decoder_identity(self, frame: dict[str, int], packet: dict[str, object], kind: str) -> dict[str, object]:
         return {
             "kind": kind, "frame_index": frame["frame_index"], "frame_pts_ms": frame["pts_ms"],
+            "decoder_mode": self.decoder_mode,
             **{key: packet[key] for key in ("packet_index", "packet_pts", "packet_dts", "packet_identity")},
             "demux_observed_monotonic_ns": packet["observed_at_monotonic_ns"],
             "clock_bound_ns": self.metadata()["clock_bound_ns"],
@@ -4691,6 +4756,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--audit-decoded-marker", action="store_true",
                         help="audit first changed CEF lane marker in decoded display order; requires local CEF page")
+    parser.add_argument("--rtmp-decoder", choices=("software", "nvdec-lowdelay"), default="software",
+                        help="explicit receiver decoder; NVDEC requires decoded continuity/pixel qualification")
     parser.add_argument(
         "--cef-url",
         default=os.environ.get("PULSAR_CEF_URL"),
@@ -4701,6 +4768,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--takes must be >= 1")
     if args.decode_rtmp and not args.rtmp_receiver:
         parser.error("--decode-rtmp requires --rtmp-receiver")
+    if args.rtmp_decoder != "software" and not args.decode_rtmp:
+        parser.error("--rtmp-decoder nvdec-lowdelay requires --decode-rtmp")
     if args.runtime_id and args.trace is None:
         parser.error("--runtime-id requires --trace")
     if args.resource_mode and args.trace is None:
@@ -4821,6 +4890,7 @@ def run(args: argparse.Namespace) -> int:
                 stream_id=_stream_id_for_runtime(process.runtime_id, args.encoder),
                 decode_frames=args.decode_rtmp,
                 audit_marker=args.audit_decoded_marker,
+                decoder_mode=args.rtmp_decoder,
             )
             process.rtmp_producer_trace_path = producer_trace_path
             process.rtmp_final_trace_path = final_trace_path
@@ -4985,6 +5055,13 @@ def run(args: argparse.Namespace) -> int:
         if result == 0:
             try:
                 process.assert_shutdown_clean(require_runtime_lease=trace_path is not None)
+                if args.encoder == "nvenc":
+                    ready_requested = os.environ.get("PULSAR_NVENC_READY_DRAIN") == "1"
+                    ready_observed = any("Pulsar ready-batch drain enabled" in line
+                                         for line in process.snapshot())
+                    if ready_requested != ready_observed:
+                        raise ProbeFailure("NVENC ready-drain requested/observed mode mismatch")
+                    print(f"   native NVENC ready-drain mode observed: {ready_observed}")
                 if args.rtmp_receiver:
                     try:
                         process.finalize_rtmp_trace(

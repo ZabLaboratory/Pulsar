@@ -413,7 +413,7 @@ def test_quantile_is_deterministic_linear_interpolation():
     assert probe.quantile([1.0, 2.0, 3.0, 4.0], 0.99) == pytest.approx(3.97)
 
 
-@pytest.mark.parametrize("defect", [None, "wrong_kind", "wrong_pts", "wrong_packet", "wrong_demux", "wrong_clock", "duplicate"])
+@pytest.mark.parametrize("defect", [None, "wrong_kind", "wrong_pts", "wrong_packet", "wrong_demux", "wrong_clock", "wrong_decoder_mode", "unknown_decoder_mode", "duplicate"])
 def test_decoded_candidate_requires_explicit_packet_and_clock_identity(defect):
     records = _take_records(2)
     session = records[0]
@@ -439,6 +439,10 @@ def test_decoded_candidate_requires_explicit_packet_and_clock_identity(defect):
         candidate["decoder"]["demux_observed_monotonic_ns"] -= 1
     elif defect == "wrong_clock":
         candidate["decoder"]["clock_bound_ns"] += 1
+    elif defect == "wrong_decoder_mode":
+        candidate["decoder"]["decoder_mode"] = "nvdec-lowdelay"
+    elif defect == "unknown_decoder_mode":
+        session["rtmp_receiver"]["decoder_mode"] = "unknown-decoder"
     elif defect == "duplicate":
         records.append(deepcopy(candidate))
     if defect:

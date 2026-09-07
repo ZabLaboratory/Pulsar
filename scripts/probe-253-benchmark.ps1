@@ -6,6 +6,7 @@ param(
     [ValidateSet('x264','nvenc')][string[]]$Encoders = @('x264','nvenc'),
     [int]$Takes = 100,
     [ValidateSet('packet','candidate','marker')][string]$ReceiverMode = 'candidate',
+    [ValidateSet('software','nvdec-lowdelay')][string]$Decoder = 'software',
     [switch]$FreshFramePoll,
     [switch]$CurrentReadback,
     [switch]$NvencReadyDrain
@@ -37,7 +38,7 @@ try {
     $binaries = @($Exe, (Join-Path $bin 'obs.dll'), (Join-Path $runtime 'obs-plugins/64bit/obs-nvenc.dll'), (Join-Path $runtime 'data/obs-plugins/win-dshow/obs-virtualcam-module64.dll'))
     Get-FileHash -Algorithm SHA256 -LiteralPath $binaries | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'binary.json')
     @{ receiver_mode = $ReceiverMode; fresh_frame_poll = [bool]$FreshFramePoll; current_readback = [bool]$CurrentReadback;
-       nvenc_ready_drain = [bool]$NvencReadyDrain;
+       nvenc_ready_drain = [bool]$NvencReadyDrain; decoder = $Decoder;
        binary_revision = $Revision; takes_per_codec = $Takes; workload_layout = 'visible-wgc-left-cef-right-v1';
        scripts = @(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $PSScriptRoot 'probe-dual-lane.py'), (Join-Path $PSScriptRoot 'probe-take-latency.py'))
      } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'run-settings.json')
@@ -46,6 +47,7 @@ try {
         $decoderArgs = @()
         if ($ReceiverMode -ne 'packet') { $decoderArgs += '--decode-rtmp' }
         if ($ReceiverMode -eq 'marker') { $decoderArgs += '--audit-decoded-marker' }
+        $decoderArgs += @('--rtmp-decoder', $Decoder)
         & python (Join-Path $PSScriptRoot 'probe-dual-lane.py') --exe $Exe --encoder $codec --takes $Takes --trace $trace --record-dir (Join-Path $output "$codec-recordings") --build-revision $Revision --capture-window $CaptureWindow --cef-workload --rtmp-receiver @decoderArgs --return-transport cpu *> (Join-Path $output "$codec.log")
         $probeExit = $LASTEXITCODE
         Write-Host "$codec probe exit=$probeExit"
