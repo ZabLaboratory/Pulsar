@@ -1,47 +1,60 @@
-# patches/
+# Pulsar OBS patch stack
 
-Pulsar's patches against the vendored obs-studio in `../upstream/`.
+Pulsar 3.0.0 carries **52 patches** above the pinned
+`ZabLaboratory/obs-studio` revision
+`bd73b922891e56839b0bc86bdc519802802f9d68`.
+Five foundational changes are already in that fork revision.
 
-## Naming
+The [complete libobs/OBS reference](../docs/LIBOBS-CHANGES.md) documents every
+patch, affected file, purpose, default/experimental status and the integrated
+baseline. Start there when reviewing what Pulsar changes in OBS.
 
-`NNNN-short-name.patch` — four-digit zero-padded sequence + dash +
-descriptive slug. Example: `0001-headless-mode.patch`.
+## Targets and order
 
-The sequence determines apply order. Reserve gaps (skip 0010 if you
-expect a follow-up) so subsequent inserts do not require renumbering.
+[build-win.ps1](../scripts/build-win.ps1) and the CI apply gate split patches
+by the **complete filename**:
 
-## Format
+- filenames containing `obs-browser` target the pinned nested
+  `upstream/plugins/obs-browser/` repository;
+- all other patches target `upstream/`;
+- each set applies in lexical filename order, root first, nested browser next.
 
-Each patch is a `git format-patch` output. Include the standard header:
+There are intentionally two `0022-` files. Do not select patches by numeric
+prefix alone. The historical “apply every patch to upstream in a shell loop”
+instruction is wrong for the nested browser patch.
 
-```
-From: Pulsar maintainer <maintainer@zablab.tld>
-Subject: [PATCH NNNN/####] Short imperative summary
+## Format and authoring
 
-Multi-line rationale: what this changes, why it cannot live as a
-plugin, and whether it is a candidate for upstream submission.
-```
+Use a descriptive four-digit-prefixed `NNNN-name.patch` filename and a
+reviewable `git format-patch` artifact. Preserve existing names/order.
+The header should explain the behavioral change, why a plugin cannot express
+it, upstream eligibility and the issue/work-unit provenance.
 
-If a patch is **upstream-eligible**, mark it in the rationale and
-mirror the corresponding obs-studio PR number once submitted. The goal
-is to keep `patches/` shrinking over time as upstream absorbs the
-useful changes.
+Work in a dedicated checkout. Export source changes before running a build
+that may reconstruct/reset generated upstream state. Commit/tag operations
+follow the workspace's signature and provenance requirements.
 
-## Apply
+A source rebase is not complete because `git am` succeeds: inspect semantic
+changes, ABI, lifecycle and regression evidence. Update the complete change
+reference in the same PR.
 
-The build pipeline (Phase 1) applies patches in lexical order before
-configuring CMake on `../upstream/`. Manual application during
-development:
+## Build-cache behavior
 
-```
-cd ../upstream
-for p in ../patches/*.patch; do git am "$p"; done
-```
+The build records the upstream pin, patch-content fingerprint and applied
+HEAD. It reuses only an exact clean match; `-RefreshPatches` forces replay.
+This preserves incremental object caches without accepting a different
+patched source tree as the same candidate.
 
-## Drop a patch
+Use the normal full build for qualification. `-Fast` is only a local target
+loop and does not validate every plugin or the complete release package.
 
-If a patch becomes obsolete (upstream merged it, or the feature moved
-to a Pulsar plugin), delete the file and renumber subsequent patches
-only if the gap is awkward. Sequence gaps are fine.
+## Removing or replacing a patch
 
-Patches whose filename contains `obs-browser` target the nested `upstream/plugins/obs-browser` submodule. The build script and CI apply those patches inside that pinned submodule after applying the root OBS patches; they must not be pushed to the upstream OBS repository.
+Only remove a patch after proving that its behavior is supplied by the new
+pin or an explicitly approved replacement. Replay and validate the **whole
+dependent stack**. Never delete an old patch from the middle as an operational
+rollback: subsequent patches may depend on its source, symbols or ABI.
+
+For current CPU readback, `PULSAR_RAW_CURRENT_READBACK=0` is a bounded
+diagnostic rollback. A product rollback uses a complete previously validated
+release with matching binaries and packages.

@@ -29,7 +29,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@clodocapeo/pulsar-client": "^1.8.0",
+    "@clodocapeo/pulsar-client": "^3.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

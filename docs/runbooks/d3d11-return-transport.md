@@ -1,49 +1,79 @@
-# D3D11 return transport qualification
+# Program/Preview return transport — Pulsar 3.0.0
 
-Status: opt-in and fail-closed for ProgramReturn and PreviewReturn.
+This runbook describes the **final patch stack**, including 0041–0043.
+Patch 0024 introduced an earlier design; its writable external registration
+mapping is not the current integration contract.
 
-Patch `0024` adds a separate D3D11 control mapping and three-slot NV12 texture
-ring for each return lane. The outward DirectShow sample remains ordinary
-system-memory NV12. The default remains the existing CPU seqlock queue.
+## Default and scope
 
-The transport is enabled only with `PULSAR_RETURN_TRANSPORT=d3d11` and only for
-1920x1080 NV12. It duplicates NT handles into the consumer process after the
-consumer publishes PID/session, records the producer adapter LUID and epoch,
-uses keyed mutex key 0→1/1→0 ownership, and polls a D3D11 event query with a
-2 ms deadline before readback. A borrowed frame pointer is copied into a
-tightly-packed upload vector synchronously; no pointer crosses the callback.
+ProgramReturn and PreviewReturn expose ordinary system-memory NV12 to
+DirectShow consumers. The default transport is a producer-owned CPU queue
+with read-only consumer access, latest-frame snapshots and correlated
+metadata. These returns are separate from streaming, recording and the
+stable Program encoder attachment.
 
-For the dual-lane probe, pass `--return-transport d3d11`. The harness propagates
-that explicit policy to both the Pulsar child and the FFmpeg DirectShow
-consumer. Omitting the option preserves the inherited environment/default; use
-`--return-transport cpu` to force the legacy CPU path for a comparison.
+`PULSAR_RETURN_TRANSPORT=d3d11` opts into a bounded internal GPU transport
+for the qualified 1920×1080 NV12 return. CPU remains the fallback.
+This option does not enable a public host GPU API or end-to-end zero-copy.
 
-The current implementation is a bounded GPU transport, not a zero-copy path:
-the `raw_video` callback still receives OBS's converted system-memory NV12 frame,
-copies it synchronously into the shared texture, and the consumer reads it back
-into the ordinary DirectShow sample. It does not render a second composition and
-does not retain a borrowed CPU pointer asynchronously. A future producer-side
-GPU texture hand-off must be a separate architectural change.
+## Current ownership
 
-The implementation satisfies these gates:
+The producer launches and authenticates its own private return helper.
+Only that child receives the bootstrap and duplicated capabilities used
+for the D3D11 ring. The producer remains authoritative for transport state;
+public DirectShow clients do not register a PID in a writable GPU control map.
 
-- explicit `PULSAR_RETURN_TRANSPORT=d3d11` opt-in and independent ProgramReturn
-  and PreviewReturn control maps/rings;
-- three NV12 textures per lane, fixed-width `uint64_t` duplicated handles,
-  monotonic sequence/epoch metadata, matching adapter LUID, and bounded keyed
-  mutex waits;
-- consumer-side GPU copy/readback into the existing system-memory NV12 sample
-  while preserving frame ID, PTS, revisions, and correlation identifiers;
-- observable fallback on creation/open, adapter, device-removed, timeout,
-  format, and inter-bitness failures, without stopping Program, Preview, audio,
-  encoding, RTMP, or readiness;
-- proof that the existing converted Program/Preview frame is copied once and
-  that the Program NVENC texture lifetime is unchanged; this does not claim
-  producer-side zero-copy.
+The helper receives shared textures, performs bounded readback, and relays
+frames to the producer-owned CPU mapping. External DirectShow readers consume
+that mapping read-only. Runtime/lane identity, epoch, frame sequence and media
+metadata must stay consistent across this path.
 
-P010 and non-1080p formats fail closed to the CPU queue. Create/open,
-adapter/session, device-removed, duplicate-handle, keyed-mutex, and query
-timeout failures set a numeric fallback reason and HRESULT in the control ABI,
-clear `consumer_ready`, and make the producer resume CPU publication on the
-next frame. Telemetry includes selected path, fallback, adapter LUID, epoch,
-sequences, waits, copy/readback, gaps, retries, torn reads, and frame age.
+The path still starts from converted CPU NV12 in the raw-video callback and
+includes upload/readback. It neither renders a second composition nor
+retains a borrowed raw callback pointer asynchronously. Program NVENC texture
+ownership is separate.
+
+## Qualification
+
+Use the [latency harness](probe-take-latency.md) with an explicit
+`--return-transport d3d11`. The harness propagates the selection to its
+processes. Use `--return-transport cpu` for a controlled comparison; omitting
+the argument can inherit an existing environment selection.
+
+Collect the selected path **and fallback reason**, not only a successful
+DirectShow capture. Check both Program and Preview with:
+
+- a real compatible GPU and the actual packaged helper/module set;
+- first attach, detach, reconnect, consumer termination and producer shutdown;
+- unchanged frame identity, PTS, revisions and correlation identifiers;
+- no disruption to Program, Preview, audio, encoding, streaming or readiness;
+- bounded waits, frame age and resource usage against the CPU control.
+
+A hosted runner without the required hardware can validate source/lifecycle
+gates, but cannot establish a successful hardware D3D11 path.
+
+## Fallback and diagnosis
+
+Unsupported format/resolution, adapter mismatch, capability/bootstrap
+failure, helper death, device removal and bounded-wait failure must preserve
+or return to CPU publication. P010 and non-1080p operation are not qualified
+by this route. A functioning CPU capture after fallback is availability
+proof, not D3D11 performance proof.
+
+Inspect transport selection, fallback reason/HRESULT, helper liveness,
+adapter/epoch, frame sequence, waits, copy/readback and frame age in the
+relevant trace. The DirectShow trace has its own sidecar
+(`PULSAR_DIRECTSHOW_TRACE_PATH`); do not concurrently append unrelated
+processes to the runtime producer trace.
+
+## Rollback
+
+Set `PULSAR_RETURN_TRANSPORT=cpu` before spawning a fresh runtime and repeat
+the same capture checks. Preserve the complete matching binary/module set.
+Do not remove patch 0024 or 0043 in isolation: later patches depend on the
+earlier ABI and source transformations.
+
+For a binary rollback, restore a complete previously validated release.
+See [libobs changes](../LIBOBS-CHANGES.md) and the
+[lease watcher](directshow-lease-watcher.md) for the complementary lifecycle
+contract.

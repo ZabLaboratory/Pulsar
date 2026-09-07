@@ -1,103 +1,83 @@
 # pulsar-websocket
 
-Vendor fork of [`obsproject/obs-websocket`](https://github.com/obsproject/obs-websocket)
-v5.7.3. Provides the WebSocket protocol surface that drives Pulsar
-from external clients (Stream Deck, Streamer.bot, Aitum, Prism, any
-v5-compatible client).
+The integrated Pulsar fork of obs-websocket v5.7.3. The active CMake target
+builds **`obs-websocket.dll`**, loaded from `obs-plugins/64bit/`.
+It is not a deferred phase and does not emit `pulsar-websocket.dll`.
 
-## Status
+## Responsibilities
 
-Phase 4c — **source vendored, build wiring deferred to Phase 4d**.
-The plugin sources live here under `src/`, with the upstream Qt UI
-(`forms/SettingsDialog`, `forms/ConnectInfo`) removed and the
-frontend-api migration calls (`MigrateGlobalConfigData`,
-`MigratePersistentData`) reduced to no-ops so the plugin will load
-inside the headless `pulsar-headless` service. The CMakeLists.txt
-build target is **not yet active** — Phase 4d wires it.
+- v5 Hello/Identify authentication, requests, batches and events;
+- baseline scene/input/filter/audio/output control against the headless frontend;
+- vendor registration and dispatch for Pulsar components;
+- output-attempt verification and structured failure/settlement feedback;
+- listener readiness and bounded callback quiescence before shutdown.
 
-## Why a fork
+The native bootstrap seeds per-session config before module load.
+The default listener is `127.0.0.1`, with an explicitly configured
+`PULSAR_WS_BIND` override. Authentication uses the v5 password challenge,
+**not a session JWT**. The READY line is emitted by `pulsar.exe`, not by
+this plugin, after listener and frontend initialization.
 
-Upstream obs-websocket assumes the Qt-based obs-studio frontend is
-present:
+## Fork behavior
 
-- `forms/SettingsDialog.cpp` and `forms/ConnectInfo.cpp` construct
-  Qt widgets at module load time (a Tools menu entry plus a settings
-  dialog). With `ENABLE_FRONTEND=OFF`, no frontend exists, no main
-  window exists, and `obs_frontend_get_main_window()` returns null.
-  Constructing the dialog with a null parent in a process that has no
-  main window crashes the service.
-- `Config::MigrateGlobalConfigData()` and `Config::MigratePersistentData()`
-  call `obs_frontend_get_app_config()` and
-  `obs_frontend_get_current_profile_path()` to migrate legacy
-  obs-studio config files. Without a registered frontend, both return
-  null, and the migrate path dereferences them.
+The fork removes upstream settings/connect dialogs and Tools-menu integration
+and avoids profile migration through absent OBS Studio UI state. Qt support
+used by the protocol implementation remains; “no OBS UI” is not “zero Qt.”
 
-The fork drops the UI code and stubs out the migrate calls (Pulsar
-starts from a clean state — there are no legacy obs-studio configs
-to migrate). The websocket server itself, the v5 protocol, the event
-handlers and the request handlers are unchanged: this fork stays as
-close to upstream as possible so v5 compat remains exact.
+The current fork also contains effective-output-state checks, service
+validation, headless request adaptations, diagnostics integration and shutdown
+coordination. It is no longer accurate to say every request handler is
+byte-identical to upstream. The [protocol](../../docs/PROTOCOL.md) defines the
+supported baseline and explicit refusals.
 
-## Layout
+## Vendor namespaces
 
-```
-plugins/pulsar-websocket/
-├── CMakeLists.txt            -- build wiring (Phase 4d)
-├── README.md                 -- this file
-├── UPSTREAM-LICENSE          -- GPL-2.0 from obs-websocket
-├── cmake/                    -- vendored upstream cmake helpers
-│   ├── obs-websocket-api.cmake
-│   ├── obs-websocket-apiConfig.cmake.in
-│   └── macos/Info.plist.in
-├── data/locale/en-US.ini     -- text strings the plugin reads via obs_module_text
-├── lib/
-│   ├── example/              -- upstream sample client (kept for reference)
-│   └── obs-websocket-api.h   -- public C API for other plugins
-└── src/                      -- the plugin itself
-    ├── obs-websocket.cpp     -- entry point; Qt UI block stripped
-    ├── obs-websocket.h
-    ├── Config.cpp            -- Migrate* functions stubbed to no-ops
-    ├── Config.h
-    ├── WebSocketApi.cpp
-    ├── WebSocketApi.h
-    ├── plugin-macros.h.in
-    ├── eventhandler/         -- libobs signal -> v5 event translation
-    ├── requesthandler/       -- v5 request type implementations
-    ├── utils/                -- helpers (Crypto, Json, Obs, Compat...)
-    └── websocketserver/      -- WebSocket++ server, v5 framing
-```
+| Vendor | Owner |
+|---|---|
+| `pulsar` | Multi-stream: destinations, capabilities, video/audio, adaptive control and diagnostics. |
+| `pulsar-scene` | Scene-source: managed browser-capture replacement. |
+| `pulsar-scene-switch` | Frontend: deterministic Prepare/Take/Abort/GetState. |
+| Browser-specific surface | Browser module, subject to its own available requests/control policy. |
 
-## Patches applied
+A command is sent through v5 `CallVendorRequest` with `vendorName`,
+`requestType` and `requestData`. Vendor events are v5 `VendorEvent`
+envelopes. Do not turn a vendor command into a top-level v5 request or register
+two independent owners under the same vendor name.
 
-The diff between this tree and upstream's `plugins/obs-websocket/`
-is intentionally small:
+The scene-switch contract carries its own revisions, command IDs and event
+sequence. Generic v5 delivery does not supply those production semantics.
 
-1. **`src/forms/` directory removed** — drops `SettingsDialog`,
-   `ConnectInfo`, `*.ui`, `images/`, `resources.qrc`. No Qt UI.
-2. **`src/obs-websocket.cpp`** — the `#include "forms/SettingsDialog.h"`,
-   the `SettingsDialog *_settingsDialog` global, and the
-   `obs_frontend_*` Tools-menu wiring inside `obs_module_load()` are
-   replaced with a comment block explaining the fork.
-3. **`src/Config.cpp`** — `MigrateGlobalConfigData()` returns an
-   empty `json{}`, `MigratePersistentData()` only ensures the
-   module config directory exists. Neither calls the frontend API.
+## Effective output state
 
-## Phase 4d plan
+A successful network exchange is not sufficient to report a successful start.
+The request layer verifies the effective output state with the bounded
+`PULSAR_OUTPUT_VERIFY_MS` policy and exposes settlement/failure data.
+Twitch via the legacy `rtmp_common` service is refused; use the destination
+API's pinned TLS ingest.
 
-- Author the build wiring in `CMakeLists.txt`. Mirror upstream's
-  source list (minus `src/forms/*`), find the deps (websocketpp,
-  asio, nlohmann_json, qrcodegencpp) from
-  `upstream/.deps/obs-deps-*-x64/`, link `Qt6::Core` + `Qt6::Network`
-  + `OBS::libobs` (the latter via direct `obs.lib` reference like
-  `pulsar-headless` does).
-- Set the output to `obs-websocket.dll` alongside the other plugins
-  in `rundir/obs-plugins/64bit/` so libobs's default module path
-  picks it up.
-- Re-enable `PULSAR_BUILD_WEBSOCKET=ON` by default in the top-level
-  Pulsar CMakeLists.
+Diagnostic message content is restricted by the implemented loopback policy.
+Counters/state and detailed log lines have different admission rules.
+See the [failure runbook](../../docs/runbooks/diagnose-a-failed-go-live.md).
 
-## Phase 4e
+## Lifecycle and layout
 
-Validate the v5 round-trip with an external client (e.g.
-`obsws-python`) connecting to `ws://127.0.0.1:<port>` after the
-plugin has produced its session JWT on `pulsar.exe` stdout.
+The frontend callback table is installed before this module loads, so
+event subscriptions have a live owner. Teardown stops request/event admission
+and drains active callbacks before libobs/frontend state is released.
+
+`src/websocketserver/` owns transport, `src/requesthandler/` baseline
+requests, `src/eventhandler/` libobs-to-v5 events, `Config.cpp`
+configuration and `WebSocketApi.cpp` the native vendor API.
+The public plugin header is `lib/obs-websocket-api.h`.
+
+## Validation
+
+The pipeline compiles the active target, checks binary exports, executes
+native shutdown/debug/output-attempt gates and runs real v5 offline probes.
+The TypeScript client tests additionally cover wire mapping, but do not
+replace native-runtime checks.
+
+See [development](../../docs/DEVELOPMENT.md) and
+[component architecture](../../docs/ARCHITECTURE.md).
+License: inherited GPL-2.0-or-later; preserve the upstream notice in
+`UPSTREAM-LICENSE`.

@@ -29,6 +29,8 @@ client surface and adds a `spawn()` API.
   - [`record` namespace](#record-namespace)
   - [`stream` namespace](#stream-namespace)
   - [`audio` namespace](#audio-namespace)
+  - [`capabilities` namespace](#capabilities-namespace)
+  - [Deterministic scene switching](#deterministic-scene-switching)
   - [v5 baseline passthrough](#v5-baseline-passthrough)
 - [Events](#events)
 - [Errors](#errors)
@@ -44,8 +46,9 @@ client surface and adds a `spawn()` API.
 
 Use this package when you already have a Pulsar (or any obs-websocket
 v5 server, including OBS Studio with the obs-websocket plugin) running
-somewhere — locally, on another machine over LAN, in a container —
-and just want to talk to it.
+under an authorized supervisor and want to talk to it. Pulsar binds loopback
+by default; remote/native-container deployment is not enabled by installing
+this client.
 
 Typical scenarios:
 
@@ -54,7 +57,7 @@ Typical scenarios:
 - A CLI utility that probes broadcast state, mutates bitrate, or
   toggles destinations.
 - A test harness that talks to a fake / mocked v5 server.
-- Anything that doesn't want the ~40 MB postinstall download from the
+- Anything that doesn't need the native postinstall download from the
   `pulsar-bundle*` packages.
 
 If you want Node to spawn pulsar.exe and own its lifecycle, use
@@ -73,50 +76,33 @@ underlying `obs-websocket-js` uses the platform `WebSocket` /
 
 ## Quick start
 
-```ts
+This connects to an **already running, authenticated** runtime. The host supplies
+the actual per-session URL/password; the client does not start Pulsar.
+
+```js
 import { PulsarClient } from "@clodocapeo/pulsar-client";
 
+const url = process.env.PULSAR_WS_URL;
+const password = process.env.PULSAR_WS_PASSWORD;
+if (!url || !password) throw new Error("Set this session's URL and password");
+
 const pulsar = new PulsarClient();
-
-await pulsar.connect({
-  url: "ws://127.0.0.1:4455",
-  password: process.env.PULSAR_WS_PASSWORD,
-});
-
-// 1. Multi-destination: encode once, fan out to N outputs.
-const twitch = await pulsar.destinations.create({
-  name: "Main",
-  kind: "twitch",
-  key: process.env.TWITCH_KEY!,
-});
-await pulsar.destinations.start(twitch.id);
-
-// 2. React to bitrate adaptation events.
-pulsar.on("bitrateAdjusted", (e) => {
-  console.log(`bitrate -> ${e.bitrate} kbps (${e.reason}, drop_ratio=${e.dropRatio.toFixed(4)})`);
-});
-
-// 3. Mutate the encoder live.
-await pulsar.video.setBitrate(4500);
-
-// 4. Singleton local recording (independent of destinations).
-await pulsar.record.start();
-await new Promise((r) => setTimeout(r, 5_000));
-const path = await pulsar.record.stop();
-console.log(`recorded to ${path}`);
-
-// 5. v5 baseline passthrough — anything obs-websocket v5 supports.
-const ver = await pulsar.obs.call("GetVersion");
-console.log(`obs ${ver.obsVersion}, ws ${ver.obsWebSocketVersion}`);
-
-await pulsar.disconnect();
+try {
+  await pulsar.connect({ url, password });
+  console.log(await pulsar.video.get());
+  console.log(await pulsar.capabilities.get());
+} finally {
+  await pulsar.disconnect();
+}
 ```
 
-The credentials come from the `PULSAR_READY` sentinel that pulsar.exe
-prints on stdout at boot — see
-[`docs/PRISM-EMBEDDING.md`](https://github.com/ZabLaboratory/Pulsar/blob/main/docs/PRISM-EMBEDDING.md)
-for the full handshake. If you used `@clodocapeo/pulsar-bundle`'s
-`spawn()`, the bundle has already parsed those for you.
+`PULSAR_WS_URL` and `PULSAR_WS_PASSWORD` here are host application variables,
+not native bootstrap option names. Native hosts obtain credentials from READY;
+the bundle uses its child's idle marker and private config. Never read another
+session's config or log the password.
+
+For an owned runtime, use a bundle's `spawn()`; the returned client is already
+connected. Disconnecting a client does not stop the native process or its outputs.
 
 ## API reference
 
@@ -132,6 +118,7 @@ class PulsarClient extends TypedEventEmitter {
   readonly record:        RecordNamespace;
   readonly stream:        StreamNamespace;
   readonly audio:         AudioNamespace;
+  readonly capabilities:  CapabilitiesNamespace;
 
   // Lifecycle
   connect(opts?: ConnectOptions): Promise<void>;
@@ -139,8 +126,8 @@ class PulsarClient extends TypedEventEmitter {
   isConnected(): boolean;
 
   // Typed events — see "Events" below
-  on(event: PulsarEventName, listener: (e: PulsarEventMap[E]) => void): this;
-  off(event: PulsarEventName, listener: (e: PulsarEventMap[E]) => void): this;
+  on<E extends PulsarEventName>(event: E, listener: (e: PulsarEventMap[E]) => void): this;
+  off<E extends PulsarEventName>(event: E, listener: (e: PulsarEventMap[E]) => void): this;
 
   // Escape hatch for vendor calls not yet typed
   callVendor<TReq, TRes extends { error?: string }>(
@@ -157,7 +144,7 @@ interface ConnectOptions {
   /** Defaults to "ws://127.0.0.1:4455". */
   url?: string;
   /** obs-websocket auth password. Read from PULSAR_READY sentinel
-   *  or from <pulsar-bin>/obs-websocket/config.json (server_password). */
+   *  or supplied by the owning bundle's private runtime configuration. */
   password?: string;
   /** Bitmask of obs-websocket EventSubscription flags. Defaults to
    *  0x7FF (all baseline event categories). */
@@ -180,8 +167,9 @@ Snapshot. Updates on `connect()` resolve and on the
 
 #### `callVendor(requestType, requestData?)`
 
-Low-level escape hatch — use this when a new `pulsar:*` request lands
-upstream but a typed wrapper hasn't been added to this package yet.
+Low-level escape hatch for the fixed **`pulsar`** vendor. It does not select
+`pulsar-scene` or `pulsar-scene-switch`; use `obs.call("CallVendorRequest", ... )`
+with an explicit vendor for those namespaces.
 
 ```ts
 const resp = await pulsar.callVendor<{ id: string }, { started?: boolean }>(
@@ -216,8 +204,8 @@ class DestinationsNamespace {
 interface Destination {
   id: string;
   name: string;
-  kind: "rtmp_custom" | "vod_local" | "twitch";
-  url: string;             // server-pinned for twitch
+  kind: "rtmp_custom" | "vod_local" | "twitch" | "youtube";
+  url: string;             // server-pinned for twitch/youtube
   enabled: boolean;        // last user intent
   active: boolean;         // obs_output_active(d.output)
 }
@@ -225,31 +213,31 @@ interface Destination {
 
 ```ts
 interface CreateDestinationInput {
-  kind: "rtmp_custom" | "vod_local" | "twitch";
+  kind: "rtmp_custom" | "vod_local" | "twitch" | "youtube";
   name?: string;           // defaults to the generated id
   url?: string;            // RTMP URL (rtmp_custom) or file path (vod_local)
-                           // ignored for twitch (server picks the ingest)
-  key?: string;            // required for rtmp_custom + twitch, unused for vod_local
+                           // ignored for twitch/youtube (server pins the ingest)
+  key?: string;            // required for remote kinds; unused for vod_local
 }
 ```
 
 #### Examples
 
 ```ts
-// Twitch: server pins the closest ingest URL
+// Twitch: server pins its TLS ingest URL
 const twitch = await pulsar.destinations.create({
   name: "Twitch",
   kind: "twitch",
   key: process.env.TWITCH_KEY!,
 });
 console.log(twitch.url);
-// → rtmp://<region>.contribute.live-video.net/app/
+// → rtmps://ingest.global-contribute.live-video.net/app/
 
 // Custom RTMP: e.g. a co-host's private ingest
 const rtmp = await pulsar.destinations.create({
   name: "Co-host",
   kind: "rtmp_custom",
-  url: "rtmp://my.private.cdn/live",
+  url: "rtmps://my.private.cdn/live",
   key: "stream-key",
 });
 
@@ -359,14 +347,15 @@ env-driven recorder pulsar-frontend-stub creates at boot. Distinct
 from the multi-destination API where `vod_local` destinations are
 also MP4 files but client-named.
 
-The path is auto-resolved to `<recordDir>/pulsar-<YYYYMMDD-HHMMSS>.mp4`
-by the server. `recordDir` defaults to `<cwd>/recordings/`; override
-at spawn via `PULSAR_RECORD_DIR`.
+The path is auto-resolved to `<recordDir>/pulsar-<YYYYMMDD-HHMMSS>.<ext>`
+by the server. MP4 is default; `PULSAR_RECORD_CONTAINER=mkv` selects MKV at
+boot. `recordDir` defaults to the private runtime's recordings directory;
+use `PULSAR_RECORD_DIR` for persistent storage.
 
 ```ts
 class RecordNamespace {
   start(): Promise<void>;
-  stop(timeoutMs?: number): Promise<string>;   // resolves with the .mp4 path
+  stop(timeoutMs?: number): Promise<string>;   // resolves with the actual output path
   pause(): Promise<void>;
   resume(): Promise<void>;
   isActive(): Promise<boolean>;
@@ -393,10 +382,10 @@ class StreamNamespace {
 }
 ```
 
-> ⚠️ **`StartStream` succeeds on the wire even when no destination URL
-> is configured** — the underlying `obs_output_start` declines
-> silently. To actually go live through this surface, configure a
-> service via the v5 `SetStreamServiceSettings` request first, **or**
+> Configure a service before starting the singleton output. Current Pulsar
+> verifies effective output state and reports declined/no-effect attempts;
+> the old “success with no stream” behavior is not the current contract.
+> Use v5 `SetStreamServiceSettings` for a supported service, **or**
 > use `pulsar.destinations.create({ kind: "twitch", … })` +
 > `pulsar.destinations.start(id)` instead. The multi-destination API
 > is the recommended path.
@@ -416,7 +405,8 @@ class StreamNamespace {
 Mic / audio-input control. **Stream-level, not scene-level**: mute
 state and device selection live on the OBS input itself, so they
 survive scene switches for free — no vendor plugin involved, this
-wraps the native obs-websocket v5 `Input*` requests directly.
+uses v5 `Input*` requests for input control and the `pulsar` vendor for
+monitoring-device and common Program-route readback.
 
 ```ts
 class AudioNamespace {
@@ -427,6 +417,8 @@ class AudioNamespace {
   toggleMuted(inputName: string): Promise<boolean>;      // returns new state
   listDevices(inputName: string): Promise<AudioDevice[]>; // wasapi device_id list
   setDevice(inputName: string, deviceId: string): Promise<void>;
+  listMonitoringDevices(): Promise<MonitoringDeviceList>;
+  setMonitoringDevice(deviceId: string): Promise<MonitoringDevice>;
   programRoute(): Promise<ProgramAudioRoute>;              // common r2 Program route + PTS evidence
 }
 ```
@@ -443,7 +435,7 @@ if (mic1) {
 }
 ```
 
-Mute changes (from any client, including the OBS UI) broadcast as the
+Mute changes from any connected control client broadcast as the
 typed `inputMuteStateChanged` event — see "Events" below.
 
 `programRoute()` reads the explicit `program-common` / `ProgramAudio` route.
@@ -454,9 +446,49 @@ encoder-fed audio PTS. r2 explicitly reports
 `previewAudioSupported=false` and `afvSupported=false`: Preview audio/AFV is
 not inferred from the selected video scene.
 
+### `capabilities` namespace
+
+```ts
+const capabilities = await pulsar.capabilities.get();
+```
+
+The response is a typed `PulsarCapabilities` manifest. It describes the running
+engine's encoder families, audio, input/filter/transition inventories,
+graphics adapters, output scales and mutation regimes. Presence is not
+permission to mutate every setting and is not proof that a selected device
+works. Read back the actual runtime state after a write.
+
+Monitoring-device controls should be offered only when the manifest reports
+the selectable capability. `audio.listInputs()` currently maps the baseline
+input list; it does not itself filter every non-audio kind. Validate input
+capability before presenting it as an audio device.
+
+### Deterministic scene switching
+
+There is no typed `sceneSwitch` namespace in 3.0.0. Use the explicit vendor:
+
+```js
+const state = await pulsar.obs.call("CallVendorRequest", {
+  vendorName: "pulsar-scene-switch",
+  requestType: "GetState",
+  requestData: {},
+});
+console.log(state.responseData);
+```
+
+Prepare/Take/Abort require the complete
+[scene-switch v1 envelope](../../scripts/contracts/scene_switch_v1/README.md).
+Observe PreviewReady and TakeCommitted separately from request acceptance,
+respect revisions and retain command IDs for idempotent retries.
+The runtime's 4096-outcome cache refuses new IDs at capacity rather than
+evicting known outcomes. Raw `VendorEvent` listeners must filter vendor and
+event type before interpreting a payload.
+
 ### v5 baseline passthrough
 
-Anything obs-websocket v5 supports is reachable via `pulsar.obs.call(...)`:
+Use `pulsar.obs.call(...)` for baseline v5 requests. Availability and headless
+refusals are defined by the running server and Pulsar's protocol, not by the
+client having a method name:
 
 ```ts
 // Scene CRUD
@@ -539,13 +571,14 @@ obs-websocket-js client directly: `pulsar.obs.on("InputCreated", …)`.
 | `studioModeStateChanged` | `{ enabled: boolean }` |
 | `inputMuteStateChanged` | `{ inputName: string, inputMuted: boolean }` |
 | `connectionClosed` | `{ code: number, reason: string }` |
+| `prismLog` | `PulsarPrismLogEvent`: structured severity/domain/source/code/message/context/details. |
 
 `OutputState = "STARTING" | "STARTED" | "STOPPING" | "STOPPED" | "PAUSED" | "RESUMED" | "RECONNECTING" | "RECONNECTED"`
 
 ## Errors
 
-Two custom error classes plus whatever obs-websocket-js / the OS
-network stack throws.
+Three exported custom error classes plus underlying obs-websocket-js / OS
+errors. The runtime class is also used by the bundle launcher.
 
 ```ts
 import { PulsarNotConnectedError, PulsarVendorError } from "@clodocapeo/pulsar-client";
@@ -553,6 +586,7 @@ import { PulsarNotConnectedError, PulsarVendorError } from "@clodocapeo/pulsar-c
 
 | Class | When |
 |---|---|
+| `PulsarRuntimeError` | Structured process/bootstrap error from the bundle, with stable code/envelope. |
 | `PulsarNotConnectedError` | Method called before `connect()` resolves. |
 | `PulsarVendorError` | Server returned a typed `error` field on a vendor request (validation failure, unsupported kind, etc.). Carries `requestType` + `message`. |
 
@@ -577,7 +611,8 @@ up as the underlying `obs-websocket-js` exceptions — see its
 
 ## Types
 
-Every public type is exported from the package root:
+Public types are exported from the package root; the selection below is not
+an exhaustive list. [src/index.ts](src/index.ts) is the complete export surface:
 
 ```ts
 import type {
@@ -609,22 +644,16 @@ This client does **not** auto-reconnect. The `connectionClosed` event
 fires on every disconnect (clean or abrupt); your application decides
 whether to reconnect, with what delay, and with what backoff.
 
-A reasonable pattern when bundling pulsar-bundle:
+A host should distinguish intentional shutdown from unexpected disconnection,
+serialize reconnect attempts and use bounded backoff. A lost WebSocket does
+not prove the native runtime died: it may still be on air. Reconnect and inspect
+state before deciding to replace the process.
 
-```ts
-import { spawn } from "@clodocapeo/pulsar-bundle";
-
-let pulsar = await spawn();
-pulsar.client.on("connectionClosed", async (e) => {
-  console.warn(`pulsar disconnect (code=${e.code}): respawning...`);
-  await pulsar.shutdown().catch(() => {});
-  pulsar = await spawn();
-  // Re-issue any state your app depends on (destinations, scenes, ...).
-});
-```
-
-If you're talking to an external Pulsar / OBS instance instead, just
-re-call `connect()` with exponential backoff on `connectionClosed`.
+For a real restart, finalize outputs where possible, retain files, stop only
+the owned runtime, attach handlers to the replacement client and reconstruct
+the intended state. The client does not automatically restore destinations,
+scenes, pending Takes or command-cache history. Avoid an unguarded respawn
+handler that restarts again when its own shutdown closes the connection.
 
 ## Wire format
 
@@ -639,7 +668,7 @@ both the request and response payloads.
 ## Versioning
 
 Tracks Pulsar's [`VERSION` file](https://github.com/ZabLaboratory/Pulsar/blob/main/VERSION)
-in lockstep — `1.0.0` of this package matches `pulsar.exe` `1.0.0`.
+in lockstep — this package's `3.0.0` matches Pulsar `3.0.0`.
 
 - **Patch** — bug fixes, no surface change.
 - **Minor** — new typed wrapper over an additive `pulsar:*` request
@@ -657,10 +686,10 @@ in lockstep — `1.0.0` of this package matches `pulsar.exe` `1.0.0`.
 | TypeScript | ≥ 5.0 — strict mode supported |
 | obs-websocket | v5 (handles the v5.0–v5.7 wire format range) |
 
-The same client talks to **OBS Studio with the obs-websocket plugin**
-just as well as to Pulsar — every v5 baseline call works, only the
-`pulsar:*` namespace is missing on stock OBS (vendor calls return an
-unknown-vendor error, which surfaces as `PulsarVendorError`).
+The client can connect to stock OBS's v5 server for supported baseline calls.
+Pulsar-specific vendors are absent there, and unknown-vendor failures may be
+underlying protocol errors rather than a vendor response with an `error` field.
+Do not promise identical headless/runtime behavior across servers.
 
 ## Development
 
@@ -683,13 +712,12 @@ real `pulsar.exe` needed. The fixtures live under `tests/`.
 
 This wrapper contains no libobs code and links nothing GPL — it speaks
 obs-websocket v5 over a WebSocket. The `pulsar.exe` engine it talks to
-is distributed separately under GPL-2.0-or-later, but the **process
-boundary** keeps the licences disjoint (mere aggregation, not derivative
-work).
+is distributed separately under GPL-2.0-or-later. Host distribution must
+respect the project's documented constraints and component notices; this
+README is not a blanket legal determination about an arbitrary integration.
 
 If you bundle `pulsar.exe` alongside this client (via
 `@clodocapeo/pulsar-bundle` or your own packaging), read
 [`LICENSE-INVARIANTS.md`](https://github.com/ZabLaboratory/Pulsar/blob/main/LICENSE-INVARIANTS.md)
 on the Pulsar repo first — there are four non-negotiable invariants
-your application must honour to keep its own licence under the
-process boundary.
+your application must evaluate and honour when distributing the runtime.

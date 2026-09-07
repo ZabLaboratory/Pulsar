@@ -1,5 +1,10 @@
 # #253 — étude libobs, DirectShow et retour décodé
 
+> Historical study, superseded for decoded-content conclusions by the
+> [decoded audit](issue-253-decoded-audit.md) and then the
+> [native readback result](issue-253-native-optimized.md). Keep the measurements
+> below as originally recorded; they are not the final 3.0.0 release verdict.
+
 ## Verdict du 7 septembre 2026
 
 Étude directe, sans agents. La réduction de travail libobs est implémentée et testée,

@@ -1,5 +1,9 @@
 # Pulsar #251 — T-bar Preview / On-Air UX and accessibility
 
+> Scope in 3.0.0: this is a host-facing UX/accessibility specification and
+> evidence plan, not a bundled Pulsar GUI. Its original checkpoint and validation
+> limitations are retained; see [architecture](ARCHITECTURE.md) for the runtime.
+
 <!-- AGENT_CHECKPOINT: UX specification complete; relevant contract tests green;
 full-suite limitation recorded in §9. -->
 

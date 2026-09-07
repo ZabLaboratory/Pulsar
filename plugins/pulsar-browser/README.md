@@ -1,53 +1,99 @@
 # pulsar-browser
 
-Forked from [obs-studio's obs-browser plugin](https://github.com/obsproject/obs-browser), trimmed for Pulsar's headless deployment model.
+The full distribution's headless CEF browser-source implementation, maintained
+from obs-browser source. It builds `pulsar-browser.dll` and
+`pulsar-browser-page.exe`. It is distinct from the nested upstream
+obs-browser patch in [patches/](../../patches/README.md).
 
-## Why a fork
+## Why a maintained fork
 
-The upstream obs-browser plugin assumes OBS Studio's Qt UI host : an attached display, a Qt event loop, an OpenGL/D3D11 swap chain, browser docks, tooltip surfaces. In Pulsar's headless service mode none of that exists, and several upstream behaviours actively break the runtime :
+OBS Studio browser integration assumes UI surfaces and lifecycle conventions
+that a headless media process does not provide. Pulsar removes browser
+docks/tooltips and Qt UI linkage from this component while retaining the
+`browser_source` model used by libobs and v5 clients.
 
-- **`obs-browser-page.exe`** (the CEF subprocess helper) exports
-  `NvOptimusEnablement = 1` and `AmdPowerXpressRequestHighPerformance = 1`. These exports tell Windows's laptop GPU switching logic to bind the *dedicated* GPU to the process. On a host with no display attached to that dedicated GPU, the CEF GPU subprocess crashes at the first frame pull (`gpu_data_manager_impl_private.cc: GPU process isn't usable. Goodbye.`) and takes the renderer down with it — the symptom users see is *"Webpage has crashed unexpectedly!"* immediately when the encoder starts.
-- The renderer subprocess **needs `--no-sandbox`** because Pulsar is built without the CEF sandbox SDK.
-- Half the source includes Qt headers (`QApplication`, `QThread`, `QToolTip`, `QMetaObject`, …) — useful in the OBS Studio UI to integrate with the host event loop, dead weight in a headless service.
+The helper drops exported GPU-preference symbols and uses Pulsar's helper
+name. Removing those symbols does not guarantee which adapter Windows selects.
+CEF is built without its sandbox SDK and receives `--no-sandbox`; loaded
+web content is therefore part of the application's trust decision.
 
-## What our fork changes
+## Current changes
 
-| File | Change |
+| Area | Files / behavior |
 |---|---|
-| `obs-browser-page/obs-browser-page-main.cpp` | Drop the `NvOptimusEnablement` / `AmdPowerXpressRequestHighPerformance` `__declspec(dllexport)` declarations. Windows now picks the integrated GPU (or falls back to SW). Same posture as Puppeteer / Playwright headless. |
-| `browser-app.cpp` | `OnBeforeCommandLineProcessing` appends `--no-sandbox` while preserving CEF GPU acceleration. Shared D3D11 textures remain the primary offscreen-rendering path. |
-| `browser-client.cpp` | `OnTooltip` becomes a no-op returning `false` (CEF falls back to its native default — no tooltip surface in headless). Qt includes wrapped in `#ifdef ENABLE_BROWSER_QT_LOOP` (which we never define). |
-| `obs-browser-source.cpp` | Same Qt-include guarding. |
-| `CMakeLists.txt` | Rewritten Pulsar-style : no OBS macros, direct linkage against libobs/obs-frontend-api, **zero Qt linkage** (no `find_package(Qt6)`, no `Qt6::*` in `target_link_libraries`). The runtime emits `pulsar-browser.dll` + `pulsar-browser-page.exe` into the libobs plugin / bin dirs ; `scripts/build-win.ps1` deletes the upstream `obs-browser.dll` + `obs-browser-page.exe` before our build so libobs picks up our binaries instead. |
+| Build and helper | `CMakeLists.txt`, helper entry: explicit headless source/linkage, no browser Qt UI loop, correct runtime staging and no application FFI exports. |
+| CEF command line | `browser-app.cpp`: required headless switches while preserving the supported GPU-accelerated path. |
+| Software/accelerated render callbacks | `browser-client.cpp`: rendering behavior and callback admission coordinated with source/texture lifetime. |
+| Render gate | `browser-render-callback-gate.hpp`: callback leases, pause/drain and close admission share synchronized ownership. |
+| Async task lifetime | `browser-source-task-state.hpp`: posted tasks retain source ownership through destruction; late work cannot use a deleted BrowserSource. |
+| Source lifecycle | `obs-browser-source.cpp/.hpp`: create/update/destroy and source-owned browser/task state. |
+| Module shutdown | `obs-browser-plugin.cpp`: browser pre-shutdown barrier used by the headless bootstrap before libobs/audio teardown. |
+| Webpage control | Managed sources are pinned to None by Pulsar's source-creation boundary; this plugin is not permission for a rendered page to control the engine. |
 
-## What stays identical to upstream
+The fork is not byte-identical to upstream rendering/lifecycle code.
+Source registration compatibility does not mean every internal implementation
+or runtime capability is unchanged.
 
-The wire-level behaviour. From a `browser_source` consumer's perspective (libobs source kind, the `OBS_PROPERTY_*` schema, the obs-websocket `obs-browser` vendor namespace, the URL / FPS / width / height / CSS settings) **nothing changed**. Existing scripts, vendor requests, scene templates work as-is.
+## Rendering paths
 
-The CEF version is the same (vendored `cef_binary_6533_windows_x64`), nlohmann_json version is the same, all the rendering / scheme handling / IPC code is byte-identical to upstream. The fork is intentionally small.
+Accelerated offscreen rendering uses shared D3D11 textures on supported
+hardware. The software path has separate deterministic handling and tests.
+A source may be registered and a URL accepted while its frames are black,
+frozen or stale; validate actual rendered/recorded output.
 
-## What stays in the source tree but isn't built
+A no-physical-GPU hosted runner cannot establish accelerated CEF behavior.
+Do not disable acceleration in the product merely to turn that missing proof
+into a green test.
 
-`panel/`, `drm-format.cpp`, `linux-keyboard-helpers.hpp`, `helper-info.plist` — all left untouched (we copied the upstream tree verbatim). The new `CMakeLists.txt` simply doesn't list them in the `add_library` source list, so they don't compile. Keeps the diff against upstream small for future rebases.
+## Lifetime invariants
 
-## License
+- Callback admission and destruction are coordinated; a callback cannot pass
+  a validity check and then race texture destruction unchecked.
+- A posted CEF task can outlive the OBS callback that posted it. Source-task
+  ownership remains until the last admitted task releases.
+- Browser close completion is observed before final source deletion.
+- Native shutdown drains browser work before frontend/libobs/audio teardown.
+  A failed barrier refuses unsafe continuation.
 
-GPL-2.0-or-later, inherited from libobs (and from upstream obs-browser, which is BSD-2-Clause but linked against GPL libobs). See the repo root [`LICENSE`](../../LICENSE) and [`LICENSE-INVARIANTS.md`](../../LICENSE-INVARIANTS.md) for what this means for consumers that bundle Pulsar.
+Hot-lane role exchanges preserve active producers; actual source replacement
+and session shutdown have different ownership transitions.
 
-The `__declspec(dllexport)` symbols upstream emitted in `obs-browser-page.exe` are gone — `pulsar-browser-page.exe` exports nothing, the same isolation invariant `pulsar.exe` enforces.
+## Runtime layout
 
-## Rebase strategy
+The helper and CEF dependencies/resources belong together under
+`obs-plugins/64bit/`. The build/packager removes upstream
+`obs-browser.dll` and `obs-browser-page.exe` from the distribution so only
+the Pulsar implementation registers the source.
 
-When upstream OBS Studio bumps obs-browser, the rebase is :
+Only the full bundle includes this capability. Preserve CEF locales/resource
+files when restaging. Do not infer one exact cause from a helper exit code;
+check dependency layout, duplicate loaders, rendering capability and logs.
 
-1. `cp -r upstream/plugins/obs-browser/* plugins/pulsar-browser/` (overwrites the fork)
-2. Re-apply this README's bullet list of changes (small, mechanical) :
-   - drop NvOptimusEnablement / AmdPowerXpressRequestHighPerformance exports
-   - add the required `--no-sandbox` switch in `OnBeforeCommandLineProcessing` without disabling GPU acceleration
-   - guard `<QApplication>` / `<QThread>` / `<QToolTip>` includes with `#ifdef ENABLE_BROWSER_QT_LOOP`
-   - make `OnTooltip` a no-op returning false outside `ENABLE_BROWSER_QT_LOOP`
-   - keep the Pulsar `CMakeLists.txt` (don't re-copy upstream's)
-3. Build, run probe-twitch-live, confirm.
+## Source API and trust
 
-If a future upstream change makes one of these patches obvious / non-applicable, drop it. The smaller the fork, the cheaper the rebase.
+The standard browser settings (URL, dimensions, FPS, CSS and audio routing)
+remain the integration surface. Prefer the managed
+[pulsar-scene helper](../pulsar-scene-source/README.md) for one composed page,
+or the [scene-switch contract](../../scripts/contracts/scene_switch_v1/README.md)
+for independent hot Preview/Program production.
+
+Keep scene content/server within the application's intended trust boundary.
+Webpage control None prevents that control surface; it is not equivalent to
+a sandboxed renderer or a general security claim about arbitrary URLs.
+
+## Validation and maintenance
+
+The native shutdown/lifecycle tests force callback/task/close interleavings.
+The [capture/PGM package](../../packages/capture-pgm-compat/README.md) tests
+real healthy/black/frozen browser recordings when the native hardware path
+is available. The full build/package and binary-export gate cover staging.
+
+An upstream rebase must preserve all current lifecycle, render and control
+invariants, not just the original “remove Qt and rename helper” edits.
+Do not overwrite the fork with a blind recursive copy. Review the upstream
+diff, apply changes in an isolated worktree, rebuild and requalify both
+callback-level and real rendered-output paths.
+
+License and upstream notices: see [LICENSE](../../LICENSE) and this source
+tree's notices. The headless runtime distribution follows
+[LICENSE-INVARIANTS.md](../../LICENSE-INVARIANTS.md).

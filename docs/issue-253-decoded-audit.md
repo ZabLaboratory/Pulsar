@@ -1,5 +1,9 @@
 # Pulsar #253 — audit du contenu décodé et seconde étude
 
+> Historical measurement correction. The subsequent
+> [native readback study](issue-253-native-optimized.md) contains the promoted
+> CPU result. This document retains its own workload and evidence boundary.
+
 Cette continuation remplace les conclusions sur la première image visible de
 `issue-253-latency-study.md`, sans réécrire les mesures historiques. Elle ne
 mesure toujours pas un affichage à l'écran ni une liaison RTMP externe.

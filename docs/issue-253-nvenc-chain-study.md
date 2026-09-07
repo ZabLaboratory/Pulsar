@@ -1,5 +1,10 @@
 # Pulsar #253 — NVENC, réception et décodage
 
+> Historical increment: “without publication” describes the state when this
+> study was written. Its code is included in 3.0.0, but ready-drain and async
+> output remain experimental and disabled by default. See
+> [current libobs defaults](LIBOBS-CHANGES.md#defaults-experiments-and-rollback).
+
 ## Résultat de cet incrément
 
 Travail direct dans la conversation, sans agent ni publication. Le patch 0051

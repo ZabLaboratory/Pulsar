@@ -1,265 +1,234 @@
-# Pulsar — Development
+# Pulsar — development (3.0.0)
 
-V1 ships Windows x64 only. macOS and Linux are deferred. The build
-scripts live in `scripts/`; everything they wrap is reproducible by
-hand for debugging.
+Build and test Pulsar from a dedicated checkout/worktree. The native target is
+Windows x64; the WebSocket client and pure analysis tests can run elsewhere.
+The [architecture](ARCHITECTURE.md) explains ownership and the
+[OBS/libobs inventory](LIBOBS-CHANGES.md) explains the complete patch stack.
 
 ## Toolchain
 
-| | |
+| Tool | Requirement / use |
 |---|---|
-| OS | Windows 10/11 x64 |
-| Compiler | Visual Studio 2022 Build Tools — workload "Desktop development with C++" + Windows 11 SDK. The optional "C++ ATL" component (`Microsoft.VisualStudio.Component.VC.ATL`) is **not** required for the headless path but enables `obs-qsv11` / `win-dshow` locally (see [ATL runbook](runbooks/atl-missing-build-failure.md)). |
-| CMake | 3.28+ |
-| Generator | Visual Studio 17 2022 (default) or Ninja |
-| Yarn | 4.x via Corepack (used by upstream's build scripts) |
-| Git | with submodule + LFS support |
-| Python | 3.11+ for the probe scripts |
-| ffmpeg | for the live broadcast probe (the runner uses `FedericoCarboni/setup-ffmpeg`) |
-| PowerShell | the build / probe orchestrators are `.ps1` |
+| Windows | Windows 10/11 x64 for the native runtime. |
+| Visual Studio | VS 2022 C++ desktop tools and Windows SDK. ATL is optional for a reduced build, but required for QSV/DirectShow/virtual-camera coverage. |
+| CMake | 3.28 or newer; the script resolves its executable from its configured local candidate or PATH. There is no `-CMakeExe` parameter. |
+| Git | Submodule access to the pinned OBS fork and nested dependencies. The configured submodule URL uses SSH. |
+| Node.js / npm | Node 18+ package contract; CI uses Node 20. npm workspaces, ESM and TypeScript. |
+| Python | 3.11+ for protocol/probe tooling; install each probe's declared dependencies. |
+| FFmpeg / ffprobe | Real media validation, recording inspection and correlation tests. |
+| PowerShell | Windows build/package/probe orchestration. |
+| Physical GPU | Required for accelerated CEF/hardware qualification; software-only CI cannot substitute for that evidence. |
 
-`scripts/build-win.ps1` prefers `D:\DevTools\CMake\bin\cmake.exe` and
-falls back to `PATH`. Override with `-CMakeExe <path>` if needed.
+Upstream CMake provisions its pinned dependency archives. Use the repository's
+actual script and preset requirements; old phase comments are not a second
+build interface.
 
-## Local build
+## Install package dependencies
+
+From the repository root:
 
 ```powershell
-git clone --recurse-submodules https://github.com/ZabLaboratory/Pulsar
-cd Pulsar
-.\scripts\build-win.ps1                    # configure + build (light)
-.\scripts\build-win.ps1 -Full              # full build (CEF + obs-browser)
-.\scripts\build-win.ps1 -Clean             # wipe build dir, keep dependency caches
-.\scripts\build-win.ps1 -GuiBuild          # restore upstream's full obs64.exe (debugging only)
-.\scripts\package-win.ps1 -Zip             # produce the light distributable zip
-.\scripts\package-win.ps1 -Zip -Full       # produce the full distributable zip
+$env:PULSAR_BUNDLE_SKIP_POSTINSTALL = "1"
+npm ci
+npm run build -w @clodocapeo/pulsar-client
+npm run build -w @clodocapeo/pgm-correlator
+npm run build -w @clodocapeo/pulsar-bundle
+npm run build -w @clodocapeo/pulsar-bundle-full
+npm run build -w @clodocapeo/capture-pgm-compat
+npm run lint
 ```
 
-What `build-win.ps1` does, in order:
+Skipping postinstall avoids downloading an old/missing released binary while
+building this source candidate. It does not make `spawn()` usable without
+a native runtime; supply its `binariesPath` explicitly for local work.
 
-1. Reset `upstream/` to `git submodule status --cached` (the recorded SHA).
-2. Replay every `patches/*.patch` lexically via `git am`.
-3. Configure: `cmake --preset windows-x64 -S upstream` + Pulsar overrides
-   (`ENABLE_FRONTEND=OFF`, `ENABLE_UI=OFF`, `ENABLE_BROWSER=OFF` in
-   light mode; `-Full` flips them on).
-4. Build: `cmake --build --preset windows-x64 --config RelWithDebInfo`.
-5. Compile Pulsar plugins under `plugins/` against the just-built libobs.
-6. Output lands in `upstream/build_x64/rundir/RelWithDebInfo/`.
-
-First run is ~25–30 min on a typical machine — the obs-deps + Qt6 +
-CEF tarballs (a few hundred MB) download once into the local cache.
-Incremental rebuilds are seconds.
-
-## Running it
+## Native build
 
 ```powershell
-cd upstream\build_x64\rundir\RelWithDebInfo\bin\64bit
-$env:PULSAR_PORT     = "4455"
-$env:PULSAR_PASSWORD = "dev-only-do-not-ship-this"
-.\pulsar.exe
-# look for: PULSAR_READY ws=ws://127.0.0.1:4455 password=dev-only-...
+.\scripts\build-win.ps1 -Full
 ```
 
-Then drive it from any v5 client. With the typed client in this repo:
+The default output is:
 
-```powershell
-cd packages\pulsar-client
-npm install
-node -e "
-import('./dist/index.js').then(async ({ PulsarClient }) => {
-  const p = new PulsarClient();
-  await p.connect({ url: 'ws://127.0.0.1:4455', password: 'dev-only-do-not-ship-this' });
-  console.log(await p.video.get());
-  await p.disconnect();
+```text
+upstream/build_x64/rundir/RelWithDebInfo/
+  bin/64bit/pulsar.exe
+  obs-plugins/64bit/
+  data/
+```
+
+The build:
+
+1. Resolves the recorded OBS pin and the lexical patch sets.
+2. Reuses an exact clean fingerprinted patched checkout, or reconstructs it
+   from the pin and replays root and nested-browser patches separately.
+3. Configures/builds the upstream runtime with OBS Studio frontend/UI disabled.
+   `-Full` enables browser compilation; it does **not** enable the OBS UI.
+4. Configures/builds the Pulsar CMake targets against those headers/libraries.
+5. Stages the matching Qt/runtime/module resources in the rundir.
+
+**Preserve local upstream work before running this script.** Reconstructing a
+generated patched checkout can reset it. Never use a shared/dirty upstream
+tree as a scratch space for changes that have not been exported as patches.
+
+### Build switches
+
+| Switch | Meaning |
+|---|---|
+| no switch | Complete headless build without full browser capability. |
+| `-Full` | Complete headless build including browser/CEF; release prerequisite. |
+| `-Stage configure` | Configure path, including patch preparation. |
+| `-Stage build` | Build using the relevant existing/configured state; not a promise to ignore changed patch inputs. |
+| `-Fast` | Narrow incremental target loop using an existing compatible headless cache. |
+| `-RefreshPatches` | Force reconstruction/replay even when fingerprints would allow reuse. |
+| `-Clean` | Remove the selected build output/cache before configuration; preserve dependency downloads. Use only for an intended cold rebuild. |
+| `-UpstreamBuildDir <path>` | Alternate upstream build directory; relative paths resolve from the repository. `PULSAR_UPSTREAM_BUILD_DIR` is the environment alternative. |
+| `-CI` | Select the CI upstream preset. |
+| `-GuiBuild` | Upstream GUI comparison/debug build, not the distributed Pulsar product. |
+
+`-Fast` builds libobs, D3D11, frontend API, DirectShow/filter, NVENC, x264 and
+the Pulsar headless target/dependencies. It inherits the existing browser
+capability, but does not rebuild every independent Pulsar DLL.
+Do not use it to validate WebSocket/browser/plugin changes that are outside
+that target closure. It cannot be combined with `-Full`, `-GuiBuild`,
+`-Clean` or configure-only mode.
+
+Packaging currently reads the **default** `upstream/build_x64` rundir.
+An alternate build directory is not automatically consumed by the packager;
+verify the selected runtime before packaging.
+
+## Run a local build
+
+Prefer the bundle API with an explicit binary path:
+
+```js
+import { spawn } from "./packages/pulsar-bundle-full/dist/index.js";
+
+const pulsar = await spawn({
+  binariesPath: "D:/path/to/Pulsar/upstream/build_x64/rundir/RelWithDebInfo",
+  readyTimeoutMs: 60_000,
 });
-"
+try {
+  console.log(await pulsar.client.capabilities.get());
+} finally {
+  await pulsar.shutdown();
+}
 ```
 
-## Probes
+Use a path for **your** checkout. The example reads capabilities only; a real
+recording/streaming application must finalize outputs before shutdown.
 
-Seven Python probe scripts live under `scripts/`. Each is self-contained
-and is the source of truth for what it asserts.
+Direct launch uses `bin/64bit/pulsar.exe` and environment configuration,
+not a documented `--service --port --config` CLI. The executable resolves
+its modules/data from its location and creates/uses a private runtime cwd.
+The Node helper allocates a per-child port; a manual supervisor should also
+assign one when starting concurrent instances.
 
-| Probe | What it covers |
-|---|---|
-| `probe-websocket.py` | v5 handshake (Hello → Identify → Identified), `GetVersion` round-trip. |
-| `probe-source-kinds.py` | `GetInputKindList` against the expected V1 source matrix. |
-| `probe-events.py` | scene/input/source CRUD + the matching v5 events. |
-| `probe-scene-list-truth.py` | `CreateScene` → `GetSceneList` → `RemoveScene`: the scene list must be libobs's live truth, never a stub-side snapshot (#119, ADR Prism 026 §3.1). |
-| `probe-manifest-inventories.py` | `pulsar:GetCapabilities` — the manifest's inventories stay **presence-only**: every item carries exactly `value`, no filter property bound rides along, and `video_colorimetry` publishes no selectable list (#144, ADR Prism 027 §3.3 blocs 3-4 / ADR 023 §3.3). |
-| `probe-record.py` | `StartRecord` / `StopRecord` lifecycle, ffprobes the resulting MP4 (codec=h264, audio=aac, fps, bitrate). |
-| `probe-adaptive.py` | adaptive bitrate worker — drives a destination, induces drops by stress, checks `pulsar:BitrateAdjusted` event ordering. |
-| `probe-multi-stream.py` | multi-destination CRUD + start/stop. **Excluded** from `run-probes.ps1` because of upstream-obs races; covered by the live broadcast probe instead. |
+## Validation matrix
 
-`scripts/run-probes.ps1` orchestrates the offline suite end-to-end:
-spawns `pulsar.exe`, waits for `PULSAR_READY`, runs each probe
-sequentially, collects exit codes, prints the tail of stdout/stderr on
-failure, and shuts the process down. Used by:
+| Layer | Command / location | What it proves |
+|---|---|---|
+| TypeScript | `npm run lint` and per-workspace `npm run build` | Types and package builds, not native execution. |
+| Client/bundle/correlator tests | `npm run test -w <package>` | SDK behavior, fake-child lifecycle tests, real local WS/FFmpeg tests where named. |
+| Contract tests | `scripts/contracts/`, workflow `contract-tests` | Schema, ordering, guards and deterministic state behavior. |
+| Native CTest | `ctest --test-dir build -C RelWithDebInfo --output-on-failure` | Registered native/lifecycle/queue/encoder and offline integration gates. |
+| Offline runtime | `.\scripts\run-probes.ps1` | Self-spawn and shared-instance v5/media/capability checks. |
+| Capture/PGM | [package guide](../packages/capture-pgm-compat/README.md) | Actual CEF capture recorded/decoded, when hardware/opt-in requirements are met. |
+| Dual-lane hardware | [canary](runbooks/pulsar-dual-lane-canary.md) and [latency probe](runbooks/probe-take-latency.md) | Same-candidate workload, timing and resource gates. |
+| Release broadcast | Tag/authorized dispatch workflow | Real Twitch output plus recording/diagnostics; not a physical-display measurement. |
 
-- `ctest` (top-level `CMakeLists.txt` adds `add_test(NAME probes ...)`).
-- The `offline-probes` job in `.github/workflows/pipeline.yml`.
-- Local development — just run it directly.
+The offline suite is not “seven probes.” The orchestrator includes startup,
+recording, CEF/control lifecycle, service settings, capabilities/presets,
+multi-track audio, source inventories, scene truth, monitoring, adaptive
+bitrate and record splitting. Its source lists the exact current sequence.
+The standalone multi-stream probe is not part of the shared-instance loop.
+
+A hardware skip is **not a pass**. Keep that limitation in the report.
+For a failure, inspect the first failed stage and process exit evidence;
+later connection-refused errors can be consequences of an earlier crash.
+
+## Packaging
+
+After a complete fresh full build of the intended revision:
 
 ```powershell
-.\scripts\run-probes.ps1
+.\scripts\package-win.ps1 -Variant light -Zip -SkipBuild
+.\scripts\package-win.ps1 -Variant full -Zip -SkipBuild
 ```
 
-The live broadcast probe (`scripts/probe-twitch-live.py`) is **not**
-part of the offline suite — it needs a real Twitch stream key + ~1 min
-of network bandwidth. It runs from the `live-broadcast` job in
-`pipeline.yml` against the project's Twitch credentials, produces a
-local MP4 + a diagnostic JSON, and uploads them as artefacts.
-Since #132 that job is **off the per-commit path** — tag push and
-`workflow_dispatch` only — so a real-ingest regression surfaces at
-release time or on an antenna run, not on the PR that introduced it.
-Run it on demand from the Actions tab before merging anything that
-touches the encoder / service / rtmp lifecycle.
+Without `-SkipBuild`, the packaging script invokes its required build path,
+but it expects the default runtime directory to exist when resolving input.
+The explicit build-then-package sequence above is the reliable first-run
+procedure. There is no packager `-Full` switch.
 
-## CI — `.github/workflows/pipeline.yml`
+Artifacts are created under `dist/`. The full package retains the browser
+fork/CEF, text/VLC modules and nv-filters; light strips them. NVIDIA SDK
+binaries/models are not included. Check module presence and assets on the ZIP,
+not only on the build tree.
 
-A single workflow with 9 jobs. One build, multiple gates that share
-its artefact via `upload-artifact` / `download-artifact`.
+## CI and release
 
-| Job | Runs on | Triggers | What it does |
-|---|---|---|---|
-| `lint` | ubuntu-latest | every PR + push to main | source-grep (no `__declspec(dllexport)` / `napi_*` / `node-gyp` / `prism` / `electron`), patches apply cleanly, plugins carry metadata, npm tarball content audit |
-| `build` | windows-2022 | every PR + push to main | `scripts/build-win.ps1 -Full`, uploads `pulsar-rundir` artefact consumed by all subsequent gates |
-| `binary-gate` | windows-2022 | every PR + push to main | `scripts/check-binary-exports.ps1` over `pulsar.exe`, `pulsar-browser-page.exe`, and every plugin DLL |
-| `offline-probes` | windows-2022 | every PR + push to main | `ctest` with retry, runs the offline probe suite |
-| `live-broadcast` | windows-2022 | tag `v*.*.*` + `workflow_dispatch` **only** (#132) | end-to-end Twitch broadcast — 600 s on tag, operator-chosen on dispatch — produces MP4 + diagnostic JSON |
-| `publish-gh-pages` | ubuntu-latest | push to main + tag | `peaceiris/actions-gh-pages` — publishes the broadcast MP4 to `gh-pages` so the README inline player streams the latest run |
-| `package` | windows-2022 | tag `v*.*.*` push | `scripts/package-win.ps1 -Zip` for both light + full variants |
-| `release-attach` | ubuntu-latest | tag push | `softprops/action-gh-release` with the zips + MP4 + diagnostic JSON |
-| `npm-publish` | ubuntu-latest | tag push | `npm publish` for the three packages (parallel to `build` — does not need the Windows artefact) |
+[pipeline.yml](../.github/workflows/pipeline.yml) runs on PRs, main pushes,
+version tags and explicit dispatch. Its jobs are:
 
-Triggers (deduped to avoid duplicate runs):
+- change classification, lint/source/package audits and contract tests;
+- full Windows build, binary export gate, native/offline probes;
+- capture/PGM compatibility with explicit hardware skip reporting;
+- authorized tag/dispatch live broadcast;
+- package, npm publish, release attachment and broadcast-page publication
+  when their trigger/dependency conditions are satisfied.
 
-- `push: branches: [main]` + `tags: ['v*.*.*']`
-- `pull_request: branches: [main]`
-- `workflow_dispatch` with toggles for `enable_package`,
-  `enable_release_attach`, `enable_npm_publish`, and a custom
-  `live_test_duration_seconds`.
+Tag broadcast duration is 600 seconds. Dispatch uses `duration_seconds`
+(default 300), `fps` and the explicit package/release/npm toggles.
+Do not copy old `live_test_duration_seconds` examples.
 
-Skip a run from a docs-only commit by appending `[skip ci]` to the
-commit message — GitHub Actions honours that natively.
+Do not skip CI or bypass a required check to publish a documentation/version
+refresh. Read the [release runbook](runbooks/cut-a-release-and-propagate.md)
+for version/tag consistency, complete changelog, matching assets and readback.
 
-## Adding a patch
+## Maintaining native patches
 
-The build pipeline replays `patches/*.patch` onto the recorded
-submodule SHA on every run, so authoring a new patch is producing a
-clean `format-patch` artefact.
+[patches/README.md](../patches/README.md) is the authoring entry point.
+Use a dedicated worktree, preserve the full source lineage and export the
+change with `git format-patch`. A nested-browser patch belongs to the nested
+repository, not the root OBS checkout.
 
-1. Make sure `upstream/` is at the recorded SHA. If unsure, run
-   `scripts/build-win.ps1 -Stage configure` once — it resets and
-   re-applies whatever patches are present.
-2. `cd upstream` and edit. Branch identity does not matter; `git am`
-   creates commits on detached HEAD when the build script next runs.
-3. Stage and commit with a meaningful message — include
-   `Pulsar-Patch: NNNN` and `Upstream-Candidate: yes/no` trailers so
-   the patch metadata stays self-describing.
-4. `git format-patch -1 --start-number NNNN -o ../patches HEAD`. Pick
-   the next free number (gaps are fine).
-5. `git reset --hard <recorded-sha>` to restore upstream/. The patch
-   lives in `patches/` now; the build script will re-apply it on the
-   next configure.
-6. Run `scripts/build-win.ps1 -Stage configure` to verify the patch
-   applies cleanly. Rebuild and validate the change is observable at
-   runtime.
-7. Open a PR. If the patch is upstream-eligible, also open the
-   corresponding PR on `obsproject/obs-studio` and link it from the
-   patch header.
+Do not reset unexported work, renumber the existing stack casually or delete
+an intermediate patch as a runtime rollback. Verify replay from the recorded
+pin and run the controls invalidated by the change. A core ABI or lifecycle
+change needs native validation as well as source application.
 
-## Adding a plugin
+## Adding or changing a component
 
-1. Create `plugins/pulsar-<name>/` with `CMakeLists.txt` + `README.md`
-   + your sources.
-2. Register it in the top-level `CMakeLists.txt` under the
-   `PULSAR_BUILD_PLUGINS` block.
-3. If the plugin adds a vendor request handler or event, document the
-   surface in [`PROTOCOL.md`](PROTOCOL.md) and add a typed wrapper to
-   `packages/pulsar-client/src/`.
-4. Add a probe script under `scripts/probe-<name>.py` if the surface
-   is non-trivial. Wire it into `scripts/run-probes.ps1`.
+Keep ownership in the existing component when possible. A new CMake target
+must be registered in the top-level build, documented in the
+[plugin inventory](../plugins/README.md), packaged if appropriate, and covered
+by the right native/protocol tests.
 
-## Versioning
+A wire change also updates [PROTOCOL.md](PROTOCOL.md), the canonical contract
+when applicable, typed client mapping and consumer-facing documentation.
+Do not silently change an approved ADR or add unimplemented methods to a
+README as if they already ship.
 
-Semver. Pinned in consumers via exact version match.
+## Versioning and migration
 
-- **Patch** (`x.y.Z`): bug fix, no protocol change, no env-var rename.
-- **Minor** (`x.Y.0`): new feature — additive `pulsar:*` request,
-  new destination kind, new env var. Consumers may need to consume
-  the new version to expose the feature.
-- **Major** (`X.0.0`): breaking change to `pulsar:*` extensions, env
-  var rename, or embedding contract change. Coordinated bump with
-  consumers.
+`VERSION` is the native/release version source. The client and two bundle
+package versions and exact client dependencies must match it. Refresh the
+lockfile and internal tooling dependencies deliberately. Other packages,
+such as pgm-correlator, do not become version 3.0.0 merely because Pulsar does.
 
-The single source of truth for the version string is the top-level
-`VERSION` file. C++ reads it via the build, npm reads it via
-`package.json`, and the postinstall scripts read it to fetch the
-matching binary. Bump it, commit, tag.
+A source merge, npm publication, release ZIP and installed consumer runtime
+are four different delivery states. Verify the actual asset and consumer
+deployment only when that consumer is in the authorized scope.
 
 ## Troubleshooting
 
-### `error C1083: Cannot open include file: 'atlbase.h'` (or `atlcomcli.h` / `atlstr.h`)
-
-ATL headers missing — the "C++ ATL" VS component is not installed on this machine.
-`scripts/build-win.ps1` detects this automatically and skips the three affected
-plugins (`obs-qsv11`, `win-dshow`, `virtualcam-module`) with `PULSAR_HAVE_ATL=OFF`.
-If you are invoking CMake directly (bypassing the script) the build will fail.
-Full diagnosis, gate mechanics, rollback, and optional ATL install instructions:
-[docs/runbooks/atl-missing-build-failure.md](runbooks/atl-missing-build-failure.md).
-
-### `pulsar.exe did not signal ready within 30000ms`
-
-The most common cause is `cwd` being wrong — libobs cannot find
-`data/libobs/default.effect`. Always spawn with
-`cwd = <pulsar root>/bin/64bit`.
-
-Other causes: a port conflict (another Pulsar / OBS Studio instance
-on the same port), an antivirus quarantining a fresh `pulsar.exe`,
-or the obs-websocket plugin failing to load (check `obs-plugins/64bit/`
-exists and contains `obs-websocket.dll`).
-
-### `Failed to find file 'default.effect'`
-
-Same root cause: wrong `cwd`. The error appears in pulsar's stdout
-before the READY sentinel.
-
-### `obs_output_start declined silently`
-
-The v5 `StartStream` request returns success but no actual stream
-is opened. Either configure a service via `SetStreamServiceSettings`
-first, or — better — use `pulsar:CreateDestination` +
-`pulsar:StartDestination` from the multi-stream API.
-
-### `WARN: download failed: 404` during `npm install`
-
-The matching `pulsar-windows-x64-v<version>.zip` GitHub Release does
-not exist yet (or the version you bumped to has not been tagged).
-The postinstall soft-fails so `npm install` completes; the bundle is
-unusable until you publish the matching release. For monorepo dev,
-override `binariesPath` in `spawn()` to point at a local
-`upstream/build_x64/rundir/RelWithDebInfo/` instead.
-
-### `npm install ... EBADPLATFORM` on Linux/macOS
-
-`pulsar-bundle` declares `os: ["win32"]` and `cpu: ["x64"]`. On other
-platforms `npm install` skips it cleanly. If you need to install on a
-non-target platform anyway (CI matrix, test scaffolding), pass
-`--force` to npm install — the package's own `postinstall` then
-detects the platform mismatch and exits 0 without downloading.
-
-### Probe times out / `pulsar.exe FAILED (exit 1)` in CI
-
-The `live-broadcast` job uploads the full pulsar stdout/stderr +
-diagnostic JSON as workflow artefacts. Download them from the failed
-run page. The JSON includes per-poll perf samples (active fps, render
-time, drops) so you can attribute lag to encoder vs network.
-
-### A go-live attempt failed, or an output dropped after reaching live
-
-Start from `pulsar:OutputAttemptSettled` / `pulsar:OutputFailed`
-(ADR-005 §3.4/§3.5), never from the log file first — and copy
-`%LOCALAPPDATA%\Pulsar\logs\` out of the retention window before
-investigating further. Full decision tree, the `reason_class` table, and
-the evidence-collection procedure:
-[docs/runbooks/diagnose-a-failed-go-live.md](runbooks/diagnose-a-failed-go-live.md).
+- Missing ATL: [ATL runbook](runbooks/atl-missing-build-failure.md). A reduced
+  build cannot prove DirectShow/QSV coverage.
+- Missing `default.effect`: check complete executable-relative data layout;
+  do not move process state back into a shared binary directory.
+- Missing bundle binary after npm success: postinstall can soft-fail a
+  download; check release availability and explicit `binariesPath`.
+- Native process died: [offline probe diagnosis](runbooks/offline-probe-suite-connection-refused.md).
+- Go-live failed: [output diagnosis](runbooks/diagnose-a-failed-go-live.md).
+- Wrong return instance or stale reader: [lease watcher](runbooks/directshow-lease-watcher.md).

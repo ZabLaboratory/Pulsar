@@ -1,5 +1,9 @@
 # Preview audio / AFV descope contract
 
+> This descope remains applicable in 3.0.0: video role exchange does not add
+> Preview audio or audio-follow-video. See [architecture](../ARCHITECTURE.md)
+> for the common ProgramAudio route.
+
 Status: `DESCOPED`
 
 This document is the versioned contract decision for
