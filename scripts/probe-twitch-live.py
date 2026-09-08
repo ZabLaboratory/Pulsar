@@ -104,18 +104,14 @@ POLL_INTERVAL_SEC     = 5.0
 DESTINATION_NAME      = "pulsar-live-test"
 HOSTED_INPUT_NAME     = "PulsarHostedTransportSource"
 
-# StartDestination can race the engine boot : the frontend streaming
-# output is wired asynchronously after pulsar.exe spawns, and a probe
-# that reaches StartDestination within a few seconds of boot can hit a
-# transient `frontend streaming output unavailable` before the output
-# exists. This is a boot-ordering race, not a broadcast failure (same
-# binary/key passes on retry). We poll StartDestination for a bounded
-# budget, but ONLY while the error is exactly that transient string —
-# any other error (bad key, RTMP reject, etc.) fails immediately, and
-# exhausting the budget is a hard failure. No masking : a genuinely
-# broken streaming path never produces this exact transient and would
-# still fail.
-START_DEST_BOOT_ERROR   = "frontend streaming output unavailable"
+# StartDestination can observe the output before its encoders are attached.
+# These two exact not-ready states may clear during boot, but can also be
+# permanent failures. Retry only within the fixed budget; neither state is
+# evidence of success. All other failures return immediately.
+START_DEST_BOOT_ERRORS = frozenset({
+    "frontend streaming output unavailable",
+    "encoders not bound on streaming output",
+})
 START_DEST_RETRY_BUDGET = 20.0   # seconds to wait out the boot race
 START_DEST_RETRY_DELAY  = 1.0    # poll cadence between attempts
 
@@ -407,6 +403,34 @@ def dump_response(label: str, resp: dict) -> None:
 
 def fail_log(label: str, msg: str) -> None:
     print(f"::error::live-test {label}: {msg}", file=sys.stderr)
+
+
+async def start_destination(ws, inbox: Inbox, dest_id: str) -> tuple[dict, int]:
+    """Wait for output/encoder readiness, with one monotonic retry budget."""
+    deadline = time.monotonic() + START_DEST_RETRY_BUDGET
+    attempt = 0
+    response: dict = {}
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return response, attempt
+        attempt += 1
+        response = await vendor_call(
+            ws, inbox, f"start-dest-{attempt}", "pulsar", "StartDestination",
+            {"id": dest_id}, timeout=remaining)
+        data = vendor_response_data(response)
+        if (not vendor_request_status(response).get("result")
+                or data.get("started")
+                or str(data.get("error", "")) not in START_DEST_BOOT_ERRORS):
+            return response, attempt
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return response, attempt
+        delay = min(START_DEST_RETRY_DELAY, remaining)
+        print(f"[live-test] start-dest attempt #{attempt} : "
+              f"streaming output not ready yet ('{data['error']}'), "
+              f"retrying in {delay}s")
+        await asyncio.sleep(delay)
 
 
 def sustained_fps(samples: list[dict]) -> float | None:
@@ -765,34 +789,16 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                 return 1
             print(f"[live-test] destination created : id={dest_id}")
 
-            # 3. StartDestination — poll out the boot race (see
-            #    START_DEST_BOOT_ERROR note above). Only the exact
-            #    transient boot error is retried ; everything else fails
-            #    on the first attempt.
-            deadline = time.time() + START_DEST_RETRY_BUDGET
-            attempt = 0
-            while True:
-                attempt += 1
-                r = await vendor_call(ws, inbox, f"start-dest-{attempt}",
-                    "pulsar", "StartDestination", {"id": dest_id})
-                sd = vendor_response_data(r)
-                if sd.get("started"):
-                    break
-                err = str(sd.get("error", ""))
-                transient = (err == START_DEST_BOOT_ERROR)
-                if transient and time.time() < deadline:
-                    print(f"[live-test] start-dest attempt #{attempt} : "
-                          f"streaming output not ready yet "
-                          f"('{err}'), retrying in {START_DEST_RETRY_DELAY}s")
-                    await asyncio.sleep(START_DEST_RETRY_DELAY)
-                    continue
-                # Either a non-transient error, or the boot race never
-                # cleared within budget — both are hard failures.
+            # 3. StartDestination: only the exact boot-readiness states retry.
+            r, attempt = await start_destination(ws, inbox, dest_id)
+            sd = vendor_response_data(r)
+            if not vendor_request_status(r).get("result") or not sd.get("started"):
                 dump_response("start-dest", r)
                 status = vendor_request_status(r)
-                reason = ("boot race unresolved after "
+                reason = ("boot readiness unresolved after "
                           f"{START_DEST_RETRY_BUDGET}s ({attempt} attempts)"
-                          if transient else "not started")
+                          if str(sd.get("error", "")) in START_DEST_BOOT_ERRORS
+                          else "not started")
                 fail_log("start-dest",
                     f"{reason} ; requestStatus={status} responseData={sd}")
                 return 1

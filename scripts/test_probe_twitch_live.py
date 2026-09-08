@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 from unittest.mock import Mock
+from types import SimpleNamespace
 import uuid
 
 
@@ -69,6 +70,68 @@ def test_encoder_family_attestation_is_exact(monkeypatch):
     assert not probe.wait_for_encoder_family(
         ['[pulsar] video encoder allocated: family=nvenc id=obs_nvenc_h264_tex'],
         'x264', timeout=0)
+
+
+def run_start_sequence(monkeypatch, replies, budget=20.0):
+    probe = load_probe(monkeypatch)
+    clock = [0.0]
+    calls = []
+    sleeps = []
+    monkeypatch.setattr(probe, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(probe, 'START_DEST_RETRY_BUDGET', budget)
+
+    async def fake_vendor(*args, **kwargs):
+        calls.append((args, kwargs))
+        return replies[min(len(calls) - 1, len(replies) - 1)]
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+        clock[0] += delay
+
+    monkeypatch.setattr(probe, 'vendor_call', fake_vendor)
+    monkeypatch.setattr(probe.asyncio, 'sleep', fake_sleep)
+    result = asyncio.run(probe.start_destination(None, None, 'fixture-dest'))
+    return result, calls, sleeps, clock[0]
+
+
+def start_reply(error=None, *, accepted=True):
+    return {'requestStatus': {'result': accepted}, 'responseData': {'responseData': {
+        'started': error is None, **({'error': error} if error else {}),
+    }}}
+
+
+def test_start_destination_waits_for_output_then_encoders(monkeypatch):
+    ready = start_reply()
+    (reply, attempts), calls, sleeps, elapsed = run_start_sequence(monkeypatch, [
+        start_reply('frontend streaming output unavailable'),
+        start_reply('encoders not bound on streaming output'), ready,
+    ])
+    assert reply == ready and attempts == 3
+    assert sleeps == [1.0, 1.0] and elapsed == 2.0
+    assert [call[0][2] for call in calls] == ['start-dest-1', 'start-dest-2', 'start-dest-3']
+    assert [call[1]['timeout'] for call in calls] == [20.0, 19.0, 18.0]
+
+
+def test_start_destination_permanently_missing_encoder_exhausts_budget(monkeypatch):
+    missing = start_reply('encoders not bound on streaming output')
+    (reply, attempts), calls, sleeps, elapsed = run_start_sequence(monkeypatch, [missing], 2.5)
+    assert reply == missing and attempts == 3
+    assert sleeps == [1.0, 1.0, 0.5] and elapsed == 2.5
+    assert [call[1]['timeout'] for call in calls] == [2.5, 1.5, 0.5]
+
+
+def test_start_destination_unknown_error_fails_without_retry(monkeypatch):
+    failure = start_reply('could not create rtmp_output')
+    (reply, attempts), calls, sleeps, elapsed = run_start_sequence(monkeypatch, [failure])
+    assert reply == failure and attempts == len(calls) == 1
+    assert sleeps == [] and elapsed == 0
+
+
+def test_start_destination_rejected_envelope_is_not_retried(monkeypatch):
+    failure = start_reply('encoders not bound on streaming output', accepted=False)
+    (reply, attempts), calls, sleeps, elapsed = run_start_sequence(monkeypatch, [failure])
+    assert reply == failure and attempts == len(calls) == 1
+    assert sleeps == [] and elapsed == 0
 
 
 def test_sustained_fps_discards_warmup_and_exposes_starvation(monkeypatch):
