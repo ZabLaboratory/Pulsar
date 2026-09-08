@@ -48,19 +48,59 @@ def test_explicit_runtime_is_forwarded_and_config_is_read_there(monkeypatch, tmp
 
 def test_spawn_forwards_explicit_hosted_transport_profile(monkeypatch, tmp_path):
     probe = load_probe(monkeypatch, tmp_path / 'runtime')
-    monkeypatch.setenv('LIVE_TEST_RESOLUTION', '1280x720')
-    monkeypatch.setenv('LIVE_TEST_BITRATE', '3000')
+    monkeypatch.setenv('LIVE_TEST_RESOLUTION', '1920x1080')
+    monkeypatch.setenv('LIVE_TEST_BITRATE', '6000')
     monkeypatch.setenv('LIVE_TEST_ENCODER', 'x264')
     monkeypatch.setattr(probe, 'LIVE_VOD_DIR', tmp_path / 'vod')
     spawn = Mock()
     monkeypatch.setattr(probe.subprocess, 'Popen', spawn)
-    probe.spawn_pulsar(tmp_path / 'pulsar.exe', 15)
+    probe.spawn_pulsar(tmp_path / 'pulsar.exe', 60)
     env = spawn.call_args.kwargs['env']
-    assert env['PULSAR_FPS'] == '15'
-    assert env['PULSAR_RESOLUTION'] == '1280x720'
-    assert env['PULSAR_VIDEO_BITRATE'] == '3000'
+    assert env['PULSAR_FPS'] == '60'
+    assert env['PULSAR_RESOLUTION'] == '1920x1080'
+    assert env['PULSAR_VIDEO_BITRATE'] == '6000'
     assert env['PULSAR_VIDEO_ENCODER'] == 'x264'
-    assert probe.live_resolution() == (1280, 720)
+    assert probe.live_resolution() == (1920, 1080)
+
+
+def test_unsupported_fps_cannot_silently_fall_back_to_60(monkeypatch, tmp_path):
+    import pytest
+    probe = load_probe(monkeypatch, tmp_path / 'runtime')
+    spawn = Mock()
+    monkeypatch.setattr(probe.subprocess, 'Popen', spawn)
+    with pytest.raises(ValueError, match='unsupported native FPS 15'):
+        probe.spawn_pulsar(tmp_path / 'pulsar.exe', 15)
+    spawn.assert_not_called()
+
+
+def test_probe_fps_allowlist_matches_native_boot_parser(monkeypatch):
+    import re
+    probe = load_probe(monkeypatch)
+    source = (probe.REPO_ROOT / 'plugins/pulsar-headless/main.cpp').read_text(encoding='utf-8')
+    fps_block = source.split('std::getenv("PULSAR_FPS")', 1)[1].split('ovi.fps_num', 1)[0]
+    assert {int(value) for value in re.findall(r'v == (\d+)', fps_block)} == probe.NATIVE_SUPPORTED_FPS
+
+
+def test_native_video_profile_readback_is_authoritative(monkeypatch):
+    probe = load_probe(monkeypatch)
+    response = {'requestStatus': {'result': True}, 'responseData': {
+        'baseWidth': 1920, 'baseHeight': 1080, 'outputWidth': 1920,
+        'outputHeight': 1080, 'fpsNumerator': 60, 'fpsDenominator': 1,
+    }}
+    assert probe.video_profile_matches(response, 1920, 1080, 60)
+    assert not probe.video_profile_matches(response, 1920, 1080, 15)
+    assert not probe.video_profile_matches(response, 1280, 720, 60)
+    response['responseData']['fpsDenominator'] = 0
+    assert not probe.video_profile_matches(response, 1920, 1080, 60)
+
+
+def test_27_fps_is_not_1080p60_qualification(monkeypatch):
+    probe = load_probe(monkeypatch)
+    samples = [{'active_fps': 27}] * 6
+    assert not probe.cadence_below_target(samples, 60, 25)
+    assert probe.cadence_below_target(samples, 60, 30)
+    assert not probe.cadence_below_target(
+        [{'active_fps': 1}] + [{'active_fps': 60}] * 5, 60, 30)
 
 
 def test_encoder_family_attestation_is_exact(monkeypatch):
