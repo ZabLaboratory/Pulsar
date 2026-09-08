@@ -30,6 +30,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# MSBuild --parallel schedules projects; without /MP each large Pulsar
+# project still compiles its translation units serially. Keep the per-project
+# limit bounded so concurrent Qt/CEF projects fit the hosted runner's memory.
+if(MSVC)
+    set(PULSAR_COMPILE_JOBS 2 CACHE STRING "MSVC compiler processes per Pulsar project")
+    if(NOT PULSAR_COMPILE_JOBS MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "PULSAR_COMPILE_JOBS must be a positive integer")
+    endif()
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/MP${PULSAR_COMPILE_JOBS}>")
+endif()
+
 option(PULSAR_BUILD_HEADLESS      "Build the pulsar-headless service exe"          ON)
 option(PULSAR_BUILD_FRONTEND_STUB "Build the pulsar-frontend-stub static library"  ON)
 option(PULSAR_BUILD_WEBSOCKET     "Build the pulsar-websocket plugin"              ON)
