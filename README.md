@@ -507,10 +507,18 @@ multi-camera capacity guarantee. The [performance study](docs/issue-253-native-o
 retains the workload, results and rejected experiments. Use
 `PULSAR_RAW_CURRENT_READBACK=0` to restore the previous CPU staging path.
 
-The release workflow builds the runtime, runs contract/native/integration gates,
-packages both distributions and performs a real Twitch broadcast. Release assets
-include the archives, broadcast proof, diagnostics and
-`prism-pulsar-runtime-manifest.json` with the full archive's SHA-256 digest.
+The release workflow builds the runtime, runs contract/native/integration gates
+and packages both distributions. Automated Twitch broadcast and GitHub Pages
+proof publication are disabled by owner decision; local hardware proof is reviewed
+separately, and a skipped job is not a successful live qualification. Release assets
+include the archives and `prism-pulsar-runtime-manifest.json` with the full archive's
+SHA-256 digest; separately collected proof may also be attached.
+
+To publish an already prepared draft without replacing its immutable assets,
+dispatch the pipeline on `main` with `enable_release_attach=true`,
+`release_tag=v3.0.0` (the desired existing tag) and `enable_package=false`.
+Publication waits for the non-live gates and verifies every existing asset hash,
+the runtime manifest, tag identity and preservation of the existing release notes.
 
 See the [complete 3.0.0 changelog](docs/releases/3.0.0.md), including every commit
 since `v2.0.0b`, and the [release pipeline](.github/workflows/pipeline.yml).
