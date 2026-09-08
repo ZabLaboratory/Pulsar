@@ -90,7 +90,28 @@ find_package(nlohmann_json 3.11 REQUIRED)
 set(CEF_ROOT "${CEF_ROOT_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${CEF_ROOT_DIR}/cmake")
 find_package(CEF 95 REQUIRED)
-add_subdirectory("${CEF_ROOT_DIR}/libcef_dll" libcef_dll_wrapper)
+
+# The pinned OBS CEF distribution already contains the /MT Release and /MTd
+# Debug wrappers used by upstream FindCEF.cmake. Recompiling this unmodified
+# third-party wrapper costs minutes on a cold hosted build. Consume the same
+# prebuilt dependency as OBS; retain a source-build switch for CEF development
+# and a source fallback for distributions without these Windows libraries.
+option(PULSAR_REBUILD_CEF_WRAPPER "Build CEF wrapper from source instead of the pinned prebuilt library" OFF)
+set(_cef_wrapper_release "${CEF_ROOT_DIR}/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib")
+set(_cef_wrapper_debug "${CEF_ROOT_DIR}/build/libcef_dll_wrapper/Debug/libcef_dll_wrapper.lib")
+if(WIN32 AND NOT PULSAR_REBUILD_CEF_WRAPPER AND EXISTS "${_cef_wrapper_release}" AND EXISTS "${_cef_wrapper_debug}")
+    add_library(libcef_dll_wrapper STATIC IMPORTED)
+    set_target_properties(libcef_dll_wrapper PROPERTIES
+        IMPORTED_CONFIGURATIONS "Debug;Release"
+        IMPORTED_LOCATION_DEBUG "${_cef_wrapper_debug}"
+        IMPORTED_LOCATION_RELEASE "${_cef_wrapper_release}"
+        MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release
+        MAP_IMPORTED_CONFIG_MINSIZEREL Release
+    )
+    message(STATUS "Pulsar browser: using pinned prebuilt CEF wrapper (same library as upstream OBS)")
+else()
+    add_subdirectory("${CEF_ROOT_DIR}/libcef_dll" libcef_dll_wrapper)
+endif()
 
 # ----------------------------------------------------------------------------
 # pulsar-browser.dll — the libobs plugin loaded by obs_load_all_modules.
