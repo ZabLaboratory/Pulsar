@@ -71,9 +71,13 @@ on:
         type: boolean
         default: false
       enable_release_attach:
-        description: 'Attach distros + proof to a GitHub Release (requires a tag context)'
+        description: 'Attach tag distros, or publish an existing draft selected by release_tag'
         type: boolean
         default: false
+      release_tag:
+        description: 'Existing draft tag to publish without rebuilding or replacing its assets (main dispatch only)'
+        type: string
+        default: ''
       enable_npm_publish:
         description: 'Publish @clodocapeo/pulsar-* to npm (requires NPM_TOKEN + tag-matched VERSION)'
         type: boolean
@@ -319,7 +323,7 @@ jobs:
         # can only be collected with it present. No OBS binary / no VPS reach
         # is needed for these — they assert pure logic (leaf path, scene_control
         # default, the --real-orion URL the CEF loads).
-        run: python -m pip install --upgrade pip pytest websockets
+        run: python -m pip install --upgrade pip pytest websockets PyYAML
 
       - name: Run scene_control contract test
         # Blue is not checked out in Pulsar CI: the test binds its
@@ -335,7 +339,7 @@ jobs:
         # the --real-orion true-wire URL the CEF browser_source loads. The
         # on-air legs are the CTest integration suite (needs the build) +
         # Keeper's antenna run (needs the VPS).
-        run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py scripts/test_probe_twitch_live.py scripts/test_prepare_pages_proof.py -v
+        run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py scripts/test_probe_twitch_live.py scripts/test_prepare_pages_proof.py scripts/test_live_workflow.py scripts/test_publish_existing_release.py -v
 
       - name: Native build cache invalidation and integrity contracts
         run: python -m unittest discover -s scripts -p test_ci_native_cache.py -v
@@ -649,41 +653,17 @@ jobs:
 
   # ── Stage 3c : live broadcast (Twitch + record + diagnostic) ─────
   #
-  # OFF the routine path since #132 (porteur decision : CI wall-clock).
-  # It was the second cost centre after the C++ build -- ~17 min on a
-  # push to main (10 min of real stream + submodule checkout + ffmpeg
-  # setup + VOD transcode + upload), and it serialises on a repo-wide
-  # non-cancelling Twitch lock, so two changes in flight queue behind
-  # each other.
-  #
-  # It is NOT deleted, because "rien n'est valide sans live Twitch
-  # complet" stays the project's validation criterion: the job still
-  # runs on a **tag push** (release-grade broadcast that
-  # feeds gh-pages + the Release attach) and on **workflow_dispatch**
-  # (operator-chosen duration/fps). What we give up is per-commit
-  # coverage of the real-ingest chain:
-  #   - encoder -> real Twitch RTMPS ingest, sustained (regressions in
-  #     rtmp_output / the service lifecycle now surface at tag time, or
-  #     on the antenna run, instead of on the PR that caused them),
-  #   - the VOD proof MP4 + diagnostic.json for that commit,
-  #   - the gh-pages proof refresh on every push to main.
-  # Hosted runners have no physical GPU, so that environment uses a
-  # declared 720p15 x264 transport profile with an animated native media
-  # source. It proves the real ingest path without depending on CEF or
-  # claiming the separate accelerated 1080p60 hardware gate.
-  # The offline suite covers the wire contract, the encoders and the
-  # record path -- not a real ingest. Re-arm per-commit coverage by
-  # deleting the `if:` below.
-  #
-  # `live broadcast (Twitch)` is a REQUIRED status check on main: it
-  # must be dropped from the branch-protection contexts in the same
-  # move, or every PR waits forever on a check that no longer reports.
+  # Disabled by explicit owner decision on 2026-09-08, after accepting local
+  # exact-release-binary proof. Hosted 1080p60 measured only 11.7 actual FPS
+  # (run 34189919375); this disabled job is NOT a live qualification pass.
+  # The probe and its 1080p60/6000 kbps/x264 assertions remain available for
+  # manual hardware testing. Re-enabling automated broadcasts requires a
+  # new owner decision. No fresh CI VOD or Pages proof is produced.
   live-broadcast:
     name: live broadcast (Twitch)
     needs: build
-    if: >-
-      startsWith(github.ref, 'refs/tags/v')
-      || github.event_name == 'workflow_dispatch'
+    # Disabled by the owner: local hardware proof is accepted for this release.
+    if: false
     runs-on: windows-2022
     timeout-minutes: 60
     env:
@@ -860,7 +840,8 @@ jobs:
   publish-gh-pages:
     name: publish proof to gh-pages
     needs: live-broadcast
-    if: success() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    # Disabled by the owner together with the automated Twitch broadcast.
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -954,8 +935,8 @@ jobs:
   # ── Stage 6 : attach distros + proof to GitHub Release (tag only) ─
   release-attach:
     name: GitHub Release attach
-    needs: [package, live-broadcast]
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.enable_release_attach == 'true')
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'workflow_dispatch' || github.event.inputs.enable_release_attach == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -965,12 +946,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: pulsar-distros
-          path: artefacts
-
-      - name: Download broadcast proof
-        uses: actions/download-artifact@v4
-        with:
-          name: pulsar-live-broadcast-proof
           path: artefacts
 
       - name: Create Prism runtime release manifest
@@ -998,11 +973,36 @@ jobs:
         with:
           files: |
             artefacts/*.zip
-            artefacts/pulsar-live-broadcast-proof.mp4
-            artefacts/pulsar-live-broadcast-proof-*.mp4
-            artefacts/diagnostic.json
             artefacts/prism-pulsar-runtime-manifest.json
           fail_on_unmatched_files: true
+
+  # Existing immutable draft publication is deliberately separate from
+  # packaging current main. It preserves the selected tag, notes and assets.
+  release-publish:
+    name: Publish existing GitHub Release
+    needs: [lint, contract-tests, build, binary-gate, offline-probes, capture-pgm-compat]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.event.inputs.enable_release_attach == 'true' && github.event.inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout publisher
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify immutable assets and publish existing draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: >-
+          python scripts/publish-existing-release.py
+          --repo "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG"
+          --assets-dir "$RUNNER_TEMP/existing-release-assets" --publish
 
   # ── Stage 7 : npm packages publish (tag only, parallel to build) ─
   # Independent of pulsar.exe build : different toolchain (Node, not
