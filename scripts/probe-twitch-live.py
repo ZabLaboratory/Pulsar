@@ -16,6 +16,8 @@ Optional env :
                       <repo>/upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/pulsar.exe)
   LIVE_TEST_DURATION  seconds to broadcast (default 300)
   LIVE_TEST_FPS       target encoder fps (default 60 — set via PULSAR_FPS at spawn)
+  LIVE_TEST_RESOLUTION encoder geometry (default 1920x1080)
+  LIVE_TEST_BITRATE   video bitrate in kbps (default 6000)
   PULSAR_RUNTIME_DIR  explicit runtime/config directory (default: unique temporary
                       directory, removed at exit; explicit directories are kept)
 
@@ -28,10 +30,9 @@ Validations :
     returns started=true
   - Throughout the broadcast, every 30 s :
       GetDestinations[<id>].active == true
-      GetVideoSettings.video_bitrate matches target ± tolerance
       GetAdaptiveState samples > 0 (adaptive worker is awake)
-  - Frame drop ratio at end < FRAME_DROP_THRESHOLD (5 %)
-  - Total frames sent >= duration * fps * 0.95
+  - Frame drop ratio throughout < FRAME_DROP_THRESHOLD (5 %)
+  - Post-warmup active FPS averages at least 90 % of the declared profile
   - StopDestination returns clean
   - No "error" / "fail" lines in pulsar stdout/stderr (excluding
     benign warnings on the allowlist)
@@ -90,7 +91,10 @@ EVENT_SUBSCRIPTION_ALL = 0x7FF
 
 # --- Thresholds ---
 FRAME_DROP_RATIO_MAX  = 0.05    # 5 %
+ACTIVE_FPS_RATIO_MIN  = 0.90    # sustained render cadence vs declared target
 SPAWN_TIMEOUT_SEC     = 60.0    # pulsar to print PULSAR_READY + drop config.json
+STOP_RECORD_PENDING_CODE = 702
+STOP_RECORD_SETTLE_SEC = 30.0
 # Poll cadence is also the WS keep-alive cadence : without periodic
 # app-level traffic, Windows's ProactorEventLoop RSTs the idle TCP
 # connection on loopback (observed at ~30 s). 5 s leaves plenty of
@@ -135,6 +139,17 @@ def find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def live_resolution() -> tuple[int, int]:
+    raw = os.environ.get("LIVE_TEST_RESOLUTION", "1920x1080")
+    try:
+        width, height = (int(part) for part in raw.lower().split("x", 1))
+    except (TypeError, ValueError):
+        raise ValueError(f"invalid LIVE_TEST_RESOLUTION {raw!r}; expected WIDTHxHEIGHT")
+    if width <= 0 or height <= 0:
+        raise ValueError(f"invalid LIVE_TEST_RESOLUTION {raw!r}; dimensions must be positive")
+    return width, height
+
+
 def start_scene_server(port: int) -> socketserver.ThreadingTCPServer:
     """Serve scripts/live-test/ from 127.0.0.1:<port>."""
     handler = functools.partial(
@@ -153,8 +168,9 @@ def spawn_pulsar(exe: pathlib.Path, fps: int) -> subprocess.Popen:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     env["PULSAR_RUNTIME_DIR"] = str(RUNTIME_DIR)
     env["PULSAR_FPS"] = str(fps)
-    env["PULSAR_RESOLUTION"] = "1920x1080"
-    env["PULSAR_VIDEO_BITRATE"] = "6000"
+    width, height = live_resolution()
+    env["PULSAR_RESOLUTION"] = f"{width}x{height}"
+    env["PULSAR_VIDEO_BITRATE"] = os.environ.get("LIVE_TEST_BITRATE", "6000")
     # Point the recording pipeline at a known directory so the live
     # probe can pick up the produced MP4 deterministically and the
     # workflow can upload it as the broadcast proof.
@@ -357,6 +373,60 @@ def fail_log(label: str, msg: str) -> None:
     print(f"::error::live-test {label}: {msg}", file=sys.stderr)
 
 
+def sustained_fps(samples: list[dict]) -> float | None:
+    """Average post-warmup active FPS, or None when no live signal exists."""
+    values = [
+        float(sample["active_fps"])
+        for sample in samples[1:]
+        if sample.get("active_fps") is not None
+    ]
+    return sum(values) / len(values) if values else None
+
+
+async def settle_record_stop(ws, inbox: Inbox, response: dict) -> str | None:
+    """Resolve a completed or accepted-as-pending StopRecord truthfully.
+
+    Pulsar bounds the synchronous muxer flush. A 702 response therefore means
+    the stop was accepted, not rejected. Poll the authoritative record status
+    until it becomes inactive and exposes the final path; never infer success
+    from the pending response itself.
+    """
+    status = response.get("requestStatus", {}) or {}
+    data = response.get("responseData", {}) or {}
+    code = int(status.get("code") or 0)
+    if not status.get("result") and code != STOP_RECORD_PENDING_CODE:
+        return None
+
+    path = data.get("outputPath")
+    if status.get("result") and path:
+        return str(path)
+
+    print("[live-test] StopRecord accepted as pending; waiting for muxer finalisation")
+    deadline = asyncio.get_running_loop().time() + STOP_RECORD_SETTLE_SEC
+    attempt = 0
+    while True:
+        attempt += 1
+        current = await request(ws, inbox, "GetRecordStatus", f"stop-rec-status-{attempt}")
+        current_status = current.get("requestStatus", {}) or {}
+        current_data = current.get("responseData", {}) or {}
+        if not current_status.get("result"):
+            return None
+        path = current_data.get("outputPath") or path
+        if not current_data.get("outputActive"):
+            if path:
+                return str(path)
+            completed = sorted(
+                LIVE_VOD_DIR.glob("*.mp4"),
+                key=lambda candidate: candidate.stat().st_mtime,
+                reverse=True,
+            )
+            return str(completed[0]) if completed else None
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return None
+        await asyncio.sleep(min(0.25, remaining))
+
+
 # ── Diagnostic JSON dump ────────────────────────────────────────────────────
 # Writes a structured snapshot at end-of-run so reviewers can attribute lag
 # to pulsar (high render time, dropped frames) vs network (low effective
@@ -504,6 +574,7 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
     if not (SCENE_DIR / "test-scene.html").exists():
         fail_log("config", f"test-scene.html missing under {SCENE_DIR}")
         return 2
+    width, height = live_resolution()
 
     # Drop any stale pulsar-websocket config so we don't read a previous
     # session's password.
@@ -588,8 +659,8 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                 "SetCaptureSource", {
                     "kind": "browser_source",
                     "url":  scene_url,
-                    "width":  1920,
-                    "height": 1080,
+                    "width":  width,
+                    "height": height,
                     "fps":    fps,
                     "reroute_audio": True,
                 })
@@ -769,6 +840,14 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                         f"at poll #{poll_count}")
                     return 1
 
+            measured_fps = sustained_fps(perf_samples)
+            minimum_sustained_fps = fps * ACTIVE_FPS_RATIO_MIN
+            if measured_fps is None or measured_fps < minimum_sustained_fps:
+                fail_log("render-cadence",
+                    f"sustained active fps {measured_fps!r} is below "
+                    f"{minimum_sustained_fps:.1f} (90% of declared {fps} fps)")
+                return 1
+
             # 5. StopDestination.
             r = await vendor_call(ws, inbox, "stop-dest", "pulsar",
                 "StopDestination", {"id": dest_id})
@@ -778,12 +857,11 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
             # path. ffmpeg_muxer flushes + writes the moov atom on close,
             # so the file is ready to upload by the time this returns.
             r = await request(ws, inbox, "StopRecord", "stop-rec")
-            rec_status = r.get("requestStatus", {})
-            rec_data   = r.get("responseData", {}) or {}
-            vod_path   = rec_data.get("outputPath")
-            if not rec_status.get("result") or not vod_path:
+            vod_path = await settle_record_stop(ws, inbox, r)
+            if not vod_path:
                 fail_log("stop-rec",
-                    f"StopRecord failed; requestStatus={rec_status} responseData={rec_data}")
+                    f"StopRecord was rejected or did not settle within "
+                    f"{STOP_RECORD_SETTLE_SEC:.0f}s; response={r}")
                 return 1
             print(f"[live-test] local recording finalised : {vod_path}")
             # Sentinel parsed by .github/workflows/live-test.yml to find
