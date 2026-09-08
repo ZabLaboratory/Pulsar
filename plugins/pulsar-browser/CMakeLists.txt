@@ -11,8 +11,8 @@
 #   - We rename the subprocess helper to `pulsar-browser-page.exe` so
 #     it cannot be confused with the upstream binary.
 #
-# build-win.ps1 deletes the upstream obs-browser.dll from the rundir
-# before our plugin builds, so libobs only sees our pulsar-browser.dll
+# build-win.ps1 disables the unused upstream obs-browser build (and removes
+# stale copies on incremental builds), so libobs only sees pulsar-browser.dll
 # at obs_load_all_modules time. Same `browser_source` source kind,
 # identical from libobs's perspective.
 
@@ -193,8 +193,8 @@ target_link_libraries(pulsar-browser-page PRIVATE
 #      else, CEF's CreateProcess gets "file not found" and every
 #      subprocess (GPU, network, renderer) fails to launch with
 #      error_code=63, then "GPU process isn't usable. Goodbye."
-#   2. The upstream obs-browser CEF copy step lands libcef.dll and the
-#      whole CEF runtime payload in obs-plugins/64bit/. Co-locating the
+#   2. Our CEF copy step lands libcef.dll and the whole CEF runtime
+#      payload in obs-plugins/64bit/. Co-locating the
 #      helper exe there means the Windows loader resolves libcef.dll
 #      naturally — no extra copy step needed.
 # This mirrors upstream OBS Studio layout exactly.
@@ -202,4 +202,27 @@ set_target_properties(pulsar-browser-page PROPERTIES
     OUTPUT_NAME "pulsar-browser-page"
     RUNTIME_OUTPUT_DIRECTORY                "${PULSAR_OBS_PLUGINS_DIR}"
     RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${PULSAR_OBS_PLUGINS_DIR}"
+)
+
+# Own the runtime staging instead of compiling the unused upstream browser
+# merely for its POST_BUILD copy. Match the pinned upstream Windows helper's
+# exact file list and destinations; no CEF runtime feature is removed.
+set(_cef_runtime_files
+    "${CEF_ROOT_DIR}/Release/libcef.dll"
+    "${CEF_ROOT_DIR}/Release/chrome_elf.dll"
+    "${CEF_ROOT_DIR}/Release/libEGL.dll"
+    "${CEF_ROOT_DIR}/Release/libGLESv2.dll"
+    "${CEF_ROOT_DIR}/Release/v8_context_snapshot.bin"
+    "${CEF_ROOT_DIR}/Resources/chrome_100_percent.pak"
+    "${CEF_ROOT_DIR}/Resources/chrome_200_percent.pak"
+    "${CEF_ROOT_DIR}/Resources/icudtl.dat"
+    "${CEF_ROOT_DIR}/Resources/resources.pak"
+)
+add_custom_command(TARGET pulsar-browser POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${PULSAR_OBS_PLUGINS_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${_cef_runtime_files} "${PULSAR_OBS_PLUGINS_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${CEF_ROOT_DIR}/Resources/locales" "${PULSAR_OBS_PLUGINS_DIR}/locales"
+    COMMENT "Stage the complete pinned CEF runtime for pulsar-browser"
+    VERBATIM
 )
