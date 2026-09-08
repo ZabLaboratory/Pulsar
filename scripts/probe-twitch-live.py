@@ -114,6 +114,7 @@ START_DEST_BOOT_ERRORS = frozenset({
 })
 START_DEST_RETRY_BUDGET = 20.0   # seconds to wait out the boot race
 START_DEST_RETRY_DELAY  = 1.0    # poll cadence between attempts
+NATIVE_SUPPORTED_FPS = frozenset({24, 30, 48, 60, 120})
 
 # Benign log substrings that do not constitute failure.
 BENIGN_LOG_SUBSTRINGS = [
@@ -181,6 +182,8 @@ def start_scene_server(port: int) -> socketserver.ThreadingTCPServer:
 
 def spawn_pulsar(exe: pathlib.Path, fps: int) -> subprocess.Popen:
     """Spawn pulsar.exe with the desired encoder geometry."""
+    if fps not in NATIVE_SUPPORTED_FPS:
+        raise ValueError(f"unsupported native FPS {fps}; expected {sorted(NATIVE_SUPPORTED_FPS)}")
     env = os.environ.copy()
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     env["PULSAR_RUNTIME_DIR"] = str(RUNTIME_DIR)
@@ -441,6 +444,27 @@ def sustained_fps(samples: list[dict]) -> float | None:
         if sample.get("active_fps") is not None
     ]
     return sum(values) / len(values) if values else None
+
+
+def video_profile_matches(response: dict, width: int, height: int, fps: int) -> bool:
+    """Check obs_get_video_info readback, never just the requested environment."""
+    data = response.get("responseData", {}) or {}
+    return bool(
+        (response.get("requestStatus", {}) or {}).get("result")
+        and data.get("baseWidth") == width and data.get("baseHeight") == height
+        and data.get("outputWidth") == width and data.get("outputHeight") == height
+        and isinstance(data.get("fpsDenominator"), (int, float))
+        and data["fpsDenominator"] > 0
+        and data.get("fpsNumerator") == fps * data["fpsDenominator"]
+    )
+
+
+def cadence_below_target(samples: list[dict], fps: int, elapsed: float) -> bool:
+    """Fail sustained starvation after 30 seconds instead of streaming it for 10 minutes."""
+    if elapsed < 30 or len(samples) < 3:
+        return False
+    observed = sustained_fps(samples[-7:])
+    return observed is None or observed < fps * ACTIVE_FPS_RATIO_MIN
 
 
 async def settle_record_stop(ws, inbox: Inbox, response: dict) -> str | None:
@@ -806,6 +830,13 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
             print(f"[live-test] destination STARTED -- going live "
                   f"(attempt #{attempt})")
 
+            profile = await request(ws, inbox, "GetVideoSettings", "native-video-profile")
+            if not video_profile_matches(profile, width, height, fps):
+                fail_log("video-profile", f"native video settings do not match "
+                         f"{width}x{height}@{fps}: {profile}")
+                return 1
+            print(f"[live-test] native video profile confirmed : {width}x{height}@{fps}")
+
             requested_encoder = os.environ.get("LIVE_TEST_ENCODER", "").strip().lower()
             if requested_encoder and requested_encoder != "auto":
                 if not wait_for_encoder_family(log_lines, requested_encoder):
@@ -910,6 +941,13 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                     fail_log("poll",
                         f"frame drop ratio {drop_ratio:.4f} > {FRAME_DROP_RATIO_MAX} "
                         f"at poll #{poll_count}")
+                    return 1
+
+                if cadence_below_target(perf_samples, fps, elapsed):
+                    fail_log("render-cadence", f"sustained active fps "
+                             f"{sustained_fps(perf_samples[-7:])!r} below "
+                             f"{fps * ACTIVE_FPS_RATIO_MIN:.1f} after {elapsed}s "
+                             f"for the confirmed {width}x{height}@{fps} profile")
                     return 1
 
             measured_fps = sustained_fps(perf_samples)

@@ -335,7 +335,7 @@ jobs:
         # the --real-orion true-wire URL the CEF browser_source loads. The
         # on-air legs are the CTest integration suite (needs the build) +
         # Keeper's antenna run (needs the VPS).
-        run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py scripts/test_probe_twitch_live.py -v
+        run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py scripts/test_probe_twitch_live.py scripts/test_prepare_pages_proof.py -v
 
       - name: Native build cache invalidation and integrity contracts
         run: python -m unittest discover -s scripts -p test_ci_native_cache.py -v
@@ -743,20 +743,13 @@ jobs:
               || ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && '600')
               || '60'
             }}
-          # GitHub-hosted Windows runners expose no physical display adapter.
-          # Their software renderer cannot sustain the production 1080p60
-          # profile and previously produced a starving/black Twitch player.
-          # Keep this leg as a truthful native-source/x264 Twitch transport
-          # proof at 720p15; CEF and accelerated hardware evidence remain a
-          # distinct release gate.
-          LIVE_TEST_FPS: >-
-            ${{ steps.hardware-gpu.outputs.available == 'true' && (github.event.inputs.fps || '60') || '15' }}
-          LIVE_TEST_RESOLUTION: >-
-            ${{ steps.hardware-gpu.outputs.available == 'true' && '1920x1080' || '1280x720' }}
-          LIVE_TEST_BITRATE: >-
-            ${{ steps.hardware-gpu.outputs.available == 'true' && '6000' || '3000' }}
-          LIVE_TEST_ENCODER: >-
-            ${{ steps.hardware-gpu.outputs.available == 'true' && 'auto' || 'x264' }}
+          # Keep the requested 1080p60 / 6000 kbps qualification on every
+          # runner. Insufficient hardware must fail, not lower the gate.
+          # Hardware CEF and native-source transport remain distinct evidence.
+          LIVE_TEST_FPS: ${{ github.event.inputs.fps || '60' }}
+          LIVE_TEST_RESOLUTION: '1920x1080'
+          LIVE_TEST_BITRATE: '6000'
+          LIVE_TEST_ENCODER: 'x264'
           LIVE_TEST_SOURCE_KIND: >-
             ${{ steps.hardware-gpu.outputs.available == 'true' && 'browser_source' || 'ffmpeg_source' }}
           LIVE_TEST_VOD_DIR:  ${{ runner.temp }}/pulsar-live-vod
@@ -873,17 +866,36 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout preview preparation script
+        uses: actions/checkout@v4
+
       - name: Download broadcast artefact
         uses: actions/download-artifact@v4
         with:
           name: pulsar-live-broadcast-proof
           path: artefacts
 
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup ffmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: release
+
+      - name: Prepare bounded Pages viewing preview (full proof retained in artifact)
+        run: >-
+          python scripts/prepare-pages-proof.py
+          --source-dir artefacts --output-dir pages-preview
+          --run-url https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
       - name: Publish to gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./artefacts
+          publish_dir: ./pages-preview
           publish_branch: gh-pages
           force_orphan: true
           user_name: 'github-actions[bot]'
