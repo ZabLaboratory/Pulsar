@@ -621,7 +621,7 @@ jobs:
   #
   # It is NOT deleted, because "rien n'est valide sans live Twitch
   # complet" stays the project's validation criterion: the job still
-  # runs, unchanged, on a **tag push** (release-grade broadcast that
+  # runs on a **tag push** (release-grade broadcast that
   # feeds gh-pages + the Release attach) and on **workflow_dispatch**
   # (operator-chosen duration/fps). What we give up is per-commit
   # coverage of the real-ingest chain:
@@ -630,6 +630,9 @@ jobs:
   #     on the antenna run, instead of on the PR that caused them),
   #   - the VOD proof MP4 + diagnostic.json for that commit,
   #   - the gh-pages proof refresh on every push to main.
+  # Hosted runners have no physical GPU, so that environment uses a
+  # declared 720p15 transport profile and proves the real ingest path
+  # without claiming the separate accelerated 1080p60 hardware gate.
   # The offline suite covers the wire contract, the encoders and the
   # record path -- not a real ingest. Re-arm per-commit coverage by
   # deleting the `if:` below.
@@ -682,6 +685,11 @@ jobs:
         with:
           ffmpeg-version: release
 
+      - name: Detect physical GPU for live profile
+        id: hardware-gpu
+        shell: pwsh
+        run: ./scripts/detect-hardware-gpu.ps1 -GithubOutput $env:GITHUB_OUTPUT
+
       - name: Run Twitch live-broadcast probe
         env:
           TWITCH_STREAM_KEY:  ${{ secrets.TWITCH_STREAM_KEY }}
@@ -697,11 +705,21 @@ jobs:
               || ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && '600')
               || '60'
             }}
-          LIVE_TEST_FPS:      ${{ github.event.inputs.fps || '60' }}
+          # GitHub-hosted Windows runners expose no physical display adapter.
+          # Their software renderer cannot sustain the production 1080p60
+          # profile and previously produced a starving/black Twitch player.
+          # Keep this leg as a truthful Twitch transport proof at 720p15;
+          # accelerated hardware evidence remains a distinct release gate.
+          LIVE_TEST_FPS: >-
+            ${{ steps.hardware-gpu.outputs.available == 'true' && (github.event.inputs.fps || '60') || '15' }}
+          LIVE_TEST_RESOLUTION: >-
+            ${{ steps.hardware-gpu.outputs.available == 'true' && '1920x1080' || '1280x720' }}
+          LIVE_TEST_BITRATE: >-
+            ${{ steps.hardware-gpu.outputs.available == 'true' && '6000' || '3000' }}
           LIVE_TEST_VOD_DIR:  ${{ runner.temp }}/pulsar-live-vod
         shell: bash
         run: |
-          echo "::notice::live-test duration=${LIVE_TEST_DURATION} s"
+          echo "::notice::live-test duration=${LIVE_TEST_DURATION}s profile=${LIVE_TEST_RESOLUTION}@${LIVE_TEST_FPS} bitrate=${LIVE_TEST_BITRATE}kbps"
           python scripts/probe-twitch-live.py 2>&1 | tee probe-output.log
 
       - name: Compress + stage broadcast VOD
