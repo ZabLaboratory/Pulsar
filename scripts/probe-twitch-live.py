@@ -2,8 +2,8 @@
 """
 Pulsar live Twitch broadcast probe.
 
-End-to-end functional check : spawn pulsar.exe, point its CEF
-browser_source at a locally-served test scene, push a 5-minute
+End-to-end functional check : spawn pulsar.exe, install either its CEF
+browser_source or an animated native media source, push a 5-minute
 stream to Twitch, poll metrics throughout, assert thresholds, clean
 up. Exit 0 = Pulsar passed the live-broadcast contract ; non-zero =
 something is broken.
@@ -18,14 +18,15 @@ Optional env :
   LIVE_TEST_FPS       target encoder fps (default 60 — set via PULSAR_FPS at spawn)
   LIVE_TEST_RESOLUTION encoder geometry (default 1920x1080)
   LIVE_TEST_BITRATE   video bitrate in kbps (default 6000)
+  LIVE_TEST_ENCODER   explicit encoder family, e.g. x264 (default: engine auto)
+  LIVE_TEST_SOURCE_KIND browser_source or ffmpeg_source (default browser_source)
   PULSAR_RUNTIME_DIR  explicit runtime/config directory (default: unique temporary
                       directory, removed at exit; explicit directories are kept)
 
 Validations :
   - pulsar spawns + obs-websocket config drops within 30 s
   - Hello / Identify auth round-trip succeeds
-  - SetCaptureSource(browser_source, http://127.0.0.1:<port>/test-scene.html)
-    returns kind="browser_source"
+  - the declared source is installed and read back from the program scene
   - CreateDestination(twitch, $key) returns an id ; StartDestination
     returns started=true
   - Throughout the broadcast, every 30 s :
@@ -101,6 +102,7 @@ STOP_RECORD_SETTLE_SEC = 30.0
 # margin and gives the run summary more granular metrics.
 POLL_INTERVAL_SEC     = 5.0
 DESTINATION_NAME      = "pulsar-live-test"
+HOSTED_INPUT_NAME     = "PulsarHostedTransportSource"
 
 # StartDestination can race the engine boot : the frontend streaming
 # output is wired asynchronously after pulsar.exe spawns, and a probe
@@ -150,6 +152,25 @@ def live_resolution() -> tuple[int, int]:
     return width, height
 
 
+def prepare_media_fixture(width: int, height: int, fps: int) -> pathlib.Path:
+    """Generate a short animated A/V loop without depending on CEF or a GPU."""
+    LIVE_VOD_DIR.mkdir(parents=True, exist_ok=True)
+    fixture = LIVE_VOD_DIR / "hosted-transport-source.mkv"
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", f"testsrc2=size={width}x{height}:rate={fps}",
+        "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000",
+        "-t", "12", "-c:v", "libx264", "-preset", "ultrafast",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k",
+        "-shortest", str(fixture),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    if completed.returncode != 0 or not fixture.exists():
+        detail = (completed.stderr or completed.stdout or "unknown ffmpeg failure")[-1000:]
+        raise RuntimeError(f"could not generate hosted transport source: {detail}")
+    return fixture
+
+
 def start_scene_server(port: int) -> socketserver.ThreadingTCPServer:
     """Serve scripts/live-test/ from 127.0.0.1:<port>."""
     handler = functools.partial(
@@ -171,6 +192,9 @@ def spawn_pulsar(exe: pathlib.Path, fps: int) -> subprocess.Popen:
     width, height = live_resolution()
     env["PULSAR_RESOLUTION"] = f"{width}x{height}"
     env["PULSAR_VIDEO_BITRATE"] = os.environ.get("LIVE_TEST_BITRATE", "6000")
+    encoder = os.environ.get("LIVE_TEST_ENCODER", "").strip()
+    if encoder and encoder != "auto":
+        env["PULSAR_VIDEO_ENCODER"] = encoder
     # Point the recording pipeline at a known directory so the live
     # probe can pick up the produced MP4 deterministically and the
     # workflow can upload it as the broadcast proof.
@@ -218,6 +242,18 @@ def stream_pulsar_logs(proc: subprocess.Popen, sink: list[str]) -> None:
     assert proc.stdout is not None
     for line in proc.stdout:
         sink.append(line.rstrip())
+
+
+def wait_for_encoder_family(log_lines: list[str], expected: str, timeout: float = 10.0) -> bool:
+    """Require the native allocation log to attest the requested encoder."""
+    needle = f"video encoder allocated: family={expected.lower()}"
+    deadline = time.time() + timeout
+    while True:
+        if any(needle in line.lower() for line in log_lines):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.1)
 
 
 class Inbox:
@@ -571,7 +607,11 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
     else:
         exe = DEFAULT_EXE
 
-    if not (SCENE_DIR / "test-scene.html").exists():
+    source_kind = os.environ.get("LIVE_TEST_SOURCE_KIND", "browser_source").strip()
+    if source_kind not in ("browser_source", "ffmpeg_source"):
+        fail_log("config", f"unsupported LIVE_TEST_SOURCE_KIND {source_kind!r}")
+        return 2
+    if source_kind == "browser_source" and not (SCENE_DIR / "test-scene.html").exists():
         fail_log("config", f"test-scene.html missing under {SCENE_DIR}")
         return 2
     width, height = live_resolution()
@@ -584,14 +624,17 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
         except OSError:
             pass
 
-    # Local HTTP server hosting the test scene.
-    http_port = find_free_port()
-    httpd = start_scene_server(http_port)
-    # Scene URL is finalised after we know pulsar's WS port + password
-    # (see below). The adapter inside test-scene.html stays dormant
-    # until those are passed via the query string.
-    scene_url_base = f"http://127.0.0.1:{http_port}/test-scene.html"
-    print(f"[live-test] scene HTTP server : {scene_url_base}")
+    httpd = None
+    scene_url_base = None
+    media_fixture = None
+    if source_kind == "browser_source":
+        http_port = find_free_port()
+        httpd = start_scene_server(http_port)
+        scene_url_base = f"http://127.0.0.1:{http_port}/test-scene.html"
+        print(f"[live-test] scene HTTP server : {scene_url_base}")
+    else:
+        media_fixture = prepare_media_fixture(width, height, fps)
+        print(f"[live-test] animated CPU media source : {media_fixture}")
 
     # Spawn pulsar.exe.
     print(f"[live-test] spawning {exe}")
@@ -650,45 +693,60 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                 reader_task.cancel()
                 return 0 if dest_id else 1
 
-            # Hand the scene the live WS coordinates so its in-page
-            # adapter can connect and stream telemetry into the HUD.
-            scene_url = f"{scene_url_base}?port={port}&token={password}"
-
-            # 1. SetCaptureSource → browser_source.
-            r = await vendor_call(ws, inbox, "set-capture", "pulsar-scene",
-                "SetCaptureSource", {
-                    "kind": "browser_source",
-                    "url":  scene_url,
-                    "width":  width,
-                    "height": height,
-                    "fps":    fps,
-                    "reroute_audio": True,
+            if source_kind == "browser_source":
+                scene_url = f"{scene_url_base}?port={port}&token={password}"
+                r = await vendor_call(ws, inbox, "set-capture", "pulsar-scene",
+                    "SetCaptureSource", {
+                        "kind": "browser_source", "url": scene_url,
+                        "width": width, "height": height, "fps": fps,
+                        "reroute_audio": True,
+                    })
+                dump_response("set-capture", r)
+                data = vendor_response_data(r)
+                if data.get("kind") != "browser_source":
+                    fail_log("set-capture", f"unexpected response : {data}")
+                    return 1
+                r = await vendor_call(ws, inbox, "get-capture", "pulsar-scene",
+                    "GetCaptureSource", {})
+                got = vendor_response_data(r)
+                if (got.get("kind") != "browser_source" or got.get("url") != scene_url
+                        or int(got.get("last_change_unix", 0)) <= 0):
+                    fail_log("get-capture", f"browser snapshot drift: {got}")
+                    return 1
+                print("[live-test] browser capture snapshot confirmed")
+            else:
+                current = await request(ws, inbox, "GetCurrentProgramScene", "program-scene")
+                current_status = current.get("requestStatus", {}) or {}
+                scene_name = (current.get("responseData", {}) or {}).get("currentProgramSceneName")
+                if not current_status.get("result") or not scene_name:
+                    fail_log("media-source", f"current program scene unavailable: {current}")
+                    return 1
+                created = await request(ws, inbox, "CreateInput", "create-media-source", {
+                    "sceneName": scene_name,
+                    "inputName": HOSTED_INPUT_NAME,
+                    "inputKind": "ffmpeg_source",
+                    "inputSettings": {
+                        "local_file": str(media_fixture),
+                        "is_local_file": True,
+                        "looping": True,
+                        "restart_on_activate": True,
+                        "close_when_inactive": False,
+                        "hw_decode": False,
+                    },
+                    "sceneItemEnabled": True,
                 })
-            dump_response("set-capture", r)
-            data = vendor_response_data(r)
-            if data.get("kind") != "browser_source":
-                fail_log("set-capture", f"unexpected response : {data}")
-                return 1
-
-            # 1b. GetCaptureSource → confirm the active snapshot
-            #     reflects what we just set.
-            r = await vendor_call(ws, inbox, "get-capture", "pulsar-scene",
-                "GetCaptureSource", {})
-            dump_response("get-capture", r)
-            got = vendor_response_data(r)
-            if got.get("kind") != "browser_source":
-                fail_log("get-capture",
-                    f"snapshot not browser_source : {got}")
-                return 1
-            if got.get("url") != scene_url:
-                fail_log("get-capture",
-                    f"url drift : got {got.get('url')!r}, expected {scene_url!r}")
-                return 1
-            if int(got.get("last_change_unix", 0)) <= 0:
-                fail_log("get-capture",
-                    f"last_change_unix not set : {got}")
-                return 1
-            print(f"[live-test] get-capture confirms snapshot")
+                if not (created.get("requestStatus", {}) or {}).get("result"):
+                    fail_log("media-source", f"CreateInput(ffmpeg_source) failed: {created}")
+                    return 1
+                readback = await request(ws, inbox, "GetInputSettings", "read-media-source", {
+                    "inputName": HOSTED_INPUT_NAME,
+                })
+                read_data = readback.get("responseData", {}) or {}
+                if (not (readback.get("requestStatus", {}) or {}).get("result")
+                        or read_data.get("inputKind") != "ffmpeg_source"):
+                    fail_log("media-source", f"ffmpeg_source readback failed: {readback}")
+                    return 1
+                print(f"[live-test] animated ffmpeg_source confirmed on {scene_name!r}")
 
             # 2. CreateDestination twitch.
             r = await vendor_call(ws, inbox, "create-dest", "pulsar",
@@ -741,6 +799,14 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
             dump_response("start-dest", r)
             print(f"[live-test] destination STARTED -- going live "
                   f"(attempt #{attempt})")
+
+            requested_encoder = os.environ.get("LIVE_TEST_ENCODER", "").strip().lower()
+            if requested_encoder and requested_encoder != "auto":
+                if not wait_for_encoder_family(log_lines, requested_encoder):
+                    fail_log("encoder",
+                        f"requested {requested_encoder!r} but native allocation was not attested")
+                    return 1
+                print(f"[live-test] native encoder confirmed : {requested_encoder}")
 
             # 3b. StartRecord -- record the broadcast locally so the CI
             # workflow can upload the MP4 as the live-test proof. Standard
@@ -928,11 +994,12 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                 proc.kill()
         except Exception:
             pass
-        try:
-            httpd.shutdown()
-            httpd.server_close()
-        except Exception:
-            pass
+        if httpd is not None:
+            try:
+                httpd.shutdown()
+                httpd.server_close()
+            except Exception:
+                pass
 
     return rc
 
