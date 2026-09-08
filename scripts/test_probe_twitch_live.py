@@ -49,6 +49,7 @@ def test_spawn_forwards_explicit_hosted_transport_profile(monkeypatch, tmp_path)
     probe = load_probe(monkeypatch, tmp_path / 'runtime')
     monkeypatch.setenv('LIVE_TEST_RESOLUTION', '1280x720')
     monkeypatch.setenv('LIVE_TEST_BITRATE', '3000')
+    monkeypatch.setenv('LIVE_TEST_ENCODER', 'x264')
     monkeypatch.setattr(probe, 'LIVE_VOD_DIR', tmp_path / 'vod')
     spawn = Mock()
     monkeypatch.setattr(probe.subprocess, 'Popen', spawn)
@@ -57,7 +58,17 @@ def test_spawn_forwards_explicit_hosted_transport_profile(monkeypatch, tmp_path)
     assert env['PULSAR_FPS'] == '15'
     assert env['PULSAR_RESOLUTION'] == '1280x720'
     assert env['PULSAR_VIDEO_BITRATE'] == '3000'
+    assert env['PULSAR_VIDEO_ENCODER'] == 'x264'
     assert probe.live_resolution() == (1280, 720)
+
+
+def test_encoder_family_attestation_is_exact(monkeypatch):
+    probe = load_probe(monkeypatch)
+    assert probe.wait_for_encoder_family(
+        ['[pulsar] video encoder allocated: family=x264 id=obs_x264'], 'x264', timeout=0)
+    assert not probe.wait_for_encoder_family(
+        ['[pulsar] video encoder allocated: family=nvenc id=obs_nvenc_h264_tex'],
+        'x264', timeout=0)
 
 
 def test_sustained_fps_discards_warmup_and_exposes_starvation(monkeypatch):

@@ -631,8 +631,9 @@ jobs:
   #   - the VOD proof MP4 + diagnostic.json for that commit,
   #   - the gh-pages proof refresh on every push to main.
   # Hosted runners have no physical GPU, so that environment uses a
-  # declared 720p15 transport profile and proves the real ingest path
-  # without claiming the separate accelerated 1080p60 hardware gate.
+  # declared 720p15 x264 transport profile with an animated native media
+  # source. It proves the real ingest path without depending on CEF or
+  # claiming the separate accelerated 1080p60 hardware gate.
   # The offline suite covers the wire contract, the encoders and the
   # record path -- not a real ingest. Re-arm per-commit coverage by
   # deleting the `if:` below.
@@ -708,18 +709,23 @@ jobs:
           # GitHub-hosted Windows runners expose no physical display adapter.
           # Their software renderer cannot sustain the production 1080p60
           # profile and previously produced a starving/black Twitch player.
-          # Keep this leg as a truthful Twitch transport proof at 720p15;
-          # accelerated hardware evidence remains a distinct release gate.
+          # Keep this leg as a truthful native-source/x264 Twitch transport
+          # proof at 720p15; CEF and accelerated hardware evidence remain a
+          # distinct release gate.
           LIVE_TEST_FPS: >-
             ${{ steps.hardware-gpu.outputs.available == 'true' && (github.event.inputs.fps || '60') || '15' }}
           LIVE_TEST_RESOLUTION: >-
             ${{ steps.hardware-gpu.outputs.available == 'true' && '1920x1080' || '1280x720' }}
           LIVE_TEST_BITRATE: >-
             ${{ steps.hardware-gpu.outputs.available == 'true' && '6000' || '3000' }}
+          LIVE_TEST_ENCODER: >-
+            ${{ steps.hardware-gpu.outputs.available == 'true' && 'auto' || 'x264' }}
+          LIVE_TEST_SOURCE_KIND: >-
+            ${{ steps.hardware-gpu.outputs.available == 'true' && 'browser_source' || 'ffmpeg_source' }}
           LIVE_TEST_VOD_DIR:  ${{ runner.temp }}/pulsar-live-vod
         shell: bash
         run: |
-          echo "::notice::live-test duration=${LIVE_TEST_DURATION}s profile=${LIVE_TEST_RESOLUTION}@${LIVE_TEST_FPS} bitrate=${LIVE_TEST_BITRATE}kbps"
+          echo "::notice::live-test duration=${LIVE_TEST_DURATION}s profile=${LIVE_TEST_RESOLUTION}@${LIVE_TEST_FPS} bitrate=${LIVE_TEST_BITRATE}kbps encoder=${LIVE_TEST_ENCODER:-auto} source=${LIVE_TEST_SOURCE_KIND}"
           python scripts/probe-twitch-live.py 2>&1 | tee probe-output.log
 
       - name: Compress + stage broadcast VOD
