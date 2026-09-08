@@ -337,6 +337,9 @@ jobs:
         # Keeper's antenna run (needs the VPS).
         run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py scripts/test_probe_twitch_live.py -v
 
+      - name: Native build cache invalidation and integrity contracts
+        run: python -m unittest discover -s scripts -p test_ci_native_cache.py -v
+
       - name: Run offline Pulsar probe contract tests
         # The AC-12 RTMP boundary and AC-13 dual-lane probe contracts are
         # hardware-free; keep them in the required Python gate so changes to
@@ -365,15 +368,6 @@ jobs:
           git config --global user.email "ci@pulsar.zablaboratory"
           git config --global user.name "Pulsar CI"
 
-      - name: Cache obs-deps + Qt6 + CEF
-        uses: actions/cache@v4
-        with:
-          path: upstream/.deps
-          key: obs-deps-full-${{ runner.os }}-${{ hashFiles('scripts/build-win.ps1', '.gitmodules') }}
-          restore-keys: |
-            obs-deps-full-${{ runner.os }}-
-            obs-deps-${{ runner.os }}-
-
       - name: Install CMake 3.28+
         uses: lukka/get-cmake@latest
         with:
@@ -384,9 +378,51 @@ jobs:
         with:
           arch: x64
 
+      - name: Fingerprint exact native build inputs and toolchain
+        id: native-key
+        shell: pwsh
+        run: python scripts/ci-native-cache.py key
+
+      # Exact output reuse only; never restore sources, credentials, runtime
+      # state or test results. The current checkout supplies interpreted probes.
+      # No restore-keys: any native/config/toolchain change builds in full.
+      - name: Restore exact native runtime
+        id: native-cache
+        uses: actions/cache@v4
+        with:
+          key: ${{ steps.native-key.outputs.key }}
+          path: |
+            upstream/build_x64/rundir/RelWithDebInfo
+            build/CTestTestfile.cmake
+            build/**/CTestTestfile.cmake
+            build/**/*.vcxproj
+            build/tests/nv-probe/**
+            build/tests/data/libobs/**
+            build/native-cache-manifest.json
+
+      - name: Cache obs-deps + Qt6 + CEF
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: upstream/.deps
+          key: obs-deps-full-${{ runner.os }}-${{ hashFiles('scripts/build-win.ps1', '.gitmodules') }}
+          restore-keys: |
+            obs-deps-full-${{ runner.os }}-
+            obs-deps-${{ runner.os }}-
+
       - name: Build pulsar.exe with -Full (CEF + obs-browser)
+        if: steps.native-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: ./scripts/build-win.ps1 -Full
+
+      - name: Seal native output inventory and producer provenance
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: python scripts/ci-native-cache.py seal --key '${{ steps.native-key.outputs.key }}'
+
+      - name: Verify native outputs before all downstream gates
+        shell: pwsh
+        run: python scripts/ci-native-cache.py verify --key '${{ steps.native-key.outputs.key }}'
 
       - name: Upload pulsar-rundir artefact
         uses: actions/upload-artifact@v4
@@ -413,6 +449,7 @@ jobs:
             build/**/*.vcxproj
             build/tests/nv-probe/**
             build/tests/data/libobs/**
+            build/native-cache-manifest.json
           retention-days: 1
           compression-level: 1
 
