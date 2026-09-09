@@ -1309,3 +1309,21 @@ def test_traced_probe_leases_exact_directshow_module_per_user() -> None:
     assert '"obs-virtualcam-module64.dll"' in lease
     assert "directshow_lease.install()" in source
     assert source.index("process.shutdown()") < source.index("directshow_lease.restore()")
+
+
+def test_virtualcam_installer_repairs_every_registered_filter() -> None:
+    installer = (
+        _ROOT
+        / "upstream/plugins/win-dshow/virtualcam-module/virtualcam-install.bat.in"
+    ).read_text(encoding="utf-8")
+    assert "found, skipping install" not in installer
+    assert "%SystemRoot%\\SysWOW64\\regsvr32.exe /i /s" in installer
+    assert "%SystemRoot%\\System32\\regsvr32.exe /i /s" in installer
+    for clsid in (
+        "{@VIRTUALCAM_GUID@}",
+        "{8C4E159D-3F60-4A42-9A6D-7F3A5B21E490}",
+        "{8C4E159D-3F60-4A42-9A6D-7F3A5B21E491}",
+    ):
+        assert clsid in installer
+    assert installer.count("InprocServer32") >= 2
+    assert installer.count("DirectShow filter registration verification failed") == 2
