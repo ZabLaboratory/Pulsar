@@ -384,8 +384,9 @@ diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
 index b3ccae6b1..7208a0706 100644
 --- a/plugins/win-dshow/virtualcam.c
 +++ b/plugins/win-dshow/virtualcam.c
-@@ -124,8 +124,10 @@ static bool return_consumer_process_image_allowed(HANDLE process)
- 	       _wcsicmp(image_name, L"ffmpeg.exe") == 0 || _wcsicmp(image_name, L"pulsar.exe") == 0;
+@@ -124,9 +124,11 @@ static bool return_consumer_process_image_allowed(HANDLE process)
+ 	       _wcsicmp(image_name, L"ffmpeg.exe") == 0 || _wcsicmp(image_name, L"pulsar.exe") == 0 ||
+ 	       _wcsicmp(image_name, L"electron.exe") == 0 || _wcsicmp(image_name, L"prism.exe") == 0;
  }
  
 -static bool return_consumer_registration_live(struct virtualcam_data *vcam)
@@ -428,4 +429,3 @@ index b3ccae6b1..7208a0706 100644
  		InterlockedIncrement(&vcam->lease_hits);
 -- 
 2.54.0.windows.1
-
