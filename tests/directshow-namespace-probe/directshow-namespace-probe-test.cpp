@@ -38,8 +38,26 @@ void check_case(const char *label, const char *runtime_id, const char *legacy_al
 
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+	if (argc > 1) {
+		/* This invocation is registered by CTest with the same switches that
+		 * Prism adds before Chromium creates the DirectShow video service.  Clear
+		 * inherited environment state so the command-line path is exercised on
+		 * its own. */
+		set_variable("PULSAR_RUNTIME_INSTANCE_ID", nullptr);
+		set_variable("PULSAR_DIRECTSHOW_LEGACY_ALIAS", nullptr);
+		const enum directshow_queue_namespace actual = directshow_queue_namespace_for_consumer(
+			DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN);
+		if (actual != DIRECTSHOW_QUEUE_NAMESPACE_DEDICATED) {
+			std::fprintf(stderr, "command-line dedicated: expected %s, got %s\n",
+				     directshow_queue_namespace_name(DIRECTSHOW_QUEUE_NAMESPACE_DEDICATED),
+				     directshow_queue_namespace_name(actual));
+			return 1;
+		}
+		return 0;
+	}
+
     check_case("stock unset compatibility", nullptr, nullptr, DIRECTSHOW_CONSUMER_FILTER_STOCK,
                DIRECTSHOW_QUEUE_NAMESPACE_LEGACY);
     check_case("program unset rejects", nullptr, nullptr, DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN,

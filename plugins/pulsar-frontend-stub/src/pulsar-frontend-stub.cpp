@@ -2929,6 +2929,7 @@ public:
 
     bool setup();
     void emit(obs_frontend_event event);
+    bool setPreviewCompositeSource(bool enabled);
     bool sceneSwitchPrepare(const std::string &commandId, char laneId, const std::string &sceneId);
     bool sceneSwitchTake(const std::string &takeCommandId);
     bool sceneSwitchAbort(const std::string &takeCommandId);
@@ -3926,7 +3927,8 @@ public:
             !obs_websocket_vendor_register_request(vendor_, "Take", &Take, this) ||
             !obs_websocket_vendor_register_request(vendor_, "Abort", &Abort, this) ||
             !obs_websocket_vendor_register_request(vendor_, "Dispatch", &Dispatch, this) ||
-            !obs_websocket_vendor_register_request(vendor_, "GetState", &GetState, this)) {
+            !obs_websocket_vendor_register_request(vendor_, "GetState", &GetState, this) ||
+            !obs_websocket_vendor_register_request(vendor_, "SetPreviewComposite", &SetPreviewComposite, this)) {
             blog(LOG_ERROR, "[pulsar-scene-switch] vendor registration failed");
             // The websocket API has no unregister operation for a partially
             // registered vendor.  This object has static lifetime, so those
@@ -4205,6 +4207,35 @@ private:
     static void Take(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, "Take"); }
     static void Abort(obs_data_t *request, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->dispatch(request, response, "Abort"); }
     static void GetState(obs_data_t *, obs_data_t *response, void *priv) { static_cast<PulsarSceneSwitchVendor *>(priv)->state(response); }
+    static void SetPreviewComposite(obs_data_t *request, obs_data_t *response, void *)
+    {
+        if (!request || !response || !g_api) {
+            if (response) {
+                obs_data_set_bool(response, "ok", false);
+                obs_data_set_string(response, "error", "preview composite bridge unavailable");
+            }
+            return;
+        }
+
+        json raw;
+        try {
+            raw = json::parse(obs_data_get_json(request));
+        } catch (...) {
+            raw = json::object();
+        }
+        if (!raw.is_object() || !raw.contains("enabled") || !raw["enabled"].is_boolean()) {
+            obs_data_set_bool(response, "ok", false);
+            obs_data_set_string(response, "error", "requestData.enabled must be a boolean");
+            return;
+        }
+
+        const bool enabled = raw["enabled"].get<bool>();
+        const bool ok = g_api->setPreviewCompositeSource(enabled);
+        obs_data_set_bool(response, "ok", ok);
+        obs_data_set_string(response, "source_name", enabled ? "ZabPreviewComposite" : "PulsarPreviewLane");
+        if (!ok)
+            obs_data_set_string(response, "error", enabled ? "ZabPreviewComposite is unavailable" : "PreviewView lane restore failed");
+    }
     static void Tick(void *priv, float) { static_cast<PulsarSceneSwitchVendor *>(priv)->expire(); }
     void dispatch(obs_data_t *request, obs_data_t *response, const char *requestType)
     {
@@ -4555,6 +4586,35 @@ bool PulsarFrontendAPI::dualLaneInvariantLocked(const char *where) const
              (void *)programSelection, (void *)previewSelection);
     }
     return valid;
+}
+
+bool PulsarFrontendAPI::setPreviewCompositeSource(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(dualLaneMutex);
+    if (!dualLaneReady || !dualLaneOperational || !previewView || !previewScene) {
+        blog(LOG_WARNING,
+             "[pulsar-scene-switch] PreviewView composite binding rejected: topology unavailable");
+        return false;
+    }
+
+    obs_source_t *source = previewScene;
+    if (enabled) {
+        source = obs_get_source_by_name("ZabPreviewComposite");
+        if (!source || !obs_scene_from_source(source)) {
+            if (source)
+                obs_source_release(source);
+            blog(LOG_WARNING,
+                 "[pulsar-scene-switch] PreviewView composite binding rejected: ZabPreviewComposite is missing");
+            return false;
+        }
+    }
+
+    obs_view_set_source(previewView, 0, source);
+    if (enabled)
+        obs_source_release(source);
+    blog(LOG_INFO, "[pulsar-scene-switch] PreviewView source bound=%s source=%s", enabled ? "composite" : "lane",
+         enabled ? "ZabPreviewComposite" : obs_source_get_name(previewScene));
+    return true;
 }
 
 bool PulsarFrontendAPI::replaceLaneCompositionLocked(int lane, obs_source_t *scene)

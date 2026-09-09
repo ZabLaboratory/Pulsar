@@ -20,3 +20,13 @@ set_tests_properties(pulsar-directshow-namespace-probe PROPERTIES
     TIMEOUT 30
     LABELS "runtime;unit;security"
 )
+
+add_test(NAME pulsar-directshow-namespace-command-line-probe
+    COMMAND directshow-namespace-probe-test
+        --pulsar-runtime-instance-id=command-line-runtime
+        --pulsar-directshow-legacy-alias=0
+)
+set_tests_properties(pulsar-directshow-namespace-command-line-probe PROPERTIES
+    TIMEOUT 30
+    LABELS "runtime;unit;security"
+)
