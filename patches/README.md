@@ -46,6 +46,11 @@ frames under the source async mutex; other platforms return an unavailable
 sentinel. This is a lower bound and excludes plugin/driver/GPU allocations.
 The patch is replayed after the existing stack without changing its upstream pin.
 
+Patch 0058 lets `PULSAR_REQUIRE_CEF` request the pinned, hash-verified CEF
+dependency independently of the upstream browser target. `build-win.ps1 -Full`
+sets that flag; light builds leave it off. `scripts/test-cef-provisioning.py`
+exercises the real dependency helper for full, light and invalid-hash cases.
+
 The build records the upstream pin, patch-content fingerprint and applied
 HEAD. It reuses only an exact clean match; `-RefreshPatches` forces replay.
 This preserves incremental object caches without accepting a different

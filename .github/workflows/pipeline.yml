@@ -278,6 +278,9 @@ jobs:
             popd
           fi
 
+      - name: Headless CEF dependency provisioning
+        run: python3 scripts/test-cef-provisioning.py
+
       - name: Plugin metadata (CMakeLists + README per plugin)
         run: |
           set -e

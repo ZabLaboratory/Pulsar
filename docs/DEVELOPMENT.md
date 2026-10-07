@@ -63,7 +63,9 @@ The build:
 2. Reuses an exact clean fingerprinted patched checkout, or reconstructs it
    from the pin and replays root and nested-browser patches separately.
 3. Configures/builds the upstream runtime with OBS Studio frontend/UI disabled.
-   `-Full` enables browser compilation; it does **not** enable the OBS UI.
+   `-Full` enables Pulsar browser compilation and sets `PULSAR_REQUIRE_CEF=ON`
+   to fetch the pinned CEF dependency while the upstream browser stays disabled.
+   It does **not** enable the OBS UI. The light build leaves this request off.
 4. Configures/builds the Pulsar CMake targets against those headers/libraries.
 5. Stages the matching Qt/runtime/module resources in the rundir.
 

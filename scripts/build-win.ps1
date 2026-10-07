@@ -459,6 +459,9 @@ if ($Stage -in @('configure', 'all') -and -not $reuseFastUpstreamConfigure) {
     #   ENABLE_BROWSER   - default OFF in obs-browser, but the windows-x64
     #                      preset forces it ON in cacheVariables. Override.
     $extraArgs = @()
+    # The upstream dependency helper normally skips CEF when its own browser
+    # plugin is disabled. Full Pulsar still needs CEF for pulsar-browser.
+    $extraArgs += "-DPULSAR_REQUIRE_CEF=$(if ($Full) { 'ON' } else { 'OFF' })"
     # ATL gate (see Test-AtlAvailable). Default ON in the patched
     # CMakeLists, so we only ever need to force OFF; passing ON
     # explicitly when ATL is present keeps the cache value unambiguous
@@ -473,8 +476,8 @@ if ($Stage -in @('configure', 'all') -and -not $reuseFastUpstreamConfigure) {
         $extraArgs += '-DENABLE_UI=OFF'
         # Pulsar owns browser_source through pulsar-browser. Building the
         # upstream DLL/helper here only to delete them below wasted cold-build
-        # time. The x64 preset fetches CEF independently of ENABLE_BROWSER;
-        # pulsar-browser's own CMake now stages the identical runtime payload.
+        # time. PULSAR_REQUIRE_CEF requests the pinned dependency for -Full;
+        # pulsar-browser's own CMake stages the identical runtime payload.
         $extraArgs += '-DENABLE_BROWSER=OFF'
         if ($Full) {
             Write-Host '  -Full: Pulsar browser + CEF enabled; unused upstream browser not built'
