@@ -40,6 +40,12 @@ reference in the same PR.
 
 ## Build-cache behavior
 
+Patch 0057 adds `obs_source_get_core_memory_usage`, consumed by the native
+websocket `GetSourceStats` request. Windows reads core allocations and cache-owned
+frames under the source async mutex; other platforms return an unavailable
+sentinel. This is a lower bound and excludes plugin/driver/GPU allocations.
+The patch is replayed after the existing stack without changing its upstream pin.
+
 The build records the upstream pin, patch-content fingerprint and applied
 HEAD. It reuses only an exact clean match; `-RefreshPatches` forces replay.
 This preserves incremental object caches without accepting a different
