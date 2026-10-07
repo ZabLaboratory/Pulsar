@@ -40,6 +40,21 @@ reference in the same PR.
 
 ## Build-cache behavior
 
+Patch 0057 adds `obs_source_get_core_memory_usage`, consumed by the native
+websocket `GetSourceStats` request. Windows reads core allocations and cache-owned
+frames under the source async mutex; other platforms return an unavailable
+sentinel. This is a lower bound and excludes plugin/driver/GPU allocations.
+The patch is replayed after the existing stack without changing its upstream pin.
+
+Patch 0058 lets `PULSAR_REQUIRE_CEF` request the pinned, hash-verified CEF
+dependency independently of the upstream browser target. `build-win.ps1 -Full`
+sets that flag; light builds leave it off. `scripts/test-cef-provisioning.py`
+exercises the real dependency helper for full, light and invalid-hash cases.
+
+Patch 0059 bounds read-owned source profiling to a five-second lease, independent
+of explicit resource-trace policy. The native `probe-source-telemetry.py` checks
+warm samples during polling, expiry after idle and explicit component maxima.
+
 The build records the upstream pin, patch-content fingerprint and applied
 HEAD. It reuses only an exact clean match; `-RefreshPatches` forces replay.
 This preserves incremental object caches without accepting a different
