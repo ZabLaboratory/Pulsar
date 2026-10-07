@@ -81,3 +81,14 @@ See [development](../../docs/DEVELOPMENT.md) and
 [component architecture](../../docs/ARCHITECTURE.md).
 License: inherited GPL-2.0-or-later; preserve the upstream notice in
 `UPSTREAM-LICENSE`.
+
+## Source telemetry
+
+GetSourceStats uses sourceName/sourceUuid and the libobs profiler to return CPU
+tick/render and GPU render costs in ms, maxima and frame budget. Missing samples
+return null with available=false; this is not application-process utilization.
+RAM uses obs_source_get_core_memory_usage from patch 0057. ramBytes is a
+Windows-only lower bound for core source allocations, async cache/queue capacity,
+unique cached frames and fixed audio slabs; aliases are not counted twice.
+ramScope=core-allocations-lower-bound excludes plugin, decoder, driver and GPU
+allocations. Non-Windows returns null. Reads do not activate inactive sources.

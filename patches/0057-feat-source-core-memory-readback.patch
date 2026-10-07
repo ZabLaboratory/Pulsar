@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000057 Mon Sep 17 00:00:00 2001
+From: ClodoCapeo <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Wed, 7 Oct 2026 19:00:00 +0200
+Subject: [PATCH] feat(libobs): expose core-owned source memory lower bound
+
+Read Windows aligned core/cache/audio allocations under the async mutex.
+Return UINT64_MAX outside Windows; exclude private plugin/driver memory.
+
+diff --git a/libobs/obs-source.c b/libobs/obs-source.c
+index ce60dff37..7e4253e62 100644
+--- a/libobs/obs-source.c
++++ b/libobs/obs-source.c
+@@ -17,6 +17,9 @@
+ 
+ #include <inttypes.h>
+ #include <math.h>
++#ifdef _WIN32
++#include <malloc.h>
++#endif
+ 
+ #include "media-io/format-conversion.h"
+ #include "media-io/video-frame.h"
+@@ -35,6 +38,40 @@
+ 
+ static bool filter_compatible(obs_source_t *source, obs_source_t *filter);
+ 
++uint64_t obs_source_get_core_memory_usage(obs_source_t *source)
++{
++#ifdef _WIN32
++	if (!source)
++		return UINT64_MAX;
++	uint64_t bytes = _aligned_msize(source, 32, 0);
++	/* Cache owns these frame copies. cur/prev/frame queue are aliases and must
++	 * not be counted again. Allocation sizes include aligned plane padding. */
++	pthread_mutex_lock(&source->async_mutex);
++	if (source->async_cache.array)
++		bytes += _aligned_msize(source->async_cache.array, 32, 0);
++	if (source->async_frames.array)
++		bytes += _aligned_msize(source->async_frames.array, 32, 0);
++	for (size_t i = 0; i < source->async_cache.num; i++) {
++		struct obs_source_frame *frame = source->async_cache.array[i].frame;
++		if (!frame)
++			continue;
++		bytes += _aligned_msize(frame, 32, 0);
++		if (frame->data[0])
++			bytes += _aligned_msize(frame->data[0], 32, 0);
++	}
++	pthread_mutex_unlock(&source->async_mutex);
++	/* These two audio slabs are allocated once during source initialization. */
++	if (source->audio_output_buf[0][0])
++		bytes += _aligned_msize(source->audio_output_buf[0][0], 32, 0);
++	if (source->audio_mix_buf[0])
++		bytes += _aligned_msize(source->audio_mix_buf[0], 32, 0);
++	return bytes;
++#else
++	UNUSED_PARAMETER(source);
++	return UINT64_MAX;
++#endif
++}
++
+ static inline bool data_valid(const struct obs_source *source, const char *f)
+ {
+ 	return obs_source_valid(source, f) && source->context.data;
+diff --git a/libobs/obs.h b/libobs/obs.h
+index 99bcb1953..c8adc6048 100644
+--- a/libobs/obs.h
++++ b/libobs/obs.h
+@@ -1314,6 +1314,9 @@ EXPORT void obs_source_enum_full_tree(obs_source_t *source, obs_source_enum_proc
+ 
+ /** Returns true if active, false if not */
+ EXPORT bool obs_source_active(const obs_source_t *source);
++/** Windows core-owned source/cache RAM allocations; excludes plugin/driver allocations.
++ * UINT64_MAX means unavailable on the current platform. */
++EXPORT uint64_t obs_source_get_core_memory_usage(obs_source_t *source);
+ 
+ /**
+  * Returns true if currently displayed somewhere (active or not), false if not
