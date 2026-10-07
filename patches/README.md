@@ -51,6 +51,10 @@ dependency independently of the upstream browser target. `build-win.ps1 -Full`
 sets that flag; light builds leave it off. `scripts/test-cef-provisioning.py`
 exercises the real dependency helper for full, light and invalid-hash cases.
 
+Patch 0059 bounds read-owned source profiling to a five-second lease, independent
+of explicit resource-trace policy. The native `probe-source-telemetry.py` checks
+warm samples during polling, expiry after idle and explicit component maxima.
+
 The build records the upstream pin, patch-content fingerprint and applied
 HEAD. It reuses only an exact clean match; `-RefreshPatches` forces replay.
 This preserves incremental object caches without accepting a different

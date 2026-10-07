@@ -138,8 +138,7 @@ RequestResult RequestHandler::GetSourceStats(const Request &request)
 	OBSSourceAutoRelease source = request.AcquireSource("canvasUuid", "sourceName", "sourceUuid", statusCode, comment);
 	if (!source)
 		return RequestResult::Error(statusCode, comment);
-	source_profiler_enable(true);
-	source_profiler_gpu_enable(true);
+	source_profiler_request_telemetry();
 	profiler_result_t profile = {};
 	const bool ready = source_profiler_fill_result(source, &profile);
 	obs_video_info video = {};
@@ -153,8 +152,9 @@ RequestResult RequestHandler::GetSourceStats(const Request &request)
 	result["frameBudgetMs"] = videoReady ? json(1000.0 * video.fps_den / video.fps_num) : json(nullptr);
 	result["cpuMs"] = ready ? json(static_cast<double>(profile.tick_avg + profile.render_sum) / 1000000.0) : json(nullptr);
 	result["gpuMs"] = ready && profile.render_gpu_sum > 0 ? json(static_cast<double>(profile.render_gpu_sum) / 1000000.0) : json(nullptr);
-	result["cpuMaxMs"] = ready ? json(static_cast<double>(profile.tick_max + profile.render_max) / 1000000.0) : json(nullptr);
-	result["gpuMaxMs"] = ready && profile.render_gpu_max > 0 ? json(static_cast<double>(profile.render_gpu_max) / 1000000.0) : json(nullptr);
+	result["cpuTickMaxMs"] = ready ? json(static_cast<double>(profile.tick_max) / 1000000.0) : json(nullptr);
+	result["cpuRenderFirstPassMaxMs"] = ready ? json(static_cast<double>(profile.render_max) / 1000000.0) : json(nullptr);
+	result["gpuRenderFirstPassMaxMs"] = ready && profile.render_gpu_max > 0 ? json(static_cast<double>(profile.render_gpu_max) / 1000000.0) : json(nullptr);
 	return RequestResult::Success(result);
 }
 
