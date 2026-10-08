@@ -84,7 +84,7 @@ bool IsControlledSceneSwitchPendingBypass(const Request &request)
 		return false;
 	const std::string nested = nestedRequest->get<std::string>();
 	if (vendor->get<std::string>() == "pulsar-transitions")
-		return nested == "Abort" || nested == "GetState" || nested == "GetResult";
+		return nested == "Abort" || nested == "GetState" || nested == "GetResult" || nested == "GetPreviewResult";
 	return vendor->get<std::string>() == "pulsar-scene-switch" && (nested == "Abort" || nested == "GetState");
 }
 

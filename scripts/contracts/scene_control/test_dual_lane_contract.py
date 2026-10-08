@@ -679,7 +679,7 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert 'request.RequestType != "CallVendorRequest"' in handler
     assert 'vendor->get<std::string>() == "pulsar-scene-switch" && (nested == "Abort" || nested == "GetState")' in handler
     assert 'if (vendor->get<std::string>() == "pulsar-transitions")' in handler
-    assert 'return nested == "Abort" || nested == "GetState" || nested == "GetResult";' in handler
+    assert 'return nested == "Abort" || nested == "GetState" || nested == "GetResult" || nested == "GetPreviewResult";' in handler
     assert "vendor->is_string() || !nestedRequest->is_string()" in handler
     assert "json::value() here" in handler
     assert "const bool controlledSceneSwitchBypass" in handler

@@ -5,8 +5,8 @@ Owner: `plugins/pulsar-frontend-stub`. The media resource lives in
 `pulsar-media-transition-config.cpp`; the frontend owns the lane mutex, atomic
 frame-boundary routing, admission and lifecycle. The `pulsar-transitions`
 obs-websocket vendor and `PulsarClient.transitions` expose the capability to
-hosts such as Prism. This increment changes no Prism code and includes no
-default media or artwork.
+hosts such as Prism. Pulsar includes no default media or artwork; host UI and
+persistence are owned by the host repository.
 
 This capability uses Pulsar's existing dual-lane mode
 (`PULSAR_DUAL_LANE_ENABLED=1`). Its existing activation and rollback gates
@@ -30,7 +30,8 @@ takes `{}` and returns:
   "media_duration_ms": 0,
   "transition_duration_ms": 0,
   "role_map": {"on_air": "A", "preview": "B"},
-  "last_switch": {}
+  "last_switch": {},
+  "preview_overlay": {}
 }
 ```
 
@@ -112,10 +113,11 @@ The destination must be an existing OBS scene, distinct from the other lane's
 selected scene and both physical lane roots. A same-scene request returns
 `status: "noop"`. The caller stages the complete target graph and establishes
 its source readiness before sending this request. Pulsar cannot infer a
-scene replacement occurring inside a persistent browser/DOM source: a future
-host integration must stage a distinct composition and invoke this API, not
-mutate the visible page before asking for a transition. Plain scene selection
-and Prepare remain preparation operations; they do not start this effect.
+scene replacement occurring inside a persistent browser/DOM source. Hosts
+using that model must use the held-cover Preview operation below before
+mutating the visible wire, or stage a distinct composition for `SwitchLane`.
+Plain scene selection and Prepare remain preparation operations; they do not
+start an effect by themselves.
 
 One transition is admitted at a time. Scene/input/settings mutations are
 frozen from acceptance until the terminal frame callback. An outstanding
@@ -141,8 +143,38 @@ source when another client may have submitted a later operation.
 `Abort` takes the runtime and command IDs, responds `status: "aborting"`, and
 restores the outgoing composition at a native frame boundary. Await the
 terminal result. It cannot cancel another command or a v1 Take. Use the
-existing scene-switch Abort for a Take. GetState/GetResult/Abort are the only
-new operations allowed through the pending-mutation gate.
+existing scene-switch Abort for a Take. GetState/GetResult/GetPreviewResult/Abort
+are the transition operations allowed through the pending-mutation gate.
+
+## Persistent cockpit Preview cover
+
+Prism's cockpit rail updates one `ZabPreviewComposite` in place. It uses
+`BeginPreview` with `{runtime_instance_id, command_id}` rather than staging a
+second OBS scene. Pulsar creates a private scene containing the bound composite
+and the configured decoder child, and attaches it only to PreviewView at an
+atomic frame boundary. Program's source, output and audio remain independent;
+the Preview media child is muted. Beginning requires a ready configured
+decoder and rejects concurrent Take, same-lane transition or prepared Take.
+
+Poll `GetPreviewResult` with the same runtime/command IDs. The states are
+`starting`, `closing`, then `covered`: Pulsar pauses the media when its clock
+reaches the configured cut point, within one video tick. The result reports
+`cut_time_ms`. The host may now change Orion's persistent Preview wire and
+reconcile native sources while the cover remains rendered. Opacity at this
+point remains the media author's responsibility. `SetPreviewComposite`
+acknowledges the existing composite without removing an active cover.
+
+Call `EndPreview` with `{runtime_instance_id, command_id, abort: false}` once
+the incoming scene is ready. It unpauses the media (`opening`) and restores the
+original composite when playback ends. `completed` contains the actual
+restoration `frame_id`/`pts_ns`; the start frame is also reported. An early
+failure or superseded host request uses `abort: true` and awaits `aborted` at
+the restoration frame. Normal release before `covered` is refused. Configure,
+Clear and other transitions remain busy throughout this operation; Preview
+source reconciliation remains allowed under the cover. If the host disappears
+or decoding fails, Pulsar restores the view itself within the configured media
+duration plus 20 seconds. The most recent Preview outcome is retained for
+readback and command replay, separate from `SwitchLane` outcomes.
 
 Vendor validation failures return `{ "error": "CODE" }`; transport admission
 failures use the existing obs-websocket error envelope. Stable codes include

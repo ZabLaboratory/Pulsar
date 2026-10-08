@@ -33,6 +33,8 @@ public:
     void preload_tick(); // video thread only; never starts playback or audio
     obs_source_t *prepare(bool preview, uint32_t &duration_ms, std::string &error);
     void finish();
+    obs_source_t *playback_source() const { return media(); } // borrowed, lane mutex held
+    uint32_t cut_point_ms() const { return config_.cut_point_ms; }
 
 private:
     obs_source_t *media() const;

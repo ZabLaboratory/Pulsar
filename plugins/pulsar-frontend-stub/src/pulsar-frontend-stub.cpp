@@ -2941,6 +2941,13 @@ public:
     json switchLaneScene(const json &request);
     json abortLaneSwitch(const std::string &commandId);
     json laneSwitchResult(const std::string &commandId);
+    json beginPreviewMedia(const std::string &commandId);
+    json endPreviewMedia(const std::string &commandId, bool abort);
+    json previewMediaResult(const std::string &commandId);
+    void previewMediaTickLocked();
+    void clearPreviewMediaLocked();
+    static void OnPreviewMediaStarted(void *param, uint64_t frameId, uint64_t ptsNs);
+    static void OnPreviewMediaRestored(void *param, uint64_t frameId, uint64_t ptsNs);
     static void OnLaneSwitchCommitted(void *param, uint64_t frameId, uint64_t ptsNs);
     static void OnSceneSwitchPreviewVideoFrame(void *param, struct video_data *frame);
     static void OnDualLaneTick(void *param, float seconds);
@@ -3905,6 +3912,13 @@ private:
     struct LaneOutcome { json request; json result; };
     std::map<std::string, LaneOutcome> laneOutcomes;
     json lastLaneSwitch = nullptr;
+    obs_scene_t *previewMediaOverlay = nullptr;
+    obs_source_t *previewMediaBase = nullptr;
+    json previewMediaOutcome = nullptr;
+    uint64_t previewMediaDeadlineNs = 0;
+    bool previewMediaReleased = false;
+    bool previewMediaAborted = false;
+    bool previewMediaRestoreQueued = false;
     std::atomic<bool> recordingPaused{false};
     std::string lastRecording;
     std::string lastReplay;
@@ -4384,6 +4398,9 @@ public:
             obs_websocket_vendor_register_request(vendor_, "GetState", &GetState, this) &&
             obs_websocket_vendor_register_request(vendor_, "SwitchLane", &SwitchLane, this) &&
             obs_websocket_vendor_register_request(vendor_, "GetResult", &GetResult, this) &&
+            obs_websocket_vendor_register_request(vendor_, "BeginPreview", &BeginPreview, this) &&
+            obs_websocket_vendor_register_request(vendor_, "EndPreview", &EndPreview, this) &&
+            obs_websocket_vendor_register_request(vendor_, "GetPreviewResult", &GetPreviewResult, this) &&
             obs_websocket_vendor_register_request(vendor_, "Abort", &Abort, this);
         return running_;
     }
@@ -4403,6 +4420,9 @@ private:
     static void SwitchLane(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("SwitchLane", a, b); }
     static void GetResult(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("GetResult", a, b); }
     static void Abort(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("Abort", a, b); }
+    static void BeginPreview(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("BeginPreview", a, b); }
+    static void EndPreview(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("EndPreview", a, b); }
+    static void GetPreviewResult(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("GetPreviewResult", a, b); }
     void dispatch(const std::string &operation, obs_data_t *request, obs_data_t *response)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -4422,6 +4442,14 @@ private:
                     out = g_api->configureMediaTransition(value["config"]);
                 else if (operation == "Clear" && value.size() == 1) out = g_api->configureMediaTransition(nullptr);
                 else if (operation == "SwitchLane") out = g_api->switchLaneScene(value);
+                else if ((operation == "BeginPreview" || operation == "GetPreviewResult") && value.size() == 2 &&
+                         value.contains("command_id") && value["command_id"].is_string())
+                    out = operation == "BeginPreview" ? g_api->beginPreviewMedia(value["command_id"]) :
+                                                        g_api->previewMediaResult(value["command_id"]);
+                else if (operation == "EndPreview" && value.size() == 3 &&
+                         value.contains("command_id") && value["command_id"].is_string() &&
+                         value.contains("abort") && value["abort"].is_boolean())
+                    out = g_api->endPreviewMedia(value["command_id"], value["abort"]);
                 else if ((operation == "Abort" || operation == "GetResult") && value.size() == 2 &&
                          value.contains("command_id") && value["command_id"].is_string())
                     out = operation == "Abort" ? g_api->abortLaneSwitch(value["command_id"]) :
@@ -4445,7 +4473,8 @@ json PulsarFrontendAPI::mediaTransitionState()
     const char *id = std::getenv("PULSAR_RUNTIME_INSTANCE_ID");
     state["runtime_instance_id"] = id && *id ? id : "pulsar-runtime";
     state["operational"] = dualLaneReady && dualLaneOperational;
-    state["busy"] = dualLaneCutPending.load();
+    state["busy"] = dualLaneCutPending.load() || previewMediaOverlay != nullptr;
+    state["preview_overlay"] = previewMediaOutcome.is_null() ? json::object() : previewMediaOutcome;
     state["role_map"] = {{"on_air", onAirLane == 0 ? "A" : "B"}, {"preview", previewLane == 0 ? "A" : "B"}};
     state["last_switch"] = lastLaneSwitch.is_null() ? json::object() : lastLaneSwitch;
     return state;
@@ -4456,11 +4485,143 @@ json PulsarFrontendAPI::configureMediaTransition(const json &config)
     {
         std::lock_guard<std::mutex> lock(dualLaneMutex);
         if (!dualLaneReady || !dualLaneOperational) return {{"error", "RUNTIME_UNAVAILABLE"}};
-        if (dualLaneCutPending.load()) return {{"error", "TRANSITION_BUSY"}};
+        if (dualLaneCutPending.load() || previewMediaOverlay) return {{"error", "TRANSITION_BUSY"}};
         std::string error;
         if (!mediaTransition.configure(config, error)) return {{"error", error}};
     }
     return mediaTransitionState();
+}
+
+// The persistent cockpit wire updates one composite in place. Overlay the
+// actual PreviewView, hold a decoded cover frame, then reopen after the host
+// has admitted Orion and reconciled native sources. Program is never rebound
+// to this overlay and its audio never receives the preview media child.
+json PulsarFrontendAPI::beginPreviewMedia(const std::string &commandId)
+{
+    std::lock_guard<std::mutex> lock(dualLaneMutex);
+    if (commandId.empty() || commandId.size() > 128 || commandId.find_first_not_of(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-") != std::string::npos)
+        return {{"error", "REQUEST_INVALID"}};
+    if (!previewMediaOutcome.is_null() && previewMediaOutcome["command_id"] == commandId)
+        return previewMediaOutcome;
+    if (!dualLaneReady || !dualLaneOperational) return {{"error", "RUNTIME_UNAVAILABLE"}};
+    if (dualLaneCutPending.load() || previewMediaOverlay || !sceneSwitchPreparedCommandId.empty())
+        return {{"error", "TRANSITION_BUSY"}};
+    OBSSourceAutoRelease base = obs_view_get_source(previewView, 0);
+    if (!base || std::strcmp(obs_source_get_name(base), "ZabPreviewComposite") != 0)
+        return {{"error", "PREVIEW_COMPOSITE_REQUIRED"}};
+    uint32_t duration = 0;
+    std::string error;
+    if (!mediaTransition.prepare(true, duration, error)) return {{"error", error}};
+    auto *media = mediaTransition.playback_source();
+    previewMediaOverlay = obs_scene_create_private("PulsarPreviewMediaOverlay");
+    if (!previewMediaOverlay) return {{"error", "PREVIEW_OVERLAY_UNAVAILABLE"}};
+    previewMediaBase = obs_source_get_ref(base);
+    obs_scene_add(previewMediaOverlay, base);
+    auto *item = obs_scene_add(previewMediaOverlay, media);
+    if (!item) {
+        clearPreviewMediaLocked();
+        return {{"error", "PREVIEW_OVERLAY_UNAVAILABLE"}};
+    }
+    obs_video_info video = {};
+    obs_get_video_info(&video);
+    vec2 bounds;
+    vec2_set(&bounds, static_cast<float>(video.base_width), static_cast<float>(video.base_height));
+    obs_sceneitem_set_bounds_type(item, OBS_BOUNDS_STRETCH);
+    obs_sceneitem_set_bounds(item, &bounds);
+    obs_sceneitem_set_bounds_alignment(item, OBS_ALIGN_TOP | OBS_ALIGN_LEFT);
+    previewMediaReleased = previewMediaAborted = previewMediaRestoreQueued = false;
+    previewMediaDeadlineNs = os_gettime_ns() + (uint64_t{duration} + 20000) * 1000000ULL;
+    const char *runtime = std::getenv("PULSAR_RUNTIME_INSTANCE_ID");
+    previewMediaOutcome = {{"command_id", commandId}, {"runtime_instance_id", runtime ? runtime : "pulsar-runtime"},
+        {"operational", true}, {"channel", "preview"}, {"status", "starting"}};
+    OBSSourceAutoRelease program = obs_view_get_source(programView, 0);
+    if (!obs_view_queue_atomic_swap_with_floor(programView, 0, program, previewView, 0,
+            obs_scene_get_source(previewMediaOverlay), os_gettime_ns(), OnPreviewMediaStarted, this)) {
+        clearPreviewMediaLocked();
+        previewMediaOutcome["status"] = "failed";
+        return {{"error", "ATOMIC_SWAP_REJECTED"}};
+    }
+    return previewMediaOutcome;
+}
+
+void PulsarFrontendAPI::OnPreviewMediaStarted(void *param, uint64_t frameId, uint64_t ptsNs)
+{
+    auto *self = static_cast<PulsarFrontendAPI *>(param);
+    std::lock_guard<std::mutex> lock(self->dualLaneMutex);
+    if (!self->previewMediaOverlay) return;
+    obs_source_media_play_pause(self->mediaTransition.playback_source(), false);
+    obs_source_media_restart(self->mediaTransition.playback_source());
+    self->previewMediaOutcome["status"] = "closing";
+    self->previewMediaOutcome["start_frame_id"] = frameId;
+    self->previewMediaOutcome["start_pts_ns"] = ptsNs;
+}
+
+json PulsarFrontendAPI::previewMediaResult(const std::string &commandId)
+{
+    std::lock_guard<std::mutex> lock(dualLaneMutex);
+    return !previewMediaOutcome.is_null() && previewMediaOutcome["command_id"] == commandId ?
+        previewMediaOutcome : json{{"error", "COMMAND_NOT_FOUND"}};
+}
+
+json PulsarFrontendAPI::endPreviewMedia(const std::string &commandId, bool abort)
+{
+    std::lock_guard<std::mutex> lock(dualLaneMutex);
+    if (previewMediaOutcome.is_null() || previewMediaOutcome["command_id"] != commandId)
+        return {{"error", "COMMAND_NOT_FOUND"}};
+    if (!previewMediaOverlay) return previewMediaOutcome;
+    if (!abort && previewMediaOutcome["status"] != "covered" && !previewMediaReleased)
+        return {{"error", "PREVIEW_NOT_COVERED"}};
+    previewMediaReleased = true;
+    previewMediaAborted = previewMediaAborted || abort;
+    if (!abort) {
+        obs_source_media_play_pause(mediaTransition.playback_source(), false);
+        previewMediaOutcome["status"] = "opening";
+    }
+    return previewMediaOutcome;
+}
+
+void PulsarFrontendAPI::clearPreviewMediaLocked()
+{
+    if (previewMediaOverlay) obs_scene_release(previewMediaOverlay);
+    previewMediaOverlay = nullptr;
+    if (previewMediaBase) obs_source_release(previewMediaBase);
+    previewMediaBase = nullptr;
+    if (mediaTransition.playback_source()) obs_source_media_stop(mediaTransition.playback_source());
+    mediaTransition.finish();
+}
+
+void PulsarFrontendAPI::OnPreviewMediaRestored(void *param, uint64_t frameId, uint64_t ptsNs)
+{
+    auto *self = static_cast<PulsarFrontendAPI *>(param);
+    std::lock_guard<std::mutex> lock(self->dualLaneMutex);
+    if (!self->previewMediaOverlay) return;
+    self->previewMediaOutcome["status"] = self->previewMediaAborted ? "aborted" : "completed";
+    self->previewMediaOutcome["frame_id"] = frameId;
+    self->previewMediaOutcome["pts_ns"] = ptsNs;
+    self->clearPreviewMediaLocked();
+}
+
+void PulsarFrontendAPI::previewMediaTickLocked()
+{
+    if (!previewMediaOverlay || previewMediaRestoreQueued) return;
+    auto *media = mediaTransition.playback_source();
+    if (os_gettime_ns() >= previewMediaDeadlineNs || obs_source_media_get_state(media) == OBS_MEDIA_STATE_ERROR) {
+        previewMediaAborted = true;
+        previewMediaOutcome["failure_reason"] = "PREVIEW_TRANSITION_TIMEOUT_OR_DECODE_ERROR";
+    }
+    if (!previewMediaReleased && previewMediaOutcome["status"] == "closing" &&
+            obs_source_media_get_time(media) >= mediaTransition.cut_point_ms()) {
+        obs_source_media_play_pause(media, true);
+        previewMediaOutcome["status"] = "covered";
+        previewMediaOutcome["cut_time_ms"] = obs_source_media_get_time(media);
+    }
+    const auto state = obs_source_media_get_state(media);
+    if (!previewMediaAborted && (!previewMediaReleased ||
+            (state != OBS_MEDIA_STATE_ENDED && state != OBS_MEDIA_STATE_STOPPED))) return;
+    OBSSourceAutoRelease program = obs_view_get_source(programView, 0);
+    previewMediaRestoreQueued = obs_view_queue_atomic_swap_with_floor(programView, 0, program,
+        previewView, 0, previewMediaBase, os_gettime_ns(), OnPreviewMediaRestored, this);
 }
 
 json PulsarFrontendAPI::laneSwitchResult(const std::string &commandId)
@@ -4492,7 +4653,7 @@ json PulsarFrontendAPI::switchLaneScene(const json &request)
     if (existing != laneOutcomes.end()) return existing->second.request == request ? existing->second.result :
         json{{"error", "IDEMPOTENCY_CONFLICT"}};
     if (!dualLaneReady || !dualLaneOperational) return {{"error", "RUNTIME_UNAVAILABLE"}};
-    if (dualLaneCutPending.load() || !sceneSwitchPreparedCommandId.empty()) return {{"error", "TRANSITION_BUSY"}};
+    if (dualLaneCutPending.load() || previewMediaOverlay || !sceneSwitchPreparedCommandId.empty()) return {{"error", "TRANSITION_BUSY"}};
     if (laneOutcomes.size() >= 1024) return {{"error", "COMMAND_CAPACITY_REACHED"}};
     const int lane = laneName == "A" ? 0 : 1;
     obs_source_t *outgoing = lane == onAirLane ? programSelection : previewSelection;
@@ -4864,6 +5025,12 @@ bool PulsarFrontendAPI::setPreviewCompositeSource(bool enabled)
         }
     }
 
+    // Native source reconciliation may re-acknowledge this binding while the
+    // transition cover is held. Preserve the overlay until its frame callback.
+    if (previewMediaOverlay) {
+        if (enabled) obs_source_release(source);
+        return enabled;
+    }
     obs_view_set_source(previewView, 0, source);
     if (enabled)
         obs_source_release(source);
@@ -5198,7 +5365,7 @@ bool PulsarFrontendAPI::sceneSwitchPrepare(const std::string &commandId, char la
                  "[pulsar-dual-lane] Prepare rejected: rollback freeze is active");
         }
         const char expectedLane = previewLane == 0 ? 'A' : 'B';
-        if (dualLaneReady && dualLaneOperational && !dualLaneCutPending.load() && laneId == expectedLane &&
+        if (dualLaneReady && dualLaneOperational && !dualLaneCutPending.load() && !previewMediaOverlay && laneId == expectedLane &&
             scene != programSelection && scene != currentScene && obs_scene_from_source(scene)) {
             // Hold the previous public selection before the physical child is
             // replaced.  A postcondition failure must be able to restore both
@@ -5408,6 +5575,7 @@ void PulsarFrontendAPI::OnDualLaneTransitionAbortCommitted(void *param, uint64_t
 void PulsarFrontendAPI::dualLaneTransitionTick()
 {
     std::lock_guard<std::mutex> lock(dualLaneMutex);
+    if (previewMediaOverlay) { previewMediaTickLocked(); return; }
     if (!dualLaneCutPending.load()) mediaTransition.preload_tick();
     if (sameLaneTarget >= 0 && sameLaneAborted) {
         if (!dualLaneTransitionFinalPending) {
@@ -5474,6 +5642,10 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
     uint32_t requestedDuration = static_cast<uint32_t>((std::max)(0, transitionDuration));
     {
         std::lock_guard<std::mutex> lk(dualLaneMutex);
+        if (previewMediaOverlay) {
+            g_runtimeTelemetry.cancelPending();
+            return false;
+        }
         if (!dualLaneReady || !dualLaneOperational || !scene || !dualLaneInvariantLocked("queue-before")) {
             g_runtimeTelemetry.cancelPending();
             if (dualLaneReady && !dualLaneOperational)
@@ -6762,6 +6934,7 @@ void PulsarFrontendAPI::teardown()
         dualLaneCutPending.store(false);
     }
     obs_view_cancel_atomic_swap();
+    clearPreviewMediaLocked();
     mediaTransition.clear();
     if (sameLaneScene) {
         obs_source_release(sameLaneScene);
