@@ -31,6 +31,8 @@ public:
     bool configured() const { return source_ != nullptr; }
     nlohmann::json state() const;
     void preload_tick(); // video thread only; never starts playback or audio
+    static void preload_frame(obs_source_t *media); // same contract for a private Preview decoder
+    obs_source_t *create_preview_playback() const; // owned reference; isolated from stinger stop callbacks
     obs_source_t *prepare(bool preview, uint32_t &duration_ms, std::string &error);
     void finish();
     obs_source_t *playback_source() const { return media(); } // borrowed, lane mutex held

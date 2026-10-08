@@ -14,6 +14,16 @@ replacement without changing the role map for the latter. The historical
 environment-only demo stinger described below remains an explicit opt-in;
 there is no automatically selected demo path.
 
+`src/pulsar-preview-frame.cpp` owns the single canvas-sized GPU capture used
+while the host prepares a persistent cockpit composite in place. It registers
+its source kind at frontend initialization and renders/captures on the OBS
+graphics thread. The frontend owns the private overlay's lifetime; the media
+owner clones one bounded Preview decoder per operation. Host readiness then
+starts continuous playback, with an incoming-composite reveal at the media
+cut point and native restoration on completion/abort. The decoder isolation
+prevents prior asynchronous stop callbacks from truncating immediate replays.
+`scripts/probe-preview-transition.py` covers that runtime contract.
+
 `libobs` exposes a `frontend-api` layer (`obs-frontend-api.dll`) whose
 function table is filled by whichever frontend is running — the OBS
 Studio Qt UI in upstream, this stub in Pulsar. Without callbacks set,

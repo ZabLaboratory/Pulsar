@@ -72,6 +72,7 @@ add_library(pulsar-frontend-stub STATIC
     src/pulsar-frontend-stub.cpp
     src/pulsar-media-transition.cpp
     src/pulsar-media-transition-config.cpp
+    src/pulsar-preview-frame.cpp
 )
 
 target_include_directories(pulsar-frontend-stub PUBLIC

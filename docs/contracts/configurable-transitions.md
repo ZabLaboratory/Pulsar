@@ -150,24 +150,32 @@ are the transition operations allowed through the pending-mutation gate.
 
 Prism's cockpit rail updates one `ZabPreviewComposite` in place. It uses
 `BeginPreview` with `{runtime_instance_id, command_id}` rather than staging a
-second OBS scene. Pulsar creates a private scene containing the bound composite
-and the configured decoder child, and attaches it only to PreviewView at an
+second OBS scene. Pulsar creates a private scene containing a GPU snapshot of
+the outgoing composite, the live composite, and a private Preview decoder
+derived from the configured media. It attaches this scene only to PreviewView at an
 atomic frame boundary. Program's source, output and audio remain independent;
 the Preview media child is muted. Beginning requires a ready configured
 decoder and rejects concurrent Take, same-lane transition or prepared Take.
 
 Poll `GetPreviewResult` with the same runtime/command IDs. The states are
-`starting`, `closing`, then `covered`: Pulsar pauses the media when its clock
-reaches the configured cut point, within one video tick. The result reports
-`cut_time_ms`. The host may now change Orion's persistent Preview wire and
-reconcile native sources while the cover remains rendered. Opacity at this
-point remains the media author's responsibility. `SetPreviewComposite`
+`starting`, `preparing`, then `covered`. The latter means that the outgoing
+frame has actually been captured and the Preview decoder has a decoded first
+frame (`cover_kind: "outgoing_frame"). Playback has not started. The host may
+now change Orion's persistent Preview wire and reconcile native sources behind
+this captured frame. The snapshot's active child keeps the live composite and
+its producers hot; one canvas-sized GPU texture is held, with no CPU copy or
+frame queue. `SetPreviewComposite`
 acknowledges the existing composite without removing an active cover.
 
 Call `EndPreview` with `{runtime_instance_id, command_id, abort: false}` once
-the incoming scene is ready. It unpauses the media (`opening`) and restores the
-original composite when playback ends. `completed` contains the actual
-restoration `frame_id`/`pts_ns`; the start frame is also reported. An early
+the incoming scene is ready. This starts uninterrupted media playback at a
+native frame boundary (`closing`). When the media clock reaches the configured
+cut point, Pulsar shows the live incoming composite and releases the snapshot
+item (`opening`), without pausing or seeking the video. Opacity at the cut
+remains the media author's responsibility. `media_time_ms`, `media_paused`, and
+`cut_time_ms` expose playback continuity. Pulsar restores the original composite
+when playback ends. `completed` contains the actual restoration `frame_id`/`pts_ns`;
+capture and playback-start frames/PTS are reported separately. An early
 failure or superseded host request uses `abort: true` and awaits `aborted` at
 the restoration frame. Normal release before `covered` is refused. Configure,
 Clear and other transitions remain busy throughout this operation; Preview
@@ -175,6 +183,15 @@ source reconciliation remains allowed under the cover. If the host disappears
 or decoding fails, Pulsar restores the view itself within the configured media
 duration plus 20 seconds. The most recent Preview outcome is retained for
 readback and command replay, separate from `SwitchLane` outcomes.
+
+The Preview decoder is owned only by this operation and released on restore,
+abort or failure. Late stop callbacks from a previous operation or the Take
+stinger cannot interrupt a subsequent Preview animation. The existing host
+Begin/prepare/End sequencing remains valid; preparation latency occurs before
+the video begins instead of stopping it at the midpoint. The isolated
+`scripts/probe-preview-transition.py` checks delayed preparation, continuous
+media time across the cut, immediate replay, two abort phases and graceful
+shutdown using synthetic scenes without recording or streaming.
 
 Vendor validation failures return `{ "error": "CODE" }`; transport admission
 failures use the existing obs-websocket error envelope. Stable codes include

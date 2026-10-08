@@ -86,15 +86,34 @@ uint64_t MediaTransition::media_duration_ns() const
 
 void MediaTransition::preload_tick()
 {
+    preload_frame(media());
+}
+
+void MediaTransition::preload_frame(obs_source_t *media)
+{
     // Inactive ffmpeg sources retain a decoded first frame, but expose zero
     // dimensions until that frame has a texture. Upload it on the video thread
     // only: doing this from GetState would invert graphics and lane locks.
-    if (media() && media_duration_ns() && !obs_source_get_width(media_)) {
+    if (media && !obs_source_get_width(media)) {
         calldata_t cd = {};
-        proc_handler_call(obs_source_get_proc_handler(media_), "preload_first_frame", &cd);
+        proc_handler_call(obs_source_get_proc_handler(media), "preload_first_frame", &cd);
         calldata_free(&cd);
-        obs_source_show_preloaded_video(media_);
+        obs_source_show_preloaded_video(media);
     }
+}
+
+obs_source_t *MediaTransition::create_preview_playback() const
+{
+    if (!media()) return nullptr;
+    OBSDataAutoRelease original = obs_source_get_settings(media_);
+    OBSDataAutoRelease settings = obs_data_create();
+    obs_data_apply(settings, original);
+    auto *playback = obs_source_create_private("ffmpeg_source", "PulsarPreviewTransitionVideo", settings);
+    if (playback) {
+        obs_source_set_volume(playback, config_.volume);
+        obs_source_set_muted(playback, true);
+    }
+    return playback;
 }
 
 std::string MediaTransition::readiness_error() const

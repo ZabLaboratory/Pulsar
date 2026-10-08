@@ -106,6 +106,7 @@
 #include "pulsar-dual-lane-config.h"
 #include "pulsar-transition-controller.h"
 #include "pulsar-media-transition.h"
+#include "pulsar-preview-frame.h"
 #include "pulsar-dual-lane-control.h"
 #include "pulsar-runtime-telemetry.h"
 #include "pulsar-runtime-telemetry-signals.h"
@@ -2947,6 +2948,7 @@ public:
     void previewMediaTickLocked();
     void clearPreviewMediaLocked();
     static void OnPreviewMediaStarted(void *param, uint64_t frameId, uint64_t ptsNs);
+    static void OnPreviewMediaPlaybackStarted(void *param, uint64_t frameId, uint64_t ptsNs);
     static void OnPreviewMediaRestored(void *param, uint64_t frameId, uint64_t ptsNs);
     static void OnLaneSwitchCommitted(void *param, uint64_t frameId, uint64_t ptsNs);
     static void OnSceneSwitchPreviewVideoFrame(void *param, struct video_data *frame);
@@ -3914,9 +3916,15 @@ private:
     json lastLaneSwitch = nullptr;
     obs_scene_t *previewMediaOverlay = nullptr;
     obs_source_t *previewMediaBase = nullptr;
+    obs_source_t *previewMediaFrame = nullptr;
+    obs_source_t *previewMediaPlayback = nullptr;
+    obs_sceneitem_t *previewMediaHeldItem = nullptr;
+    obs_sceneitem_t *previewMediaLiveItem = nullptr;
+    obs_sceneitem_t *previewMediaVideoItem = nullptr;
     json previewMediaOutcome = nullptr;
     uint64_t previewMediaDeadlineNs = 0;
     bool previewMediaReleased = false;
+    bool previewMediaPlaybackStarted = false;
     bool previewMediaAborted = false;
     bool previewMediaRestoreQueued = false;
     std::atomic<bool> recordingPaused{false};
@@ -4493,8 +4501,9 @@ json PulsarFrontendAPI::configureMediaTransition(const json &config)
 }
 
 // The persistent cockpit wire updates one composite in place. Overlay the
-// actual PreviewView, hold a decoded cover frame, then reopen after the host
-// has admitted Orion and reconciled native sources. Program is never rebound
+// actual PreviewView with an outgoing GPU frame while the host admits Orion
+// and reconciles native sources. Only then play the media without pausing it.
+// The visual cut reveals the prepared live composite. Program is never rebound
 // to this overlay and its audio never receives the preview media child.
 json PulsarFrontendAPI::beginPreviewMedia(const std::string &commandId)
 {
@@ -4513,24 +4522,41 @@ json PulsarFrontendAPI::beginPreviewMedia(const std::string &commandId)
     uint32_t duration = 0;
     std::string error;
     if (!mediaTransition.prepare(true, duration, error)) return {{"error", error}};
-    auto *media = mediaTransition.playback_source();
+    // A fresh bounded Preview decoder cannot receive a late stop callback
+    // from the previous overlay or from the independent Take stinger.
+    previewMediaPlayback = mediaTransition.create_preview_playback();
+    auto *media = previewMediaPlayback;
+    if (!media) return {{"error", "DECODER_UNAVAILABLE"}};
+    obs_video_info video = {};
+    obs_get_video_info(&video);
+    previewMediaFrame = pulsar_transition::create_preview_frame(base, video.base_width, video.base_height);
+    if (!previewMediaFrame) {
+        clearPreviewMediaLocked();
+        return {{"error", "PREVIEW_FRAME_UNAVAILABLE"}};
+    }
     previewMediaOverlay = obs_scene_create_private("PulsarPreviewMediaOverlay");
-    if (!previewMediaOverlay) return {{"error", "PREVIEW_OVERLAY_UNAVAILABLE"}};
-    previewMediaBase = obs_source_get_ref(base);
-    obs_scene_add(previewMediaOverlay, base);
-    auto *item = obs_scene_add(previewMediaOverlay, media);
-    if (!item) {
+    if (!previewMediaOverlay) {
         clearPreviewMediaLocked();
         return {{"error", "PREVIEW_OVERLAY_UNAVAILABLE"}};
     }
-    obs_video_info video = {};
-    obs_get_video_info(&video);
+    previewMediaBase = obs_source_get_ref(base);
+    previewMediaLiveItem = obs_scene_add(previewMediaOverlay, base);
+    previewMediaHeldItem = obs_scene_add(previewMediaOverlay, previewMediaFrame);
+    auto *item = obs_scene_add(previewMediaOverlay, media);
+    if (!item || !previewMediaLiveItem || !previewMediaHeldItem) {
+        clearPreviewMediaLocked();
+        return {{"error", "PREVIEW_OVERLAY_UNAVAILABLE"}};
+    }
+    previewMediaVideoItem = item;
+    obs_sceneitem_set_visible(previewMediaLiveItem, false);
+    obs_sceneitem_set_visible(previewMediaVideoItem, false);
     vec2 bounds;
     vec2_set(&bounds, static_cast<float>(video.base_width), static_cast<float>(video.base_height));
     obs_sceneitem_set_bounds_type(item, OBS_BOUNDS_STRETCH);
     obs_sceneitem_set_bounds(item, &bounds);
     obs_sceneitem_set_bounds_alignment(item, OBS_ALIGN_TOP | OBS_ALIGN_LEFT);
     previewMediaReleased = previewMediaAborted = previewMediaRestoreQueued = false;
+    previewMediaPlaybackStarted = false;
     previewMediaDeadlineNs = os_gettime_ns() + (uint64_t{duration} + 20000) * 1000000ULL;
     const char *runtime = std::getenv("PULSAR_RUNTIME_INSTANCE_ID");
     previewMediaOutcome = {{"command_id", commandId}, {"runtime_instance_id", runtime ? runtime : "pulsar-runtime"},
@@ -4550,11 +4576,23 @@ void PulsarFrontendAPI::OnPreviewMediaStarted(void *param, uint64_t frameId, uin
     auto *self = static_cast<PulsarFrontendAPI *>(param);
     std::lock_guard<std::mutex> lock(self->dualLaneMutex);
     if (!self->previewMediaOverlay) return;
-    obs_source_media_play_pause(self->mediaTransition.playback_source(), false);
-    obs_source_media_restart(self->mediaTransition.playback_source());
-    self->previewMediaOutcome["status"] = "closing";
+    self->previewMediaOutcome["status"] = "preparing";
     self->previewMediaOutcome["start_frame_id"] = frameId;
     self->previewMediaOutcome["start_pts_ns"] = ptsNs;
+}
+
+void PulsarFrontendAPI::OnPreviewMediaPlaybackStarted(void *param, uint64_t frameId, uint64_t ptsNs)
+{
+    auto *self = static_cast<PulsarFrontendAPI *>(param);
+    std::lock_guard<std::mutex> lock(self->dualLaneMutex);
+    if (!self->previewMediaOverlay || self->previewMediaAborted) return;
+    obs_sceneitem_set_visible(self->previewMediaVideoItem, true);
+    obs_source_media_restart(self->previewMediaPlayback);
+    self->previewMediaPlaybackStarted = true;
+    self->previewMediaOutcome["status"] = "closing";
+    self->previewMediaOutcome["media_time_ms"] = 0;
+    self->previewMediaOutcome["playback_start_frame_id"] = frameId;
+    self->previewMediaOutcome["playback_start_pts_ns"] = ptsNs;
 }
 
 json PulsarFrontendAPI::previewMediaResult(const std::string &commandId)
@@ -4570,13 +4608,19 @@ json PulsarFrontendAPI::endPreviewMedia(const std::string &commandId, bool abort
     if (previewMediaOutcome.is_null() || previewMediaOutcome["command_id"] != commandId)
         return {{"error", "COMMAND_NOT_FOUND"}};
     if (!previewMediaOverlay) return previewMediaOutcome;
+    if (previewMediaReleased && !abort) return previewMediaOutcome;
     if (!abort && previewMediaOutcome["status"] != "covered" && !previewMediaReleased)
         return {{"error", "PREVIEW_NOT_COVERED"}};
     previewMediaReleased = true;
     previewMediaAborted = previewMediaAborted || abort;
     if (!abort) {
-        obs_source_media_play_pause(mediaTransition.playback_source(), false);
-        previewMediaOutcome["status"] = "opening";
+        previewMediaOutcome["status"] = "starting";
+        OBSSourceAutoRelease program = obs_view_get_source(programView, 0);
+        if (!obs_view_queue_atomic_swap_with_floor(programView, 0, program, previewView, 0,
+                obs_scene_get_source(previewMediaOverlay), os_gettime_ns(), OnPreviewMediaPlaybackStarted, this)) {
+            previewMediaAborted = true;
+            return {{"error", "ATOMIC_SWAP_REJECTED"}};
+        }
     }
     return previewMediaOutcome;
 }
@@ -4585,9 +4629,16 @@ void PulsarFrontendAPI::clearPreviewMediaLocked()
 {
     if (previewMediaOverlay) obs_scene_release(previewMediaOverlay);
     previewMediaOverlay = nullptr;
+    previewMediaHeldItem = previewMediaLiveItem = previewMediaVideoItem = nullptr;
+    if (previewMediaFrame) obs_source_release(previewMediaFrame);
+    previewMediaFrame = nullptr;
     if (previewMediaBase) obs_source_release(previewMediaBase);
     previewMediaBase = nullptr;
-    if (mediaTransition.playback_source()) obs_source_media_stop(mediaTransition.playback_source());
+    if (previewMediaPlayback) {
+        obs_source_media_stop(previewMediaPlayback);
+        obs_source_release(previewMediaPlayback);
+    }
+    previewMediaPlayback = nullptr;
     mediaTransition.finish();
 }
 
@@ -4605,19 +4656,32 @@ void PulsarFrontendAPI::OnPreviewMediaRestored(void *param, uint64_t frameId, ui
 void PulsarFrontendAPI::previewMediaTickLocked()
 {
     if (!previewMediaOverlay || previewMediaRestoreQueued) return;
-    auto *media = mediaTransition.playback_source();
+    auto *media = previewMediaPlayback;
+    pulsar_transition::MediaTransition::preload_frame(media);
     if (os_gettime_ns() >= previewMediaDeadlineNs || obs_source_media_get_state(media) == OBS_MEDIA_STATE_ERROR) {
         previewMediaAborted = true;
         previewMediaOutcome["failure_reason"] = "PREVIEW_TRANSITION_TIMEOUT_OR_DECODE_ERROR";
     }
-    if (!previewMediaReleased && previewMediaOutcome["status"] == "closing" &&
-            obs_source_media_get_time(media) >= mediaTransition.cut_point_ms()) {
-        obs_source_media_play_pause(media, true);
+    if (!previewMediaReleased && previewMediaOutcome["status"] == "preparing" &&
+            pulsar_transition::preview_frame_ready(previewMediaFrame) &&
+            obs_source_get_width(media) && obs_source_get_height(media)) {
         previewMediaOutcome["status"] = "covered";
-        previewMediaOutcome["cut_time_ms"] = obs_source_media_get_time(media);
+        previewMediaOutcome["cover_kind"] = "outgoing_frame";
+    }
+    if (previewMediaPlaybackStarted) {
+        const auto time = obs_source_media_get_time(media);
+        previewMediaOutcome["media_time_ms"] = (std::max)(time,
+            previewMediaOutcome.value("media_time_ms", int64_t{0}));
+        previewMediaOutcome["media_paused"] = obs_source_media_get_state(media) == OBS_MEDIA_STATE_PAUSED;
+        if (previewMediaOutcome["status"] == "closing" && time >= mediaTransition.cut_point_ms()) {
+            obs_sceneitem_set_visible(previewMediaLiveItem, true);
+            obs_sceneitem_set_visible(previewMediaHeldItem, false);
+            previewMediaOutcome["status"] = "opening";
+            previewMediaOutcome["cut_time_ms"] = time;
+        }
     }
     const auto state = obs_source_media_get_state(media);
-    if (!previewMediaAborted && (!previewMediaReleased ||
+    if (!previewMediaAborted && (!previewMediaPlaybackStarted ||
             (state != OBS_MEDIA_STATE_ENDED && state != OBS_MEDIA_STATE_STOPPED))) return;
     OBSSourceAutoRelease program = obs_view_get_source(programView, 0);
     previewMediaRestoreQueued = obs_view_queue_atomic_swap_with_floor(programView, 0, program,
@@ -7793,6 +7857,7 @@ extern "C" void pulsar_frontend_init(void)
     g_rollbackMarkerWriter.start();
     g_dualLaneControlBridge.install();
     g_runtimeTelemetry.install();
+    pulsar_transition::register_preview_frame_source();
     auto *api = new PulsarFrontendAPI();
     g_api = api;
     obs_frontend_set_callbacks_internal(api);
