@@ -68,6 +68,25 @@ def test_headless_fences_browser_audio_before_obs_shutdown() -> None:
     assert browser_fence < frontend_shutdown < obs_shutdown
 
 
+def test_rtwq_outlives_libobs_and_is_retained_on_unsafe_abort() -> None:
+    source = (ROOT / "plugins" / "pulsar-headless" / "main.cpp").read_text(encoding="utf-8")
+    main = source[source.index("int main(") :]
+    assert main.index("startup_realtime_work_queue()") < main.index("obs_startup(")
+    # Every completed libobs shutdown releases RTWQ immediately afterwards.
+    shutdowns = list(re.finditer(r"(?m)^\s*obs_shutdown\(\);", main))
+    assert len(shutdowns) == 5
+    for call in shutdowns:
+        assert re.match(
+            r"\s*(?:const auto work_queue_shutdown = )?pulsar_runtime::shutdown_realtime_work_queue\(\);",
+            main[call.end() :],
+        )
+    startup_failure = main[main.index('if (!obs_startup(') : main.index('[pulsar-runtime] instance_id=')]
+    assert "shutdown_realtime_work_queue();" in startup_failure
+    # Browser/source fences may abort with callbacks still alive. Those returns
+    # intentionally skip both obs_shutdown and RTWQ teardown until process exit.
+    assert main.count("shutdown_realtime_work_queue()") == len(shutdowns) + 1
+
+
 def test_accelerated_paint_copies_callback_texture_into_owned_texture() -> None:
     source = (ROOT / "plugins" / "pulsar-browser" / "browser-client.cpp").read_text(
         encoding="utf-8"

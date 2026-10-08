@@ -152,6 +152,7 @@ if(WIN32)
     # cross-root/physical-directory authorities, alias hardening, and
     # acquire/refusal/release/abandoned-recovery of both lock classes.
     add_subdirectory(tests/runtime-isolation-probe)
+    add_subdirectory(tests/rtwq-lifecycle)
 
     # #248 -- the producer (C) and DirectShow consumer (C++) must take the
     # same fail-closed namespace decision before either can touch a named

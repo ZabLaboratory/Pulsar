@@ -29,6 +29,7 @@
 #include "log-handler.h"
 #include "pulsar-frontend-stub.h"
 #include "runtime-identity.h"
+#include "realtime-work-queue.h"
 
 #include <QtCore/QByteArray>
 #include <QtWidgets/QApplication>
@@ -1294,9 +1295,22 @@ int main(int argc, char **argv)
     // captured by our durable, redacted log handler.
     install_pulsar_log_handler();
 
+    // win-wasapi uses the host-owned RTWQ platform, as it does in OBS's GUI
+    // entry point. Loading RTWorkQ.dll alone does not initialize its queues.
+    const auto work_queue_result = pulsar_runtime::startup_realtime_work_queue();
+    if (work_queue_result != 0) {
+        blog(LOG_ERROR, "[pulsar-headless] RTWQ startup failed (0x%08X)",
+             static_cast<unsigned int>(work_queue_result));
+        return 1;
+    }
+#ifdef _WIN32
+    blog(LOG_INFO, "[pulsar-headless] RTWQ platform started");
+#endif
+
     const std::string module_config_path = runtime_state->identity.runtime_dir.string();
     if (!obs_startup("en-US", module_config_path.c_str(), nullptr)) {
         blog(LOG_ERROR, "[pulsar-headless] obs_startup failed");
+        pulsar_runtime::shutdown_realtime_work_queue();
         return 1;
     }
 
@@ -1312,11 +1326,13 @@ int main(int argc, char **argv)
 
     if (!reset_video()) {
         obs_shutdown();
+        pulsar_runtime::shutdown_realtime_work_queue();
         return 1;
     }
 
     if (!reset_audio()) {
         obs_shutdown();
+        pulsar_runtime::shutdown_realtime_work_queue();
         return 1;
     }
 
@@ -1358,6 +1374,7 @@ int main(int argc, char **argv)
         // clean fail-closed exit.
         pulsar_frontend_shutdown();
         obs_shutdown();
+        pulsar_runtime::shutdown_realtime_work_queue();
         return 1;
     }
 
@@ -1402,6 +1419,7 @@ int main(int argc, char **argv)
             return 1;
         }
         obs_shutdown();
+        pulsar_runtime::shutdown_realtime_work_queue();
         return 1;
     }
 
@@ -1495,6 +1513,11 @@ int main(int argc, char **argv)
         return 1;
     }
     obs_shutdown();
+
+    const auto work_queue_shutdown = pulsar_runtime::shutdown_realtime_work_queue();
+    if (work_queue_shutdown != 0)
+        blog(LOG_WARNING, "[pulsar-headless] RTWQ shutdown failed (0x%08X)",
+             static_cast<unsigned int>(work_queue_shutdown));
 
     runtime_state->release();
 #ifdef _WIN32
