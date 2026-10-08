@@ -1,6 +1,8 @@
 #include "pulsar-media-transition.h"
 #include <obs.hpp>
 #include <array>
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -31,9 +33,14 @@ bool MediaTransition::configure(const json &value, std::string &error)
     const auto path = std::filesystem::u8path(next.path);
     if (!std::filesystem::is_regular_file(path, ec)) { error = "ASSET_MISSING"; return false; }
     std::ifstream stream(path, std::ios::binary);
-    std::array<unsigned char, 4> header{};
+    std::array<unsigned char, 12> header{};
     stream.read(reinterpret_cast<char *>(header.data()), header.size());
-    if (stream.gcount() != 4 || header != std::array<unsigned char, 4>{0x1a, 0x45, 0xdf, 0xa3}) {
+    const auto length = stream.gcount();
+    const bool webm = length >= 4 && header[0] == 0x1a && header[1] == 0x45 && header[2] == 0xdf && header[3] == 0xa3;
+    const bool mp4 = length == 12 && std::memcmp(header.data() + 4, "ftyp", 4) == 0;
+    auto extension = path.extension().u8string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if ((extension == ".webm" && !webm) || (extension == ".mp4" && !mp4)) {
         error = "ASSET_INVALID_CONTAINER"; return false;
     }
     OBSDataAutoRelease settings = obs_data_create();

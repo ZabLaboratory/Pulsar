@@ -29,7 +29,7 @@ bool parse_media_config(const json &value, MediaConfig &out, std::string &error)
     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
     });
-    if (extension != ".webm") { error = "WEBM_REQUIRED"; return false; }
+    if (extension != ".webm" && extension != ".mp4") { error = "MEDIA_FORMAT_REQUIRED"; return false; }
     if (point < 1 || point >= 20000) { error = "CUT_POINT_INVALID"; return false; }
     if (value.contains("volume") && (!value["volume"].is_number() ||
         !std::isfinite(value["volume"].get<double>()) || value["volume"].get<double>() < 0 ||

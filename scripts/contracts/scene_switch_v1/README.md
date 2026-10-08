@@ -1,5 +1,18 @@
 # `pulsar.scene-switch.v1`
 
+## Runtime integration in Pulsar 3.0.0
+
+The native frontend implements this contract under obs-websocket vendor
+`pulsar-scene-switch`, via `CallVendorRequest`. GetState supplies actual
+revisions/roles and operational freeze state. The TypeScript SDK uses explicit
+vendor passthrough rather than a dedicated typed scene-switch namespace.
+
+The reference semantics below are unchanged. The native runtime additionally
+bounds retained command outcomes to 4096 with no eviction: known IDs replay,
+new IDs refuse at capacity until a controlled restart. Read
+[PROTOCOL.md](../../../docs/PROTOCOL.md) for runtime admission details and
+optional transitions. A callback frame/PTS is not a downstream display timestamp.
+
 This directory is the canonical contract for Pulsar's deterministic Preview →
 On-air scene switch. It is intentionally independent of OBS/libobs and of any
 particular WebSocket implementation. The C++ vendor handler, TypeScript

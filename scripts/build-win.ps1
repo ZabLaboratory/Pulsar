@@ -20,10 +20,10 @@ param(
     # Pass -GuiBuild to opt back in to the full obs-studio build for
     # debugging or comparison runs.
     [switch] $GuiBuild,
-    # -Full flips ENABLE_BROWSER on so obs-browser.dll is compiled
-    # against CEF and bundled. The headless ENABLE_FRONTEND=OFF and
+    # -Full builds pulsar-browser.dll against CEF and bundles its runtime.
+    # The unused upstream obs-browser is not compiled. ENABLE_FRONTEND=OFF and
     # ENABLE_UI=OFF stay -- we want browser sources without the Qt
-    # main UI. Adds ~10 min to the build (CEF+ obs-browser compile).
+    # main UI. CEF is still fetched by the upstream dependency preset.
     # Default OFF for fast dev cycles; CI passes -Full so the rundir
     # contains both light and full plugin sets, then package-win.ps1
     # carves out the two distribution variants.
@@ -426,8 +426,11 @@ if ($Fast -and (Test-Path $upstreamCache)) {
     $reuseFastUpstreamConfigure =
         $cacheText -match '(?m)^ENABLE_FRONTEND:BOOL=OFF\r?$' -and
         $cacheText -match '(?m)^ENABLE_UI:BOOL=OFF\r?$' -and
-        $cacheText -match '(?m)^ENABLE_BROWSER:BOOL=OFF\r?$' -and
+        $cacheText -match '(?m)^ENABLE_BROWSER:BOOL=(ON|OFF)\r?$' -and
         $cacheText -match '(?m)^ENABLE_WEBSOCKET:BOOL=OFF\r?$'
+    # Fast mode inherits the validated browser capability. Otherwise a cache
+    # created with -Full is rejected (or the Pulsar reconfigure disables CEF).
+    $Full = [bool]($cacheText -match '(?m)^ENABLE_BROWSER:BOOL=ON\r?$')
 }
 if ($Fast -and -not $reuseFastUpstreamConfigure) {
     throw "-Fast requires an existing compatible headless build_x64 cache at $upstreamBuildDir; run scripts/build-win.ps1 once first"
@@ -456,6 +459,9 @@ if ($Stage -in @('configure', 'all') -and -not $reuseFastUpstreamConfigure) {
     #   ENABLE_BROWSER   - default OFF in obs-browser, but the windows-x64
     #                      preset forces it ON in cacheVariables. Override.
     $extraArgs = @()
+    # The upstream dependency helper normally skips CEF when its own browser
+    # plugin is disabled. Full Pulsar still needs CEF for pulsar-browser.
+    $extraArgs += "-DPULSAR_REQUIRE_CEF=$(if ($Full) { 'ON' } else { 'OFF' })"
     # ATL gate (see Test-AtlAvailable). Default ON in the patched
     # CMakeLists, so we only ever need to force OFF; passing ON
     # explicitly when ATL is present keeps the cache value unambiguous
@@ -468,16 +474,13 @@ if ($Stage -in @('configure', 'all') -and -not $reuseFastUpstreamConfigure) {
     if (-not $GuiBuild) {
         $extraArgs += '-DENABLE_FRONTEND=OFF'
         $extraArgs += '-DENABLE_UI=OFF'
-        # ENABLE_BROWSER stays off in dev (-Full not passed) to skip
-        # the ~10 min CEF + obs-browser compile. CI / release builds
-        # pass -Full so the rundir contains obs-browser.dll + CEF
-        # runtime; package-win.ps1 then either ships them (full
-        # variant) or strips them (light variant).
+        # Pulsar owns browser_source through pulsar-browser. Building the
+        # upstream DLL/helper here only to delete them below wasted cold-build
+        # time. PULSAR_REQUIRE_CEF requests the pinned dependency for -Full;
+        # pulsar-browser's own CMake stages the identical runtime payload.
+        $extraArgs += '-DENABLE_BROWSER=OFF'
         if ($Full) {
-            $extraArgs += '-DENABLE_BROWSER=ON'
-            Write-Host "  -Full: ENABLE_BROWSER=ON (CEF + obs-browser will compile)"
-        } else {
-            $extraArgs += '-DENABLE_BROWSER=OFF'
+            Write-Host '  -Full: Pulsar browser + CEF enabled; unused upstream browser not built'
         }
         # ENABLE_WEBSOCKET=OFF -- skip building the upstream
         # obs-websocket plugin. Pulsar ships its own fork at

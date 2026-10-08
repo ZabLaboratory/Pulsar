@@ -1116,6 +1116,7 @@ if ($nameDriftCode -eq 3) {
 # would re-poison config.json mid-suite and break every probe after it.
 $probes = @(
     'probe-source-kinds.py',
+    'probe-source-telemetry.py',
     'probe-events.py',
     # #119 / ADR Prism 026 §3.1 -- GetSceneList must enumerate libobs, not
     # a stub-side snapshot. Creates and removes its own scene, so it leaves

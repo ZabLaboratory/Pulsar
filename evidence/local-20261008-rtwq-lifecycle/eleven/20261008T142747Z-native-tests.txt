@@ -1,0 +1,16 @@
+Test project D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261008-rtwq-lifecycle/build-rtwq
+    Start  8: pulsar-rtwq-lifecycle
+1/3 Test  #8: pulsar-rtwq-lifecycle ...................   Passed    0.06 sec
+    Start 22: pulsar-audio-callback-gate-test
+2/3 Test #22: pulsar-audio-callback-gate-test .........   Passed    0.04 sec
+    Start 23: pulsar-browser-source-task-state-test
+3/3 Test #23: pulsar-browser-source-task-state-test ...   Passed    0.04 sec
+
+100% tests passed, 0 tests failed out of 3
+
+Label Time Summary:
+integration    =   0.06 sec*proc (1 test)
+runtime        =   0.06 sec*proc (1 test)
+unit           =   0.08 sec*proc (2 tests)
+
+Total Test time (real) =   0.23 sec

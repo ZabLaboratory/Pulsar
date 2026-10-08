@@ -11,13 +11,26 @@ CallVendorRequest("pulsar-scene", "GetCaptureSource", {})
 
 > **Why a distinct vendor namespace (`pulsar-scene`, not `pulsar`)** : obs-websocket's `vendor_register_cb` rejects a second register on the same vendor name. The second plugin to call it gets NULL and its requests never bind. Each Pulsar plugin therefore owns its own namespace — `pulsar-multi-stream` keeps `pulsar` (destinations + adaptive bitrate + video settings), `pulsar-scene-source` owns `pulsar-scene` (capture source).
 
-This is the Pulsar side of the **Phase 13.4** integration : Prism (or
+This is the legacy single-page capture integration: Prism (or
 any future Pulsar-bundling app) drops the legacy `window_capture` —
 which would tie the broadcast geometry to the host window — and asks
 Pulsar to start a CEF `browser_source` pointed at a local scene server
 URL. The DOM rendered inside Pulsar's own CEF subprocess becomes the
 captured frame source ; the host application is decoupled from the
 broadcast canvas size.
+
+## Relationship to the 3.0.0 production core
+
+This helper replaces one managed capture source and removes prior managed
+items. It does not reserve an independent Preview candidate or implement
+atomic frame-boundary Takes. For that, use the frontend-owned
+`pulsar-scene-switch` vendor and its
+[versioned contract](../../scripts/contracts/scene_switch_v1/README.md).
+Do not invoke a global managed-item sweep as a substitute for lane preparation.
+
+A successful response confirms the control mutation, not healthy rendered
+frames. CEF/helper/layout and actual recorded PGM must be checked separately.
+The full bundle's CEF build is not sandboxed; a URL is a content trust decision.
 
 ## Vendor requests
 
@@ -37,8 +50,9 @@ knows** before adding the new one.
 > CEF browser and its JS state alive for the rest of the session. A Pulsar-
 > managed browser source is either the active capture source, or destroyed.
 > It is *not* torn down on a program-scene change (`shutdown = false`) —
-> Pulsar composes cuts inside the page, so tearing it down would blank the
-> antenna. Normative statement: `docs/PROTOCOL.md`, *Browser sources —
+> this single-page integration may compose changes inside the page, so tearing
+> it down would blank that capture. The separate dual-lane production core
+> preserves hot producers through its own Prepare/Take lifecycle. Normative statement: `docs/PROTOCOL.md`, *Browser sources —
 > control level and lifecycle*.
 
 | Field | Type | Default | Notes |
@@ -72,7 +86,7 @@ Return the active capture source state.
 
 | Field | Type | Notes |
 |---|---|---|
-| `kind` | string | `"browser_source"` after a successful Set, `"window_capture"` if Set has never been called (frontend-stub's default). |
+| `kind` | string | `"browser_source"` after a successful Set, `"window_capture"` if Set has never been called (legacy reported default; not proof that a window target was configured or produces frames). |
 | `url` | string | Present when `kind == "browser_source"`. |
 | `width` / `height` / `fps` / `reroute_audio` | int / bool | Same as Set. |
 | `last_change_unix` | int | Unix timestamp of the last successful Set, `0` if none yet. |

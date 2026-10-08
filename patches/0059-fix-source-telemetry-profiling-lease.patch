@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000059 Mon Sep 17 00:00:00 2001
+From: ClodoCapeo <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Wed, 7 Oct 2026 19:40:00 +0200
+Subject: [PATCH] fix(telemetry): expire read-owned source profiling leases
+
+Renew read telemetry for five seconds, separately from explicitly enabled
+resource tracing. Frame collection releases timers and samples after expiry.
+
+diff --git a/libobs/util/source-profiler.c b/libobs/util/source-profiler.c
+index 18188b545..b979188ea 100644
+--- a/libobs/util/source-profiler.c
++++ b/libobs/util/source-profiler.c
+@@ -93,6 +93,19 @@ static bool gpu_enabled = false;
+ /* These can be set from other threads, mark them volatile */
+ static volatile bool enable_next = false;
+ static volatile bool gpu_enable_next = false;
++/* Read telemetry owns a five-second lease, separate from explicit trace policy. */
++static pthread_mutex_t telemetry_mutex = PTHREAD_MUTEX_INITIALIZER;
++static uint64_t telemetry_until_ns = 0;
++static volatile bool telemetry_requested = false;
++static bool telemetry_active = false;
++
++void source_profiler_request_telemetry(void)
++{
++	pthread_mutex_lock(&telemetry_mutex);
++	telemetry_until_ns = os_gettime_ns() + 5000000000ULL;
++	os_atomic_store_bool(&telemetry_requested, true);
++	pthread_mutex_unlock(&telemetry_mutex);
++}
+ 
+ void ucirclebuf_init(struct ucirclebuf *buf, size_t capacity)
+ {
+@@ -264,10 +277,18 @@ void source_profiler_render_end(void)
+ 
+ void source_profiler_frame_begin(void)
+ {
+-	if (!enabled && enable_next)
++	telemetry_active = false;
++	if (os_atomic_load_bool(&telemetry_requested)) {
++		pthread_mutex_lock(&telemetry_mutex);
++		telemetry_active = os_gettime_ns() < telemetry_until_ns;
++		if (!telemetry_active)
++			os_atomic_store_bool(&telemetry_requested, false);
++		pthread_mutex_unlock(&telemetry_mutex);
++	}
++	if (!enabled && (enable_next || telemetry_active))
+ 		enabled = true;
+ 
+-	if (!gpu_enabled && enabled && gpu_enable_next) {
++	if (!gpu_enabled && enabled && (gpu_enable_next || telemetry_active)) {
+ 		gpu_enabled = true;
+ 	} else if (gpu_enabled) {
+ 		/* Advance timer idx if gpu enabled */
+@@ -384,10 +405,10 @@ void source_profiler_frame_collect(void)
+ 		gs_leave_context();
+ 
+ 	/* Apply updated states for next frame */
+-	if (!enable_next) {
++	if (!enable_next && !telemetry_active) {
+ 		enabled = gpu_enabled = false;
+ 		profiler_shutdown();
+-	} else if (!gpu_enable_next) {
++	} else if (!gpu_enable_next && !telemetry_active) {
+ 		gpu_enabled = false;
+ 		reset_gpu_timers();
+ 	}
+diff --git a/libobs/util/source-profiler.h b/libobs/util/source-profiler.h
+index b6ff4741c..f3a4e2afe 100644
+--- a/libobs/util/source-profiler.h
++++ b/libobs/util/source-profiler.h
+@@ -55,6 +55,8 @@ typedef struct profiler_result {
+ EXPORT void source_profiler_enable(bool enable);
+ /* Enable/disable GPU profiling (applied on next frame) */
+ EXPORT void source_profiler_gpu_enable(bool enable);
++/* Renew a five-second CPU/GPU telemetry lease without changing explicit trace policy. */
++EXPORT void source_profiler_request_telemetry(void);
+ 
+ /* Get latest profiling results for source (must be freed by user) */
+ EXPORT profiler_result_t *source_profiler_get_result(obs_source_t *source);

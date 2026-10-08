@@ -221,8 +221,12 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedPulsar> {
   // Keep failure cleanup deterministic. In particular, a ready timeout must
   // terminate the child before releasing the generated cwd; otherwise a
   // failed boot can retain the instance lock and leave a partial namespace.
-  const terminateChild = async (): Promise<void> => {
+  let terminationReason: "shutdown" | "startup-cleanup" | null = null;
+  const terminateChild = async (reason: "shutdown" | "startup-cleanup" = "startup-cleanup"): Promise<void> => {
     if (child.exitCode !== null || child.signalCode !== null) return;
+    // Set intent before kill(), whose exit callback can run immediately.
+    // An external SIGTERM without this ownership remains an unexpected exit.
+    terminationReason = reason;
     child.kill();
     await new Promise<void>((resolveExit) => {
       if (child.exitCode !== null || child.signalCode !== null) {
@@ -291,11 +295,26 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedPulsar> {
 
   child.on("exit", (code, signal) => {
     clearTimeout(watchdog);
-    emitRuntimeError("PULSAR_PROCESS_EXITED", `pulsar.exe exited prematurely (code=${code}, signal=${signal})`, {
-      exitCode: code,
-      signal,
-    });
-    rejectReady(new PulsarRuntimeError("PULSAR_PROCESS_EXITED", `pulsar.exe exited prematurely (code=${code}, signal=${signal})`, { action: "spawn", exitCode: code, signal }));
+    const expected = terminationReason !== null &&
+      (code === 0 || signal === "SIGTERM" || signal === "SIGKILL");
+    if (expected) {
+      opts.onPrismLog?.({
+        schemaVersion: 1,
+        severity: "info",
+        domain: "service",
+        source: "pulsar.runtime",
+        code: "PULSAR_PROCESS_STOPPED",
+        message: `pulsar.exe stopped after requested termination (code=${code}, signal=${signal})`,
+        context: { action: terminationReason === "shutdown" ? "shutdown" : "spawn" },
+        details: { exitCode: code, signal, reason: terminationReason },
+      });
+    } else {
+      emitRuntimeError("PULSAR_PROCESS_EXITED", `pulsar.exe exited prematurely (code=${code}, signal=${signal})`, {
+        exitCode: code,
+        signal,
+      });
+      rejectReady(new PulsarRuntimeError("PULSAR_PROCESS_EXITED", `pulsar.exe exited prematurely (code=${code}, signal=${signal})`, { action: "spawn", exitCode: code, signal }));
+    }
     cleanupRuntimeDir();
   });
 
@@ -370,7 +389,7 @@ export async function spawn(opts: SpawnOptions = {}): Promise<SpawnedPulsar> {
       } catch {
         // Already closed -- swallow.
       }
-      await terminateChild();
+      await terminateChild("shutdown");
       cleanupRuntimeDir();
     })();
     return shutdownPromise;

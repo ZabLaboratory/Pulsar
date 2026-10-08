@@ -1,103 +1,60 @@
-# Runbook — Offline probe suite: `ConnectionRefused` / `ConnectionClosed`
+# Offline probes: ConnectionRefused / ConnectionClosed
 
-**Applies to:** the `offline probe suite (CTest)` job of `pipeline.yml`
-(`scripts/run-probes.ps1`, Phase 2 connect-only probes).
-**Reference incident:** run `30230046422` on `main` (`0d04641`), 2026-07-27.
-**Instrumented by:** PR #132.
+This is a current diagnostic checklist with a historical incident reference:
+run `30230046422` on `0d04641` (2026-07-27), instrumented by PR #132.
+Its suspected WASAPI race and estimated occurrence rate were not a general
+diagnosis of later failures.
 
----
+## Classify the failed boundary
 
-## Symptom
+A WebSocket refusal can mean the server never started, exited, used another
+port, or rejected the expected runtime setup. A connection closing mid-probe
+can be a server death or an independent client/transport error.
 
-Two (or more) connect-only probes fail at the end of the suite:
+1. Find the earliest failure in the build/probe output, not the final client
+   exception. Inspect process exit status and startup diagnostics.
+2. Look for the suite's `FATAL: the shared pulsar.exe DIED` banner.
+   Its “last alive” probe locates the failure in time; it does not prove causality.
+3. Correlate the actual runtime instance, session, port and private working
+   directory. A newly allocated port reduces collisions; it is not a proof
+   that all startup races are impossible.
+4. If the process remains alive, query `GetDiagnostics` through the expected
+   authenticated client. Check whether a probe assertion failed independently.
+5. If it exited, preserve the stderr tail, exit code and retained probe
+   artifacts. Absence of the FATAL banner alone does not prove the process lived.
 
-```
-==> Running probe-adaptive.py
-connecting: ws://127.0.0.1:59036
-identified
-initial: {...}
-waiting 7s for worker to sample...
-websockets.exceptions.ConnectionClosedError: no close frame received or sent
-==> probe-adaptive.py FAILED (exit 1)
-==> Running probe-record.py
-ConnectionRefusedError: [WinError 1225] The remote computer refused the network connection
-==> probe-record.py FAILED (exit 1)
-```
+## Preserve evidence
 
----
+Use the log path reported by the runtime: explicit `PULSAR_LOG_DIR`, otherwise
+its private runtime's `logs/`, with the historical local-app-data fallback
+only when applicable. A temporary wrapper-owned runtime can be removed at
+shutdown. Do not assume the old global log directory survives every run.
 
-## Diagnostic — read the failure in this order
+Logs are redacted by the native handler, but review exported artifacts and
+raw subprocess output before sharing. See
+[failed go-live](diagnose-a-failed-go-live.md).
 
-**1. Is it a server death or a probe assertion failure?**
+## Historical lead, not a standing exemption
 
-Since PR #132 the suite answers this itself. Look for:
+In the July incident, a hosted Windows runner had no usable audio endpoint.
+WASAPI reconnect activity overlapped source teardown, making a lifetime race
+a plausible lead. The original stderr tail was unavailable; the cause was
+not proven.
 
-```
-==> FATAL: the shared pulsar.exe DIED (pid <n>, exit code <n>)
-```
+For a new incident, verify the actual runner, audio devices, probe sequence
+and process state. Do not rule out port/configuration or stale-process issues
+merely because an older job ran on a fresh VM.
 
-- **Banner present** → the shared `pulsar.exe` crashed. The `ConnectionClosed` /
-  `ConnectionRefused` lines are consequences. The probe named "last alive" is
-  *where* it died, not necessarily *why*. The suite stops there and lists the
-  remaining probes as `NOT RUN`. Diagnose from the **stderr tail** printed right
-  under the banner. Since #183 this is no longer a raw libobs dump: every line
-  is redacted and leveled by `pulsar-headless`'s log handler before it reaches
-  stderr, and the same redacted line is mirrored to the rotating file sink under
-  `%LOCALAPPDATA%\Pulsar\logs\` on the runner (survives past the redirected
-  capture in `build/probe-pulsar-stderr.log`) — see
-  [docs/runbooks/diagnose-a-failed-go-live.md](diagnose-a-failed-go-live.md) for
-  the structured path (`GetDiagnostics`, ADR-005 §3.6.1) when the process is
-  still alive to query.
-- **No banner** → the server stayed up the whole time and the probe assertion
-  genuinely failed. Read the probe, not the infra.
+## Retry and resolution
 
-**2. What is ruled out (do not re-investigate):**
+Inspect the current workflow for its retry policy. Never widen it, disable
+the failing gate or add `continue-on-error` to make a release pass.
 
-| Hypothesis | Why it does not apply |
-|---|---|
-| Zombie `pulsar.exe` from a previous run | The job runs on `runs-on: windows-2022` — a **GitHub-hosted, fresh VM**, not the self-hosted pool. |
-| Port collision / `TIME_WAIT` on 4455 | `run-probes.ps1` binds a `TcpListener` on port 0 per session and reseeds `obs-websocket/config.json`; every run uses a fresh random port. |
-| Stale `config.json` from a Phase-1 self-spawning probe | The shared instance's boot is the last writer of `config.json`, by design (see the header of `run-probes.ps1`). |
+Reduce a reproducible failure to its owning code/test/runtime boundary.
+A confirmed runner incident can justify retrying the same immutable candidate;
+a code fix needs its own validated revision. Preserve the first failure
+before retrying. A second failure is evidence to investigate, not a cue to
+keep rerunning.
 
-**3. Known trigger (open, upstream).** The runner has **no audio endpoint**:
-
-```
-warning: [WASAPISource::TryInitialize]:[default] Failed GetDefaultAudioEndpoint: 80070490
-info: Device '' invalidated.  Retrying (source: probe-input-wasapi_output_capture)
-```
-
-`probe-source-kinds.py` creates and destroys `wasapi_input_capture` /
-`wasapi_output_capture`, so the WASAPI reconnect thread interleaves with source
-destruction — the race already tracked as `TODO(upstream-obs)` in the workflow.
-This is the leading suspect for the reference incident; it is **not proven**,
-because the stderr tail that would prove it was not captured before PR #132.
-
----
-
-## Rate & retry budget
-
-The step retries **once** (`nick-fields/retry@v3`, `max_attempts: 2`), documented
-at ~7 % occurrence. Note the weak independence: **both attempts run on the same
-VM, seconds apart**, so an environment-conditioned race (no audio device) can hit
-both — as it did on `30230046422`. The workflow's rule stands: *if both attempts
-fail, treat it as real*, and the run is now expected to carry a `FATAL` banner
-saying which of the two cases it is.
-
----
-
-## Resolution
-
-- Server crash (`FATAL` present): attach the stderr tail (already redacted since
-  #183) to the upstream-obs investigation — the mirrored copy under
-  `%LOCALAPPDATA%\Pulsar\logs\` on the runner is a fallback if the workflow
-  artefact was not preserved. **Do not** re-run blind, **do not** widen the
-  retry budget, and never add `continue-on-error` — the gate (#121/#128) is
-  blocking on purpose.
-- Assertion failure (no `FATAL`): normal red CI, route to the owner of the probe.
-
-## Rollback
-
-PR #132 touches only diagnostics (`scripts/run-probes.ps1`,
-comments in `.github/workflows/pipeline.yml`). Reverting the commits restores the
-previous behaviour (crash reported as a client-side connection error); no build,
-binary or runtime surface is involved.
+The diagnostic-only PR #132 is historical provenance, not the recommended
+rollback of today's complete probe suite.

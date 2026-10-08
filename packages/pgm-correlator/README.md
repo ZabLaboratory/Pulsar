@@ -7,7 +7,9 @@ B22).
 
 ## Why time, not pixels
 
-Pulsar captures pixels and RTMP; it has no metadata channel. Short of a
+This observer does not receive scene identity inside arbitrary recorded
+pixels. Pulsar 3.0.0 has separate correlated runtime telemetry, but that is
+not automatically embedded into the recordings consumed by this package. Short of a
 Solar burn-in (out of scope here, would be a Solar change), no
 `correlation_id` is recoverable from a recorded frame. This package instead
 observes two independent, real timelines and pairs them:
@@ -82,7 +84,10 @@ import { PulsarClient } from "@clodocapeo/pulsar-client";
 import { recordCorrelatedSession } from "@clodocapeo/pgm-correlator";
 
 const pulsar = new PulsarClient();
-await pulsar.connect({ url: "ws://127.0.0.1:4455" });
+await pulsar.connect({
+  url: process.env.PULSAR_WS_URL,
+  password: process.env.PULSAR_WS_PASSWORD,
+});
 
 const { artifact, paths } = await recordCorrelatedSession({
   pulsar,
@@ -93,3 +98,21 @@ const { artifact, paths } = await recordCorrelatedSession({
 
 console.log(artifact.counts, paths.summaryPath);
 ```
+
+
+## 3.0.0 integration status
+
+This package keeps its own version; it is not one of the three Pulsar 3.0.0
+packages published by the standard release job. Its workspace client
+dependency is aligned with the current SDK.
+
+The limitations above describe the original #230 evidence, not a claim that
+the current release environment has no Orion or Docker. No live cross-service
+validation is inferred from updating the dependency or rerunning portable
+tests. A real session needs authorized endpoints/credentials, exact clock
+assumptions, an explicit output directory and proper recorder/client cleanup.
+
+The usage block is an orchestration sketch; the host must validate its
+environment variables, protect the show token and disconnect the client in
+its own finally/cleanup path. Temporal matches express proximity under the
+reported threshold, not causal or pixel-identity proof.

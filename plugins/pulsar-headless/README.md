@@ -2,9 +2,10 @@
 
 Service-mode entry point for Pulsar.
 
-Starts libobs without instantiating any Qt component, manages
-lifecycle (init / scene graph load / shutdown), and exposes signals
-that `pulsar-websocket` translates into protocol events.
+Builds `bin/64bit/pulsar.exe` for Windows x64. It starts libobs without an
+OBS Studio window, but constructs a minimal Qt application required by
+loaded components. It owns bootstrap, readiness and teardown; the frontend
+component owns the production scene graph and encoder selection.
 
 ## Status
 
@@ -39,16 +40,63 @@ configured listener reports active.
 ## Responsibility surface
 
 - `obs_startup` / `obs_shutdown` lifecycle.
+- Windows RTWQ startup before libobs and shutdown after source teardown.
 - Runtime identity and crash-safe instance/legacy-alias leases.
 - Default video / audio backends selected for the host platform.
 - Signal pipe-out so `pulsar-websocket` can subscribe to scene /
   source / output events without coupling to libobs internals.
-- CLI entry: `pulsar --service [--port N] [--config path]`.
+- Direct entry: `pulsar.exe`, configured through the documented environment.
+  There is no supported `--service --port --config` CLI.
+- WebSocket and browser pre-shutdown barriers before frontend/libobs teardown.
+- Explicit inherited anonymous-event shutdown for the native redirected-stdio
+  harness; the current Node bundle does not expose that control.
+
+## Windows audio platform
+
+`realtime-work-queue.cpp` owns one `RtwqStartup` reference for the process,
+before `obs_startup` can create WASAPI sources. Loading the DLL alone is not
+enough: a later `RtwqLockSharedWorkQueue` otherwise returns `MF_E_SHUTDOWN`
+(`0xC00D3E85`). Startup failure is reported before `PULSAR_READY`.
+
+The main thread calls `RtwqShutdown` only after `obs_shutdown`, once source
+callbacks have drained. Browser or frontend cleanup failures deliberately
+leave both libobs and RTWQ alive until process exit. Repeated start/stop calls
+do not change another component's reference count.
+
+`tests/rtwq-lifecycle` links the production helper against the real Windows
+API: it reproduces the original failure, exercises repeated Capture queue
+creation, and checks platform reference ownership. The headless shutdown
+tests also enforce bootstrap/teardown ordering.
+
+On a Windows host with a full bundle and a default audio output,
+`python tests/rtwq-lifecycle/probe-wasapi.py <pulsar.exe> --work-dir <temporary-directory> --report <evidence.json>`
+creates/removes six actual WASAPI sources in an isolated process, verifies
+that no recording/stream is active, and requires graceful native shutdown.
 
 ## Out of scope
 
 - UI of any kind. If a debug surface is needed it lives in a separate
   optional plugin or as a developer-only build flag.
-- Encoder selection logic — that is `pulsar-multi-stream`'s job.
+- Encoder selection logic — owned by `pulsar-frontend-stub`; multi-stream
+  reads/mutates the supported settings through the shared runtime.
 - Authentication — handled inside `pulsar-websocket` at the protocol
   layer.
+
+
+## Boot and shutdown contract
+
+The order is namespace/lease acquisition → minimal Qt/logging → Windows RTWQ → libobs and
+video/audio → frontend callback installation → protected WebSocket config →
+module load/listener check → frontend production state → session/READY/idle
+markers. READY does not prove that a media source has rendered or a remote
+stream has reached live.
+
+On graceful native shutdown, quiesce WebSocket, drain browser callbacks/tasks,
+stop/release frontend outputs/sources, then stop libobs, stop RTWQ and release leases.
+A failed barrier refuses unsafe continuation. Forceful process termination
+does not exercise these same barriers and must not be described as an MP4
+finalization guarantee.
+
+[Architecture](../../docs/ARCHITECTURE.md),
+[embedding lifecycle](../../docs/PRISM-EMBEDDING.md) and
+[environment reference](../../docs/PROTOCOL.md) describe the public contract.

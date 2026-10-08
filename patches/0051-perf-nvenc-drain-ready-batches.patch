@@ -1,0 +1,260 @@
+From 2e17089440c361f336b3351cf7c7863bd75db74f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 15:51:21 +0200
+Subject: [PATCH] perf(nvenc): drain ready batches
+
+Opt-in scheduling experiment; retain B-frames, pool size and compression tools. Pull completed packets on the existing encoder thread after timing registration. Runtime qualification pending.
+
+Agent-Role: eleven
+
+Agent-Thread: 01a045e2-996f-7913-99f0-2cd237d3a6f8
+
+Work-Unit: ZabLaboratory/Pulsar#253
+
+Issue: ZabLaboratory/Pulsar#253
+---
+ libobs/obs-encoder.c               | 25 ++++++++++
+ libobs/obs-encoder.h               |  8 ++++
+ libobs/obs-internal.h              |  1 +
+ libobs/obs-video-gpu-encode.c      |  2 +
+ plugins/obs-nvenc/nvenc-internal.h |  2 +
+ plugins/obs-nvenc/nvenc.c          | 75 +++++++++++++++++++++---------
+ 6 files changed, 92 insertions(+), 21 deletions(-)
+
+diff --git a/libobs/obs-encoder.c b/libobs/obs-encoder.c
+index 27df623a5..9b27a1dac 100644
+--- a/libobs/obs-encoder.c
++++ b/libobs/obs-encoder.c
+@@ -1390,6 +1390,29 @@ void send_off_encoder_packet(obs_encoder_t *encoder, bool success, bool received
+ 	}
+ }
+ 
++bool drain_encoder_packets(obs_encoder_t *encoder)
++{
++	if (!encoder->info.get_pending_packet)
++		return true;
++
++	/* No new lifetime or callback thread: keep packet delivery and its timing
++	 * lookup serialized with encode. Bound a faulty plugin's ready batch. */
++	for (size_t i = 0; i < 64; i++) {
++		struct encoder_packet pkt = {0};
++		bool received = false;
++		pkt.timebase_num = encoder->timebase_num * encoder->frame_rate_divisor;
++		pkt.timebase_den = encoder->timebase_den;
++		pkt.encoder = encoder;
++		bool success = encoder->info.get_pending_packet(encoder->context.data, &pkt, &received);
++		send_off_encoder_packet(encoder, success, received, &pkt);
++		if (!success || !received)
++			return success;
++	}
++	blog(LOG_ERROR, "Encoder '%s' exceeded bounded ready packet batch", encoder->context.name);
++	full_stop(encoder);
++	return false;
++}
++
+ static const char *do_encode_name = "do_encode";
+ bool do_encode(struct obs_encoder *encoder, struct encoder_frame *frame, const uint64_t *frame_cts)
+ {
+@@ -1440,6 +1463,8 @@ bool do_encode(struct obs_encoder *encoder, struct encoder_frame *frame, const u
+ 		ept->fer = fer_ts;
+ 	}
+ 	send_off_encoder_packet(encoder, success, received, &pkt);
++	if (success)
++		success = drain_encoder_packets(encoder);
+ 
+ 	profile_end(do_encode_name);
+ 
+diff --git a/libobs/obs-encoder.h b/libobs/obs-encoder.h
+index 3b3063875..f4b644fad 100644
+--- a/libobs/obs-encoder.h
++++ b/libobs/obs-encoder.h
+@@ -363,6 +363,14 @@ struct obs_encoder_info {
+ 
+ 	/** Audio encoder only: Returns padding, in samples, that must be skipped at the start of the stream. */
+ 	uint32_t (*get_priming_samples)(void *data);
++
++	/** Optional pull of another already-ready packet after encode returned.
++	 * Called on the same encoder thread, after timing registration and delivery
++	 * of the encode result. Must not submit a new image, flush, or wait for new
++	 * input. Return received=false once the ready batch is exhausted.
++	 * Packet storage remains owned by the encoder until the next encoder call.
++	 * Appended for size-based registration compatibility with older plugins. */
++	bool (*get_pending_packet)(void *data, struct encoder_packet *packet, bool *received_packet);
+ };
+ 
+ EXPORT void obs_register_encoder_s(const struct obs_encoder_info *info, size_t size);
+diff --git a/libobs/obs-internal.h b/libobs/obs-internal.h
+index f110432d0..b2c93935d 100644
+--- a/libobs/obs-internal.h
++++ b/libobs/obs-internal.h
+@@ -1536,6 +1536,7 @@ extern void stop_gpu_encode(obs_encoder_t *encoder);
+ 
+ extern bool do_encode(struct obs_encoder *encoder, struct encoder_frame *frame, const uint64_t *frame_cts);
+ extern void send_off_encoder_packet(obs_encoder_t *encoder, bool success, bool received, struct encoder_packet *pkt);
++extern bool drain_encoder_packets(obs_encoder_t *encoder);
+ 
+ void obs_encoder_destroy(obs_encoder_t *encoder);
+ 
+diff --git a/libobs/obs-video-gpu-encode.c b/libobs/obs-video-gpu-encode.c
+index bc83bf12e..5bbf04105 100644
+--- a/libobs/obs-video-gpu-encode.c
++++ b/libobs/obs-video-gpu-encode.c
+@@ -185,6 +185,8 @@ static void *gpu_encode_thread(void *data)
+ 			}
+ 
+ 			send_off_encoder_packet(encoder, success, received, &pkt);
++			if (success)
++				drain_encoder_packets(encoder);
+ 
+ 			lock_key = next_key;
+ 
+diff --git a/plugins/obs-nvenc/nvenc-internal.h b/plugins/obs-nvenc/nvenc-internal.h
+index 2b233223b..6db886d4a 100644
+--- a/plugins/obs-nvenc/nvenc-internal.h
++++ b/plugins/obs-nvenc/nvenc-internal.h
+@@ -70,6 +70,8 @@ struct nvenc_data {
+ 	uint32_t buf_count;
+ 	int output_delay;
+ 	int buffers_queued;
++	int buffers_ready;
++	bool ready_drain;
+ 	size_t next_bitstream;
+ 	size_t cur_bitstream;
+ 	bool encode_started;
+diff --git a/plugins/obs-nvenc/nvenc.c b/plugins/obs-nvenc/nvenc.c
+index ddf04d213..62708e7a9 100644
+--- a/plugins/obs-nvenc/nvenc.c
++++ b/plugins/obs-nvenc/nvenc.c
+@@ -3,6 +3,7 @@
+ #include <obs-nal.h>
+ #include <util/darray.h>
+ #include <util/dstr.h>
++#include <stdlib.h>
+ 
+ /* ========================================================================= */
+ 
+@@ -323,6 +324,16 @@ static bool init_encoder_base(struct nvenc_data *enc, obs_data_t *settings)
+ 				 ? max(3, config->frameIntervalP)
+ 				 : buf_count - 1;
+ 	enc->output_delay = output_delay;
++#ifdef _WIN32
++	/* Local scheduling experiment, not a compression preset. Only the D3D11
++	 * H.264 path is qualified; CUDA fallback and other codecs stay untouched. */
++	const char *ready_drain = getenv("PULSAR_NVENC_READY_DRAIN");
++	enc->ready_drain = enc->codec == CODEC_H264 && !enc->non_texture &&
++			   nv_tuning == NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY && ready_drain &&
++			   strcmp(ready_drain, "1") == 0;
++	if (enc->ready_drain)
++		info("Pulsar ready-batch drain enabled (surface pool and compression settings preserved)");
++#endif
+ 
+ 	if (lookahead) {
+ 		const int lkd_bound = output_delay - config->frameIntervalP - 4;
+@@ -1083,8 +1094,10 @@ static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
+ 
+ 	if (!enc->buffers_queued)
+ 		return true;
+-	if (!finalize && enc->buffers_queued < enc->output_delay)
+-		return true;
++	if (!finalize) {
++		if (enc->ready_drain ? !enc->buffers_ready : enc->buffers_queued < enc->output_delay)
++			return true;
++	}
+ 
+ 	size_t count = finalize ? enc->buffers_queued : 1;
+ 
+@@ -1181,11 +1194,43 @@ static bool get_encoded_packet(struct nvenc_data *enc, bool finalize)
+ 			enc->cur_bitstream = 0;
+ 
+ 		enc->buffers_queued--;
++		if (enc->ready_drain && enc->buffers_ready)
++			enc->buffers_ready--;
+ 	}
+ 
+ 	return true;
+ }
+ 
++static void nvenc_fill_packet(struct nvenc_data *enc, struct encoder_packet *packet, bool *received_packet)
++{
++	*received_packet = enc->packet_data.num != 0;
++	if (!*received_packet)
++		return;
++	int64_t dts;
++	deque_pop_front(&enc->dts_list, &dts, sizeof(dts));
++	if (enc->codec != CODEC_AV1)
++		dts -= enc->props.bf * packet->timebase_num;
++	packet->data = enc->packet_data.array;
++	packet->size = enc->packet_data.num;
++	packet->type = OBS_ENCODER_VIDEO;
++	packet->pts = enc->packet_pts;
++	packet->dts = dts;
++	packet->keyframe = enc->packet_keyframe;
++	packet->priority = enc->packet_priority;
++}
++
++static bool nvenc_pending_packet(void *data, struct encoder_packet *packet, bool *received_packet)
++{
++	struct nvenc_data *enc = data;
++	*received_packet = false;
++	if (!enc->ready_drain || !enc->buffers_ready)
++		return true;
++	if (!get_encoded_packet(enc, false))
++		return false;
++	nvenc_fill_packet(enc, packet, received_packet);
++	return true;
++}
++
+ struct roi_params {
+ 	uint32_t mb_width;
+ 	uint32_t mb_height;
+@@ -1325,6 +1370,11 @@ bool nvenc_encode_base(struct nvenc_data *enc, struct nv_bitstream *bs, void *pi
+ 
+ 	enc->encode_started = true;
+ 	enc->buffers_queued++;
++	/* SUCCESS releases the pending submission prefix; NEED_MORE_INPUT does
++	 * not authorize locking the new buffers. Keep B-frame reordering in the
++	 * driver and preserve submission-order bitstream/DTS consumption. */
++	if (enc->ready_drain && err == NV_ENC_SUCCESS)
++		enc->buffers_ready = enc->buffers_queued;
+ 
+ 	if (++enc->next_bitstream == enc->buf_count) {
+ 		enc->next_bitstream = 0;
+@@ -1340,25 +1390,7 @@ bool nvenc_encode_base(struct nvenc_data *enc, struct nv_bitstream *bs, void *pi
+ 	/* ------------------------------------ */
+ 	/* output encoded packet                */
+ 
+-	if (enc->packet_data.num) {
+-		int64_t dts;
+-		deque_pop_front(&enc->dts_list, &dts, sizeof(dts));
+-
+-		/* subtract bframe delay from dts for H.264/HEVC */
+-		if (enc->codec != CODEC_AV1)
+-			dts -= enc->props.bf * packet->timebase_num;
+-
+-		*received_packet = true;
+-		packet->data = enc->packet_data.array;
+-		packet->size = enc->packet_data.num;
+-		packet->type = OBS_ENCODER_VIDEO;
+-		packet->pts = enc->packet_pts;
+-		packet->dts = dts;
+-		packet->keyframe = enc->packet_keyframe;
+-		packet->priority = enc->packet_priority;
+-	} else {
+-		*received_packet = false;
+-	}
++	nvenc_fill_packet(enc, packet, received_packet);
+ 
+ 	return true;
+ }
+@@ -1413,6 +1445,7 @@ struct obs_encoder_info h264_nvenc_info = {
+ 	.get_properties = h264_nvenc_properties,
+ 	.get_extra_data = nvenc_extra_data,
+ 	.get_sei_data = nvenc_sei_data,
++	.get_pending_packet = nvenc_pending_packet,
+ };
+ 
+ #ifdef ENABLE_HEVC
+-- 
+2.54.0.windows.1
+

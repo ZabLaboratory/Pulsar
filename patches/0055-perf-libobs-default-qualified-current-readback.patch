@@ -1,0 +1,54 @@
+From 07666284d1e8bf56c2c5e10c4cd8b7131748e7f0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 18:05:13 +0200
+Subject: [PATCH] perf(libobs): enable qualified immediate CPU readback by
+ default
+
+Agent-Role: eleven
+Agent-Thread: 01a045e2-996f-7913-99f0-2cd237d3a6f8
+Work-Unit: ZabLaboratory/Pulsar#253
+Issue: #253
+Evidence: two 100-Take x264 A/B pairs; compensated flash/click; preserve GPU and other modes
+---
+ libobs/obs-video.c | 20 +++++++++++++++-----
+ 1 file changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/libobs/obs-video.c b/libobs/obs-video.c
+index 835772524..841662cc4 100644
+--- a/libobs/obs-video.c
++++ b/libobs/obs-video.c
+@@ -923,16 +923,26 @@ static const char *output_frame_gs_flush_name = "gs_flush";
+ static const char *output_frame_output_video_data_name = "output_video_data";
+ static inline void output_frame(struct obs_core_video_mix *video)
+ {
+-	/* Study-only switch: retain cadence/PTS and ownership, but trade an
+-	 * immediate GPU map wait for the previous-surface pipeline interval. */
+-	static int current_readback = -1;
+-	if (current_readback < 0) {
++	/* Auto-enable only the Windows 1080p60 CPU pipeline qualified by the
++	 * decoded-image, flash/click, cadence and output-lifecycle probes.
++	 * Other formats/platforms and texture encoders retain their pipeline. */
++	static int current_readback_mode = -1;
++	if (current_readback_mode < 0) {
+ 		const char *setting = getenv("PULSAR_RAW_CURRENT_READBACK");
+-		current_readback = setting && strcmp(setting, "1") == 0;
++#ifdef _WIN32
++		current_readback_mode = !setting ? 2 : strcmp(setting, "1") == 0;
++#else
++		current_readback_mode = setting && strcmp(setting, "1") == 0;
++#endif
+ 	}
+ 	const uint64_t frame_start = os_gettime_ns();
+ 	const bool raw_active = video->raw_was_active;
+ 	const bool gpu_active = video->gpu_was_active;
++	const struct video_output_info *readback_info = video_output_get_info(video->video);
++	const bool qualified_readback = readback_info->width == 1920 && readback_info->height == 1080 &&
++		readback_info->fps_num == 60 && readback_info->fps_den == 1 && readback_info->format == VIDEO_FORMAT_NV12;
++	const bool current_readback = !gpu_active && (current_readback_mode == 1 ||
++		(current_readback_mode == 2 && qualified_readback));
+ 
+ 	int cur_texture = video->cur_texture;
+ 	int prev_texture = cur_texture == 0 ? NUM_TEXTURES - 1 : cur_texture - 1;
+-- 
+2.54.0.windows.1

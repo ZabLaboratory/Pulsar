@@ -12,6 +12,12 @@ int main()
     std::string error;
     if (!pulsar_transition::parse_media_config(good, config, error) || config.cut_point_ms != 880 || !config.muted)
         throw std::runtime_error("valid host configuration rejected");
+    for (const auto ext : {".mp4", ".MP4", ".WEBM"}) {
+        auto candidate = good;
+        candidate["path"] = std::filesystem::u8path(path).replace_extension(ext).u8string();
+        if (!pulsar_transition::parse_media_config(candidate, config, error))
+            throw std::runtime_error("valid media extension rejected");
+    }
     int rejected = 0;
     const auto reject = [&](json candidate) {
         if (pulsar_transition::parse_media_config(candidate, config, error) || error.empty())
@@ -25,11 +31,11 @@ int main()
         auto candidate = good; candidate["volume"] = value; reject(candidate);
     }
     for (auto value : {json("https://example.org/file.webm"), json("relative.webm"), json(""),
-                       json("\\\\server\\share\\file.webm"), json(path + ".mp4"), json(path + std::string(1, '\0'))}) {
+                       json("\\\\server\\share\\file.webm"), json(path + ".avi"), json(path + std::string(1, '\0'))}) {
         auto candidate = good; candidate["path"] = value; reject(candidate);
     }
     auto candidate = good; candidate["muted"] = 1; reject(candidate);
     candidate = good; candidate["arbitrary"] = true; reject(candidate);
     reject(json::array()); reject(nullptr);
-    std::cout << "media configuration: valid custom WebM accepted; " << rejected << " invalid cases rejected\n";
+    std::cout << "media configuration: valid WebM/MP4 accepted; " << rejected << " invalid cases rejected\n";
 }

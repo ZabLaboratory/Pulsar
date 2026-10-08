@@ -1,0 +1,94 @@
+From c7ad4fb5a06b33610c12081a95ef47df370e26c7 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 14:19:35 +0200
+Subject: [PATCH] fix(telemetry): distinguish encoded content time from cadence
+ CTS
+
+Agent-Role: Eleven
+
+Agent-Thread: /root
+
+Work-Unit: ZabLaboratory/Pulsar#253
+
+Issue: 253
+
+Evidence: GPU render order and decoded marker show one-frame CTS/content difference
+---
+ libobs/obs-encoder.c          | 1 +
+ libobs/obs-encoder.h          | 5 +++++
+ libobs/obs-internal.h         | 1 +
+ libobs/obs-video-gpu-encode.c | 1 +
+ libobs/obs-video.c            | 4 ++++
+ 5 files changed, 12 insertions(+)
+
+diff --git a/libobs/obs-encoder.c b/libobs/obs-encoder.c
+index d0bbc46a2..b26f66532 100644
+--- a/libobs/obs-encoder.c
++++ b/libobs/obs-encoder.c
+@@ -1436,6 +1436,7 @@ bool do_encode(struct obs_encoder *encoder, struct encoder_frame *frame, const u
+ 		}
+ 		ept->pts = frame->pts;
+ 		ept->cts = *frame_cts;
++		ept->content_pts_ns = *frame_cts;
+ 		ept->fer = fer_ts;
+ 	}
+ 	send_off_encoder_packet(encoder, success, received, &pkt);
+diff --git a/libobs/obs-encoder.h b/libobs/obs-encoder.h
+index 5205c8fa7..ec4fb7018 100644
+--- a/libobs/obs-encoder.h
++++ b/libobs/obs-encoder.h
+@@ -103,6 +103,11 @@ struct encoder_packet_time {
+ 	 * stages; they do not alter packet ordering or ownership. */
+ 	uint64_t interleaved_mutex_wait_start_monotonic_ns;
+ 	uint64_t interleaved_mutex_acquired_monotonic_ns;
++
++	/* Pulsar diagnostic: timestamp of the pixels in this packet. The GPU
++	 * submission path may pair current pixels with a previous cadence CTS.
++	 * Keep media PTS/CTS untouched; zero means content identity unavailable. */
++	uint64_t content_pts_ns;
+ };
+ 
+ /** Encoder output packet */
+diff --git a/libobs/obs-internal.h b/libobs/obs-internal.h
+index f1a7f1ea5..f110432d0 100644
+--- a/libobs/obs-internal.h
++++ b/libobs/obs-internal.h
+@@ -358,6 +358,7 @@ struct obs_tex_frame {
+ 	gs_texture_t *tex_uv;
+ 	uint32_t handle;
+ 	uint64_t timestamp;
++	uint64_t content_pts_ns;
+ 	uint64_t lock_key;
+ 	int count;
+ 	bool released;
+diff --git a/libobs/obs-video-gpu-encode.c b/libobs/obs-video-gpu-encode.c
+index 977562194..bc83bf12e 100644
+--- a/libobs/obs-video-gpu-encode.c
++++ b/libobs/obs-video-gpu-encode.c
+@@ -180,6 +180,7 @@ static void *gpu_encode_thread(void *data)
+ 
+ 				ept->pts = encoder->cur_pts;
+ 				ept->cts = tf.timestamp;
++				ept->content_pts_ns = tf.content_pts_ns;
+ 				ept->fer = fer_ts;
+ 			}
+ 
+diff --git a/libobs/obs-video.c b/libobs/obs-video.c
+index 48bb127a3..ed0d4b3bf 100644
+--- a/libobs/obs-video.c
++++ b/libobs/obs-video.c
+@@ -502,6 +502,10 @@ static inline bool queue_frame(struct obs_core_video_mix *video, bool raw_active
+ 
+ 	tf.count = 1;
+ 	tf.timestamp = vframe_info->timestamp;
++	/* This texture was converted during the current composition tick.
++	 * Duplicating an already queued texture deliberately retains its content
++	 * identity even when its output cadence timestamp advances. */
++	tf.content_pts_ns = obs->video.video_time;
+ 	tf.released = true;
+ #ifdef _WIN32
+ 	tf.handle = gs_texture_get_shared_handle(tf.tex);
+-- 
+2.54.0.windows.1
+

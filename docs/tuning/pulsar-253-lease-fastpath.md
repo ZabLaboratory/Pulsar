@@ -1,5 +1,12 @@
 # Pulsar #253 DirectShow lease fastpath decision
 
+> Historical first-increment decision, not the 3.0.0 return implementation.
+> Later patch 0029 moved lease observation to a bounded watcher; later queue,
+> registration and private-helper patches refine ownership. See the current
+> [lease runbook](../runbooks/directshow-lease-watcher.md) and
+> [complete native inventory](../LIBOBS-CHANGES.md). The candidate measurements
+> below are retained without rewriting their original conclusion.
+
 The first #253 increment repairs pipeline telemetry only.  The DirectShow
 return path still calls `OpenEventW` and closes the observation handle for each
 frame in `return_consumer_is_active`.

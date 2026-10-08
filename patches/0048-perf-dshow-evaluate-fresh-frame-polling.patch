@@ -1,0 +1,93 @@
+From 0c83b11b6ab3d5db3e4e8a0335e059a917c9f365 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 14:18:37 +0200
+Subject: [PATCH] perf(dshow): evaluate bounded fresh-frame polling for
+ ProgramReturn
+
+Agent-Role: Eleven
+
+Agent-Thread: /root
+
+Work-Unit: ZabLaboratory/Pulsar#253
+
+Issue: 253
+
+Evidence: actual queue runtime concurrent publication test passes; runtime promotion pending
+---
+ .../virtualcam-module/virtualcam-filter.cpp     | 17 ++++++++++++++++-
+ .../shared-memory-queue.c                       |  9 +++++++++
+ .../shared-memory-queue.h                       |  2 ++
+ 3 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index cde3ba240..c29c50057 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -282,6 +282,8 @@ inline uint64_t VCamFilter::GetTime()
+ 
+ void VCamFilter::Thread()
+ {
++	const char *poll_setting = std::getenv("PULSAR_DSHOW_FRESH_FRAME_POLL");
++	const bool poll_fresh_frame = poll_setting && std::strcmp(poll_setting, "1") == 0;
+ 	HANDLE h[2] = {thread_start, thread_stop};
+ 	DWORD ret = WaitForMultipleObjects(2, h, false, INFINITE);
+ 	if (ret != WAIT_OBJECT_0)
+@@ -317,7 +319,20 @@ void VCamFilter::Thread()
+ 	while (!stopped()) {
+ 		if (os_atomic_load_bool(&active))
+ 			Frame(filter_time);
+-		sleepto_100ns(cur_time += obs_interval);
++		cur_time += obs_interval;
++		if (poll_fresh_frame && program_return && os_atomic_load_bool(&active) && vq &&
++		    video_queue_state(vq) == SHARED_QUEUE_STATE_READY && (uint64_t)GetInterval() == obs_interval) {
++			/* A read-only hint removes the arbitrary producer/consumer phase.
++			 * Never acquire a sample or retain a slot while waiting. The
++			 * original cadence deadline bounds silence; stop interrupts the
++			 * wait. Actual reads retain their complete seqlock validation. */
++			while (!stopped() && gettime_100ns() < cur_time && !video_queue_has_unread_frame(vq)) {
++				if (WaitForSingleObject(thread_stop, 1) == WAIT_OBJECT_0)
++					break;
++			}
++		} else {
++			sleepto_100ns(cur_time);
++		}
+ 		filter_time += obs_interval;
+ 	}
+ }
+diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.c b/shared/obs-shared-memory-queue/shared-memory-queue.c
+index 30b7ab128..7d302e73a 100644
+--- a/shared/obs-shared-memory-queue/shared-memory-queue.c
++++ b/shared/obs-shared-memory-queue/shared-memory-queue.c
+@@ -597,6 +597,15 @@ bool video_queue_read_ex(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint
+ 	return false;
+ }
+ 
++bool video_queue_has_unread_frame(video_queue_t *vq)
++{
++	if (!queue_mapping_live(vq) || !vq->ready_to_read ||
++	    queue_load_index(&vq->header->state) != SHARED_QUEUE_STATE_READY)
++		return false;
++	const uint32_t published = queue_load_index(&vq->header->read_idx);
++	return !vq->have_last_read_index || published != vq->last_read_index;
++}
++
+ void video_queue_get_read_counters(video_queue_t *vq, struct video_queue_read_counters *counters)
+ {
+ 	if (counters)
+diff --git a/shared/obs-shared-memory-queue/shared-memory-queue.h b/shared/obs-shared-memory-queue/shared-memory-queue.h
+index 629bd1867..27fb2908c 100644
+--- a/shared/obs-shared-memory-queue/shared-memory-queue.h
++++ b/shared/obs-shared-memory-queue/shared-memory-queue.h
+@@ -84,6 +84,8 @@ extern bool video_queue_read(video_queue_t *vq, nv12_scale_t *scale, void *dst,
+ extern bool video_queue_read_ex(video_queue_t *vq, nv12_scale_t *scale, void *dst, uint64_t *ts,
+ 					struct video_queue_frame_metadata *metadata);
+ extern void video_queue_get_read_counters(video_queue_t *vq, struct video_queue_read_counters *counters);
++/* Read-only readiness hint; video_queue_read_ex still validates slot ownership. */
++extern bool video_queue_has_unread_frame(video_queue_t *vq);
+ 
+ #ifdef __cplusplus
+ }
+-- 
+2.54.0.windows.1
+

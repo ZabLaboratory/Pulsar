@@ -1,0 +1,151 @@
+From 40128c5b90e27c1685172dfeb9f0477c35423479 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Wed, 9 Sep 2026 16:00:08 +0200
+Subject: [PATCH] fix(win-dshow): propagate runtime namespace through Chromium
+
+Resolve the dedicated return namespace from an explicit Chromium switch when the DirectShow child does not inherit the Electron environment. Keep the environment path for the Pulsar producer and fail closed on malformed values.
+
+Agent-Role: forge
+
+Agent-Thread: /root
+
+Work-Unit: local-20260909-pulsar3-live
+
+Issue: N/A
+
+ADR-Revision: N/A
+
+Evidence: directshow-namespace-command-line-probe
+
+diff --git a/plugins/win-dshow/directshow-namespace.h b/plugins/win-dshow/directshow-namespace.h
+index 3e17ee930..3200ddca7 100644
+--- a/plugins/win-dshow/directshow-namespace.h
++++ b/plugins/win-dshow/directshow-namespace.h
+@@ -13,6 +13,7 @@
+ 
+ #include <stdbool.h>
+ #include <stddef.h>
++#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <windows.h>
+@@ -50,6 +51,61 @@ static inline bool directshow_environment_variable(const char *name, char *value
+ 	return true;
+ }
+ 
++static inline bool directshow_command_line_switch(const char *name, char *value, size_t capacity)
++{
++	const char *command_line = GetCommandLineA();
++	if (!command_line || !*command_line || !name || !*name || capacity < 2)
++		return false;
++
++	char prefix[128] = {0};
++	const int prefix_length = _snprintf_s(prefix, sizeof(prefix), _TRUNCATE, "--%s=", name);
++	if (prefix_length <= 0)
++		return false;
++
++	for (const char *cursor = command_line; *cursor; ++cursor) {
++		const char previous = cursor == command_line ? ' ' : cursor[-1];
++		if (previous != ' ' && previous != '\t' && previous != '"')
++			continue;
++		if (strncmp(cursor, prefix, (size_t)prefix_length) != 0)
++			continue;
++
++		const char *start = cursor + prefix_length;
++		const char *end = start;
++		while (*end && *end != ' ' && *end != '\t' && *end != '"')
++			++end;
++		const size_t length = (size_t)(end - start);
++		if (length == 0 || length >= capacity) {
++			/* A present but malformed/oversized switch is explicit invalid
++			 * configuration, not permission to fall back to a legacy alias. */
++			value[0] = '!';
++			value[1] = '\0';
++		} else {
++			memcpy(value, start, length);
++			value[length] = '\0';
++		}
++		return true;
++	}
++
++	return false;
++}
++
++static inline bool directshow_runtime_instance_id_value(char *value, size_t capacity)
++{
++	/* An explicit Chromium switch is the host's authoritative value.  This
++	 * protects the consumer from an inherited stale environment block while
++	 * preserving the environment path for the Pulsar producer process. */
++	if (directshow_command_line_switch("pulsar-runtime-instance-id", value, capacity))
++		return true;
++	return directshow_environment_variable("PULSAR_RUNTIME_INSTANCE_ID", value, capacity);
++}
++
++static inline bool directshow_legacy_alias_value(char *value, size_t capacity)
++{
++	if (directshow_command_line_switch("pulsar-directshow-legacy-alias", value, capacity))
++		return true;
++	return directshow_environment_variable("PULSAR_DIRECTSHOW_LEGACY_ALIAS", value, capacity);
++}
++
+ static inline bool directshow_runtime_instance_id_valid(const char *value)
+ {
+ 	if (!value || !*value || strlen(value) > 64)
+@@ -77,9 +133,9 @@ static inline enum directshow_queue_namespace directshow_queue_namespace_for_con
+ 	char runtime_id[32768] = {0};
+ 	char legacy_alias[32768] = {0};
+ 	const bool runtime_id_present =
+-		directshow_environment_variable("PULSAR_RUNTIME_INSTANCE_ID", runtime_id, sizeof(runtime_id));
++		directshow_runtime_instance_id_value(runtime_id, sizeof(runtime_id));
+ 	const bool legacy_alias_present =
+-		directshow_environment_variable("PULSAR_DIRECTSHOW_LEGACY_ALIAS", legacy_alias, sizeof(legacy_alias));
++		directshow_legacy_alias_value(legacy_alias, sizeof(legacy_alias));
+ 
+ 	if (runtime_id_present && !directshow_runtime_instance_id_valid(runtime_id))
+ 		return DIRECTSHOW_QUEUE_NAMESPACE_REJECT;
+diff --git a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+index 3e60f639f..df091c48a 100644
+--- a/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
++++ b/plugins/win-dshow/virtualcam-module/virtualcam-filter.cpp
+@@ -29,7 +29,8 @@ static std::wstring queue_name_for_filter(enum directshow_queue_namespace queue_
+ 						   : filter_kind == DIRECTSHOW_CONSUMER_FILTER_PROGRAM_RETURN
+ 							     ? L"OBSPulsarProgramReturnVideo"
+ 							     : L"OBSVirtualCamVideo";
+-	const char *runtime_id = getenv("PULSAR_RUNTIME_INSTANCE_ID");
++	char runtime_id[65] = {0};
++	directshow_runtime_instance_id_value(runtime_id, sizeof(runtime_id));
+ 	if (queue_namespace != DIRECTSHOW_QUEUE_NAMESPACE_DEDICATED)
+ 		return legacy_name;
+ 
+diff --git a/plugins/win-dshow/virtualcam.c b/plugins/win-dshow/virtualcam.c
+index 49464e4cd..f5884b916 100644
+--- a/plugins/win-dshow/virtualcam.c
++++ b/plugins/win-dshow/virtualcam.c
+@@ -638,7 +638,9 @@ static bool queue_name_for_output(obs_output_t *output, wchar_t *destination, si
+ 		destination[capacity - 1] = 0;
+ 		return true;
+ 	}
+-	const char *runtime_id = getenv("PULSAR_RUNTIME_INSTANCE_ID");
++	char runtime_id[65] = {0};
++	if (!directshow_runtime_instance_id_value(runtime_id, sizeof(runtime_id)))
++		return false;
+ 
+ 	wchar_t wide_id[65] = {0};
+ 	/* IDs are validated as ASCII above; avoid a libobs link from this DLL. */
+@@ -720,9 +722,10 @@ static bool virtualcam_start(void *data)
+ 
+ 	vcam->vq = video_queue_create_named(width, height, interval, vcam->queue_name);
+ 	if (!vcam->vq) {
+-		const char *runtime_id = getenv("PULSAR_RUNTIME_INSTANCE_ID");
++		char runtime_id[65] = {0};
++		directshow_runtime_instance_id_value(runtime_id, sizeof(runtime_id));
+ 		blog(LOG_WARNING, "starting virtual-output failed (queue=%ls runtime_instance_id=%s)",
+-		     vcam->queue_name, runtime_id ? runtime_id : "");
++		     vcam->queue_name, runtime_id);
+ 		return false;
+ 	}
+ 	if (vcam->consumer_gated && !return_consumer_registration_pipe_start(vcam)) {
+-- 
+2.54.0.windows.1
+

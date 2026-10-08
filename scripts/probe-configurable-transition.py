@@ -283,6 +283,14 @@ async def exercise(args, proc, report):
         assert (await wire.vendor("GetState"))["config"]["cut_point_ms"] == 19000
         assert (await wire.vendor("Configure", {**guard, "config": {**config, "path": str(args.output / "missing.webm")}}))["error"] == "ASSET_MISSING"
         await wire.vendor("Clear", guard)
+        mp4_config = {**config, "path": str(args.output / "fixture.mp4")}
+        assert "error" not in await wire.vendor("Configure", {**guard, "config": mp4_config})
+        mp4_ready = await wire.poll("GetState", {}, lambda s: s.get("ready"))
+        assert (await switch("mp4-program", "B", "blue", "red"))["status"] == "accepted"
+        mp4_result = await result("mp4-program")
+        assert mp4_result["status"] == "completed" and mp4_result["frame_id"] > 0
+        report["mp4"] = {"ready": mp4_ready, "result": mp4_result}
+        await wire.vendor("Clear", guard)
         print("Replacement, abort/replay, mute/gain, clear and invalid media passed", flush=True)
         terminal = [e["eventData"]["eventData"] for e in wire.events if e.get("eventType") == "VendorEvent" and
             e.get("eventData", {}).get("vendorName") == "pulsar-transitions"]
@@ -312,6 +320,8 @@ def main():
         PULSAR_FPS="30", PULSAR_RECORD_CONTAINER="mkv")
     fixture(args.output / "fixture.webm")
     fixture(args.output / "second-éffect.webm", (155, 100, 235))
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(args.output / "fixture.webm"),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(args.output / "fixture.mp4")], check=True, timeout=30)
     (args.output / "invalid.webm").write_bytes(b"not a WebM")
     proc = process.PulsarProcess(args.exe.resolve(), "x264", args.output)
     report = {"passed": False}

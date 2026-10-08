@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ClodoCapeo <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 11:00:00 +0000
+Subject: [PATCH] perf(libobs): preserve equal-view activation during atomic swaps
+
+Both permanently hot views use MAIN_VIEW. Exchanging their roots leaves
+show and activation references unchanged, including shared descendants.
+Retain mixed-view and generic replacement behavior and the callback drain.
+
+---
+diff --git a/libobs/obs-view.c b/libobs/obs-view.c
+index 7e6d6cbda..aa83d2c9d 100644
+--- a/libobs/obs-view.c
++++ b/libobs/obs-view.c
+@@ -260,10 +260,16 @@ void obs_view_apply_pending_atomic_swap(uint64_t frame_id, uint64_t pts_ns)
+ 	 * one view per source, so skip show_refs churn and transfer only the MAIN
+ 	 * activation ownership.  Generic swaps, including Fade/Stinger, retain the
+ 	 * original activate/deactivate path below. */
+-	const bool preserve_active_pair =
++	const bool exchange_pair =
+ 		old_first && old_second && new_first && new_second && old_first != old_second &&
+-		new_first == old_second && new_second == old_first &&
++		new_first == old_second && new_second == old_first;
++	/* Equal view types contribute identical show/activation ownership to each
++	 * root. A pure exchange changes neither root nor descendant refcounts,
++	 * including shared descendants and roots referenced by other views. */
++	const bool preserve_same_type_pair = exchange_pair && swap->first_view->type == swap->second_view->type;
++	const bool preserve_active_pair = exchange_pair &&
+ 		swap->first_view->type == MAIN_VIEW && swap->second_view->type == AUX_VIEW;
++	const bool preserve_pair = preserve_same_type_pair || preserve_active_pair;
+ 	/* The references acquired by queue_atomic_swap now belong to the views. */
+ 	swap->first_source = NULL;
+ 	swap->second_source = NULL;
+@@ -273,7 +279,9 @@ void obs_view_apply_pending_atomic_swap(uint64_t frame_id, uint64_t pts_ns)
+ 	pthread_mutex_unlock(&swap->first_view->channels_mutex);
+ 	pthread_mutex_unlock(&swap->second_view->channels_mutex);
+ 
+-	if (preserve_active_pair) {
++	if (preserve_same_type_pair) {
++		/* No ownership changes; queued source references still transfer below. */
++	} else if (preserve_active_pair) {
+ 		obs_source_transfer_main_activation(old_first, new_first);
+ 	} else {
+ 		if (new_first)
+@@ -282,12 +290,12 @@ void obs_view_apply_pending_atomic_swap(uint64_t frame_id, uint64_t pts_ns)
+ 			obs_source_activate(new_second, swap->second_view->type);
+ 	}
+ 	if (old_first) {
+-		if (!preserve_active_pair)
++		if (!preserve_pair)
+ 			obs_source_deactivate(old_first, swap->first_view->type);
+ 		obs_source_release(old_first);
+ 	}
+ 	if (old_second) {
+-		if (!preserve_active_pair)
++		if (!preserve_pair)
+ 			obs_source_deactivate(old_second, swap->second_view->type);
+ 		obs_source_release(old_second);
+ 	}

@@ -90,6 +90,11 @@ file(GLOB_RECURSE _pulsar_ws_sources CONFIGURE_DEPENDS
 
 add_library(pulsar-websocket MODULE ${_pulsar_ws_sources})
 
+# This template-heavy header is common to the request handlers. Parse it once
+# per configuration instead of once per translation unit. No project header,
+# Qt/Windows include ordering or per-source feature macro is forced into PCH.
+target_precompile_headers(pulsar-websocket PRIVATE <nlohmann/json.hpp>)
+
 set_target_properties(pulsar-websocket PROPERTIES
     OUTPUT_NAME "obs-websocket"   # match upstream so v5 client tooling
                                   # sees the same module name

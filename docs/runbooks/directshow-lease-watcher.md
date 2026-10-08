@@ -43,8 +43,12 @@ object is recreated.
 
 ## Rollback
 
-Remove `0029-fix-win-dshow-lease-watcher.patch` from the lexical patch set and
-replay the pinned OBS submodule from `bd73b922891e56839b0bc86bdc519802802f9d68`.
-The prior `0025` bootstrap behavior remains intact. Do not restore per-frame
-`OpenEventW` polling without re-establishing the bounded-lifecycle and
-fail-closed tests.
+Use a complete previously validated release and matching modules. Patch 0029
+is part of a dependent stack; removing it alone is not an operational rollback.
+For a D3D11-specific comparison, select `PULSAR_RETURN_TRANSPORT=cpu` before
+spawn, without disabling consumer-liveness checks.
+
+The [transport runbook](d3d11-return-transport.md) describes the private-helper
+GPU route in 3.0.0. The event/pipe lease described here gates external return
+activity; it does not grant an arbitrary DirectShow client a GPU handle.
+Do not restore per-frame `OpenEventW` polling or weaken fail-closed checks.

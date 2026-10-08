@@ -71,9 +71,13 @@ on:
         type: boolean
         default: false
       enable_release_attach:
-        description: 'Attach distros + proof to a GitHub Release (requires a tag context)'
+        description: 'Attach tag distros, or publish an existing draft selected by release_tag'
         type: boolean
         default: false
+      release_tag:
+        description: 'Existing draft tag to publish without rebuilding or replacing its assets (main dispatch only)'
+        type: string
+        default: ''
       enable_npm_publish:
         description: 'Publish @clodocapeo/pulsar-* to npm (requires NPM_TOKEN + tag-matched VERSION)'
         type: boolean
@@ -274,6 +278,9 @@ jobs:
             popd
           fi
 
+      - name: Headless CEF dependency provisioning
+        run: python3 scripts/test-cef-provisioning.py
+
       - name: Plugin metadata (CMakeLists + README per plugin)
         run: |
           set -e
@@ -305,8 +312,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout
+      - name: Checkout (with submodules)
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
@@ -319,7 +328,7 @@ jobs:
         # can only be collected with it present. No OBS binary / no VPS reach
         # is needed for these — they assert pure logic (leaf path, scene_control
         # default, the --real-orion URL the CEF loads).
-        run: python -m pip install --upgrade pip pytest websockets
+        run: python -m pip install --upgrade pip pytest websockets PyYAML
 
       - name: Run scene_control contract test
         # Blue is not checked out in Pulsar CI: the test binds its
@@ -335,7 +344,10 @@ jobs:
         # the --real-orion true-wire URL the CEF browser_source loads. The
         # on-air legs are the CTest integration suite (needs the build) +
         # Keeper's antenna run (needs the VPS).
-        run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py -v
+        run: pytest scripts/test_m10_setup.py scripts/test_probe_m10_real_orion.py scripts/test_probe_twitch_live.py scripts/test_prepare_pages_proof.py scripts/test_live_workflow.py scripts/test_publish_existing_release.py -v
+
+      - name: Native build cache invalidation and integrity contracts
+        run: python -m unittest discover -s scripts -p test_ci_native_cache.py -v
 
       - name: Run offline Pulsar probe contract tests
         # The AC-12 RTMP boundary and AC-13 dual-lane probe contracts are
@@ -365,15 +377,6 @@ jobs:
           git config --global user.email "ci@pulsar.zablaboratory"
           git config --global user.name "Pulsar CI"
 
-      - name: Cache obs-deps + Qt6 + CEF
-        uses: actions/cache@v4
-        with:
-          path: upstream/.deps
-          key: obs-deps-full-${{ runner.os }}-${{ hashFiles('scripts/build-win.ps1', '.gitmodules') }}
-          restore-keys: |
-            obs-deps-full-${{ runner.os }}-
-            obs-deps-${{ runner.os }}-
-
       - name: Install CMake 3.28+
         uses: lukka/get-cmake@latest
         with:
@@ -384,9 +387,51 @@ jobs:
         with:
           arch: x64
 
+      - name: Fingerprint exact native build inputs and toolchain
+        id: native-key
+        shell: pwsh
+        run: python scripts/ci-native-cache.py key
+
+      # Exact output reuse only; never restore sources, credentials, runtime
+      # state or test results. The current checkout supplies interpreted probes.
+      # No restore-keys: any native/config/toolchain change builds in full.
+      - name: Restore exact native runtime
+        id: native-cache
+        uses: actions/cache@v4
+        with:
+          key: ${{ steps.native-key.outputs.key }}
+          path: |
+            upstream/build_x64/rundir/RelWithDebInfo
+            build/CTestTestfile.cmake
+            build/**/CTestTestfile.cmake
+            build/**/*.vcxproj
+            build/tests/nv-probe/**
+            build/tests/data/libobs/**
+            build/native-cache-manifest.json
+
+      - name: Cache obs-deps + Qt6 + CEF
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: upstream/.deps
+          key: obs-deps-full-${{ runner.os }}-${{ hashFiles('scripts/build-win.ps1', '.gitmodules') }}
+          restore-keys: |
+            obs-deps-full-${{ runner.os }}-
+            obs-deps-${{ runner.os }}-
+
       - name: Build pulsar.exe with -Full (CEF + obs-browser)
+        if: steps.native-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: ./scripts/build-win.ps1 -Full
+
+      - name: Seal native output inventory and producer provenance
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: python scripts/ci-native-cache.py seal --key '${{ steps.native-key.outputs.key }}'
+
+      - name: Verify native outputs before all downstream gates
+        shell: pwsh
+        run: python scripts/ci-native-cache.py verify --key '${{ steps.native-key.outputs.key }}'
 
       - name: Upload pulsar-rundir artefact
         uses: actions/upload-artifact@v4
@@ -402,12 +447,18 @@ jobs:
           # finds the test registered and the binary missing, which reads
           # as an infrastructure failure rather than as the security check
           # it is.
+          # build/tests/data/libobs/** is the executable-relative effect
+          # bundle used by the native D3D11 scheduler probes. Those tests
+          # deliberately call obs_reset_video on the Basic Render Driver;
+          # shipping only their executables makes that a false code failure.
           path: |
             upstream/build_x64/rundir/RelWithDebInfo
             build/CTestTestfile.cmake
             build/**/CTestTestfile.cmake
             build/**/*.vcxproj
             build/tests/nv-probe/**
+            build/tests/data/libobs/**
+            build/native-cache-manifest.json
           retention-days: 1
           compression-level: 1
 
@@ -607,39 +658,21 @@ jobs:
 
   # ── Stage 3c : live broadcast (Twitch + record + diagnostic) ─────
   #
-  # OFF the routine path since #132 (porteur decision : CI wall-clock).
-  # It was the second cost centre after the C++ build -- ~17 min on a
-  # push to main (10 min of real stream + submodule checkout + ffmpeg
-  # setup + VOD transcode + upload), and it serialises on a repo-wide
-  # non-cancelling Twitch lock, so two changes in flight queue behind
-  # each other.
-  #
-  # It is NOT deleted, because "rien n'est valide sans live Twitch
-  # complet" stays the project's validation criterion: the job still
-  # runs, unchanged, on a **tag push** (release-grade broadcast that
-  # feeds gh-pages + the Release attach) and on **workflow_dispatch**
-  # (operator-chosen duration/fps). What we give up is per-commit
-  # coverage of the real-ingest chain:
-  #   - encoder -> real Twitch RTMPS ingest, sustained (regressions in
-  #     rtmp_output / the service lifecycle now surface at tag time, or
-  #     on the antenna run, instead of on the PR that caused them),
-  #   - the VOD proof MP4 + diagnostic.json for that commit,
-  #   - the gh-pages proof refresh on every push to main.
-  # The offline suite covers the wire contract, the encoders and the
-  # record path -- not a real ingest. Re-arm per-commit coverage by
-  # deleting the `if:` below.
-  #
-  # `live broadcast (Twitch)` is a REQUIRED status check on main: it
-  # must be dropped from the branch-protection contexts in the same
-  # move, or every PR waits forever on a check that no longer reports.
+  # Disabled by explicit owner decision on 2026-09-08, after accepting local
+  # exact-release-binary proof. Hosted 1080p60 measured only 11.7 actual FPS
+  # (run 34189919375); this disabled job is NOT a live qualification pass.
+  # The probe and its 1080p60/6000 kbps/x264 assertions remain available for
+  # manual hardware testing. Re-enabling automated broadcasts requires a
+  # new owner decision. No fresh CI VOD or Pages proof is produced.
   live-broadcast:
     name: live broadcast (Twitch)
     needs: build
-    if: >-
-      startsWith(github.ref, 'refs/tags/v')
-      || github.event_name == 'workflow_dispatch'
+    # Disabled by the owner: local hardware proof is accepted for this release.
+    if: false
     runs-on: windows-2022
     timeout-minutes: 60
+    env:
+      PULSAR_RUNTIME_DIR: ${{ github.workspace }}/.pulsar-live-runtime
     permissions:
       contents: write   # gh-pages deploy is downstream, but release attach
                         # needs it on this job too if dispatch enables it.
@@ -675,6 +708,11 @@ jobs:
         with:
           ffmpeg-version: release
 
+      - name: Detect physical GPU for live profile
+        id: hardware-gpu
+        shell: pwsh
+        run: ./scripts/detect-hardware-gpu.ps1 -GithubOutput $env:GITHUB_OUTPUT
+
       - name: Run Twitch live-broadcast probe
         env:
           TWITCH_STREAM_KEY:  ${{ secrets.TWITCH_STREAM_KEY }}
@@ -690,11 +728,19 @@ jobs:
               || ((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && '600')
               || '60'
             }}
-          LIVE_TEST_FPS:      ${{ github.event.inputs.fps || '60' }}
+          # Keep the requested 1080p60 / 6000 kbps qualification on every
+          # runner. Insufficient hardware must fail, not lower the gate.
+          # Hardware CEF and native-source transport remain distinct evidence.
+          LIVE_TEST_FPS: ${{ github.event.inputs.fps || '60' }}
+          LIVE_TEST_RESOLUTION: '1920x1080'
+          LIVE_TEST_BITRATE: '6000'
+          LIVE_TEST_ENCODER: 'x264'
+          LIVE_TEST_SOURCE_KIND: >-
+            ${{ steps.hardware-gpu.outputs.available == 'true' && 'browser_source' || 'ffmpeg_source' }}
           LIVE_TEST_VOD_DIR:  ${{ runner.temp }}/pulsar-live-vod
         shell: bash
         run: |
-          echo "::notice::live-test duration=${LIVE_TEST_DURATION} s"
+          echo "::notice::live-test duration=${LIVE_TEST_DURATION}s profile=${LIVE_TEST_RESOLUTION}@${LIVE_TEST_FPS} bitrate=${LIVE_TEST_BITRATE}kbps encoder=${LIVE_TEST_ENCODER:-auto} source=${LIVE_TEST_SOURCE_KIND}"
           python scripts/probe-twitch-live.py 2>&1 | tee probe-output.log
 
       - name: Compress + stage broadcast VOD
@@ -765,7 +811,8 @@ jobs:
       # requires the password itself.
       #
       # NB : the previous path `obs-websocket/config.json` was workspace-
-      # relative and matched nothing (the file lives under the rundir),
+        # relative and matched nothing. The file now lives under the explicit
+        # runtime directory shared with the probe and native bootstrap,
       # so `if-no-files-found: ignore` silently uploaded nothing. This
       # step also fixes that blind spot.
       - name: Stage redacted pulsar-websocket config on failure
@@ -773,7 +820,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          src="upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs-websocket/config.json"
+            src="${PULSAR_RUNTIME_DIR}/obs-websocket/config.json"
           if [ ! -f "${src}" ]; then
             echo "::warning::no pulsar-websocket config.json to redact (${src} absent)"
             exit 0
@@ -798,23 +845,43 @@ jobs:
   publish-gh-pages:
     name: publish proof to gh-pages
     needs: live-broadcast
-    if: success() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    # Disabled by the owner together with the automated Twitch broadcast.
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: write
     steps:
+      - name: Checkout preview preparation script
+        uses: actions/checkout@v4
+
       - name: Download broadcast artefact
         uses: actions/download-artifact@v4
         with:
           name: pulsar-live-broadcast-proof
           path: artefacts
 
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup ffmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: release
+
+      - name: Prepare bounded Pages viewing preview (full proof retained in artifact)
+        run: >-
+          python scripts/prepare-pages-proof.py
+          --source-dir artefacts --output-dir pages-preview
+          --run-url https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
       - name: Publish to gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./artefacts
+          publish_dir: ./pages-preview
           publish_branch: gh-pages
           force_orphan: true
           user_name: 'github-actions[bot]'
@@ -873,8 +940,8 @@ jobs:
   # ── Stage 6 : attach distros + proof to GitHub Release (tag only) ─
   release-attach:
     name: GitHub Release attach
-    needs: [package, live-broadcast]
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.enable_release_attach == 'true')
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name != 'workflow_dispatch' || github.event.inputs.enable_release_attach == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -884,12 +951,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: pulsar-distros
-          path: artefacts
-
-      - name: Download broadcast proof
-        uses: actions/download-artifact@v4
-        with:
-          name: pulsar-live-broadcast-proof
           path: artefacts
 
       - name: Create Prism runtime release manifest
@@ -917,11 +978,36 @@ jobs:
         with:
           files: |
             artefacts/*.zip
-            artefacts/pulsar-live-broadcast-proof.mp4
-            artefacts/pulsar-live-broadcast-proof-*.mp4
-            artefacts/diagnostic.json
             artefacts/prism-pulsar-runtime-manifest.json
           fail_on_unmatched_files: true
+
+  # Existing immutable draft publication is deliberately separate from
+  # packaging current main. It preserves the selected tag, notes and assets.
+  release-publish:
+    name: Publish existing GitHub Release
+    needs: [lint, contract-tests, build, binary-gate, offline-probes, capture-pgm-compat]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.event.inputs.enable_release_attach == 'true' && github.event.inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout publisher
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify immutable assets and publish existing draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: >-
+          python scripts/publish-existing-release.py
+          --repo "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG"
+          --assets-dir "$RUNNER_TEMP/existing-release-assets" --publish
 
   # ── Stage 7 : npm packages publish (tag only, parallel to build) ─
   # Independent of pulsar.exe build : different toolchain (Node, not

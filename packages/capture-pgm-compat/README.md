@@ -39,9 +39,7 @@ Two proof layers:
 2. **`tests/live-capture-compat.test.ts`** -- the real proof. Spawns a REAL
    full Pulsar (`pulsar.exe` + CEF via `@clodocapeo/pulsar-bundle-full`),
    drives a real `browser_source` through three real local pages (healthy:
-   `requestAnimationFrame` canvas animation; black: a URL the local page
-   server 404s -- `pulsar-bundle-full`'s own README documents this as CEF
-   rendering blank/black; frozen: a page that paints real detail once with
+   `requestAnimationFrame` canvas animation; black: the harness's deliberately degraded local-page scenario; frozen: a page that paints real detail once with
    no further updates), records each with `pulsar.record.start()/stop()`
    (the real x264 path), measures all three, and cross-checks
    `@clodocapeo/pgm-correlator`'s (#230) `extractVisualEvents` verdict
@@ -51,32 +49,44 @@ Two proof layers:
 
 ## Running the live integration suite
 
-Opt-in only (see "CI gap" below):
+The native suite is explicitly opt-in; run from the repository root after
+building its workspace dependencies and a matching full native runtime:
 
-```bash
-PULSAR_LIVE_CAPTURE_COMPAT=1 npm run test -w @clodocapeo/capture-pgm-compat
+```powershell
+$env:PULSAR_LIVE_CAPTURE_COMPAT = "1"
+$env:PULSAR_BUNDLE_FULL_BINARIES_PATH = "D:/path/to/Pulsar/upstream/build_x64/rundir/RelWithDebInfo"
+npm run test -w @clodocapeo/capture-pgm-compat
 ```
 
-If this package's own `@clodocapeo/pulsar-bundle-full` dependency hasn't
-downloaded its ~150MB binaries (e.g. a worktree checkout reusing an
-already-downloaded sibling checkout instead of triggering a fresh
-postinstall download), point at them explicitly:
+The explicit path is read by this test harness, not by the public bundle
+`spawn()` API. Supply the full rundir root, not `bin/64bit`.
+FFmpeg/ffprobe must be available; the tests use the actual native binary and
+local pages/recordings, not a published Twitch feed.
 
-```bash
-PULSAR_BUNDLE_FULL_BINARIES_PATH=/path/to/pulsar-bundle-full/binaries \
-PULSAR_LIVE_CAPTURE_COMPAT=1 npm run test -w @clodocapeo/capture-pgm-compat
-```
+## CI coverage in 3.0.0
 
-## CI gap (known, not silently left)
+The pipeline now has a Windows `capture-pgm-compat` job consuming the built
+`pulsar-rundir` artifact. It installs/builds workspace dependencies and runs
+this package. The old “there is no Windows TS integration stage” statement
+is obsolete.
 
-`.github/workflows/pipeline.yml`'s `npm run test -w <pkg>` for every TS
-package (including this one) runs ONLY inside the `npm-publish` job --
-`runs-on: ubuntu-latest`, gated `if: startsWith(github.ref, 'refs/tags/v')`.
-It never runs on PRs, and ubuntu-latest cannot execute a Windows CEF binary
-regardless. `frame-health.test.ts` (the ffmpeg-only half) would actually run
-there fine; `live-capture-compat.test.ts` never will, anywhere, without a
-new `windows-2022` TS-test stage -- adding one is a CI/infra decision
-(Keeper's call), intentionally not made by this package. The live suite is
-gated behind `PULSAR_LIVE_CAPTURE_COMPAT` so `npm test` stays green
-everywhere it currently runs; run it locally on Windows to get real
-coverage of the actual capture path.
+The job detects a physical GPU. With one, it sets
+`PULSAR_LIVE_CAPTURE_COMPAT=1`; without one, it runs the portable measurement
+tests and explicitly reports that accelerated native CEF proof was not run.
+A passing no-GPU job is not an accelerated capture pass. Keep real hardware
+evidence separate from hosted CI.
+
+## Interpretation and limits
+
+The spatial/temporal oracle distinguishes this corpus's healthy, black and
+frozen scenarios. An HTTP status or a successful source-control request alone
+is not that proof. A 404 does not universally imply a black CEF frame.
+
+Temporal correlation with pgm-correlator does not recover an arbitrary
+scene's identity from pixels. These are controlled local recordings, not
+end-to-end authenticated Orion/Blue production evidence or physical-display
+latency measurements.
+
+Record exact runtime revision, selected encoder, hardware, enabled test mode
+and resulting files when citing a run. Use the
+[development guide](../../docs/DEVELOPMENT.md) for the broader gate matrix.

@@ -1,4 +1,4 @@
-# Host-controlled WebM transitions
+# Host-controlled media transitions
 
 Owner: `plugins/pulsar-frontend-stub`. The media resource lives in
 `pulsar-media-transition.{h,cpp}`, with pure wire validation in
@@ -48,7 +48,7 @@ takes `{}` and returns:
 }
 ```
 
-The path must be an absolute local `.webm` file. URLs, UNC paths, embedded
+The path must be an absolute local `.webm` or `.mp4` file. URLs, UNC paths, embedded
 NULs, unknown configuration fields, fractional/bool cut points and invalid
 gain/mute values are rejected. `cut_point_ms` is an integer in `[1, 19999]`.
 `volume` defaults to 1 and is bounded to `[0,1]`; `muted` defaults to false.
@@ -67,7 +67,7 @@ not stretch the animation to an unrelated fade duration.
 
 An author must choose a fully opaque cut point in the actual animation.
 Readiness validates decoding/timing, not opacity coverage or artistic quality.
-Transparent WebM frames are composited by the existing OBS stinger renderer.
+MP4 uses its decoded video (ordinary H.264 MP4 has no alpha). Transparent WebM frames are composited by the existing OBS stinger renderer.
 Only the media child's gain/mute is changed; surrounding scene and stream
 audio gains are not changed. Preview lane playback mutes the media child;
 the next Program/Take playback restores the configured gain/mute.
@@ -147,7 +147,7 @@ new operations allowed through the pending-mutation gate.
 Vendor validation failures return `{ "error": "CODE" }`; transport admission
 failures use the existing obs-websocket error envelope. Stable codes include
 `REQUEST_INVALID`, `RUNTIME_MISMATCH`, `RUNTIME_UNAVAILABLE`, `CONFIG_INVALID`,
-`LOCAL_PATH_REQUIRED`, `WEBM_REQUIRED`, `ASSET_MISSING`,
+`LOCAL_PATH_REQUIRED`, `MEDIA_FORMAT_REQUIRED`, `ASSET_MISSING`,
 `ASSET_INVALID_CONTAINER`, `DECODER_UNAVAILABLE`, `MEDIA_NOT_READY`,
 `DECODE_FAILED`, `DURATION_INVALID`, `CUT_POINT_INVALID`,
 `CUT_POINT_OUTSIDE_MEDIA`, `VOLUME_INVALID`, `MUTED_INVALID`,

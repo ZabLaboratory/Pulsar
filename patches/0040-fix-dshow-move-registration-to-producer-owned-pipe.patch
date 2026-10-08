@@ -127,7 +127,7 @@ index f4dd39ef7..f8cb3bf76 100644
  	bool queue_namespace_rejected;
  	bool program_return;
  	bool preview_return;
-@@ -84,14 +87,95 @@ static void return_lease_log_state(struct virtualcam_data *vcam, enum return_lea
+@@ -84,14 +87,96 @@ static void return_lease_log_state(struct virtualcam_data *vcam, enum return_lea
  		     return_lease_state_name(state), vcam->consumer_lease_name);
  }
  
@@ -165,7 +165,8 @@ index f4dd39ef7..f8cb3bf76 100644
 +	const wchar_t *image_name = wcsrchr(image_path, L'\\');
 +	image_name = image_name ? image_name + 1 : image_path;
 +	return _wcsicmp(image_name, L"obs64.exe") == 0 || _wcsicmp(image_name, L"obs32.exe") == 0 ||
-+	       _wcsicmp(image_name, L"ffmpeg.exe") == 0 || _wcsicmp(image_name, L"pulsar.exe") == 0;
++	       _wcsicmp(image_name, L"ffmpeg.exe") == 0 || _wcsicmp(image_name, L"pulsar.exe") == 0 ||
++	       _wcsicmp(image_name, L"electron.exe") == 0 || _wcsicmp(image_name, L"prism.exe") == 0;
 +}
 +
 +static bool return_consumer_registration_live(struct virtualcam_data *vcam)

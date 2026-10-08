@@ -1,0 +1,36 @@
+From ade37139d8751a9c0322e8eedb0cbed690c7c021 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Mon, 7 Sep 2026 17:52:49 +0200
+Subject: [PATCH] fix(libobs): align current readback media time with audio
+
+Agent-Role: eleven
+Agent-Thread: 01a045e2-996f-7913-99f0-2cd237d3a6f8
+Work-Unit: ZabLaboratory/Pulsar#253
+Issue: #253
+Evidence: native flash-click A/B measures picture advance without timestamp compensation
+---
+ libobs/obs-video.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/libobs/obs-video.c b/libobs/obs-video.c
+index 8b1542a23..835772524 100644
+--- a/libobs/obs-video.c
++++ b/libobs/obs-video.c
+@@ -974,6 +974,14 @@ static inline void output_frame(struct obs_core_video_mix *video)
+ 		deque_pop_front(&video->vframe_info_buffer, &vframe_info, sizeof(vframe_info));
+ 
+ 		frame.timestamp = vframe_info.timestamp;
++		/* A current CPU surface is one cadence interval newer than the
++		 * historical previous-surface readback. Advance its media clock by
++		 * that same interval, so removing the readback queue does not move
++		 * the picture ahead of the audio timeline. Preserve cadence/count
++		 * under renderer stalls; content identity remains independently exact.
++		 * The GPU-encoding path already uses its established timestamp map. */
++		if (current_readback && !gpu_active)
++			frame.timestamp += video_output_get_frame_time(video->video);
+ 		bool current_content = current_readback;
+ #ifdef _WIN32
+ 		/* GPU encoding stages into the single copy_surfaces_encode set:
+-- 
+2.54.0.windows.1

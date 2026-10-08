@@ -26,6 +26,65 @@ sys.modules[SPEC.name] = probe
 SPEC.loader.exec_module(probe)
 
 
+def _marker_frames(lanes="AAABBB"):
+    return [{"frame_index": i, "pts_ms": round(i * 1000 / 60),
+             "observed_at_monotonic_ns": 1_000_000_000 + i * 17_000_000,
+             "y_mean": 16 if lane == "A" else 235, "u_mean": 128, "v_mean": 128}
+            for i, lane in enumerate(lanes)]
+
+
+def test_first_changed_marker_precedes_future_p_candidate():
+    frames = _marker_frames()
+    probe.validate_decoded_sequence(frames)
+    first = probe.first_changed_marker(frames, expected_pts_ms=50.4, old_lane="A", new_lane="B")
+    assert first["frame_index"] == 3
+    assert first["frame_index"] < frames[5]["frame_index"]
+
+
+@pytest.mark.parametrize("defect", ["missing_index", "duplicate_index", "pts_gap", "backwards_pts", "clock_backwards"])
+def test_decoded_sequence_rejects_incomplete_evidence(defect):
+    frames = _marker_frames()
+    if defect == "missing_index":
+        frames.pop(2)
+    elif defect == "duplicate_index":
+        frames[2]["frame_index"] = 1
+    elif defect == "pts_gap":
+        frames[2]["pts_ms"] += 17
+    elif defect == "backwards_pts":
+        frames[2]["pts_ms"] = frames[1]["pts_ms"] - 1
+    else:
+        frames[2]["observed_at_monotonic_ns"] = frames[1]["observed_at_monotonic_ns"] - 1
+    with pytest.raises(probe.ProbeFailure, match="decoded"):
+        probe.validate_decoded_sequence(frames)
+
+
+@pytest.mark.parametrize("defect", ["old_is_new", "missing_old", "no_change", "ambiguous", "chroma", "missing_mean"])
+def test_first_changed_marker_does_not_skip_invalid_content(defect):
+    frames = _marker_frames()
+    expected = 50.0
+    if defect == "old_is_new":
+        frames[2]["y_mean"] = 235
+    elif defect == "missing_old":
+        expected = 0.0
+    elif defect == "no_change":
+        frames = _marker_frames("AAAAAA")
+    elif defect == "ambiguous":
+        frames[3]["y_mean"] = 100
+    elif defect == "chroma":
+        frames[3]["u_mean"] = 200
+    else:
+        del frames[3]["v_mean"]
+    with pytest.raises(probe.ProbeFailure, match="decoded"):
+        probe.first_changed_marker(frames, expected_pts_ms=expected, old_lane="A", new_lane="B")
+
+
+def test_cef_marker_geometry_and_distinct_lane_content():
+    assert b"background:#000000" in probe.cef_page_html("A")
+    assert b"background:#ffffff" in probe.cef_page_html("B")
+    assert b"width:64px;height:64px" in probe.cef_page_html("A")
+    assert b"decoded-lane-marker" not in probe.cef_page_html()
+
+
 def _latency_fixture_records():
     helper_path = ROOT / "tests" / "probe-take-latency" / "test_probe_take_latency.py"
     spec = importlib.util.spec_from_file_location("latency_fixture_helper", helper_path)
@@ -139,6 +198,19 @@ def test_prepare_record_directory_persists_unique_session(tmp_path):
     with context as context_path:
         assert Path(context_path) == session
     assert (session / "pulsar-test.mp4").is_file()
+
+
+def test_prepare_record_directory_allows_canonical_repository_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(probe, "REPO_ROOT", tmp_path)
+    evidence_root = tmp_path / "evidence" / "253" / "eleven" / "run"
+    context, session, persistent = probe.prepare_record_directory(evidence_root)
+    assert persistent is True
+    assert session.parent == evidence_root
+    with context:
+        assert session.is_dir()
+    assert session.is_dir()
+    with pytest.raises(probe.ProbeFailure):
+        probe.prepare_record_directory(tmp_path / "scripts" / "recordings")
 
 
 def test_prepare_record_directory_default_is_ephemeral():
@@ -434,11 +506,16 @@ def test_wait_for_take_boundaries_requires_all_four_unique_correlations(tmp_path
     process = _boundary_wait_process(trace, runtime_id)
     correlation = probe.RtmpPacketCorrelation()
 
-    for commit in commits:
-        result = asyncio.run(
-            probe.wait_for_take_boundaries(process, receiver, commit, correlation, timeout=0.1)
-        )
-        assert set(result) == {*probe.PRODUCER_BOUNDARIES, "rtmp_first_packet"}
+    async def check_all_commits():
+        # Match the real probe's one-loop lifecycle; avoid 200 Windows TCP
+        # socketpairs just to exercise 200 correlations on the same stream.
+        for commit in commits:
+            result = await probe.wait_for_take_boundaries(
+                process, receiver, commit, correlation, timeout=0.1
+            )
+            assert set(result) == {*probe.PRODUCER_BOUNDARIES, "rtmp_first_packet"}
+
+    asyncio.run(check_all_commits())
     assert correlation.used_packet_indices == set(range(200))
     assert correlation.offset_min is not None
     assert correlation.offset_max is not None
@@ -715,8 +792,10 @@ def test_fusion_is_atomic_and_keeps_existing_reference_on_validation_failure(tmp
     assert not list(tmp_path.glob("*.fused.tmp"))
 
 
-def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path):
+@pytest.mark.parametrize("decode_case", ["off", "valid", "missing", "duplicate", "wrong_pts", "before_packet"])
+def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path, decode_case):
     all_records = _latency_fixture_records()
+    all_records = [record for record in all_records if record.get("boundary") != "decoded_first_frame"]
     records = [
         record
         for record in all_records
@@ -742,6 +821,21 @@ def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path)
         }
     ]
     sidecar = _write_directshow_sidecar(tmp_path, all_records)
+    receiver.decode_frames = decode_case != "off"
+    if decode_case != "missing":
+        receiver.decoded_frames = [{
+            "frame_index": 0,
+            "pts_ms": 1501 if decode_case == "wrong_pts" else 1500,
+            "observed_at_monotonic_ns": 1_019_000_000 if decode_case == "before_packet" else 1_040_000_000,
+        }]
+    if decode_case == "duplicate":
+        receiver.decoded_frames *= 2
+    if decode_case in {"missing", "duplicate", "wrong_pts", "before_packet"}:
+        final.write_bytes(b"preserved-final")
+        with pytest.raises(probe.ProbeFailure, match="decoded"):
+            receiver.fuse_trace(producer, final, directshow_path=sidecar)
+        assert final.read_bytes() == b"preserved-final"
+        return
     receiver.fuse_trace(producer, final, directshow_path=sidecar)
     fused = [json.loads(line) for line in final.read_text(encoding="utf-8").splitlines()]
     rtmp = [record for record in fused if record.get("boundary") == "rtmp_first_packet"]
@@ -750,6 +844,12 @@ def test_fusion_emits_receiver_observation_only_after_unique_pts_match(tmp_path)
     assert rtmp[0]["surface"] == "RTMP"
     assert rtmp[0]["consumer"] == "receiver"
     assert rtmp[0]["receiver_observed_normalized_ns"] == rtmp[0]["observed_at_monotonic_ns"]
+    decoded = [record for record in fused if record.get("boundary") == "decoded_candidate_frame"]
+    assert len(decoded) == (1 if decode_case == "valid" else 0)
+    if decoded:
+        assert decoded[0]["observed_at_monotonic_ns"] == 1_040_000_000
+        assert decoded[0]["take_command_id"] == rtmp[0]["take_command_id"]
+        assert "not display/antenna" in decoded[0]["notes"]
 
 
 def test_fusion_parser_failure_keeps_existing_final_byte_for_byte(tmp_path):

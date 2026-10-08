@@ -9,9 +9,10 @@ Pulsar's CI enforces the source-side and binary-side invariants for
 its own artefacts. It cannot, by construction, verify what YOU do
 with those artefacts. That is what this document is about.
 
-This is **not** an essay. Every claim below is backed by a runnable
-command. The reference script + workflow at the bottom drop into any
-consumer repo and exercise every check empirically. **If you have
+These are reference checks to adapt to the consumer\'s real source roots,
+packaging paths and build jobs. Grep fingerprints are review signals, not
+proof of source derivation or legal compliance. Binary import checks cover
+the inspected binary, not arbitrary dynamic behavior. **If you have
 not run the checks, you have not passed the audit** — there is no
 "in spirit" path.
 
@@ -21,7 +22,7 @@ not run the checks, you have not passed the audit** — there is no
 
 | File | What it does |
 |---|---|
-| [`scripts/pulsar-consumer-audit.sh`](#reference-script-pulsar-consumer-auditsh) | Single bash script. Runs every static check below. Exits 0 = clean, non-zero = at least one invariant broken. |
+| [`scripts/pulsar-consumer-audit.sh`](#reference-script-pulsar-consumer-auditsh) | Single bash script. Runs every static check below. Exits 0 = no configured static match; non-zero = review/failure requiring classification. |
 | [`.github/workflows/pulsar-consumer-audit.yml`](#reference-workflow-pulsar-consumer-audityml) | GitHub Actions workflow. Runs the script on every PR + push to your default branch. Add the binary-imports check on the platforms where you ship. |
 
 Both files below are copy-pasteable and self-contained. Adapt the
@@ -71,8 +72,9 @@ grep -rn -E '#\s*include\s*[<"](obs[a-zA-Z0-9_/-]*\.h(pp)?|graphics/[a-zA-Z0-9_-
 
 A `bindings.gyp` (or its modern equivalents `binding.gyp`, `*.gypi`,
 or a `cmake-js` config) declares that Node will compile a native
-addon. The only legit reason for that in a consumer repo is exactly
-what invariant #3 forbids : an N-API wrapper around libobs.
+addon. A consumer may legitimately use unrelated native modules. Review each
+match: the prohibited case is a native binding to Pulsar/libobs, not every
+native addon. Scope and document unrelated-module exceptions.
 
 ```bash
 # Forbidden manifests at the consumer repo root.
@@ -130,7 +132,7 @@ echo "OK"
 
 The most insidious failure mode : a developer reads a Pulsar source
 file, "rewrites" it in the consumer with the file open, and ships
-near-identical code. That is derivative work, full stop.
+near-identical code. This requires source-provenance review against project policy.
 
 The pragmatic empirical check : every Pulsar plugin source file
 carries a Pulsar-specific identifier (function names, log prefixes,
@@ -145,7 +147,6 @@ fingerprints=(
   'pulsar-multi-stream'
   'pulsar-frontend-stub'
   'pulsar-headless'
-  'pulsar:BitrateAdjusted'
   'PULSAR_BUILD_HEADLESS'
   'pulsar_frontend_init'
   'pulsar_frontend_finished_loading'
@@ -175,7 +176,7 @@ build produces `<consumer>.exe`, run :
 ```powershell
 # PowerShell, with msvc-dev-cmd or VS Build Tools on PATH.
 $exe = "out/<consumer>.exe"   # adjust to your build output
-$imports = & dumpbin /imports $exe 2>&1
+$imports = dumpbin /imports $exe 2>&1
 $forbidden = @("obs.dll", "obs-frontend-api.dll", "pulsar.exe", "libobs.dll")
 $leaked = @()
 foreach ($name in $forbidden) {
@@ -376,7 +377,7 @@ echo "::notice::in your platform-build job — see CONSUMER-AUDIT.md Checks 5-7.
 
 ## Reference workflow `pulsar-consumer-audit.yml`
 
-Drop verbatim into your consumer repo at
+Adapt to the consumer\'s actual build graph before placing it at
 `.github/workflows/pulsar-consumer-audit.yml`.
 
 ```yaml
@@ -460,6 +461,10 @@ jobs:
 
 ## When to update this audit
 
+Public wire event names such as `pulsar:BitrateAdjusted` are legitimate
+client code, not native implementation fingerprints. Do not ban API use
+with a copy-paste detector.
+
 The fingerprint list (Check 4) and the allowed-locations list
 (Check 8) are the parts that drift over time.
 
@@ -486,5 +491,6 @@ If a check would normally fail but you have a documented exception
 (e.g. you do legitimately need a library named `libobs-something`
 that has nothing to do with OBS), update the script's regex
 allow-list with a comment explaining why. **Don't disable the
-script.** Don't skip jobs. The audit is the only thing that keeps
-your license intact ; treating it as optional defeats it.
+script.** Don't skip jobs. These checks enforce the project boundary; they do not certify a
+license outcome. Keep evidence and obtain the appropriate review for
+novel integration or distribution choices.

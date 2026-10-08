@@ -2,8 +2,8 @@
 """
 Pulsar live Twitch broadcast probe.
 
-End-to-end functional check : spawn pulsar.exe, point its CEF
-browser_source at a locally-served test scene, push a 5-minute
+End-to-end functional check : spawn pulsar.exe, install either its CEF
+browser_source or an animated native media source, push a 5-minute
 stream to Twitch, poll metrics throughout, assert thresholds, clean
 up. Exit 0 = Pulsar passed the live-broadcast contract ; non-zero =
 something is broken.
@@ -16,20 +16,24 @@ Optional env :
                       <repo>/upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/pulsar.exe)
   LIVE_TEST_DURATION  seconds to broadcast (default 300)
   LIVE_TEST_FPS       target encoder fps (default 60 — set via PULSAR_FPS at spawn)
+  LIVE_TEST_RESOLUTION encoder geometry (default 1920x1080)
+  LIVE_TEST_BITRATE   video bitrate in kbps (default 6000)
+  LIVE_TEST_ENCODER   explicit encoder family, e.g. x264 (default: engine auto)
+  LIVE_TEST_SOURCE_KIND browser_source or ffmpeg_source (default browser_source)
+  PULSAR_RUNTIME_DIR  explicit runtime/config directory (default: unique temporary
+                      directory, removed at exit; explicit directories are kept)
 
 Validations :
   - pulsar spawns + obs-websocket config drops within 30 s
   - Hello / Identify auth round-trip succeeds
-  - SetCaptureSource(browser_source, http://127.0.0.1:<port>/test-scene.html)
-    returns kind="browser_source"
+  - the declared source is installed and read back from the program scene
   - CreateDestination(twitch, $key) returns an id ; StartDestination
     returns started=true
   - Throughout the broadcast, every 30 s :
       GetDestinations[<id>].active == true
-      GetVideoSettings.video_bitrate matches target ± tolerance
       GetAdaptiveState samples > 0 (adaptive worker is awake)
-  - Frame drop ratio at end < FRAME_DROP_THRESHOLD (5 %)
-  - Total frames sent >= duration * fps * 0.95
+  - Frame drop ratio throughout < FRAME_DROP_THRESHOLD (5 %)
+  - Post-warmup active FPS averages at least 90 % of the declared profile
   - StopDestination returns clean
   - No "error" / "fail" lines in pulsar stdout/stderr (excluding
     benign warnings on the allowlist)
@@ -45,12 +49,15 @@ import http.server
 import json
 import os
 import pathlib
+import shutil
 import socket
 import socketserver
 import subprocess
 import sys
 import threading
+import tempfile
 import time
+import uuid
 from typing import Any
 
 try:
@@ -63,7 +70,12 @@ except ImportError:
 REPO_ROOT  = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_EXE = REPO_ROOT / "upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/pulsar.exe"
 RUNDIR     = REPO_ROOT / "upstream/build_x64/rundir/RelWithDebInfo/bin/64bit"
-CONFIG_PATH = RUNDIR / "obs-websocket" / "config.json"
+# Native bootstrap no longer writes configuration beside the executable.
+# Give the child and the reader the same explicit, isolated runtime directory.
+_EXPLICIT_RUNTIME = os.environ.get("PULSAR_RUNTIME_DIR", "").strip()
+RUNTIME_DIR = (pathlib.Path(_EXPLICIT_RUNTIME) if _EXPLICIT_RUNTIME else
+               pathlib.Path(tempfile.gettempdir()) / f"pulsar-live-probe-{uuid.uuid4().hex}").resolve()
+CONFIG_PATH = RUNTIME_DIR / "obs-websocket" / "config.json"
 SCENE_DIR  = REPO_ROOT / "scripts/live-test"
 
 # Local recording directory : pulsar runs StartRecord in parallel with
@@ -80,28 +92,29 @@ EVENT_SUBSCRIPTION_ALL = 0x7FF
 
 # --- Thresholds ---
 FRAME_DROP_RATIO_MAX  = 0.05    # 5 %
+ACTIVE_FPS_RATIO_MIN  = 0.90    # sustained render cadence vs declared target
 SPAWN_TIMEOUT_SEC     = 60.0    # pulsar to print PULSAR_READY + drop config.json
+STOP_RECORD_PENDING_CODE = 702
+STOP_RECORD_SETTLE_SEC = 30.0
 # Poll cadence is also the WS keep-alive cadence : without periodic
 # app-level traffic, Windows's ProactorEventLoop RSTs the idle TCP
 # connection on loopback (observed at ~30 s). 5 s leaves plenty of
 # margin and gives the run summary more granular metrics.
 POLL_INTERVAL_SEC     = 5.0
 DESTINATION_NAME      = "pulsar-live-test"
+HOSTED_INPUT_NAME     = "PulsarHostedTransportSource"
 
-# StartDestination can race the engine boot : the frontend streaming
-# output is wired asynchronously after pulsar.exe spawns, and a probe
-# that reaches StartDestination within a few seconds of boot can hit a
-# transient `frontend streaming output unavailable` before the output
-# exists. This is a boot-ordering race, not a broadcast failure (same
-# binary/key passes on retry). We poll StartDestination for a bounded
-# budget, but ONLY while the error is exactly that transient string —
-# any other error (bad key, RTMP reject, etc.) fails immediately, and
-# exhausting the budget is a hard failure. No masking : a genuinely
-# broken streaming path never produces this exact transient and would
-# still fail.
-START_DEST_BOOT_ERROR   = "frontend streaming output unavailable"
+# StartDestination can observe the output before its encoders are attached.
+# These two exact not-ready states may clear during boot, but can also be
+# permanent failures. Retry only within the fixed budget; neither state is
+# evidence of success. All other failures return immediately.
+START_DEST_BOOT_ERRORS = frozenset({
+    "frontend streaming output unavailable",
+    "encoders not bound on streaming output",
+})
 START_DEST_RETRY_BUDGET = 20.0   # seconds to wait out the boot race
 START_DEST_RETRY_DELAY  = 1.0    # poll cadence between attempts
+NATIVE_SUPPORTED_FPS = frozenset({24, 30, 48, 60, 120})
 
 # Benign log substrings that do not constitute failure.
 BENIGN_LOG_SUBSTRINGS = [
@@ -125,6 +138,36 @@ def find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def live_resolution() -> tuple[int, int]:
+    raw = os.environ.get("LIVE_TEST_RESOLUTION", "1920x1080")
+    try:
+        width, height = (int(part) for part in raw.lower().split("x", 1))
+    except (TypeError, ValueError):
+        raise ValueError(f"invalid LIVE_TEST_RESOLUTION {raw!r}; expected WIDTHxHEIGHT")
+    if width <= 0 or height <= 0:
+        raise ValueError(f"invalid LIVE_TEST_RESOLUTION {raw!r}; dimensions must be positive")
+    return width, height
+
+
+def prepare_media_fixture(width: int, height: int, fps: int) -> pathlib.Path:
+    """Generate a short animated A/V loop without depending on CEF or a GPU."""
+    LIVE_VOD_DIR.mkdir(parents=True, exist_ok=True)
+    fixture = LIVE_VOD_DIR / "hosted-transport-source.mkv"
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", f"testsrc2=size={width}x{height}:rate={fps}",
+        "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000",
+        "-t", "12", "-c:v", "libx264", "-preset", "ultrafast",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k",
+        "-shortest", str(fixture),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    if completed.returncode != 0 or not fixture.exists():
+        detail = (completed.stderr or completed.stdout or "unknown ffmpeg failure")[-1000:]
+        raise RuntimeError(f"could not generate hosted transport source: {detail}")
+    return fixture
+
+
 def start_scene_server(port: int) -> socketserver.ThreadingTCPServer:
     """Serve scripts/live-test/ from 127.0.0.1:<port>."""
     handler = functools.partial(
@@ -139,10 +182,18 @@ def start_scene_server(port: int) -> socketserver.ThreadingTCPServer:
 
 def spawn_pulsar(exe: pathlib.Path, fps: int) -> subprocess.Popen:
     """Spawn pulsar.exe with the desired encoder geometry."""
+    if fps not in NATIVE_SUPPORTED_FPS:
+        raise ValueError(f"unsupported native FPS {fps}; expected {sorted(NATIVE_SUPPORTED_FPS)}")
     env = os.environ.copy()
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    env["PULSAR_RUNTIME_DIR"] = str(RUNTIME_DIR)
     env["PULSAR_FPS"] = str(fps)
-    env["PULSAR_RESOLUTION"] = "1920x1080"
-    env["PULSAR_VIDEO_BITRATE"] = "6000"
+    width, height = live_resolution()
+    env["PULSAR_RESOLUTION"] = f"{width}x{height}"
+    env["PULSAR_VIDEO_BITRATE"] = os.environ.get("LIVE_TEST_BITRATE", "6000")
+    encoder = os.environ.get("LIVE_TEST_ENCODER", "").strip()
+    if encoder and encoder != "auto":
+        env["PULSAR_VIDEO_ENCODER"] = encoder
     # Point the recording pipeline at a known directory so the live
     # probe can pick up the produced MP4 deterministically and the
     # workflow can upload it as the broadcast proof.
@@ -190,6 +241,18 @@ def stream_pulsar_logs(proc: subprocess.Popen, sink: list[str]) -> None:
     assert proc.stdout is not None
     for line in proc.stdout:
         sink.append(line.rstrip())
+
+
+def wait_for_encoder_family(log_lines: list[str], expected: str, timeout: float = 10.0) -> bool:
+    """Require the native allocation log to attest the requested encoder."""
+    needle = f"video encoder allocated: family={expected.lower()}"
+    deadline = time.time() + timeout
+    while True:
+        if any(needle in line.lower() for line in log_lines):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.1)
 
 
 class Inbox:
@@ -345,6 +408,109 @@ def fail_log(label: str, msg: str) -> None:
     print(f"::error::live-test {label}: {msg}", file=sys.stderr)
 
 
+async def start_destination(ws, inbox: Inbox, dest_id: str) -> tuple[dict, int]:
+    """Wait for output/encoder readiness, with one monotonic retry budget."""
+    deadline = time.monotonic() + START_DEST_RETRY_BUDGET
+    attempt = 0
+    response: dict = {}
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return response, attempt
+        attempt += 1
+        response = await vendor_call(
+            ws, inbox, f"start-dest-{attempt}", "pulsar", "StartDestination",
+            {"id": dest_id}, timeout=remaining)
+        data = vendor_response_data(response)
+        if (not vendor_request_status(response).get("result")
+                or data.get("started")
+                or str(data.get("error", "")) not in START_DEST_BOOT_ERRORS):
+            return response, attempt
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return response, attempt
+        delay = min(START_DEST_RETRY_DELAY, remaining)
+        print(f"[live-test] start-dest attempt #{attempt} : "
+              f"streaming output not ready yet ('{data['error']}'), "
+              f"retrying in {delay}s")
+        await asyncio.sleep(delay)
+
+
+def sustained_fps(samples: list[dict]) -> float | None:
+    """Average post-warmup active FPS, or None when no live signal exists."""
+    values = [
+        float(sample["active_fps"])
+        for sample in samples[1:]
+        if sample.get("active_fps") is not None
+    ]
+    return sum(values) / len(values) if values else None
+
+
+def video_profile_matches(response: dict, width: int, height: int, fps: int) -> bool:
+    """Check obs_get_video_info readback, never just the requested environment."""
+    data = response.get("responseData", {}) or {}
+    return bool(
+        (response.get("requestStatus", {}) or {}).get("result")
+        and data.get("baseWidth") == width and data.get("baseHeight") == height
+        and data.get("outputWidth") == width and data.get("outputHeight") == height
+        and isinstance(data.get("fpsDenominator"), (int, float))
+        and data["fpsDenominator"] > 0
+        and data.get("fpsNumerator") == fps * data["fpsDenominator"]
+    )
+
+
+def cadence_below_target(samples: list[dict], fps: int, elapsed: float) -> bool:
+    """Fail sustained starvation after 30 seconds instead of streaming it for 10 minutes."""
+    if elapsed < 30 or len(samples) < 3:
+        return False
+    observed = sustained_fps(samples[-7:])
+    return observed is None or observed < fps * ACTIVE_FPS_RATIO_MIN
+
+
+async def settle_record_stop(ws, inbox: Inbox, response: dict) -> str | None:
+    """Resolve a completed or accepted-as-pending StopRecord truthfully.
+
+    Pulsar bounds the synchronous muxer flush. A 702 response therefore means
+    the stop was accepted, not rejected. Poll the authoritative record status
+    until it becomes inactive and exposes the final path; never infer success
+    from the pending response itself.
+    """
+    status = response.get("requestStatus", {}) or {}
+    data = response.get("responseData", {}) or {}
+    code = int(status.get("code") or 0)
+    if not status.get("result") and code != STOP_RECORD_PENDING_CODE:
+        return None
+
+    path = data.get("outputPath")
+    if status.get("result") and path:
+        return str(path)
+
+    print("[live-test] StopRecord accepted as pending; waiting for muxer finalisation")
+    deadline = asyncio.get_running_loop().time() + STOP_RECORD_SETTLE_SEC
+    attempt = 0
+    while True:
+        attempt += 1
+        current = await request(ws, inbox, "GetRecordStatus", f"stop-rec-status-{attempt}")
+        current_status = current.get("requestStatus", {}) or {}
+        current_data = current.get("responseData", {}) or {}
+        if not current_status.get("result"):
+            return None
+        path = current_data.get("outputPath") or path
+        if not current_data.get("outputActive"):
+            if path:
+                return str(path)
+            completed = sorted(
+                LIVE_VOD_DIR.glob("*.mp4"),
+                key=lambda candidate: candidate.stat().st_mtime,
+                reverse=True,
+            )
+            return str(completed[0]) if completed else None
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return None
+        await asyncio.sleep(min(0.25, remaining))
+
+
 # ── Diagnostic JSON dump ────────────────────────────────────────────────────
 # Writes a structured snapshot at end-of-run so reviewers can attribute lag
 # to pulsar (high render time, dropped frames) vs network (low effective
@@ -489,9 +655,14 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
     else:
         exe = DEFAULT_EXE
 
-    if not (SCENE_DIR / "test-scene.html").exists():
+    source_kind = os.environ.get("LIVE_TEST_SOURCE_KIND", "browser_source").strip()
+    if source_kind not in ("browser_source", "ffmpeg_source"):
+        fail_log("config", f"unsupported LIVE_TEST_SOURCE_KIND {source_kind!r}")
+        return 2
+    if source_kind == "browser_source" and not (SCENE_DIR / "test-scene.html").exists():
         fail_log("config", f"test-scene.html missing under {SCENE_DIR}")
         return 2
+    width, height = live_resolution()
 
     # Drop any stale pulsar-websocket config so we don't read a previous
     # session's password.
@@ -501,14 +672,17 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
         except OSError:
             pass
 
-    # Local HTTP server hosting the test scene.
-    http_port = find_free_port()
-    httpd = start_scene_server(http_port)
-    # Scene URL is finalised after we know pulsar's WS port + password
-    # (see below). The adapter inside test-scene.html stays dormant
-    # until those are passed via the query string.
-    scene_url_base = f"http://127.0.0.1:{http_port}/test-scene.html"
-    print(f"[live-test] scene HTTP server : {scene_url_base}")
+    httpd = None
+    scene_url_base = None
+    media_fixture = None
+    if source_kind == "browser_source":
+        http_port = find_free_port()
+        httpd = start_scene_server(http_port)
+        scene_url_base = f"http://127.0.0.1:{http_port}/test-scene.html"
+        print(f"[live-test] scene HTTP server : {scene_url_base}")
+    else:
+        media_fixture = prepare_media_fixture(width, height, fps)
+        print(f"[live-test] animated CPU media source : {media_fixture}")
 
     # Spawn pulsar.exe.
     print(f"[live-test] spawning {exe}")
@@ -567,45 +741,60 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                 reader_task.cancel()
                 return 0 if dest_id else 1
 
-            # Hand the scene the live WS coordinates so its in-page
-            # adapter can connect and stream telemetry into the HUD.
-            scene_url = f"{scene_url_base}?port={port}&token={password}"
-
-            # 1. SetCaptureSource → browser_source.
-            r = await vendor_call(ws, inbox, "set-capture", "pulsar-scene",
-                "SetCaptureSource", {
-                    "kind": "browser_source",
-                    "url":  scene_url,
-                    "width":  1920,
-                    "height": 1080,
-                    "fps":    fps,
-                    "reroute_audio": True,
+            if source_kind == "browser_source":
+                scene_url = f"{scene_url_base}?port={port}&token={password}"
+                r = await vendor_call(ws, inbox, "set-capture", "pulsar-scene",
+                    "SetCaptureSource", {
+                        "kind": "browser_source", "url": scene_url,
+                        "width": width, "height": height, "fps": fps,
+                        "reroute_audio": True,
+                    })
+                dump_response("set-capture", r)
+                data = vendor_response_data(r)
+                if data.get("kind") != "browser_source":
+                    fail_log("set-capture", f"unexpected response : {data}")
+                    return 1
+                r = await vendor_call(ws, inbox, "get-capture", "pulsar-scene",
+                    "GetCaptureSource", {})
+                got = vendor_response_data(r)
+                if (got.get("kind") != "browser_source" or got.get("url") != scene_url
+                        or int(got.get("last_change_unix", 0)) <= 0):
+                    fail_log("get-capture", f"browser snapshot drift: {got}")
+                    return 1
+                print("[live-test] browser capture snapshot confirmed")
+            else:
+                current = await request(ws, inbox, "GetCurrentProgramScene", "program-scene")
+                current_status = current.get("requestStatus", {}) or {}
+                scene_name = (current.get("responseData", {}) or {}).get("currentProgramSceneName")
+                if not current_status.get("result") or not scene_name:
+                    fail_log("media-source", f"current program scene unavailable: {current}")
+                    return 1
+                created = await request(ws, inbox, "CreateInput", "create-media-source", {
+                    "sceneName": scene_name,
+                    "inputName": HOSTED_INPUT_NAME,
+                    "inputKind": "ffmpeg_source",
+                    "inputSettings": {
+                        "local_file": str(media_fixture),
+                        "is_local_file": True,
+                        "looping": True,
+                        "restart_on_activate": True,
+                        "close_when_inactive": False,
+                        "hw_decode": False,
+                    },
+                    "sceneItemEnabled": True,
                 })
-            dump_response("set-capture", r)
-            data = vendor_response_data(r)
-            if data.get("kind") != "browser_source":
-                fail_log("set-capture", f"unexpected response : {data}")
-                return 1
-
-            # 1b. GetCaptureSource → confirm the active snapshot
-            #     reflects what we just set.
-            r = await vendor_call(ws, inbox, "get-capture", "pulsar-scene",
-                "GetCaptureSource", {})
-            dump_response("get-capture", r)
-            got = vendor_response_data(r)
-            if got.get("kind") != "browser_source":
-                fail_log("get-capture",
-                    f"snapshot not browser_source : {got}")
-                return 1
-            if got.get("url") != scene_url:
-                fail_log("get-capture",
-                    f"url drift : got {got.get('url')!r}, expected {scene_url!r}")
-                return 1
-            if int(got.get("last_change_unix", 0)) <= 0:
-                fail_log("get-capture",
-                    f"last_change_unix not set : {got}")
-                return 1
-            print(f"[live-test] get-capture confirms snapshot")
+                if not (created.get("requestStatus", {}) or {}).get("result"):
+                    fail_log("media-source", f"CreateInput(ffmpeg_source) failed: {created}")
+                    return 1
+                readback = await request(ws, inbox, "GetInputSettings", "read-media-source", {
+                    "inputName": HOSTED_INPUT_NAME,
+                })
+                read_data = readback.get("responseData", {}) or {}
+                if (not (readback.get("requestStatus", {}) or {}).get("result")
+                        or read_data.get("inputKind") != "ffmpeg_source"):
+                    fail_log("media-source", f"ffmpeg_source readback failed: {readback}")
+                    return 1
+                print(f"[live-test] animated ffmpeg_source confirmed on {scene_name!r}")
 
             # 2. CreateDestination twitch.
             r = await vendor_call(ws, inbox, "create-dest", "pulsar",
@@ -624,40 +813,37 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                 return 1
             print(f"[live-test] destination created : id={dest_id}")
 
-            # 3. StartDestination — poll out the boot race (see
-            #    START_DEST_BOOT_ERROR note above). Only the exact
-            #    transient boot error is retried ; everything else fails
-            #    on the first attempt.
-            deadline = time.time() + START_DEST_RETRY_BUDGET
-            attempt = 0
-            while True:
-                attempt += 1
-                r = await vendor_call(ws, inbox, f"start-dest-{attempt}",
-                    "pulsar", "StartDestination", {"id": dest_id})
-                sd = vendor_response_data(r)
-                if sd.get("started"):
-                    break
-                err = str(sd.get("error", ""))
-                transient = (err == START_DEST_BOOT_ERROR)
-                if transient and time.time() < deadline:
-                    print(f"[live-test] start-dest attempt #{attempt} : "
-                          f"streaming output not ready yet "
-                          f"('{err}'), retrying in {START_DEST_RETRY_DELAY}s")
-                    await asyncio.sleep(START_DEST_RETRY_DELAY)
-                    continue
-                # Either a non-transient error, or the boot race never
-                # cleared within budget — both are hard failures.
+            # 3. StartDestination: only the exact boot-readiness states retry.
+            r, attempt = await start_destination(ws, inbox, dest_id)
+            sd = vendor_response_data(r)
+            if not vendor_request_status(r).get("result") or not sd.get("started"):
                 dump_response("start-dest", r)
                 status = vendor_request_status(r)
-                reason = ("boot race unresolved after "
+                reason = ("boot readiness unresolved after "
                           f"{START_DEST_RETRY_BUDGET}s ({attempt} attempts)"
-                          if transient else "not started")
+                          if str(sd.get("error", "")) in START_DEST_BOOT_ERRORS
+                          else "not started")
                 fail_log("start-dest",
                     f"{reason} ; requestStatus={status} responseData={sd}")
                 return 1
             dump_response("start-dest", r)
             print(f"[live-test] destination STARTED -- going live "
                   f"(attempt #{attempt})")
+
+            profile = await request(ws, inbox, "GetVideoSettings", "native-video-profile")
+            if not video_profile_matches(profile, width, height, fps):
+                fail_log("video-profile", f"native video settings do not match "
+                         f"{width}x{height}@{fps}: {profile}")
+                return 1
+            print(f"[live-test] native video profile confirmed : {width}x{height}@{fps}")
+
+            requested_encoder = os.environ.get("LIVE_TEST_ENCODER", "").strip().lower()
+            if requested_encoder and requested_encoder != "auto":
+                if not wait_for_encoder_family(log_lines, requested_encoder):
+                    fail_log("encoder",
+                        f"requested {requested_encoder!r} but native allocation was not attested")
+                    return 1
+                print(f"[live-test] native encoder confirmed : {requested_encoder}")
 
             # 3b. StartRecord -- record the broadcast locally so the CI
             # workflow can upload the MP4 as the live-test proof. Standard
@@ -757,6 +943,21 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                         f"at poll #{poll_count}")
                     return 1
 
+                if cadence_below_target(perf_samples, fps, elapsed):
+                    fail_log("render-cadence", f"sustained active fps "
+                             f"{sustained_fps(perf_samples[-7:])!r} below "
+                             f"{fps * ACTIVE_FPS_RATIO_MIN:.1f} after {elapsed}s "
+                             f"for the confirmed {width}x{height}@{fps} profile")
+                    return 1
+
+            measured_fps = sustained_fps(perf_samples)
+            minimum_sustained_fps = fps * ACTIVE_FPS_RATIO_MIN
+            if measured_fps is None or measured_fps < minimum_sustained_fps:
+                fail_log("render-cadence",
+                    f"sustained active fps {measured_fps!r} is below "
+                    f"{minimum_sustained_fps:.1f} (90% of declared {fps} fps)")
+                return 1
+
             # 5. StopDestination.
             r = await vendor_call(ws, inbox, "stop-dest", "pulsar",
                 "StopDestination", {"id": dest_id})
@@ -766,12 +967,11 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
             # path. ffmpeg_muxer flushes + writes the moov atom on close,
             # so the file is ready to upload by the time this returns.
             r = await request(ws, inbox, "StopRecord", "stop-rec")
-            rec_status = r.get("requestStatus", {})
-            rec_data   = r.get("responseData", {}) or {}
-            vod_path   = rec_data.get("outputPath")
-            if not rec_status.get("result") or not vod_path:
+            vod_path = await settle_record_stop(ws, inbox, r)
+            if not vod_path:
                 fail_log("stop-rec",
-                    f"StopRecord failed; requestStatus={rec_status} responseData={rec_data}")
+                    f"StopRecord was rejected or did not settle within "
+                    f"{STOP_RECORD_SETTLE_SEC:.0f}s; response={r}")
                 return 1
             print(f"[live-test] local recording finalised : {vod_path}")
             # Sentinel parsed by .github/workflows/live-test.yml to find
@@ -838,11 +1038,12 @@ async def probe(stream_key: str, duration_sec: int, fps: int) -> int:
                 proc.kill()
         except Exception:
             pass
-        try:
-            httpd.shutdown()
-            httpd.server_close()
-        except Exception:
-            pass
+        if httpd is not None:
+            try:
+                httpd.shutdown()
+                httpd.server_close()
+            except Exception:
+                pass
 
     return rc
 
@@ -858,7 +1059,13 @@ def main() -> int:
     args = ap.parse_args()
 
     key = os.environ.get("TWITCH_STREAM_KEY", "").strip()
-    return asyncio.run(probe(key, args.duration, args.fps))
+    try:
+        return asyncio.run(probe(key, args.duration, args.fps))
+    finally:
+        # Caller-owned directories are retained for redacted CI diagnostics.
+        # Only this invocation's generated temporary directory is ours to remove.
+        if not _EXPLICIT_RUNTIME:
+            shutil.rmtree(RUNTIME_DIR, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,9 @@
 # Pulsar dual-lane canary and rollback runbook
 
+> Applicable to the 3.0.0 dual-lane runtime. Preserve the gates and evidence
+> ledger below; a canary result is scoped to its codec, workload and hardware.
+> See [architecture](../ARCHITECTURE.md) for the current component/ownership map.
+
 This runbook is the operational companion for ADR-PULSAR-DUAL-LANE-001,
 revision `draft-r2-dual-lane-20260828`, and issue #249. It covers only the
 approved Cut core: two hot physical lanes, stable Program/Preview surfaces,

@@ -1,5 +1,10 @@
 # #246 latency and capacity evidence
 
+> Current harness contract, reviewed for 3.0.0. Historical issue numbers name
+> the evidence criteria, not an older runtime requirement. For the final
+> transport and optimization defaults, see [libobs changes](../LIBOBS-CHANGES.md).
+> Receiver packets, decoded content and physical display remain separate bounds.
+
 `scripts/probe-take-latency.py` is the strict, offline half of the #246
 probe. It consumes a JSONL trace produced by the runtime instrumentation and
 does not manufacture observations from log arrival order. The script is

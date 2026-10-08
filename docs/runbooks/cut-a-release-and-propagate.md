@@ -1,275 +1,195 @@
-# Runbook — cut a Pulsar release and propagate it to consumers
+# Cut a Pulsar release and propagate it to consumers
 
-**Owner**: Keeper prepares (bump, branch, PR); **Eleven** merges the release PR and
-pushes the protected tag under App `eleven-by-clodocapeo`. Corrected 2026-08-10 after
-a Bastion audit: this runbook predates the per-agent GitHub Apps (created
-2026-08-09/10) and still described the merge/tag step run under the human account
-`ClodoCapeo`. Keeper's `merge-operator` profile carries no `Administration`
-permission and never merges/tags a protected ref itself — it stops at an open,
-green PR (doctrine étage 0, `docs/rules/github-app-agents.md` §4, hors dépôt).
+Current procedure for the 3.0.0 pipeline. Earlier release incidents are useful
+history, not instructions to bypass today's checks.
 
-This repo's actual required-checks gate does not clear on `main` for a docs-only
-diff (`docs/**`/`**/*.md` never trigger the 4 required `pipeline.yml` checks —
-tracked as Pulsar#205), so **every merge onto `main` today, including this one,
-goes through `gh pr merge --squash --admin`** under Eleven's org-level
-`Administration: write` — observed four times on 2026-08-10 (PR#200, PR#203, PR#204,
-tag `v1.8.0`). `docs/rules/github-app-agents.md` §11 states no App should need to
-bypass a ruleset; that aspiration and this repo's actual gate configuration
-currently diverge. This runbook describes the gate as it behaves today, not as §11
-aspires to it — the doctrine/reality gap is a separate open point (routed to
-Atlas/Bastion, not resolved by editing this runbook). See the explicit handoff at
-step 6 below.
-**First written**: 2026-07-26, during the v1.2.2 release
-(RTMPS Twitch ingest, #113 / PR #114 — the fix that motivated the runbook).
-**Last exercised**: 2026-08-10, v1.8.0 (ADR-005 go-live failure diagnosability,
-PR #204; consumer Prism PR #700) — first run under the per-agent Apps: Keeper
-prepared the bump/branch/PR, hit the merge/tag gate described above, and handed
-off to Eleven, who merged (`--admin`) and pushed the tag. This is the run that
-proved the Keeper→Eleven handoff and motivated this resync.
-Previously: 2026-07-28, v1.5.0 (`youtube` destination kind #162 +
-graphics adapters / output scales manifest block #163, PR #164) — pre-Apps era,
-release cut squash-merged by Keeper without review under the hotfix exception
-(`docs/rules/git.md`, Gate point 2): urgent (the merged chain is dormant on the
-artefact side, and Prism #473 plus the B8/B1 issues are blocked on it),
-infra-pure (VERSION / CHANGELOG / 3 × package.json / lockfile, zero code),
-documented here. Consumer side: Prism PR #476.
-Previously: 2026-07-28, v1.4.0 (nv-filters strip / NS1 + NVENC preset,
-PR #155; consumer Prism PR #471) — same exception, urgent because a
-DLL-planting surface in the process holding the stream key stayed open on
-every operator until an artefact shipped.
-Previously: 2026-07-28, v1.3.0 (ADR 027 capability manifest, PR #149; consumer
-Prism PR #469) — the run that produced the first four field traps below.
+## Authority and completion
 
-## Why this runbook exists
+The release owner needs explicit authority to merge, sign/push the release
+tag and publish. Eleven uses the configured `ClodoCapeo` account through
+`gh` in Git Bash. A delegated specialist uses its own verified role App
+and stops at its assigned authority boundary. Follow the active workspace
+policy; do not infer administrative bypass permission from this runbook.
 
-Merging a fix into `main` does **not** put it in front of users. Pulsar's
-value ships as a compiled Windows binary, and consumers (Prism) get it
-through npm:
+A release is complete only when its source revision, signed tag, npm packages,
+binary assets and release notes agree, and the tag's required validation
+stages have succeeded. Consumer deployment is a separate authorized change.
 
-```
-plugins/**.cpp  ──build──►  pulsar.exe + *.dll
-                            │
-                   package  ▼   pulsar-windows-x64-full-v<VERSION>.zip
-                            │   attached to the GitHub Release v<VERSION>
-                            ▼
-   @clodocapeo/pulsar-bundle-full@<VERSION>  (postinstall downloads that zip)
-                            ▼
-   Prism package.json  "@clodocapeo/pulsar-bundle-full": "^<VERSION>"
+## Distribution chain
+
+```text
+signed source → merged main revision → signed vX.Y.Z tag
+                                      ├─ npm client + light/full wrappers
+                                      └─ Windows build → light/full ZIPs
+                                                       + live proof
+                                                       + runtime manifest
+consumer install → wrapper postinstall → matching ZIP → actual pulsar.exe
 ```
 
-Three things must all be true for a fix to be live: the npm version is
-published, the GitHub Release carries the matching zip, and the consumer's
-range resolves to that version. Miss any one and the operator keeps running
-the old binary — silently, because
-`packages/pulsar-bundle-full/scripts/postinstall.mjs` **soft-fails** a 404
-(by design, so `npm install` completes) and only warns.
+The wrappers may warn and let installation complete when binary download
+fails. A successful `npm install` alone does not prove a runnable engine.
 
-## Procedure
+## 1. Reconcile the exact release scope
 
-1. **Decide the semver bump** — `docs/DEVELOPMENT.md` § Versioning. A
-   compiled-behaviour fix with no protocol change is a patch.
-2. **CHANGELOG.md** — new `## [X.Y.Z] - YYYY-MM-DD` section above the
-   previous one. For a security fix, say what was exposed and add an
-   explicit *consumers must upgrade* note: the source merge alone is not
-   the mitigation.
-3. **Bump the version in all four places** (`VERSION` is the source of
-   truth, C++ and npm both read from it):
-   - `VERSION`
-   - `packages/pulsar-client/package.json` → `version`
-   - `packages/pulsar-bundle/package.json` → `version` **and**
-     `dependencies["@clodocapeo/pulsar-client"]` (exact pin)
-   - `packages/pulsar-bundle-full/package.json` → same two fields
-4. **Refresh the lockfile without side effects**:
-   `npm install --package-lock-only --ignore-scripts --no-audit --no-fund`.
-   A plain `npm install` on Windows runs the postinstall, which `rm -rf`s
-   `binaries/` **before** fetching — and the new release does not exist
-   yet, so you would delete a working local binary for nothing.
-5. **Commit** `chore(release): vX.Y.Z` on a `keeper/release-vX.Y.Z-<slug>`
-   branch, push it, open a PR against `main`. Expected diff shape: CHANGELOG,
-   VERSION, 3 × package.json, package-lock.json — nothing else. Keeper's
-   `merge-operator` App profile carries no `Administration` right and never
-   fast-forwards or force-pushes `main` directly
-   (`docs/rules/github-app-agents.md` §4/§11) — Keeper's job stops at an
-   open, green PR.
-6. **Handoff to Eleven for merge + tag.** Once CI is green on the PR, Keeper
-   hands off to Eleven: Eleven merges the release PR
-   (`gh pr merge <n> --squash --admin`, App `eleven-by-clodocapeo`, org-level
-   `Administration: write`) and pushes the annotated tag `vX.Y.Z` on `main`
-   HEAD. The tag is what unlocks the release-grade stages; `pipeline.yml`
-   gates them on `startsWith(github.ref, 'refs/tags/v')`. `--admin` is
-   required here today because a docs-only bump diff never triggers the 4
-   required `pipeline.yml` checks (Pulsar#205) — Eleven is the only identity
-   in the fleet that can clear that gate. This is the runbook describing the
-   gate as it behaves, not an endorsement of the gap.
-7. **Watch `pipeline.yml` on the tag** — four tag-only outcomes matter:
-   - `publish @clodocapeo/pulsar-* to npm` (needs only `lint`, so it lands
-     in ~2 min) — requires `secrets.NPM_TOKEN`; the job re-checks that the
-     tag matches `VERSION` and fails loudly otherwise.
-   - `package light + full distros` → the two zips.
-   - `live broadcast (Twitch)` → 600 s real broadcast on tag.
-   - `GitHub Release attach` → `needs: [package, live-broadcast]`, creates
-     the Release and uploads the zips + proof MP4 + `diagnostic.json`.
-8. **Verify, do not assume**:
-   ```sh
-   npm view @clodocapeo/pulsar-bundle-full version          # == X.Y.Z
-   gh release view vX.Y.Z --json assets -q '.assets[].name' # full zip present
-   ```
-   Then assert the *content*, not just the presence — for v1.2.2, grepping
-   the shipped `obs-plugins/64bit/pulsar-multi-stream.dll` out of
-   `pulsar-windows-x64-v1.2.2.zip` for URL literals returned exactly one
-   match, `rtmps://ingest.global-contribute.live-video.net/app/`, and no
-   cleartext `rtmp://`. Two minutes of work, and it is the only step that
-   actually proves the compiled fix shipped.
-9. **Bump every consumer** — Prism `package.json`
-   (`@clodocapeo/pulsar-bundle-full`), branch `keeper/<slug>`, `npm install`,
-   local gate (Prism CI is disabled: `lint && typecheck && build && test`).
-10. **Prove it on the real artefact**, not on the lockfile: re-install /
-    re-pack the desktop bundle and confirm the shipped `pulsar.exe` /
-    `pulsar-multi-stream.dll` came from the new zip. For v1.2.2 the
-    on-air assertion was `pulsar:GetDestinations` reporting an `rtmps://`
-    URL for a `twitch` destination.
+Fetch remote refs and resolve the previous release tag to its commit. Compare
+that commit with the candidate, not merely the `Unreleased` heading:
 
-## Traps met in the field
+```sh
+git fetch origin --tags
+git log --reverse --format='%H %s' vPREVIOUS..origin/main
+git diff --stat vPREVIOUS..origin/main
+```
 
-- **`## [Unreleased]` is not a reliable inventory of what you are about to ship**
-  (v1.5.0). #162 merged to `main` with no CHANGELOG entry at all, so cutting on
-  the section as written would have published a first-class `youtube`
-  destination kind silently. Diff the commits, not the document:
-  `git log --oneline v<previous>..main` and reconcile every PR against the
-  `Unreleased` body **before** renaming the header. Writing the missing entry is
-  part of the release commit, not a follow-up.
-- **Pre-empt the broadcast concurrency squeeze instead of recovering from it**
-  (v1.5.0). The known trap below is that a *pending* `live broadcast (Twitch)`
-  is evicted when a newer run queues into `live-test-twitch`. Cutting a release
-  produces three runs within seconds — the PR run, the `main` run, the tag run.
-  Cancel the first two as soon as the tag run appears (`gh run cancel <id>`):
-  the PR branch is already merged and the runbook's own note says the tag run
-  covers the same ground plus the release stages. At v1.5.0 that left the tag
-  run alone in the group and `release-attach` landed on the first attempt, with
-  no rerun.
+Classify features, fixes, compatibility changes, operational defaults, removed
+behavior and known limitations. Keep benchmark workload/codec/hardware bounds.
+Record the source boundary and include a full commit inventory when requested.
 
-- **`live broadcast (Twitch)` serialises across runs** — concurrency group
-  `live-test-twitch`, `cancel-in-progress: false`. A push to `main` plus the
-  tag plus any open PR each queue a broadcast, so `release-attach` can sit
-  waiting well past the build. Not a failure; do not re-run.
-- **A *pending* broadcast gets cancelled when a newer run queues into the
-  same group** — GitHub keeps at most one pending entry per concurrency
-  group, and `cancel-in-progress: false` does not protect it. This bit the
-  v1.2.2 release: a PR run queued behind the tag run, the tag run's
-  `live broadcast (Twitch)` flipped to `cancelled`, and `release-attach`
-  (`needs: [package, live-broadcast]`) was **skipped** — npm had 1.2.2 but
-  no Release, so every consumer postinstall would have 404'd and soft-failed
-  into a binary-less install. The whole run reads `cancelled`, not `failure`,
-  which is easy to skim past. Recovery: `gh run rerun <tag-run-id> --failed`
-  (the `pulsar-rundir` artefact is still there, 1-day retention), which
-  re-queues the broadcast as the newest entry. Always end a release by
-  checking the Release assets, not the npm version.
-- **A `push` to `main` cancels the in-flight `main` run** (concurrency
-  `pipeline-${{ github.ref }}`, `cancel-in-progress: true`). Cutting a
-  release right after a merge cancels that merge's run; the tag run covers
-  the same ground plus the release stages.
-- **`paths-ignore` covers `CHANGELOG.md` and `docs/**`** — a docs-only
-  release commit would not trigger the pipeline at all. The version bump is
-  what makes it fire.
-- **`gh pr merge --merge` and `--rebase` both fail on this repo** — only
-  squash is allowed (`GraphQL: Merge commits are not allowed on this
-  repository`). Cost at v1.3.0 (pre-Apps era, merged by Keeper under the
-  human account with `--admin`): two failed attempts, and each one leaves
-  the local checkout switched back to a `main` that does not yet carry the
-  bump, so `cat VERSION` reads the OLD number and looks like the merge
-  silently did nothing. Since the per-agent GitHub Apps (2026-08-09/10), this
-  merge is Eleven's, not Keeper's: Eleven merges with `--squash --admin` (see
-  the handoff note at step 6 — the admin bypass is required by this repo's
-  current gate, not optional) and re-checks `VERSION` after the `git pull`.
-- **A stale local checkout hides the very code you are releasing.** At v1.3.0
-  the working copy was 5 commits behind `origin/main`: `wire.ts` showed no
-  `version` / `capabilities` / `regimes` and the release looked pointless.
-  `git fetch` first, and read `git show origin/main:<path>` — never the local
-  file — before deciding a bump is empty.
-- **The consumer's fixture is part of the release, not a follow-up.** Prism
-  captures the manifest from the bundled binary
-  (`npm run manifest:capture`, ADR 027 RC 9) and an inclusion guard compares its
-  registry against it. A release that changes what `GetCapabilities` answers
-  makes `npm run manifest:check` go red on the consumer *by design* — and at
-  v1.3.0 it also fired `EXPECTED_UNDECLARED`, the guard's dead-man switch, which
-  is the intended signal that dormant checks just switched on. Budget the
-  re-capture and the guard update in the consumer bump; a red `manifest:check`
-  there is the chain working, not a regression.
-- **A packaging-time strip is only real in the zip — assert it there** (v1.4.0,
-  NS1). `scripts/package-win.ps1` removes plugins *after* the build, so nothing
-  in the source tree, the build log or a local `binaries/` proves what shipped.
-  The two-command proof, run on the downloaded asset:
-  ```sh
-  gh release download vX.Y.Z -p 'pulsar-windows-x64-*.zip'
-  unzip -l pulsar-windows-x64-full-vX.Y.Z.zip | grep -ci nv-filters   # expect 0
-  unzip -l pulsar-windows-x64-v<previous>.zip | grep -ci nv-filters   # expect >0
-  ```
-  Run the **control on the previous release too**. A `grep -c` returning 0 on a
-  misspelt pattern also returns 0, and a strip that silently stopped matching
-  looks exactly like a strip that worked. At v1.4.0: 0 entries in both new zips,
-  50 in v1.3.0 (incl. `obs-plugins/64bit/nv-filters.dll`), `obs-nvenc` untouched
-  at 53 — NVENC is a *different* plugin, check it survived.
-- **Re-assert on the consumer's disk, not on its lockfile.** `npm warn
-  allow-scripts` lists `@clodocapeo/pulsar-bundle-full` as "not yet covered",
-  which reads like the postinstall was skipped and the binary is stale. Settle it
-  by fact, not by reading the warning: `binaries/README.txt` carries the version
-  line (`Pulsar v1.4.0`), and `find binaries -iname '*nv-filters*'` must be
-  empty. Both are one command and neither can be faked by a lockfile.
-- **Dropping a plugin need not move the manifest fixture.** At v1.4.0
-  `manifest:check` went red on `bundleVersion` / `libobsVersion` only: the filter
-  inventory comes from `obs_enum_filter_types`, and `nv-filters` never registers
-  on a machine without the NVIDIA SDKs, so it was already absent from the
-  capture. Do not infer from a green-after-recapture that the strip was inert —
-  the capture reflects the *capturing* machine, the zip reflects the ship.
-- **For a manifest-shaped release, the consumer's re-capture *is* the content
-  proof** (v1.5.0) — cheaper than unzipping the asset and it exercises the
-  binary rather than the archive. `npm run manifest:capture` on Prism after the
-  bump returned exactly `bundleVersion` 1.4.0 → 1.5.0, `libobsVersion`,
-  `destination_kinds` + `youtube`, and the two new blocks
-  (`graphics_adapters`, `output_scales`). A capture that moves only the two
-  version lines means the payload did **not** ship: stop and check the zip.
-- **A new capability block does not necessarily move the inclusion guard.**
-  At v1.5.0 `EXPECTED_UNDECLARED` stayed empty and the guard's six categories
-  were untouched, because `graphics_adapters` / `output_scales` are not yet
-  enumerated by Prism's registry (that is the B8 / B1 work). Re-capture, run
-  the guard, and leave the dead-man switch alone — do not add categories to
-  `CATEGORIES` "while you are there": the guard is meant to fire when the
-  registry starts driving them, and pre-wiring it disarms exactly that.
-- **`npx eslint .` on Prism can run past 30 min on the dev box** while the same
-  tree's 2 018 vitest tests finish in 40 s, and it gets dramatically worse with
-  two concurrent runs. Never chain `npm run lint && npm run typecheck` behind a
-  short timeout and conclude the tree is broken: `tsc` on both tsconfigs, the
-  build and the full suite all complete in minutes, and the PR's
-  `Lint + typecheck + build` job on CI is the authoritative answer. Scope
-  locally (`npx eslint <path>`) if you need a fast signal.
-- **Prism's full `vitest run` fails 2 suites under parallel load on the dev
-  box** — `broadcast-engine.test.ts` and `scene-server.test.ts`, on 5 s timeouts.
-  Both are fully `vi.mock`-ed (they never spawn `pulsar.exe`), both pass in
-  isolation (200/200), and both fail identically on the unmodified tree. Confirm
-  that triple before spending time on it: it is machine load, not the bump.
-- **Vendor shims that overwrite `pulsar.exe`** silently defeat the whole
-  chain (historically `scripts/vendor-pulsar-virtualcam.mjs` in Prism, now
-  removed). If a consumer postinstall touches the binary, the npm version
-  proves nothing — check the file on disk.
+Use a dedicated repository-local worktree. Preserve dirty canonical checkouts
+and active worktrees. Create its `evidence/` directory immediately.
 
-## Rollback
+## 2. Prepare one coherent candidate
 
-The Release/npm publish is additive; nothing is mutated in place, so
-rollback is a **forward** move, never an unpublish.
+Update:
 
-- **Bad binary, npm already published**: `npm dist-tag add
-  @clodocapeo/pulsar-bundle-full@<previous> latest`, then cut `X.Y.Z+1`
-  with the revert. Do **not** `npm unpublish` (breaks every lockfile
-  pinning that version) and do **not** delete the Release (any consumer
-  that already resolved `X.Y.Z` would start 404-ing its postinstall and
-  soft-fail into a binary-less install).
-- **Consumers**: revert the consumer bump commit (Prism `package.json` +
-  lockfile) and `npm install`. That is enough — the postinstall re-fetches
-  the previous zip and rewrites `binaries/`.
-- **Tag pushed by mistake, nothing published yet**: delete the tag
-  (`git push --delete origin vX.Y.Z`) before `npm-publish` finishes, then
-  re-tag. After publication, the version number is burnt — go forward.
-- **Pipeline red after the tag**: the tag is harmless on its own. Fix on a
-  branch, merge, delete + re-push the tag (npm publish is idempotent-fail:
-  a second publish of the same version errors, so bump the patch instead if
-  npm already succeeded).
+- `VERSION`, the native version source;
+- versions of `packages/pulsar-client`, `pulsar-bundle` and
+  `pulsar-bundle-full`;
+- the two bundles' exact `@clodocapeo/pulsar-client` dependency;
+- other workspace references when a major version changes their range;
+- `package-lock.json`, `CHANGELOG.md` and versioned release notes;
+- README/secondary documentation affected by the released behavior.
+
+Do not automatically version or publish independent internal packages.
+Refresh the lockfile without running binary-download lifecycle hooks:
+
+```sh
+npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+npm ci --ignore-scripts --no-audit --no-fund
+```
+
+Follow [development](../DEVELOPMENT.md) for workspace builds, typechecks and
+tests. Keep source, native/contract tests and hardware-only validation distinct.
+Review the final diff, sign the commit with required provenance trailers, push,
+and open/update the release PR.
+
+## 3. Merge the validated candidate
+
+Inspect the current PR head, required checks and mergeability. The workflow
+now always triggers: its `changes` job routes docs-only changes. Old notes
+about `paths-ignore` and mandatory `--admin` are obsolete.
+
+Publish the merge attestation for the exact head. Use the repository's allowed
+merge method (squash) and an exact-head guard:
+
+```sh
+gh pr merge PR_NUMBER --squash --match-head-commit FULL_HEAD_SHA
+```
+
+Do not bypass a missing/red gate. Verify the resulting GitHub commit is
+`Verified`, fetch it, and compare its tree/version with the reviewed candidate.
+A local canonical checkout can remain stale or dirty; it is not the authority
+for choosing the tag target.
+
+## 4. Sign and push the immutable version tag
+
+Verify that `vX.Y.Z` does not already exist locally or remotely, and that the
+selected merged commit contains the intended `VERSION`.
+
+```sh
+git tag -s vX.Y.Z MERGED_SHA -m "Pulsar X.Y.Z"
+git verify-tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+Never move an already published release tag to a different binary. Do not
+print credentials or repository secret values.
+
+## 5. Follow the tag pipeline to completion
+
+Inspect [.github/workflows/pipeline.yml](../../.github/workflows/pipeline.yml)
+for the precise dependencies and current job names.
+
+| Stage | Required result |
+|---|---|
+| Contract/lint/TypeScript checks | Matching tag/version and green checks. |
+| Windows Full build and native probes | Fresh release-grade runtime; no `-Fast` shortcut. |
+| Browser/capture compatibility | Explicit result and hardware limitations, not a skipped-hardware claim of coverage. |
+| Package light + full | Both ZIPs from the same validated runtime. |
+| Live broadcast (Twitch) | Tag run requests 600 seconds of real broadcast and retains its proof. |
+| npm publish | Client, light wrapper and full wrapper at the intended version. |
+| Release attach | ZIPs, proof video, diagnostic JSON and runtime manifest attached. |
+
+The npm job can finish before packaging/live broadcast. Do not announce
+availability until the GitHub assets are present as well. Release attachment
+depends on packaging and live broadcast.
+
+Live broadcast is selected for tags and manual dispatch, not ordinary PR/main
+pushes. It is serialized by `live-test-twitch`. A queued job is not a failure;
+do not cancel unrelated runs or blindly rerun. Diagnose an actual failure,
+then retry only the invalidated stages when their retained artifacts suffice.
+
+## 6. Verify published content
+
+Read back all three packages with explicit versions and their `latest` tags,
+and inspect the actual release:
+
+```sh
+npm view @clodocapeo/pulsar-client@X.Y.Z version
+npm view @clodocapeo/pulsar-bundle@X.Y.Z version
+npm view @clodocapeo/pulsar-bundle-full@X.Y.Z version
+gh release view vX.Y.Z --json tagName,name,isDraft,isPrerelease,assets,url
+```
+
+Download both archives and `prism-pulsar-runtime-manifest.json` to an explicit
+artifact directory. Verify the manifest's version/tag and full-ZIP SHA-256,
+archive version stamps and expected module inventory.
+
+The **full** variant contains `nv-filters`; light strips it. NVIDIA SDK
+payloads are not shipped. Full contains Pulsar's CEF browser module/helper;
+do not use an old “nv-filters absent from both” assertion.
+
+Run a smoke test against the downloaded runtime and matching SDK, preferably
+the README example. Check startup/authentication, reported version, a read-only
+request and shutdown. This complements CI; it is not a new live broadcast.
+
+Set the release title and complete notes after the workflow creates the release:
+
+```sh
+gh release edit vX.Y.Z --title "Pulsar X.Y.Z" --notes-file docs/releases/X.Y.Z.md --latest
+```
+
+Read back the notes and asset list. Retain CI URLs, commit/tag identities,
+hashes and diagnostic result in the release closeout.
+
+## 7. Propagate only to authorized consumers
+
+A Pulsar release does not automatically upgrade Prism or another consumer.
+For each separately authorized consumer:
+
+1. Update the selected wrapper dependency and lockfile.
+2. Reinstall/repackage the desktop application.
+3. Verify the actual installed binary version/hash, not only the lockfile.
+4. Recapture a capability fixture if its contract requires one and run that
+   consumer's current checks.
+5. Validate startup, scene/control compatibility and the relevant real output.
+
+Do not assume a consumer's CI is disabled based on a historical incident.
+Do not weaken capability inclusion guards to accept a changed fixture.
+
+## Recovery and rollback
+
+Before any publish, a failed run may be retried at the same immutable commit
+after its infrastructure cause is resolved. If source changes are necessary,
+prepare and validate a new release candidate/version.
+
+After publication, fix forward with a new patch release. Do not delete the
+existing GitHub release, replace its assets, unpublish npm versions or retag:
+already pinned installations rely on those objects.
+
+An authorized operator can move npm `latest` back to a known-good version,
+but pinned consumers still require their own rollback. Restore each consumer's
+complete previous wrapper/binary set and rebuild its artifact.
+
+Never treat an existing npm version as proof that the current tag's payload
+was published: the pipeline can skip an already-existing version. Verify the
+published metadata and binary hashes before declaring recovery.

@@ -15,7 +15,7 @@ rule that will drift:
 
 | Consumer | What it uses it for |
 |---|---|
-| `upstream/plugins/nv-filters/` (via `patches/0003-*.patch`) | gates `obs_module_load()` on the probe; loads both SDKs and `nvcuda.dll` through it |
+| `upstream/plugins/nv-filters/` (via the integrated OBS fork revision; formerly patch 0003) | gates `obs_module_load()` on the probe; loads both SDKs and `nvcuda.dll` through it |
 | `plugins/pulsar-multi-stream/` | publishes the probe in the capability manifest (`capabilities.nv_filters`) |
 | `tests/nv-probe/` | the CTest gate that proves the confinement with no GPU and no SDK |
 
@@ -57,4 +57,19 @@ resolution, and a parent process chooses what that variable says.
 
 ## Rolling this back
 
-`docs/runbooks/nv-filters-rollback.md`.
+[nv-filters rollback](../../docs/runbooks/nv-filters-rollback.md).
+
+## Distribution and scope (3.0.0)
+
+The full bundle retains `nv-filters`; light strips it. Neither bundles the SDK
+DLLs or model files. Module presence, directory designation, usable SDK and
+actual registered filter are different observations; the capability manifest
+reports the relevant probe state.
+
+The validated Program Files VFX fallback is still a candidate when its override
+is absent. Unsetting an environment variable alone is not proof that no SDK
+can be selected. Follow the rollback runbook and verify effective module/filter
+state rather than inferring it from the launcher environment.
+
+NVENC encoding is a different module and does not depend on this effect-SDK
+loader. See [architecture](../../docs/ARCHITECTURE.md).

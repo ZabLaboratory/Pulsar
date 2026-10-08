@@ -24,6 +24,10 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 #include <QDir>
 
 #include "RequestHandler.h"
+#include <util/source-profiler.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 QImage TakeSourceScreenshot(obs_source_t *source, bool &success, uint32_t requestedWidth = 0, uint32_t requestedHeight = 0)
 {
@@ -128,6 +132,46 @@ bool IsImageFormatValid(std::string format)
  * @api requests
  * @category sources
  */
+// Source-local libobs work, not application-process or whole-device utilization.
+// GPU samples are asynchronous; null means no GPU measurement yet, never zero load.
+RequestResult RequestHandler::GetSourceStats(const Request &request)
+{
+	RequestStatus::RequestStatus statusCode;
+	std::string comment;
+	OBSSourceAutoRelease source = request.AcquireSource("canvasUuid", "sourceName", "sourceUuid", statusCode, comment);
+	if (!source)
+		return RequestResult::Error(statusCode, comment);
+#ifdef _WIN32
+	// Component overlays may run against the released 3.0.1 libobs. Keep the
+	// WebSocket plugin loadable there; only this newer telemetry request needs
+	// the leased profiler API. Never enable permanent profiling as a fallback.
+	const auto requestTelemetry = reinterpret_cast<void (*)()>(
+		GetProcAddress(GetModuleHandleW(L"obs.dll"), "source_profiler_request_telemetry"));
+	if (!requestTelemetry)
+		return RequestResult::Error(RequestStatus::NotReady, "SOURCE_TELEMETRY_REQUIRES_UPDATED_LIBOBS");
+	requestTelemetry();
+#else
+	source_profiler_request_telemetry();
+#endif
+	profiler_result_t profile = {};
+	const bool ready = source_profiler_fill_result(source, &profile);
+	obs_video_info video = {};
+	const bool videoReady = obs_get_video_info(&video) && video.fps_num > 0 && video.fps_den > 0;
+	json result;
+	result["available"] = ready;
+	result["showing"] = obs_source_showing(source);
+	const uint64_t ram = obs_source_get_core_memory_usage(source);
+	result["ramBytes"] = ram == UINT64_MAX ? json(nullptr) : json(ram);
+	result["ramScope"] = "core-allocations-lower-bound";
+	result["frameBudgetMs"] = videoReady ? json(1000.0 * video.fps_den / video.fps_num) : json(nullptr);
+	result["cpuMs"] = ready ? json(static_cast<double>(profile.tick_avg + profile.render_sum) / 1000000.0) : json(nullptr);
+	result["gpuMs"] = ready && profile.render_gpu_sum > 0 ? json(static_cast<double>(profile.render_gpu_sum) / 1000000.0) : json(nullptr);
+	result["cpuTickMaxMs"] = ready ? json(static_cast<double>(profile.tick_max) / 1000000.0) : json(nullptr);
+	result["cpuRenderFirstPassMaxMs"] = ready ? json(static_cast<double>(profile.render_max) / 1000000.0) : json(nullptr);
+	result["gpuRenderFirstPassMaxMs"] = ready && profile.render_gpu_max > 0 ? json(static_cast<double>(profile.render_gpu_max) / 1000000.0) : json(nullptr);
+	return RequestResult::Success(result);
+}
+
 RequestResult RequestHandler::GetSourceActive(const Request &request)
 {
 	RequestStatus::RequestStatus statusCode;

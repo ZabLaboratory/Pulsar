@@ -21,14 +21,16 @@ mais elle a pour contrepartie assumée qu'un incident encore ouvert au huitième
 jour n'a plus de preuve si personne ne l'a sortie de la zone de purge. C'est la
 seule étape de ce runbook qui n'attend pas.
 
-```powershell
-Copy-Item "$env:LOCALAPPDATA\Pulsar\logs\*" "<dossier d'incident hors zone de purge>"
-```
+Résoudre le chemin réel avant toute copie : `PULSAR_LOG_DIR` explicite,
+sinon `<PULSAR_RUNTIME_DIR>/logs` pour un runtime isolé, puis le chemin
+historique `%LOCALAPPDATA%\\Pulsar\\logs` si aucun runtime n'est déclaré.
+Quand le processus est vivant, `GetDiagnostics` fournit le fichier courant.
 
-Chemin réel : `PULSAR_LOG_DIR` si la variable est positionnée, sinon
-`%LOCALAPPDATA%\Pulsar\logs\` (défaut, `log-handler.cpp:default_log_dir`). Le
-contenu est déjà rédigé (secrets masqués, ADR-005 §3.2) : la copie ne demande
-aucune précaution supplémentaire.
+Copier uniquement les fichiers de cette session vers le dossier d'incident
+autorisé, avec accès restreint. La rétention peut aussi être écourtée par la
+suppression du runtime temporaire par le wrapper lors de `shutdown()`.
+Le masquage des secrets est une défense, pas une garantie que tout journal
+ou stdout brut peut être publié sans revue.
 
 ---
 
@@ -43,8 +45,8 @@ pulsar-dir-hardening: <dir>\obs-websocket is owned by another account; refusing 
 pulsar-headless: could not create/verify a protected, owned <dir>\obs-websocket; refusing to boot (fail closed, #201 N1)
 ```
 
-→ Un répertoire `obs-websocket/` préexistant, dans le répertoire d'installation
-per-utilisateur de Pulsar, est **possédé par un compte local autre que celui qui exécute
+→ Un répertoire `obs-websocket/` préexistant, dans le répertoire runtime
+privé de cette instance, est **possédé par un compte local autre que celui qui exécute
 `pulsar.exe`**. Depuis le durcissement N1, ce n'est plus une DACL simplement re-corrigée
 au boot : la propriété du répertoire fait échouer la vérification de propriétaire
 (`harden_directory_dacl`/`create_directory_hardened`) et le boot refuse en permanence de
@@ -112,7 +114,7 @@ légitime et attendue, pas un échec du classement.
 | `ingest_dropped` | Connexion établie puis perdue (ou refusée juste après) avant/pendant la diffusion. | Vérifier la stabilité du lien réseau local et `last_error`. Une récurrence sur la même destination pointe vers l'ingest, pas vers Pulsar — retenter avant d'escalader. |
 | `encoder_failed` | L'encodeur n'a pas démarré ou s'est arrêté en erreur. | Vérifier `GetVideoSettings` / `GetCapabilities` (l'identité d'encodeur est fixée au boot) et la disponibilité du matériel d'encodage (GPU). Joindre la preuve d'Étape 3 avant d'escalader. |
 | `config_rejected` | libobs a refusé la configuration avant toute tentative réseau — jamais atteint le réseau. | Vérifier les champs de la destination (`kind`, `url`, `key`) via `GetDestinations` / `CreateDestination`, corriger, retenter. |
-| `disconnected_local` | Output sans surface réseau (virtualcam) : tout arrêt anormal est local. | Vérifier l'état du processus local (`GetDiagnostics`), qu'aucun `StopLogFileWrite` ni arrêt local involontaire n'est en cause. |
+| `disconnected_local` | Output sans surface réseau (virtualcam) : tout arrêt anormal est local. | Vérifier l'état du processus local (`GetDiagnostics`), qu'aucun arrêt local involontaire n'est en cause. |
 | `unknown` | Aucune classe ne s'applique. `last_error` brut est joint tel quel. | Suivre intégralement la procédure de collecte de preuve (Étape 3) et joindre `last_error` brut à l'escalade — ne pas deviner de classe. |
 
 ---
@@ -155,4 +157,7 @@ déclenché par un `reason_class` ou par ce document.
 
 ## Renvois
 
-Depuis `docs/DEVELOPMENT.md`, section *Troubleshooting*.
+Voir [développement](../DEVELOPMENT.md), [architecture](../ARCHITECTURE.md)
+et [protocole](../PROTOCOL.md). Les wrappers Node attendent actuellement
+`pulsar-headless: libobs <version> ready, idling`, puis établissent la connexion authentifiée ; ils ne
+parsent pas `PULSAR_READY` comme unique critère de résolution de `spawn()`.
