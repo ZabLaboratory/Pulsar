@@ -2,6 +2,17 @@
 
 Frontend callbacks for Pulsar's headless service.
 
+The host-controlled WebM capability is documented in
+[configurable-transitions](../../docs/contracts/configurable-transitions.md).
+`src/pulsar-media-transition.cpp` owns the private decoder and media-only
+audio settings; `src/pulsar-media-transition-config.cpp` validates the host
+configuration; `pulsar-frontend-stub.cpp` owns its vendor API,
+lane admission and frame-boundary completion. It starts without a media
+resource, can be configured at runtime, and supports Take and same-lane
+replacement without changing the role map for the latter. The historical
+environment-only demo stinger described below remains an explicit opt-in;
+there is no automatically selected demo path.
+
 `libobs` exposes a `frontend-api` layer (`obs-frontend-api.dll`) whose
 function table is filled by whichever frontend is running — the OBS
 Studio Qt UI in upstream, this stub in Pulsar. Without callbacks set,

@@ -105,6 +105,7 @@
 #include "pulsar-frontend-stub.h"
 #include "pulsar-dual-lane-config.h"
 #include "pulsar-transition-controller.h"
+#include "pulsar-media-transition.h"
 #include "pulsar-dual-lane-control.h"
 #include "pulsar-runtime-telemetry.h"
 #include "pulsar-runtime-telemetry-signals.h"
@@ -2902,6 +2903,12 @@ public:
     bool sceneSwitchAbort(const std::string &takeCommandId);
     void sceneSwitchClearPrepared(const std::string &commandId);
     void dualLaneTransitionTick();
+    json mediaTransitionState();
+    json configureMediaTransition(const json &config);
+    json switchLaneScene(const json &request);
+    json abortLaneSwitch(const std::string &commandId);
+    json laneSwitchResult(const std::string &commandId);
+    static void OnLaneSwitchCommitted(void *param, uint64_t frameId, uint64_t ptsNs);
     static void OnSceneSwitchPreviewVideoFrame(void *param, struct video_data *frame);
     static void OnDualLaneTick(void *param, float seconds);
     static void OnDualLaneTransitionStarted(void *param, uint64_t frameId, uint64_t ptsNs);
@@ -3592,14 +3599,9 @@ private:
     {
         if (const char *e = std::getenv("PULSAR_STINGER_ASSET"); e && *e)
             return e;
-        // Default: <cwd>/../../data/pulsar/stinger-demo.webm. pulsar.exe runs
-        // with cwd=bin/64bit (PRISM-EMBEDDING.md), so ../../data is the bundle
-        // data root. Absent asset => the stinger simply decodes nothing; the
-        // fade fallback still composites and the encoder is never blanked.
-        std::error_code ec;
-        std::filesystem::path p =
-            std::filesystem::current_path(ec) / ".." / ".." / "data" / "pulsar" / "stinger-demo.webm";
-        return std::filesystem::weakly_canonical(p, ec).string();
+        // No default media. The legacy env override is an explicit operator
+        // choice; the host-controlled API starts with an empty configuration.
+        return {};
     }
 
     // obs_transition_start can report success before the media decoder has
@@ -3862,6 +3864,14 @@ private:
     bool dualLaneTransitionFinalPending = false;
     bool dualLaneTransitionAbortPending = false;
     uint64_t dualLaneTransitionStartNs = 0;
+    pulsar_transition::MediaTransition mediaTransition;
+    int sameLaneTarget = -1;
+    obs_source_t *sameLaneScene = nullptr;
+    bool sameLaneAborted = false;
+    std::string sameLaneCommandId;
+    struct LaneOutcome { json request; json result; };
+    std::map<std::string, LaneOutcome> laneOutcomes;
+    json lastLaneSwitch = nullptr;
     std::atomic<bool> recordingPaused{false};
     std::string lastRecording;
     std::string lastReplay;
@@ -3960,6 +3970,17 @@ public:
         state_ = "frozen";
         pendingPrepare_.reset();
         pendingTake_.reset();
+    }
+
+    // An in-lane replacement changes the selected scene, never the role map.
+    // Invalidate an older prepared command so its CAS guard cannot name the
+    // scene which was visible before this independently committed operation.
+    void laneSceneChanged(bool program)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        advanceRevision(program ? "program" : "preview");
+        pendingPrepare_.reset();
+        state_ = operational_ ? "ready" : "frozen";
     }
 
     void takeCommitted(const std::string &takeId, uint64_t frameId, uint64_t ptsNs,
@@ -4284,6 +4305,240 @@ private:
 };
 
 PulsarSceneSwitchVendor g_sceneSwitchVendorStorage;
+
+// Host API, separate from the frozen Prepare/Take v1 envelope. No private
+// media path is accepted through a scene leaf. Only an explicit host request
+// configures this runtime-local resource.
+class PulsarMediaTransitionVendor {
+public:
+    bool start()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        vendor_ = obs_websocket_register_vendor("pulsar-transitions");
+        if (!vendor_) return false;
+        running_ = obs_websocket_vendor_register_request(vendor_, "Configure", &Configure, this) &&
+            obs_websocket_vendor_register_request(vendor_, "Clear", &Clear, this) &&
+            obs_websocket_vendor_register_request(vendor_, "GetState", &GetState, this) &&
+            obs_websocket_vendor_register_request(vendor_, "SwitchLane", &SwitchLane, this) &&
+            obs_websocket_vendor_register_request(vendor_, "GetResult", &GetResult, this) &&
+            obs_websocket_vendor_register_request(vendor_, "Abort", &Abort, this);
+        return running_;
+    }
+    void stop() { std::lock_guard<std::mutex> lock(mutex_); running_ = false; }
+    void emit(const json &event)
+    {
+        // No vendor lock from a graphics callback: a request may be holding
+        // it while waiting for that exact frame boundary to drain.
+        if (!vendor_) return;
+        OBSDataAutoRelease data = obs_data_create_from_json(event.dump().c_str());
+        if (data) obs_websocket_vendor_emit_event(vendor_, "LaneSwitchCompleted", data);
+    }
+private:
+    static void Configure(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("Configure", a, b); }
+    static void Clear(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("Clear", a, b); }
+    static void GetState(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("GetState", a, b); }
+    static void SwitchLane(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("SwitchLane", a, b); }
+    static void GetResult(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("GetResult", a, b); }
+    static void Abort(obs_data_t *a, obs_data_t *b, void *p) { static_cast<PulsarMediaTransitionVendor *>(p)->dispatch("Abort", a, b); }
+    void dispatch(const std::string &operation, obs_data_t *request, obs_data_t *response)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        json out;
+        try {
+            const char *raw = request ? obs_data_get_json(request) : nullptr;
+            const json value = raw ? json::parse(raw) : json::object();
+            if (!running_ || !g_api) out = {{"error", "RUNTIME_UNAVAILABLE"}};
+            else if (!value.is_object()) out = {{"error", "REQUEST_INVALID"}};
+            else if (operation == "GetState") out = g_api->mediaTransitionState();
+            else {
+                const char *id = std::getenv("PULSAR_RUNTIME_INSTANCE_ID");
+                const std::string runtime = id && *id ? id : "pulsar-runtime";
+                if (!value.contains("runtime_instance_id") || !value["runtime_instance_id"].is_string() ||
+                    value["runtime_instance_id"] != runtime) out = {{"error", "RUNTIME_MISMATCH"}};
+                else if (operation == "Configure" && value.contains("config") && value.size() == 2)
+                    out = g_api->configureMediaTransition(value["config"]);
+                else if (operation == "Clear" && value.size() == 1) out = g_api->configureMediaTransition(nullptr);
+                else if (operation == "SwitchLane") out = g_api->switchLaneScene(value);
+                else if ((operation == "Abort" || operation == "GetResult") && value.size() == 2 &&
+                         value.contains("command_id") && value["command_id"].is_string())
+                    out = operation == "Abort" ? g_api->abortLaneSwitch(value["command_id"]) :
+                                                 g_api->laneSwitchResult(value["command_id"]);
+                else out = {{"error", "REQUEST_INVALID"}};
+            }
+        } catch (const std::exception &) { out = {{"error", "REQUEST_INVALID"}}; }
+        OBSDataAutoRelease data = obs_data_create_from_json(out.dump().c_str());
+        if (data && response) obs_data_apply(response, data);
+    }
+    std::mutex mutex_;
+    bool running_ = false;
+    obs_websocket_vendor vendor_ = nullptr;
+};
+PulsarMediaTransitionVendor g_mediaTransitionVendor;
+
+json PulsarFrontendAPI::mediaTransitionState()
+{
+    std::lock_guard<std::mutex> lock(dualLaneMutex);
+    auto state = mediaTransition.state();
+    const char *id = std::getenv("PULSAR_RUNTIME_INSTANCE_ID");
+    state["runtime_instance_id"] = id && *id ? id : "pulsar-runtime";
+    state["operational"] = dualLaneReady && dualLaneOperational;
+    state["busy"] = dualLaneCutPending.load();
+    state["role_map"] = {{"on_air", onAirLane == 0 ? "A" : "B"}, {"preview", previewLane == 0 ? "A" : "B"}};
+    state["last_switch"] = lastLaneSwitch.is_null() ? json::object() : lastLaneSwitch;
+    return state;
+}
+
+json PulsarFrontendAPI::configureMediaTransition(const json &config)
+{
+    {
+        std::lock_guard<std::mutex> lock(dualLaneMutex);
+        if (!dualLaneReady || !dualLaneOperational) return {{"error", "RUNTIME_UNAVAILABLE"}};
+        if (dualLaneCutPending.load()) return {{"error", "TRANSITION_BUSY"}};
+        std::string error;
+        if (!mediaTransition.configure(config, error)) return {{"error", error}};
+    }
+    return mediaTransitionState();
+}
+
+json PulsarFrontendAPI::laneSwitchResult(const std::string &commandId)
+{
+    std::lock_guard<std::mutex> lock(dualLaneMutex);
+    const auto it = laneOutcomes.find(commandId);
+    return it == laneOutcomes.end() ? json{{"error", "COMMAND_NOT_FOUND"}} : it->second.result;
+}
+
+json PulsarFrontendAPI::switchLaneScene(const json &request)
+{
+    if (request.size() != 5 || !request.contains("command_id") || !request["command_id"].is_string() ||
+        !request.contains("lane_id") || !request["lane_id"].is_string() ||
+        !request.contains("scene_name") || !request["scene_name"].is_string() ||
+        !request.contains("expected_scene_name") || !request["expected_scene_name"].is_string())
+        return {{"error", "REQUEST_INVALID"}};
+    const auto command = request["command_id"].get<std::string>();
+    const auto name = request["scene_name"].get<std::string>();
+    const auto expected = request["expected_scene_name"].get<std::string>();
+    const auto laneName = request["lane_id"].get<std::string>();
+    if (command.empty() || command.size() > 128 || name.empty() || name.size() > 1024 ||
+        expected.empty() || expected.size() > 1024 || command.find_first_not_of(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-") != std::string::npos ||
+        name.find('\0') != std::string::npos || expected.find('\0') != std::string::npos ||
+        (laneName != "A" && laneName != "B")) return {{"error", "REQUEST_INVALID"}};
+    OBSSourceAutoRelease incoming = obs_get_source_by_name(name.c_str());
+    std::lock_guard<std::mutex> lock(dualLaneMutex);
+    const auto existing = laneOutcomes.find(command);
+    if (existing != laneOutcomes.end()) return existing->second.request == request ? existing->second.result :
+        json{{"error", "IDEMPOTENCY_CONFLICT"}};
+    if (!dualLaneReady || !dualLaneOperational) return {{"error", "RUNTIME_UNAVAILABLE"}};
+    if (dualLaneCutPending.load() || !sceneSwitchPreparedCommandId.empty()) return {{"error", "TRANSITION_BUSY"}};
+    if (laneOutcomes.size() >= 1024) return {{"error", "COMMAND_CAPACITY_REACHED"}};
+    const int lane = laneName == "A" ? 0 : 1;
+    obs_source_t *outgoing = lane == onAirLane ? programSelection : previewSelection;
+    obs_source_t *other = lane == onAirLane ? previewSelection : programSelection;
+    if (!incoming || !obs_scene_from_source(incoming)) return {{"error", "SCENE_NOT_FOUND"}};
+    if (!outgoing || expected != obs_source_get_name(outgoing)) return {{"error", "SCENE_MISMATCH"}};
+    if (incoming == other || incoming == laneSources[0] || incoming == laneSources[1])
+        return {{"error", "LANE_ALIAS"}};
+    json result = {{"command_id", command}, {"lane_id", laneName}, {"scene_name", name},
+                   {"runtime_instance_id", request["runtime_instance_id"]}, {"status", "accepted"}};
+    if (incoming == outgoing) {
+        result["status"] = "noop";
+        laneOutcomes.emplace(command, LaneOutcome{request, result});
+        lastLaneSwitch = result;
+        return result;
+    }
+    uint32_t duration = 0;
+    std::string error;
+    obs_source_t *transition = mediaTransition.configured() ? mediaTransition.prepare(lane != onAirLane, duration, error) : nullptr;
+    if (mediaTransition.configured() && !transition) return {{"error", error}};
+    sameLaneScene = obs_source_get_ref(incoming);
+    sameLaneTarget = lane;
+    sameLaneCommandId = command;
+    sameLaneAborted = false;
+    dualLaneCutPending.store(true);
+    g_dualLaneControlBridge.set_pending(true);
+    const bool animated = transition != nullptr;
+    dualLaneTransition.begin(animated ? pulsar_transition::Kind::Stinger : pulsar_transition::Kind::Cut,
+        duration, true, transition_finalization_lead_ms(1));
+    if (animated) {
+        prepareDualLaneTransition(transition, outgoing);
+        if (!obs_transition_start(transition, OBS_TRANSITION_MODE_AUTO, duration, incoming)) error = "TRANSITION_START_FAILED";
+    }
+    const bool queued = error.empty() && obs_view_queue_atomic_swap_with_floor(
+        programView, 0, animated && lane == onAirLane ? transition : currentScene,
+        previewView, 0, animated && lane == previewLane ? transition : previewScene,
+        os_gettime_ns(), animated ? OnDualLaneTransitionStarted : OnLaneSwitchCommitted, this);
+    if (!queued) {
+        dualLaneTransition.abort("atomic_swap_rejected");
+        mediaTransition.finish();
+        obs_source_release(sameLaneScene); sameLaneScene = nullptr; sameLaneTarget = -1;
+        sameLaneCommandId.clear();
+        dualLaneCutPending.store(false); g_dualLaneControlBridge.set_pending(false);
+        return {{"error", error.empty() ? "ATOMIC_SWAP_REJECTED" : error}};
+    }
+    laneOutcomes.emplace(command, LaneOutcome{request, result});
+    lastLaneSwitch = result;
+    return result;
+}
+
+json PulsarFrontendAPI::abortLaneSwitch(const std::string &commandId)
+{
+    std::lock_guard<std::mutex> lock(dualLaneMutex);
+    if (sameLaneTarget < 0 || sameLaneCommandId != commandId) return {{"error", "COMMAND_NOT_PENDING"}};
+    sameLaneAborted = true;
+    dualLaneTransition.abort("operator");
+    // The frame callback observes the abort flag under this same mutex. If a
+    // final swap is already queued it restores the old composition; otherwise
+    // the video tick queues that restoration. Never cancel a global slot from
+    // a request thread after the matching command might have completed.
+    return {{"command_id", commandId}, {"status", "aborting"}};
+}
+
+void PulsarFrontendAPI::OnLaneSwitchCommitted(void *param, uint64_t frameId, uint64_t ptsNs)
+{
+    auto *self = static_cast<PulsarFrontendAPI *>(param);
+    json result;
+    bool program = false;
+    bool committed = false;
+    {
+        std::lock_guard<std::mutex> lock(self->dualLaneMutex);
+        if (self->sameLaneTarget < 0 || !self->sameLaneScene) return;
+        program = self->sameLaneTarget == self->onAirLane;
+        committed = !self->sameLaneAborted && self->replaceLaneCompositionLocked(self->sameLaneTarget, self->sameLaneScene);
+        if (committed) {
+            auto *&selection = program ? self->programSelection : self->previewSelection;
+            obs_source_release(selection);
+            selection = obs_source_get_ref(self->sameLaneScene);
+            self->sceneSwitchPreparedCommandId.clear();
+        }
+        auto &outcome = self->laneOutcomes.at(self->sameLaneCommandId);
+        outcome.result["status"] = committed ? "completed" : self->sameLaneAborted ? "aborted" : "failed";
+        outcome.result["frame_id"] = frameId;
+        outcome.result["pts_ns"] = ptsNs;
+        outcome.result["role_map"] = {{"on_air", self->onAirLane == 0 ? "A" : "B"}, {"preview", self->previewLane == 0 ? "A" : "B"}};
+        if (!committed && !self->sameLaneAborted) outcome.result["failure_reason"] = "COMPOSITION_REPLACE_FAILED";
+        result = self->lastLaneSwitch = outcome.result;
+        self->dualLaneTransition.committed(frameId, ptsNs, os_gettime_ns());
+        self->mediaTransition.finish();
+        obs_source_release(self->sameLaneScene); self->sameLaneScene = nullptr;
+        self->sameLaneTarget = -1; self->sameLaneCommandId.clear();
+        self->dualLaneTransitionFinalPending = false;
+        self->dualLaneTransitionStartNs = 0;
+        self->dualLaneInvariantLocked("same-lane-commit");
+        // Keep the public mutation gate closed until the scene-switch CAS
+        // revisions below have caught up with the frame-boundary replacement.
+    }
+    if (committed) {
+        g_sceneSwitchVendorStorage.laneSceneChanged(program);
+        if (!program) g_runtimeTelemetry.previewRevisionChanged();
+        self->emit(program ? OBS_FRONTEND_EVENT_SCENE_CHANGED : OBS_FRONTEND_EVENT_PREVIEW_SCENE_CHANGED);
+    }
+    {
+        std::lock_guard<std::mutex> lock(self->dualLaneMutex);
+        self->dualLaneCutPending.store(false);
+        g_dualLaneControlBridge.set_pending(false);
+    }
+    g_mediaTransitionVendor.emit(result);
+}
 
 namespace {
 
@@ -4785,7 +5040,7 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
     dualLaneReady = true;
     dualLaneOperational = true;
     dualLaneTransitionsEnabled = resolve_dual_lane_transitions();
-    if (dualLaneTransitionsEnabled) {
+    if (dualLaneTransitionsEnabled && !resolve_stinger_asset_path().empty()) {
         std::string stingerPath = resolve_stinger_asset_path();
         const StingerAssetValidation asset = validate_stinger_asset(stingerPath);
         OBSDataAutoRelease stingerSettings = obs_data_create();
@@ -4810,8 +5065,10 @@ bool PulsarFrontendAPI::setupDualLane(obs_scene_t *templateScene)
             blog(LOG_WARNING,
                  "[pulsar-dual-lane] stinger unavailable; Stinger requests will fall back to Cut");
         }
-        obs_add_tick_callback(&OnDualLaneTick, this);
     }
+    // Host-configured transitions can be enabled after boot, without an env
+    // flag or an asset. The idle callback uploads only a configured first frame.
+    obs_add_tick_callback(&OnDualLaneTick, this);
     if (!dualLaneInvariantLocked("setup")) {
         dualLaneOperational = false;
         dualLaneReady = false;
@@ -4918,6 +5175,11 @@ bool PulsarFrontendAPI::sceneSwitchTake(const std::string &takeCommandId)
 
 bool PulsarFrontendAPI::sceneSwitchAbort(const std::string &takeCommandId)
 {
+    {
+        std::lock_guard<std::mutex> lock(dualLaneMutex);
+        if (sameLaneTarget >= 0 || sceneSwitchPendingTakeId != takeCommandId)
+            return false;
+    }
     // libobs cancels only a still-pending atomic request and drains a racing
     // graphics callback.  Once that callback owns the request it clears the
     // frontend pending marker, so this post-cancel check never reports a
@@ -5037,6 +5299,7 @@ void PulsarFrontendAPI::OnDualLaneTransitionAbortCommitted(void *param, uint64_t
                               self->programVideo != self->previewVideo;
     const bool invariantValid = self->dualLaneInvariantLocked("transition-abort");
     self->dualLaneTransition.abort("operator");
+    self->mediaTransition.finish();
     self->dualLaneTransitionAbortPending = false;
     self->dualLaneTransitionFinalPending = false;
     self->dualLaneTransitionStartNs = 0;
@@ -5053,6 +5316,17 @@ void PulsarFrontendAPI::OnDualLaneTransitionAbortCommitted(void *param, uint64_t
 void PulsarFrontendAPI::dualLaneTransitionTick()
 {
     std::lock_guard<std::mutex> lock(dualLaneMutex);
+    if (!dualLaneCutPending.load()) mediaTransition.preload_tick();
+    if (sameLaneTarget >= 0 && sameLaneAborted) {
+        if (!dualLaneTransitionFinalPending) {
+            // An initial swap may still own the slot. Keep the admission gate
+            // closed and retry on the next video tick until it drains.
+            dualLaneTransitionFinalPending = obs_view_queue_atomic_swap_with_floor(
+                programView, 0, currentScene, previewView, 0, previewScene,
+                os_gettime_ns(), OnLaneSwitchCommitted, this);
+        }
+        return;
+    }
     if (!dualLaneTransition.active() || dualLaneTransitionFinalPending)
         return;
 
@@ -5077,9 +5351,11 @@ void PulsarFrontendAPI::dualLaneTransitionTick()
     // Program becomes the prepared Preview lane and Preview becomes the old
     // OnAir lane.  The transition source is released by the view at this
     // boundary; no view/video_t/output/encoder is rebound.
+    const bool sameLane = sameLaneTarget >= 0;
     const bool queued = obs_view_queue_atomic_swap_with_floor(
-        programView, 0, previewScene, previewView, 0, currentScene,
-        dualLaneTransitionStartNs, OnDualLaneCutCommitted, this);
+        programView, 0, sameLane ? currentScene : previewScene,
+        previewView, 0, sameLane ? previewScene : currentScene,
+        dualLaneTransitionStartNs, sameLane ? OnLaneSwitchCommitted : OnDualLaneCutCommitted, this);
     if (queued) {
         dualLaneTransitionFinalPending = true;
         blog(LOG_INFO, "[pulsar-dual-lane] transition_final_commit_queued kind=%s",
@@ -5103,6 +5379,7 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
     bool telemetryAccepted = false;
     pulsar_transition::Kind transitionKind = pulsar_transition::Kind::Cut;
     obs_source_t *transitionSource = nullptr;
+    uint32_t requestedDuration = static_cast<uint32_t>((std::max)(0, transitionDuration));
     {
         std::lock_guard<std::mutex> lk(dualLaneMutex);
         if (!dualLaneReady || !dualLaneOperational || !scene || !dualLaneInvariantLocked("queue-before")) {
@@ -5129,6 +5406,17 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
             return false;
         }
 
+        if (mediaTransition.configured()) {
+            std::string error;
+            transitionSource = mediaTransition.prepare(false, requestedDuration, error);
+            if (!transitionSource) {
+                blog(LOG_WARNING, "[pulsar-transitions] Take rejected: %s", error.c_str());
+                g_runtimeTelemetry.cancelPending();
+                return false;
+            }
+            transitionKind = pulsar_transition::Kind::Stinger;
+        }
+
         // Reserve the role pair under the lane mutex, but do not perform any
         // trace-file I/O while it is held.  The reservation blocks public
         // mutations through the bridge and remains valid until the queue
@@ -5142,7 +5430,7 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
         queuedOnAirLane = onAirLane;
         queuedPreviewLane = previewLane;
 
-        if (dualLaneTransitionsEnabled && currentTransition) {
+        if (!mediaTransition.configured() && dualLaneTransitionsEnabled && currentTransition) {
             const char *transitionId = obs_source_get_id(currentTransition);
             const char *transitionName = obs_source_get_name(currentTransition);
             if ((transitionId && std::strcmp(transitionId, "obs_stinger_transition") == 0) ||
@@ -5166,10 +5454,10 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
         const uint64_t finalizationLeadMs =
             transition_finalization_lead_ms(finalizationFrames);
         const bool transitionStarted =
-            dualLaneTransition.begin(transitionKind, static_cast<uint64_t>((std::max)(0, transitionDuration)),
+            dualLaneTransition.begin(transitionKind, requestedDuration,
                                      transitionKind == pulsar_transition::Kind::Cut || transitionAvailable,
                                      finalizationLeadMs);
-        const bool animate = transitionStarted && transitionKind != pulsar_transition::Kind::Cut;
+        bool animate = transitionStarted && transitionKind != pulsar_transition::Kind::Cut;
         if (transitionKind != pulsar_transition::Kind::Cut && !animate) {
             if (transitionKind == pulsar_transition::Kind::Stinger && dualLaneStingerAssetFailure)
                 dualLaneTransition.set_fallback_reason(dualLaneStingerAssetFailure);
@@ -5182,13 +5470,21 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
         if (animate) {
             prepareDualLaneTransition(transitionSource, queuedOnAir);
             if (!obs_transition_start(transitionSource, OBS_TRANSITION_MODE_AUTO,
-                                      static_cast<uint32_t>(transitionDuration), queuedPreview)) {
+                                      requestedDuration, queuedPreview)) {
                 dualLaneTransition.abort("transition_start_failed");
+                if (mediaTransition.configured()) {
+                    mediaTransition.finish();
+                    dualLaneCutPending.store(false);
+                    g_dualLaneControlBridge.set_pending(false);
+                    g_runtimeTelemetry.cancelPending();
+                    return false;
+                }
                 blog(LOG_WARNING,
                      "[pulsar-dual-lane] transition_fallback kind=%s fallback=cut fallback_to_cut=1 reason=transition_start_failed",
                      pulsar_transition::kind_name(transitionKind));
                 transitionKind = pulsar_transition::Kind::Cut;
                 transitionSource = nullptr;
+                animate = false;
             }
         }
 
@@ -5218,6 +5514,7 @@ bool PulsarFrontendAPI::queueDualLaneCut(obs_source_t *scene)
         if (!queued) {
             if (animate)
                 dualLaneTransition.abort("atomic_swap_rejected");
+            mediaTransition.finish();
             dualLaneCutPending.store(false);
             g_dualLaneControlBridge.set_pending(false);
         }
@@ -5310,6 +5607,7 @@ void PulsarFrontendAPI::OnDualLaneCutCommitted(void *param, uint64_t frameId, ui
             self->dualLaneTransitionFinalPending = false;
             self->dualLaneTransitionStartNs = 0;
         }
+        self->mediaTransition.finish();
         if (!self->dualLaneInvariantLocked("commit"))
             blog(LOG_ERROR, "[pulsar-dual-lane] commit invariant failed");
         if (self->rollbackAfterTakes > 0 && self->cutCount >= self->rollbackAfterTakes &&
@@ -5462,7 +5760,7 @@ bool PulsarFrontendAPI::setup()
     blog(LOG_INFO, "[pulsar-frontend-stub] native stinger compositing %s (PULSAR_NATIVE_STINGER)",
          nativeStingerEnabled ? "ENABLED (dormant path active)" : "disabled (default; OBS hard-cut)");
 
-    if (nativeStingerEnabled) {
+    if (nativeStingerEnabled && !resolve_stinger_asset_path().empty()) {
         // ---- DORMANT NATIVE PATH (flag ON only, ADR §A4.3) ----
         // M10 (ADR 003 Amendment 1 §A1.1): register a STINGER transition source so
         // SetCurrentSceneTransition{name:"Stinger"} resolves and the active
@@ -6327,7 +6625,7 @@ void PulsarFrontendAPI::teardown()
     // is released. The bridge contains no frontend pointer, so a late proc
     // lookup cannot dereference this object after teardown.
     g_dualLaneControlBridge.deactivate();
-    if (dualLaneTransitionsEnabled)
+    if (dualLaneReady)
         obs_remove_tick_callback(&OnDualLaneTick, this);
     {
         std::lock_guard<std::mutex> lock(dualLaneMutex);
@@ -6372,6 +6670,11 @@ void PulsarFrontendAPI::teardown()
         dualLaneCutPending.store(false);
     }
     obs_view_cancel_atomic_swap();
+    mediaTransition.clear();
+    if (sameLaneScene) {
+        obs_source_release(sameLaneScene);
+        sameLaneScene = nullptr;
+    }
 
     // Unbind every main mixer channel (video on 0, audio on 1/2/3) before
     // releasing the underlying sources. Otherwise libobs keeps refs past
@@ -7240,6 +7543,8 @@ extern "C" void pulsar_frontend_finished_loading(void)
         blog(LOG_WARNING, "[pulsar-frontend-stub] setup() reported partial failure");
     if (g_sceneSwitchVendorStorage.start())
         g_sceneSwitchVendor.store(&g_sceneSwitchVendorStorage, std::memory_order_release);
+    if (!g_mediaTransitionVendor.start())
+        blog(LOG_WARNING, "[pulsar-transitions] host API registration failed");
     g_api->emit(OBS_FRONTEND_EVENT_FINISHED_LOADING);
 }
 
@@ -7247,6 +7552,7 @@ extern "C" void pulsar_frontend_shutdown(void)
 {
     if (!g_api)
         return;
+    g_mediaTransitionVendor.stop();
     g_sceneSwitchVendor.store(nullptr, std::memory_order_release);
     g_sceneSwitchVendorStorage.stop();
     // Close the supported WebSocket mutation gate before emitting EXIT. This

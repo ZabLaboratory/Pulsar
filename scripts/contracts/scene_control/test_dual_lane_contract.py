@@ -677,8 +677,9 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert 'requestType.rfind("Get", 0) == 0' in handler
     assert "IsControlledSceneSwitchPendingBypass" in handler
     assert 'request.RequestType != "CallVendorRequest"' in handler
-    assert 'vendor->get<std::string>() != "pulsar-scene-switch"' in handler
-    assert 'return nested == "Abort" || nested == "GetState"' in handler
+    assert 'vendor->get<std::string>() == "pulsar-scene-switch" && (nested == "Abort" || nested == "GetState")' in handler
+    assert 'if (vendor->get<std::string>() == "pulsar-transitions")' in handler
+    assert 'return nested == "Abort" || nested == "GetState" || nested == "GetResult";' in handler
     assert "vendor->is_string() || !nestedRequest->is_string()" in handler
     assert "json::value() here" in handler
     assert "const bool controlledSceneSwitchBypass" in handler
@@ -694,13 +695,16 @@ def test_websocket_mutation_gate_is_central_and_fail_closed() -> None:
     assert "PREVIEW_FROZEN" in handler
     assert "after the dual-lane rollback freeze" in handler
     # The gate is central and acquired before handler lookup. The only scene
-    # switch pending bypass is the exact vendor Abort/GetState pair; the
-    # finite output-stop allowlist is unrelated to Preview mutations.
+    # switch pending bypass is the exact vendor Abort/GetState pair plus the
+    # media adapter's named Abort/GetState/GetResult. The finite output-stop
+    # allowlist is unrelated to Preview mutations.
     # Prepare/Take/Dispatch, malformed CallVendorRequest data, and every other
     # vendor remain gated. A post-freeze Take must fail closed at the gateway.
     assert 'nested == "Prepare"' not in handler
     assert 'nested == "Take"' not in handler
     assert 'nested == "Dispatch"' not in handler
+    for mutation in ("Configure", "Clear", "SwitchLane"):
+        assert f'nested == "{mutation}"' not in handler
     assert handler.index("const bool controlledSceneSwitchBypass") < handler.index("_handlerMap.at")
 
 
