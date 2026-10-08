@@ -1,0 +1,59 @@
+{
+  "tested_commit": "940038696c6108d6d8f528e782243677638560c6",
+  "authority": "Push Pulsar code and test final WebM through Prism; Computer Use stopped on user request",
+  "runtime_test": "20261008T134640Z-prism-runtime-test.json",
+  "candidate_only_files": [
+    "bin/64bit/pulsar.exe",
+    "obs-plugins/64bit/obs-websocket.dll"
+  ],
+  "configured_asset": "zab-smooth-alpha.webm",
+  "asset_sha256": "B39A150FEF3EA1A63B3F9D4C62D21A6A3A2E8A5991C70B8D28ABAB39A645E4BF",
+  "asset_metadata": {
+    "audio": "Opus",
+    "fps": 60,
+    "height": 1080,
+    "duration_ms": 2008,
+    "cut_point_ms": 875,
+    "width": 1920,
+    "video": "VP9 with ALPHA_MODE=1"
+  },
+  "checks": [
+    {
+      "risk": "Decoder or timing rejection",
+      "criterion": "Host configuration of the user WebM",
+      "proof": "ready=true; duration 2008ms; transition 2258ms",
+      "command": "Prism BroadcastEngine client -> pulsar-transitions Configure/GetState"
+    },
+    {
+      "risk": "Wrong lane mutation or missing completion",
+      "criterion": "Same-lane Preview switch",
+      "proof": "completed; frame_id 178; Program stayed WebMProbe.Program; role map unchanged",
+      "command": "Prism client -> SwitchLane/GetResult"
+    },
+    {
+      "risk": "Acceptance mistaken for completion",
+      "criterion": "Take with configured media",
+      "proof": "TakeCommitted; frame_id 318; on_air=B; role_map revision=1",
+      "command": "Existing Prism PulsarSceneSwitch.prepareAndTake"
+    },
+    {
+      "risk": "Unrequested default",
+      "criterion": "No active default asset after clear",
+      "proof": "configured=false",
+      "command": "Clear/GetState"
+    }
+  ],
+  "limitations": [
+    "Internal Prism native control path tested via development inspector; no Prism source changed",
+    "Normal Preview UI path could not be validated: this branch lacks the existing local SetPreviewComposite bridge",
+    "No visual or auditory verdict from this Prism run; earlier isolated native probe covered alpha/audio",
+    "Concurrent Vite main-process reloads interrupted initial sampling; failed attempts retained"
+  ],
+  "restoration": {
+    "preview": "arm ok; live return; 1 consumer; stream resumed",
+    "matches_original_backup": true,
+    "websocket_sha256": "19870A01076E674E3543E3AAF973BE3D067AB9980C7677362AD27719B436C9CE",
+    "pulsar_sha256": "559C64249BF6E242B527F37F811282389F36989AF90C37196BCB5AB072079DB1",
+    "outputs": "no stream and no recording started"
+  }
+}

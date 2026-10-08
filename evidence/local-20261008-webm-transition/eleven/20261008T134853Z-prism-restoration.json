@@ -1,0 +1,39 @@
+{
+  "restoredAt": "2026-10-08T13:48:53.804Z",
+  "status": {
+    "pulsarRunning": true,
+    "pulsarPort": 64891,
+    "libobsVersion": "32.1.2-47-g76c902175-modified-pulsar",
+    "activeDestinations": [],
+    "activeDestinationLabels": [],
+    "captureMode": null,
+    "state": "idle"
+  },
+  "recording": {
+    "active": false,
+    "paused": false
+  },
+  "previewReturn": {
+    "state": "live",
+    "consumers": 1,
+    "outputActive": true,
+    "source": "PulsarPreviewReturn",
+    "transport": "media-stream",
+    "error": null
+  },
+  "sceneNames": [
+    "ZabPreviewComposite",
+    "Default"
+  ],
+  "remainingTestScenes": 0,
+  "tracks": [
+    {
+      "label": "Pulsar Preview Return",
+      "state": "live"
+    },
+    {
+      "label": "Pulsar Preview Return",
+      "state": "live"
+    }
+  ]
+}
