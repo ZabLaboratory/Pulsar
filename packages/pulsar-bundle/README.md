@@ -214,6 +214,14 @@ namespace exists in this SDK.
 terminates the owned child, waits with a five-second force fallback, and
 attempts generated-directory cleanup.
 
+An exit caused by the helper's own termination request is emitted through
+`onPrismLog` as informational `PULSAR_PROCESS_STOPPED`, with the exit code,
+signal and reason (`shutdown` or `startup-cleanup`). A ready-timeout cleanup
+therefore preserves the original `PULSAR_READY_TIMEOUT` diagnosis without a
+second crash alert. Unrequested exits, including an external SIGTERM or a
+spontaneous zero exit, remain `PULSAR_PROCESS_EXITED` errors. A nonzero exit
+without a termination signal remains an error even during requested cleanup.
+
 **On Windows, child termination is not proof of graceful libobs shutdown.**
 Stop/save replay, finalize recording/stream/destinations and retain files
 first. Closing only the WebSocket does not stop the native engine.
@@ -298,7 +306,8 @@ postinstall's version stamp is not that verification.
 | `PULSAR_RUNTIME_ID_INVALID` | Invalid per-call identity before launch. |
 | `PULSAR_READY_TIMEOUT` | Read the first native boot failure, namespace collision, listener or module error. |
 | `PULSAR_CONFIG_MISSING` / `PULSAR_CONFIG_INVALID` | Idle marker did not yield usable per-session config. |
-| `PULSAR_PROCESS_ERROR` / `PULSAR_PROCESS_EXITED` | Process launch/exit observation; inspect bounded native logs. |
+| `PULSAR_PROCESS_ERROR` / `PULSAR_PROCESS_EXITED` | Process launch failure or unexpected exit; inspect bounded native logs. |
+| `PULSAR_PROCESS_STOPPED` (info) | Exit after this helper requested termination; not a graceful media-finalization guarantee. |
 | Authentication/connect failure | Check listener/config/version consistency; empty password requests generation, not no-auth mode. |
 | Missing `default.effect` | Check executable-relative data layout and matching native stack, not a shared cwd workaround. |
 
