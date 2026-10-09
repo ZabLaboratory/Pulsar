@@ -103,3 +103,11 @@ permanent profiling as a compatibility fallback.
 `cpuTickMaxMs`, `cpuRenderFirstPassMaxMs` and `gpuRenderFirstPassMaxMs` report
 individual tick/first-render maxima. They are not combined per-frame maxima for
 the summed CPU/GPU average costs.
+
+Screenshot requests refuse inputs without video dimensions before allocating
+D3D11 resources, including width-only and height-only requests. Computed dimensions
+are bounded by D3D11 texture limits; image/render/staging allocation failures
+return the existing processing failure without dereferencing null resources.
+`scripts/probe-source-screenshot.py --exe <isolated-copy> --output <explicit-dir>`
+verifies unavailable/valid sources and modern filter round-trips with synthetic
+inputs, no recording, and graceful shutdown.

@@ -31,9 +31,14 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 
 QImage TakeSourceScreenshot(obs_source_t *source, bool &success, uint32_t requestedWidth = 0, uint32_t requestedHeight = 0)
 {
+	success = false;
+	// An input may exist before its video frame arrives, or be audio-only.
+	// Never allocate a D3D11 staging texture from unavailable dimensions.
 	// Get info about the requested source
 	const uint32_t sourceWidth = obs_source_get_width(source);
 	const uint32_t sourceHeight = obs_source_get_height(source);
+	if (!sourceWidth || !sourceHeight)
+		return {};
 	const double sourceAspectRatio = ((double)sourceWidth / (double)sourceHeight);
 
 	uint32_t imgWidth = sourceWidth;
@@ -55,8 +60,13 @@ QImage TakeSourceScreenshot(obs_source_t *source, bool &success, uint32_t reques
 			imgWidth = ((double)imgHeight * sourceAspectRatio);
 	}
 
+	if (!imgWidth || !imgHeight || imgWidth > 16384 || imgHeight > 16384)
+		return {};
+
 	// Create final image texture
 	QImage ret(imgWidth, imgHeight, QImage::Format::Format_RGBA8888);
+	if (ret.isNull())
+		return {};
 	ret.fill(0);
 
 	// Video image buffer
@@ -69,7 +79,12 @@ QImage TakeSourceScreenshot(obs_source_t *source, bool &success, uint32_t reques
 	gs_texrender_t *texRender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 	gs_stagesurf_t *stageSurface = gs_stagesurface_create(imgWidth, imgHeight, GS_RGBA);
 
-	success = false;
+	if (!texRender || !stageSurface) {
+		gs_stagesurface_destroy(stageSurface);
+		gs_texrender_destroy(texRender);
+		obs_leave_graphics();
+		return {};
+	}
 	gs_texrender_reset(texRender);
 	if (gs_texrender_begin(texRender, imgWidth, imgHeight)) {
 		vec4 background;

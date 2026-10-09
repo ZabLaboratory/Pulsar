@@ -1,0 +1,28 @@
+{
+  "kind": "AGENT_REPORT",
+  "owner": "Eleven",
+  "scope": "User-authorized capability audit corrections without ADR or agents",
+  "changes": [
+    "Reject screenshots of zero-dimensional sources before any GPU allocation",
+    "Reject impossible dimensions and failed image/graphics allocations without dereferencing invalid resources",
+    "Reusable isolated synthetic source screenshot/filter lifecycle regression"
+  ],
+  "validation": {
+    "websocketDllSha256": "e93ad8bd2ae86e9cdb2f6ba2b3c70a92abe3969d46db422a3347026ee3341447",
+    "reproducedBefore": "D3D11 80070057",
+    "fixedProbe": {
+      "passed": true,
+      "websocket_sha256": "e93ad8bd2ae86e9cdb2f6ba2b3c70a92abe3969d46db422a3347026ee3341447",
+      "screenshot_dimension_modes": 4,
+      "modern_filter_lifecycle": true,
+      "staging_errors": 0,
+      "shutdown": {
+        "exit_code": 0,
+        "forced": false
+      }
+    },
+    "activeDllBackup": "D:/Documents/Zab/Artifacts/backups/2026-10-09/pulsar-capability-fixes/obs-websocket.dll",
+    "previewAndConfigurableTransitionProbes": "passed"
+  },
+  "handoff": "Source fixes are isolated on eleven/local-20261009-capability-audit. Shared Prism uses a current integration snapshot preserving concurrent work; that build is distinct from a clean Git checkout. No real Live or recording was started."
+}

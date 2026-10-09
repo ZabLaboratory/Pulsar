@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "websocket_sha256": "e93ad8bd2ae86e9cdb2f6ba2b3c70a92abe3969d46db422a3347026ee3341447",
+  "screenshot_dimension_modes": 4,
+  "modern_filter_lifecycle": true,
+  "staging_errors": 0,
+  "shutdown": {
+    "exit_code": 0,
+    "forced": false
+  }
+}
