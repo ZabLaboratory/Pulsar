@@ -73,3 +73,24 @@ state rather than inferring it from the launcher environment.
 
 NVENC encoding is a different module and does not depend on this effect-SDK
 loader. See [architecture](../../docs/ARCHITECTURE.md).
+
+## Installed SDK regression
+
+[`scripts/probe-nvidia-effects.py`](../../scripts/probe-nvidia-effects.py) is an
+explicit hardware test for a machine with the official compatible AFX/VFX
+redistributables installed. It takes `--exe`, `--work`, `--report`, `--afx` and
+`--vfx` absolute paths. It reuses the existing authenticated wire and isolated
+shutdown helper; the native loader still validates all designated paths.
+Dependencies are Python, NumPy, Pillow and websockets.
+
+The fixture uses 1080p stripes and seeded 48 kHz noise: three video filters must
+change native pixels, bypass must restore exact pixels, and each must sustain
+at least 250 frames across five seconds with no skipped frames. Three audio
+methods must load and process; denoising/combined must reduce the native meter
+magnitude by at least half. Neither microphones, cameras, monitoring speakers,
+recording nor network broadcast are used. The process must exit normally.
+
+Reports retain SDK warnings/errors separately: passing synthetic checks does
+not certify the absence of SDK diagnostics, portrait segmentation quality,
+room-echo removal quality, scene switches, or an external native output. SDK
+packages/models remain external machine dependencies and are never committed.
