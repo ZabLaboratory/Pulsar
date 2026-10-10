@@ -90,8 +90,11 @@ binary or model is distributed. This is not per-effect GPU attribution.
 `probe-nvidia-video-parity.py` checks both denoise models, alpha preservation,
 live blend and four same-frame VFX splits. `probe-nvidia-ar-parity.py` takes
 `--portrait`, checks face translation, no-face fallback, gaze correction,
-cold allocation, idle inference counts and resumption. No physical camera or
-microphone is selected by these tests.
+cold allocation, idle inference counts and resumption. It also checks stacked
+AR effects and native Program composition of the segmented portrait over an
+image and a looping video, preserving opaque subject pixels. FFmpeg must be
+on PATH to generate the three-second video fixture inside `--work`.
+No physical camera or microphone is selected by these tests.
 
 [`scripts/probe-nvidia-effects.py`](../../scripts/probe-nvidia-effects.py) is an
 explicit hardware test for a machine with the official compatible AFX/VFX

@@ -1,0 +1,42 @@
+{
+  "worktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit",
+  "branch": "eleven/local-20261009-capability-audit",
+  "base": "e51467937d65f935d1a598237287815bef04677f",
+  "sourceHeadBeforeEvidenceCommit": "a7da349e3c00c7ceb9f85278fd9f6ecd5fe32d8f",
+  "scope": "NVIDIA capability qualification and explicit product refusals",
+  "modifiedBeforeEvidenceCommit": [
+    " M evidence/local-20261009-capability-audit/eleven/20261010T140600Z-AGENT_CHECKPOINT.json",
+    " M plugins/pulsar-nv-secure-load/README.md",
+    " M scripts/probe-nvidia-ar-parity.py",
+    "?? .cache/",
+    "?? evidence/local-20261009-capability-audit/eleven/20261010T140732Z-nvidia-ar-combined.json",
+    "?? evidence/local-20261009-capability-audit/eleven/20261010T140732Z-video-manifest.json",
+    "?? evidence/local-20261009-capability-audit/eleven/20261010T142207Z-nvidia-camera-video-proof.json",
+    "?? evidence/local-20261009-capability-audit/eleven/20261010T142207Z-video-manifest.json"
+  ],
+  "artifacts": "D:/Documents/Zab/Artifacts/2026-10-10/nvidia-parity",
+  "fullBroadcastParityClaimed": false,
+  "productRefused": [
+    "Studio Voice",
+    "Virtual Key Light"
+  ],
+  "remaining": [
+    "Windows virtual audio endpoints require a driver",
+    "Effective multi-GPU selection absent",
+    "Stream Deck uses keyboard bindings only; no plugin or hardware proof",
+    "Physical webcam/voice quality, prolonged sessions and full release CI not exhaustively qualified"
+  ],
+  "retainedWorktreeReason": "Draft pull request and active shared dev qualification; unmerged work must be preserved",
+  "temporaryCacheReason": "Owned build/SDK fixture and proof runtime cache retained for reproducibility; not staged",
+  "validation": {
+    "nativeCamera": "Cold/idle/resume, AR follow/gaze/bypass, stacked AR, segmentation and image/looping-video Program composition passed",
+    "nativeDenoise": "Both models and same-frame comparison passed",
+    "nativeAudioVFX": "Three AFX methods, old VFX, 20 switches, rapid update/removal and graceful exit passed",
+    "transientFailure": "First broad run skipped one blur frame; failure retained alongside passing unchanged rerun",
+    "loader": "49 checks passed",
+    "build": "Focused nv-filters and publisher builds passed",
+    "patchReplay": "0063/0064 match normalized native source at 1246de1a4f0df3f12034dd6fdbdea75e4a8bddc1",
+    "packaging": "No SDK binary/model payload source gate passed",
+    "pythonCompile": "AR probe passed"
+  }
+}

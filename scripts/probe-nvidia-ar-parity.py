@@ -13,6 +13,7 @@ import io
 import json
 from pathlib import Path
 import sys
+import subprocess
 import time
 
 import numpy as np
@@ -41,6 +42,13 @@ async def exercise(proc, work, report, record_video=False):
     pattern = np.stack((x // 8 % 256, y // 5 % 256, (x // 16 + y // 16) % 256), axis=2).astype(np.uint8)
     Image.fromarray(pattern).save(work / "no-face.png")
     portrait.resize((1920, 1080)).save(work / "eyes.png")
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+         "testsrc2=size=1920x1080:rate=30", "-t", "3", "-an", "-c:v",
+         "libx264", "-preset", "ultrafast", "-crf", "24", "-y",
+         str(work / "background-video.mp4")],
+        check=True,
+    )
     proc.spawn()
     await asyncio.to_thread(proc.wait_for, base.transport.process.READY_RE, 45)
     await asyncio.to_thread(proc.wait_for_shutdown_control_ready, 10)
@@ -170,10 +178,44 @@ async def exercise(proc, work, report, record_video=False):
         await wire.call("RemoveSourceFilter", {"sourceName": "Portrait", "filterName": "frame"})
         await wire.call("RemoveSourceFilter", {"sourceName": "Portrait", "filterName": "ar"})
         assert (await wire.call("GetSourceFilterList", {"sourceName": "Portrait"}))["filters"] == []
+        await wire.call("SetInputSettings", {"inputName": "Portrait", "inputSettings": {"file": str(work / "eyes.png")}, "overlay": True})
+        await wire.call("CreateSourceFilter", {"sourceName": "Portrait", "filterName": "segment", "filterKind": "nv_greenscreen_filter", "filterSettings": {"mode": 0, "threshold": .5, "processing_interval": 1}})
+        await caption("NVIDIA / remplacement d'arriere-plan\nDetourage natif / fond image sous la personne")
+        Image.new("RGB", (1920, 1080), (48, 110, 190)).save(work / "background-blue.png")
+        Image.new("RGB", (1920, 1080), (190, 110, 48)).save(work / "background-red.png")
+        created = await wire.call("CreateInput", {"sceneName": "ArParity", "inputName": "Background", "inputKind": "image_source", "inputSettings": {"file": str(work / "background-blue.png")}, "sceneItemEnabled": True})
+        await wire.call("SetSceneItemIndex", {"sceneName": "ArParity", "sceneItemId": created["sceneItemId"], "sceneItemIndex": 0})
+        await asyncio.sleep(3)
+        segmented = await image()
+        assert segmented[:,:,3].min() == 0 and segmented[:,:,3].max() == 255, "Portrait must contain both transparent background and opaque subject"
+        blue = await image("ArParity")
+        await wire.call("SetInputSettings", {"inputName": "Background", "inputSettings": {"file": str(work / "background-red.png")}, "overlay": True})
+        await asyncio.sleep(2)
+        red = await image("ArParity")
+        opaque = segmented[:,:,3] == 255
+        transparent = segmented[:,:,3] == 0
+        # Ignore the caption area when comparing the composited Program pixels.
+        opaque[:80] = False; transparent[:80] = False
+        report["backgroundComposition"] = {"opaquePixels": int(opaque.sum()), "transparentPixels": int(transparent.sum()), "subjectDifference": float(np.abs(blue.astype(float)-red)[opaque].mean()), "backgroundDifference": float(np.abs(blue.astype(float)-red)[transparent].mean())}
+        assert report["backgroundComposition"]["subjectDifference"] < .1 and report["backgroundComposition"]["backgroundDifference"] > 10, report["backgroundComposition"]
+        Image.fromarray(red).save(work / "background-replacement.png")
+        await wire.call("RemoveInput", {"inputName": "Background"})
+        created = await wire.call("CreateInput", {"sceneName": "ArParity", "inputName": "Background", "inputKind": "ffmpeg_source", "inputSettings": {"local_file": str(work / "background-video.mp4"), "is_local_file": True, "looping": True}, "sceneItemEnabled": True})
+        await wire.call("SetSceneItemIndex", {"sceneName": "ArParity", "sceneItemId": created["sceneItemId"], "sceneItemIndex": 0})
+        await wire.call("SetInputMute", {"inputName": "Background", "inputMuted": True})
+        await caption("NVIDIA / remplacement d'arriere-plan\nFond VIDEO en boucle / personne detouree native")
+        await asyncio.sleep(1)
+        first = await image("ArParity")
+        await asyncio.sleep(4.3)
+        second = await image("ArParity")
+        report["videoBackground"] = {"media": await wire.call("GetMediaInputStatus", {"inputName": "Background"}), "backgroundDifference": float(np.abs(first.astype(float)-second)[transparent].mean()), "subjectDifference": float(np.abs(first.astype(float)-second)[opaque].mean())}
+        assert report["videoBackground"]["media"]["mediaState"] == "OBS_MEDIA_STATE_PLAYING" and report["videoBackground"]["backgroundDifference"] > 1 and report["videoBackground"]["subjectDifference"] < .1, report["videoBackground"]
+        await wire.call("RemoveSourceFilter", {"sourceName": "Portrait", "filterName": "segment"})
+        await wire.call("RemoveInput", {"inputName": "Background"})
         if record_video:
             await asyncio.sleep(2)
             report["nativeRecording"] = (await wire.call("StopRecord"))["outputPath"]
-        report["checks"] = ["cold allocation and processing only on render demand", "idle processing stops and resumes", "actual AR registration", "face-follow and native zoom at two positions", "eye redirection same-frame comparison", "native render windows", "exact bypass", "cleanup and graceful shutdown"]
+        report["checks"] = ["cold allocation and processing only on render demand", "idle processing stops and resumes", "actual AR registration", "face-follow and native zoom at two positions", "eye redirection same-frame comparison", "stacked AR effects", "segmented portrait over authored background in native Program", "native render windows", "exact bypass", "cleanup and graceful shutdown"]
 
 base.exercise = exercise
 if __name__ == "__main__":
