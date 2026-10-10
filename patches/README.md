@@ -1,6 +1,6 @@
 # Pulsar OBS patch stack
 
-Pulsar 3.0.0 carries **52 patches** above the pinned
+Pulsar 3.0.0 carries **54 patches** above the pinned
 `ZabLaboratory/obs-studio` revision
 `bd73b922891e56839b0bc86bdc519802802f9d68`.
 Five foundational changes are already in that fork revision.
@@ -54,6 +54,19 @@ exercises the real dependency helper for full, light and invalid-hash cases.
 Patch 0059 bounds read-owned source profiling to a five-second lease, independent
 of explicit resource-trace policy. The native `probe-source-telemetry.py` checks
 warm samples during polling, expiry after idle and explicit component maxima.
+
+Patch 0060 defers initial/recreated NVIDIA blur loading until its source and
+destination images are bound. Live updates still reload and report failures.
+The AFX/VFX logger callbacks ignore null/empty messages while preserving actual
+SDK diagnostics. The installed-SDK probe records DLL hashes, live intensities,
+stacked filters and scene-switch counters. It deliberately fails when AFX
+intensity zero does not pass the signal through; this patch does not fix that
+separate SDK behavior.
+
+Patch 0061 supplies a zero-impact audio bypass through the existing PCM FIFO
+using an atomic settings flag. It retains the filter's enabled state and does
+not reset/reload SDK models. Nonzero intensity remains an SDK operation and
+must be qualified separately, including intermediate values.
 
 The build records the upstream pin, patch-content fingerprint and applied
 HEAD. It reuses only an exact clean match; `-RefreshPatches` forces replay.

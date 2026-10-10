@@ -28,7 +28,7 @@ missing files to recreate in `patches/`:
 | [7e7a5a383](https://github.com/ZabLaboratory/obs-studio/commit/7e7a5a383) | Adds a separate Program-return camera. |
 | [b33f831b8](https://github.com/ZabLaboratory/obs-studio/commit/b33f831b8) | Resolves embedded modules and registers Program return. |
 
-On top of this pin, 3.0.0 carries **52 patch files**: 51 root-OBS patches
+On top of this pin, 3.0.0 carries **54 patch files**: 53 root-OBS patches
 and one nested obs-browser patch. [build-win.ps1](../scripts/build-win.ps1)
 sorts complete filenames lexically, routes names containing `obs-browser`
 to `upstream/plugins/obs-browser/`, and applies the others to `upstream/`.
@@ -552,6 +552,34 @@ Affected files: `libobs/obs-video.c`.
 Further restricts automatic current readback to a physical graphics adapter. A software-only Microsoft Basic Render Driver runner stays on historical staging; an explicit diagnostic override remains available.
 
 Affected files: `libobs/obs-video.c`.
+
+### 0060-fix-nvidia-effect-initialization-and-logging
+
+[Source patch](../patches/0060-fix-nvidia-effect-initialization-and-logging.patch)
+
+Defers initial/recreated blur loading until source and destination images are
+bound. Live intensity updates retain reload and report failed SDK statuses.
+Null/empty logger messages are ignored; real SDK diagnostics are preserved.
+The installed-SDK probe exercises live intensity, exact video bypass, stacked
+filters, 20 native scene changes and native audio meters. A passing load or
+readback does not qualify audio intensity: the probe rejects the reproduced
+AFX 1.6.1.2 zero-intensity failure.
+
+Affected files: `plugins/nv-filters/nvidia-audiofx-filter.c`,
+`plugins/nv-filters/nvidia-videofx-filter.c`.
+
+### 0061-fix-nvidia-audio-zero-intensity-bypass
+
+[Source patch](../patches/0061-fix-nvidia-audio-zero-intensity-bypass.patch)
+
+Guarantees that intensity zero passes original PCM through the existing 10 ms
+FIFO, including bypass of VAD. An atomic flag preserves native enabled state
+and avoids the reproduced AFX 1.6.1.2 denoiser near-silence at zero. Nonzero SDK
+processing remains unchanged. No reset/reload, allocation or additional audio
+thread lock is introduced. The regression checks all three methods against a
+contemporaneous disabled-filter control and reapplies intensity one.
+
+Affected file: `plugins/nv-filters/nvidia-audiofx-filter.c`.
 
 ## Validation boundaries and retained studies
 
