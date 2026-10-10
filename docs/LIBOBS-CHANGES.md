@@ -28,7 +28,7 @@ missing files to recreate in `patches/`:
 | [7e7a5a383](https://github.com/ZabLaboratory/obs-studio/commit/7e7a5a383) | Adds a separate Program-return camera. |
 | [b33f831b8](https://github.com/ZabLaboratory/obs-studio/commit/b33f831b8) | Resolves embedded modules and registers Program return. |
 
-On top of this pin, 3.0.0 carries **59 patch files**: 58 root-OBS patches
+On top of this pin, 3.0.0 carries **61 patch files**: 60 root-OBS patches
 and one nested obs-browser patch. [build-win.ps1](../scripts/build-win.ps1)
 sorts complete filenames lexically, routes names containing `obs-browser`
 to `upstream/plugins/obs-browser/`, and applies the others to `upstream/`.
@@ -624,6 +624,42 @@ audio filters and optional native recording of synthetic fixtures.
 Affected file: `plugins/nv-filters/nvidia-audiofx-filter.c`.
 
 ## Validation boundaries and retained studies
+
+### 0063-add-nvidia-video-denoise-and-comparison
+
+[Source patch](../patches/0063-add-nvidia-video-denoise-and-comparison.patch)
+
+Registers `nv_denoise_filter` only with the installed conservative/aggressive
+VFX models. Inputs use normalized planar BGR float and outputs convert back
+to the existing GPU texture. Closed model modes 0/1, live blend intensity,
+temporal state and exact zero bypass are native. Comparison preserves the
+original left half and processes the right half of the same source frame;
+it also appears in Program. An exported module flag gates the Prism setting.
+
+Affected files: `plugins/nv-filters/nvidia-videofx-filter.c`, `nv-filters.c`,
+`data/rtx_blur.effect` and `data/rtx_greenscreen.effect` in the same directory.
+
+### 0064-add-nvidia-ar-effects-and-demand-processing
+
+[Source patch](../patches/0064-add-nvidia-ar-effects-and-demand-processing.patch)
+
+Adds `nv_autoframe_filter` and `nv_eye_contact_filter` using the separately
+installed AR 0.8.7 SDK and existing VFX texture/CUDA interop. The owned minimal
+ABI adapter lives outside upstream. Auto Frame follows the largest valid face,
+clamps the crop and returns smoothly to the original frame after one second
+without a face. Eye Contact binds the required gaze and landmark outputs;
+strength blends the processed image and zero bypasses it exactly.
+
+Image/model allocation begins on actual render demand. Unused sources perform
+no inference; warmed allocations remain retained for resumption. The native
+`get_nvidia_processing` procedure reads processed counts and pipeline wall time
+on the graphics thread. This measures the native pipeline, not GPU-only time.
+Creation failures return to one cleanup owner; destroyed handles are nulled;
+partial image allocations and both background-blur textures are released.
+
+Affected files: `plugins/nv-filters/nvidia-videofx-filter.c`, `nv-filters.c`
+and `data/rtx_blur.effect`. The native probes use synthetic patterns and an
+explicit official portrait fixture; real webcam quality is a separate check.
 
 The native CPU readback study records 100 warm-up and 100 measured Cuts per
 trial, a changed decoded-image oracle, media timestamps and common Program

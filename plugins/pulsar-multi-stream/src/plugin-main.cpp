@@ -38,6 +38,7 @@
 #include <obs.hpp>
 #include <obs-frontend-api.h>
 #include <util/util.hpp>
+#include <util/platform.h>
 // #167 -- the SAME probe the nv-filters module gates itself on, so the
 // manifest publishes the load decision rather than a guess at it. It is the
 // first thing here that pulls in <windows.h>, hence NOMINMAX: this file uses
@@ -81,6 +82,35 @@
 OBS_DECLARE_MODULE()
 OBS_MODULE_AUTHOR("Pulsar")
 OBS_MODULE_USE_DEFAULT_LOCALE("pulsar-multi-stream", "en-US")
+
+#include <pulsar-nvidia-gpu.h>
+static void on_get_nvidia_gpu_usage(obs_data_t *, obs_data_t *result, void *)
+{
+    pulsar_nvidia_gpu_usage(result);
+}
+static void on_get_native_effect_metrics(obs_data_t *request, obs_data_t *result, void *)
+{
+    obs_data_set_bool(result, "available", false);
+    obs_source_t *source = obs_get_source_by_name(obs_data_get_string(request, "sourceName"));
+    if (!source) return;
+    obs_source_t *filter = obs_source_get_filter_by_name(source, obs_data_get_string(request, "filterName"));
+    if (filter) {
+        calldata_t data;
+        calldata_init(&data);
+        const bool available = proc_handler_call(obs_source_get_proc_handler(filter), "get_nvidia_processing", &data);
+        obs_data_set_bool(result, "available", available);
+        if (available) {
+            obs_data_set_int(result, "processedFrames", calldata_int(&data, "processed_frames"));
+            obs_data_set_double(result, "lastProcessingMs", calldata_float(&data, "last_processing_ms"));
+            obs_data_set_bool(result, "imagesAllocated", calldata_bool(&data, "images_allocated"));
+            obs_data_set_bool(result, "processingStopped", calldata_bool(&data, "processing_stopped"));
+            obs_data_set_string(result, "scope", "native-pipeline-wall-time");
+        }
+        calldata_free(&data);
+        obs_source_release(filter);
+    }
+    obs_source_release(source);
+}
 
 const char *obs_module_name(void) { return "pulsar-multi-stream"; }
 const char *obs_module_description(void) { return "First-class multi-destination streaming for Pulsar"; }
@@ -2735,10 +2765,17 @@ void on_get_capabilities(obs_data_t * /*req*/, obs_data_t *res, void *)
         OBSDataAutoRelease entry = obs_data_create();
         obs_data_set_string(entry, "applicability", kRegimeReadOnly);
         obs_data_set_bool(entry, "module_loaded", registered);
+        auto *nv_module = obs_get_module("nv-filters");
+        using NvFeatureFlags = uint32_t (*)(void);
+        auto flags = nv_module ? reinterpret_cast<NvFeatureFlags>(
+            os_dlsym(obs_get_module_lib(nv_module), "pulsar_nv_feature_flags")) : nullptr;
+        obs_data_set_bool(entry, "same_frame_comparison", registered && flags && (flags() & 1u));
         OBSDataAutoRelease afx = sdk_entry(probe.afx);
         OBSDataAutoRelease vfx = sdk_entry(probe.vfx);
+        OBSDataAutoRelease ar = sdk_entry(probe.ar);
         obs_data_set_obj(entry, "afx", afx);
         obs_data_set_obj(entry, "vfx", vfx);
+        obs_data_set_obj(entry, "ar", ar);
         obs_data_set_obj(caps, "nv_filters", entry);
     }
 
@@ -3235,6 +3272,8 @@ void obs_module_post_load(void)
     obs_websocket_vendor_register_request(g_vendor, "GetVideoSettings",     on_get_video_settings,  nullptr);
     obs_websocket_vendor_register_request(g_vendor, "SetVideoSettings",     on_set_video_settings,  nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetCapabilities",      on_get_capabilities,    nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "GetNvidiaGpuUsage",     on_get_nvidia_gpu_usage, nullptr);
+    obs_websocket_vendor_register_request(g_vendor, "GetNativeEffectMetrics", on_get_native_effect_metrics, nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetAudioTracks",       on_get_audio_tracks,    nullptr);
     obs_websocket_vendor_register_request(g_vendor, "MeasureAudioTrackFlow", on_measure_audio_track_flow, nullptr);
     obs_websocket_vendor_register_request(g_vendor, "GetProgramAudioRoute", on_get_program_audio_route, nullptr);

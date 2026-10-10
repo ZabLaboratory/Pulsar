@@ -1,6 +1,6 @@
 # Pulsar OBS patch stack
 
-Pulsar 3.0.0 carries **59 patches** above the pinned
+Pulsar 3.0.0 carries **61 patches** above the pinned
 `ZabLaboratory/obs-studio` revision
 `bd73b922891e56839b0bc86bdc519802802f9d68`.
 Five foundational changes are already in that fork revision.
@@ -85,6 +85,12 @@ Use the normal full build for qualification. `-Fast` is only a local target
 loop and does not validate every plugin or the complete release package.
 
 ## Removing or replacing a patch
+
+Patch 0063 adds native VFX video denoising and same-frame comparison. Patch 0064
+adds AR face following and eye contact, demand-driven image allocation and
+read-only processing counters. Both use the existing GPU source texture, with
+no second capture producer. See the complete change reference for SDK gates,
+lifecycle repairs, shader semantics and qualification limits.
 
 Only remove a patch after proving that its behavior is supplied by the new
 pin or an explicitly approved replacement. Replay and validate the **whole

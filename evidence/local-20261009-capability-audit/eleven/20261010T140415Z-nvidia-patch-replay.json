@@ -1,0 +1,15 @@
+{
+  "baseline": "6fc5905315af589cde8dc1f7c85212d5ee6ad65a",
+  "nativeHead": "1246de1a4",
+  "patches": [
+    "0063",
+    "0064"
+  ],
+  "normalizedSourceEquality": {
+    "plugins/nv-filters/nvidia-videofx-filter.c": true,
+    "plugins/nv-filters/nv-filters.c": true,
+    "plugins/nv-filters/data/rtx_blur.effect": true,
+    "plugins/nv-filters/data/rtx_greenscreen.effect": true
+  },
+  "scope": "Incremental clean replay above previously applied 0062; excludes full package build and CI."
+}
