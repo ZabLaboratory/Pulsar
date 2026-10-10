@@ -1,0 +1,22 @@
+[
+  {
+    "path": "20261010T074000Z-checkpoint.json",
+    "sha256": "c4811a20133e008a117d76344e6f6c24bfe2cbd8be5020b696402aecd69660e0"
+  },
+  {
+    "path": "20261010T074000Z-filter-probe.txt",
+    "sha256": "c8a5b8bf7379ffa22f271e0b0ea8b5286f4d52058a6fb26666f6cd4865b131a9"
+  },
+  {
+    "path": "20261010T074000Z-native-filters.json",
+    "sha256": "70745d125571c824e8d833ef20153c2c9fd1255bdcdf2374ba46b0c583cf46d0"
+  },
+  {
+    "path": "20261010T074000Z-provenance.json",
+    "sha256": "d4bbbfc5d87a7693528ad7dd2b75d2079cfae75caf08d26f2398858c15442a02"
+  },
+  {
+    "path": "20261010T074000Z-screenshot-regression.json",
+    "sha256": "5fddbcb4cd2f188c4b555ee12a52a2583bc148ef65eef2019d0ae37953d95220"
+  }
+]
