@@ -1,0 +1,21 @@
+cmake_minimum_required(VERSION 3.28)
+project(nvidia_lifecycle_probe LANGUAGES C)
+set(PULSAR_ROOT "D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261009-capability-audit")
+set(OBS_SOURCE "${PULSAR_ROOT}/.cache/nvidia-patch-source")
+set(OBS_BUILD "${PULSAR_ROOT}/.cache/upstream-build")
+add_library(nv-filters MODULE
+  "${OBS_SOURCE}/plugins/nv-filters/nv-filters.c"
+  "${OBS_SOURCE}/plugins/nv-filters/nvidia-audiofx-filter.c"
+  "${OBS_SOURCE}/plugins/nv-filters/nvidia-videofx-filter.c")
+target_compile_definitions(nv-filters PRIVATE LIBNVAFX_ENABLED LIBNVVFX_ENABLED)
+target_include_directories(nv-filters PRIVATE
+  "${OBS_SOURCE}/libobs"
+  "${OBS_SOURCE}/deps/w32-pthreads"
+  "${OBS_BUILD}/config"
+  "D:/Documents/Zab/Pulsar/upstream/build_x64/libobs"
+  "${PULSAR_ROOT}/plugins/pulsar-nv-secure-load")
+target_link_libraries(nv-filters PRIVATE
+  "${OBS_BUILD}/libobs/RelWithDebInfo/obs.lib"
+  "D:/Documents/Zab/Pulsar/upstream/build_x64/deps/w32-pthreads/RelWithDebInfo/w32-pthreads.lib"
+  version shell32 ole32)
+set_target_properties(nv-filters PROPERTIES PREFIX "")

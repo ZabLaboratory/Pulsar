@@ -1,0 +1,14 @@
+{
+  "binaryRoot": "C:\\Users\\Mathias\\AppData\\Roaming\\prism-dev\\components\\pulsar\\active",
+  "hashes": {
+    "bin/64bit/pulsar.exe": "fac3466e90a744bff14ca68dac2967e5a51ecd610e9fcf1c1381f8b203299ac8",
+    "obs-plugins/64bit/obs-websocket.dll": "e93ad8bd2ae86e9cdb2f6ba2b3c70a92abe3969d46db422a3347026ee3341447",
+    "obs-plugins/64bit/pulsar-capture-effects.dll": "1f29aca598ed9e8d01ee576ddc387b73637afc89f59edf31331636250d905467",
+    "bin/64bit/obs.dll": "fc8eb80e1104b39501e5c23113c5b2e73138334cd4c1c0f98f9e158f9cf46048"
+  },
+  "probeSha256": "c8a5b8bf7379ffa22f271e0b0ea8b5286f4d52058a6fb26666f6cd4865b131a9",
+  "worktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit",
+  "branch": "eleven/local-20261009-capability-audit",
+  "head": "e8d0ce456e1c9ee763f6f3d8049b4162ebee7d59",
+  "scope": "isolated synthetic probes; no SDK installed, no camera opened, no recording or streaming"
+}

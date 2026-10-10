@@ -47,6 +47,7 @@ option(PULSAR_BUILD_WEBSOCKET     "Build the pulsar-websocket plugin"           
 option(PULSAR_BUILD_MULTISTREAM   "Build the pulsar-multi-stream plugin"            ON)
 option(PULSAR_BUILD_SCENE_SOURCE  "Build the pulsar-scene-source plugin"            ON)
 option(PULSAR_BUILD_BROWSER       "Build the pulsar-browser plugin (forked CEF)"    ON)
+option(PULSAR_BUILD_CAMERA_EFFECTS "Build native GPU camera effects"               ON)
 
 # Header-only, no build of its own, and needed by pulsar-multi-stream and
 # by tests/nv-probe -- so it is added before both. (upstream's nv-filters
@@ -80,6 +81,10 @@ endif()
 
 if(PULSAR_BUILD_SCENE_SOURCE)
     add_subdirectory(plugins/pulsar-scene-source)
+endif()
+
+if(PULSAR_BUILD_CAMERA_EFFECTS)
+    add_subdirectory(plugins/pulsar-camera-effects)
 endif()
 
 if(PULSAR_BUILD_BROWSER)
@@ -152,6 +157,7 @@ if(WIN32)
     # cross-root/physical-directory authorities, alias hardening, and
     # acquire/refusal/release/abandoned-recovery of both lock classes.
     add_subdirectory(tests/runtime-isolation-probe)
+    add_subdirectory(tests/rtwq-lifecycle)
 
     # #248 -- the producer (C) and DirectShow consumer (C++) must take the
     # same fail-closed namespace decision before either can touch a named
@@ -181,6 +187,7 @@ if(WIN32)
     # GPU, or running Pulsar process.
     add_subdirectory(tests/dual-lane-config)
     add_subdirectory(tests/pulsar-transition-controller)
+    add_subdirectory(tests/pulsar-media-transition)
     add_subdirectory(tests/equal-view-swap)
     add_subdirectory(tests/return-queue-safety)
     add_subdirectory(tests/probe-nvenc-ready-drain)

@@ -1,0 +1,18 @@
+Test project D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261008-webm-transition/build-transition
+    Start  8: pulsar-rtwq-lifecycle
+1/4 Test  #8: pulsar-rtwq-lifecycle ..................   Passed    0.05 sec
+    Start 15: pulsar-transition-controller-probe
+2/4 Test #15: pulsar-transition-controller-probe .....   Passed    0.05 sec
+    Start 16: pulsar-media-transition-config-probe
+3/4 Test #16: pulsar-media-transition-config-probe ...   Passed    0.05 sec
+    Start 25: pulsar-headless-websocket-quiesce
+4/4 Test #25: pulsar-headless-websocket-quiesce ......   Passed   13.63 sec
+
+100% tests passed, 0 tests failed out of 4
+
+Label Time Summary:
+integration    =  13.68 sec*proc (2 tests)
+runtime        =  13.68 sec*proc (2 tests)
+unit           =   0.10 sec*proc (2 tests)
+
+Total Test time (real) =  14.10 sec

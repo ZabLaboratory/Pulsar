@@ -1,0 +1,19 @@
+{
+  "worktree": "D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261009-capability-audit",
+  "branch": "eleven/local-20261009-capability-audit",
+  "base": "e51467937d65f935d1a598237287815bef04677f",
+  "nativeSource": "1246de1a4f0df3f12034dd6fdbdea75e4a8bddc1",
+  "nvFiltersSha256": "023816f1ae8916ecb2c32528b098d85c6585318fe2887ece4ab5cf45279b6872",
+  "publisherSha256": "e231c260fcb5d145b50aac9f8f24a022d3e4ada7bde2af92345e9e23bfa02991",
+  "validation": {
+    "nativeAR": "cold/idle/resume, face follow, gaze, bypass and 1080p60 passed",
+    "nativeAudioVFX": "three audio methods, intensity, removals during loading and 20 switches passed",
+    "nativeDenoise": "two models, blend and same-frame splits passed",
+    "loaderGate": "49 checks passed; real-SDK assumption repaired",
+    "focusedBuild": "nv-filters and pulsar-multi-stream passed",
+    "patchReplay": "0063/0064 match normalized native sources",
+    "packaging": "no SDK payload source gate passed"
+  },
+  "remaining": "Shared dev integration and additional AR pair qualification",
+  "scope": "Focused native builds; no full-package CI qualification"
+}

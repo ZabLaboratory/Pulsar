@@ -1,0 +1,224 @@
+{
+  "started": 1791641479.2131546,
+  "mode": "isolated installed NVIDIA SDK synthetic regression",
+  "exe": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\audit-runtime\\bin\\64bit\\pulsar.exe",
+  "exeSha256": "fac3466e90a744bff14ca68dac2967e5a51ecd610e9fcf1c1381f8b203299ac8",
+  "nvFiltersSha256": "023816f1ae8916ecb2c32528b098d85c6585318fe2887ece4ab5cf45279b6872",
+  "sdkPaths": {
+    "afx": "C:\\Program Files\\NVIDIA Corporation\\NVIDIA Audio Effects SDK",
+    "vfx": "C:\\Program Files\\NVIDIA Corporation\\NVIDIA Video Effects"
+  },
+  "fixture": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\nvidia-ar-fixtures\\ar_001.png",
+    "sha256": "a196d219b924dcbb1b6c3849b781f15d61328a9066e3f49c71f689cb58594b8b"
+  },
+  "nativeSdkCapability": {
+    "afx": {
+      "directory_designated": true,
+      "dlls_present": true,
+      "min_version": "1.6.1.2",
+      "models_present": true,
+      "usable": true,
+      "version": "1.6.1.2"
+    },
+    "applicability": "read-only",
+    "ar": {
+      "directory_designated": true,
+      "dlls_present": true,
+      "min_version": "0.8.7.0",
+      "models_present": true,
+      "usable": true,
+      "version": "0.8.7.0"
+    },
+    "module_loaded": true,
+    "same_frame_comparison": true,
+    "vfx": {
+      "directory_designated": true,
+      "dlls_present": true,
+      "min_version": "0.7.6.0",
+      "models_present": true,
+      "usable": true,
+      "version": "0.7.6.0"
+    }
+  },
+  "gpuBefore": {
+    "available": true,
+    "devices": [
+      {
+        "gpuPercent": 14,
+        "index": 0,
+        "memoryPercent": 2,
+        "name": "NVIDIA GeForce RTX 3070",
+        "totalMemoryBytes": 8589934592,
+        "usedMemoryBytes": 4328009728,
+        "uuid": "GPU-a3fc3a1a-36da-1c8e-e8fb-e73e4ab35bbe"
+      }
+    ],
+    "reason": "available",
+    "scope": "whole-device"
+  },
+  "demandProcessing": {
+    "cold": {
+      "available": true,
+      "imagesAllocated": false,
+      "lastProcessingMs": 0.0,
+      "processedFrames": 0,
+      "processingStopped": false,
+      "scope": "native-pipeline-wall-time"
+    },
+    "active": {
+      "available": true,
+      "imagesAllocated": true,
+      "lastProcessingMs": 4.7636,
+      "processedFrames": 171,
+      "processingStopped": false,
+      "scope": "native-pipeline-wall-time"
+    },
+    "idleStart": {
+      "available": true,
+      "imagesAllocated": true,
+      "lastProcessingMs": 4.7636,
+      "processedFrames": 171,
+      "processingStopped": false,
+      "scope": "native-pipeline-wall-time"
+    },
+    "idleEnd": {
+      "available": true,
+      "imagesAllocated": true,
+      "lastProcessingMs": 4.7636,
+      "processedFrames": 171,
+      "processingStopped": false,
+      "scope": "native-pipeline-wall-time"
+    },
+    "resumed": {
+      "available": true,
+      "imagesAllocated": true,
+      "lastProcessingMs": 5.3729,
+      "processedFrames": 291,
+      "processingStopped": false,
+      "scope": "native-pipeline-wall-time"
+    }
+  },
+  "tracking": [
+    {
+      "position": "left",
+      "difference": 20.560814043209877
+    },
+    {
+      "position": "right",
+      "difference": 19.514062982253087
+    }
+  ],
+  "timeline": [
+    {
+      "seconds": 2.4690000000118744,
+      "text": "NVIDIA Auto Frame / sujet a left\nSuivi natif du visage / zoom 2.5 maximum"
+    },
+    {
+      "seconds": 6.125,
+      "text": "NVIDIA Auto Frame / sujet a right\nSuivi natif du visage / zoom 2.5 maximum"
+    },
+    {
+      "seconds": 9.65700000000652,
+      "text": "NVIDIA Auto Frame / aucun visage\nRetour progressif au cadrage d'origine"
+    },
+    {
+      "seconds": 14.75,
+      "text": "NVIDIA Eye Contact / comparaison meme image\nGAUCHE : avant / DROITE : correction du regard"
+    },
+    {
+      "seconds": 23.297000000005937,
+      "text": "NVIDIA Eye Contact / intensite zero\nBypass exact de la correction"
+    },
+    {
+      "seconds": 25.03200000000652,
+      "text": "NVIDIA / effets AR simultanes\nAuto Frame + Eye Contact 50 %"
+    },
+    {
+      "seconds": 33.26600000000326,
+      "text": "NVIDIA / remplacement d'arriere-plan\nDetourage natif / fond image sous la personne"
+    },
+    {
+      "seconds": 38.86000000000058,
+      "text": "NVIDIA / remplacement d'arriere-plan\nFond VIDEO en boucle / personne detouree native"
+    }
+  ],
+  "noFaceFallback": {
+    "initialCropDifference": 16.10308159722222,
+    "finalDifference": 0.0125
+  },
+  "eyeContact": {
+    "leftDifference": 0.0,
+    "rightDifference": 0.2691085500394011,
+    "render": {
+      "frames": 300,
+      "skipped": 0,
+      "meanMs": 7.761301
+    }
+  },
+  "gpuWithEyeContact": {
+    "available": true,
+    "devices": [
+      {
+        "gpuPercent": 37,
+        "index": 0,
+        "memoryPercent": 7,
+        "name": "NVIDIA GeForce RTX 3070",
+        "totalMemoryBytes": 8589934592,
+        "usedMemoryBytes": 4826578944,
+        "uuid": "GPU-a3fc3a1a-36da-1c8e-e8fb-e73e4ab35bbe"
+      }
+    ],
+    "reason": "available",
+    "scope": "whole-device"
+  },
+  "stackedAr": {
+    "frames": 301,
+    "skipped": 0,
+    "meanMs": 9.706826,
+    "difference": 20.597655285493826
+  },
+  "backgroundComposition": {
+    "opaquePixels": 156794,
+    "transparentPixels": 284526,
+    "subjectDifference": 0.0010746584690740717,
+    "backgroundDifference": 70.99850189437872
+  },
+  "videoBackground": {
+    "media": {
+      "mediaCursor": 2600,
+      "mediaDuration": 3000,
+      "mediaState": "OBS_MEDIA_STATE_PLAYING"
+    },
+    "backgroundDifference": 3.779048311929314,
+    "subjectDifference": 0.0014700817633327805
+  },
+  "nativeRecording": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\nvidia-camera-video-qualified\\pulsar-20261010-161133.mp4",
+  "checks": [
+    "cold allocation and processing only on render demand",
+    "idle processing stops and resumes",
+    "actual AR registration",
+    "face-follow and native zoom at two positions",
+    "eye redirection same-frame comparison",
+    "stacked AR effects",
+    "segmented portrait over authored background in native Program",
+    "native render windows",
+    "exact bypass",
+    "cleanup and graceful shutdown"
+  ],
+  "shutdown": {
+    "exitCode": 0,
+    "forced": false
+  },
+  "sdkLogs": [
+    "2026-10-10T14:11:21Z INFO 7HcBFTkM9im8ODuZ libobs | \tAdapter 0: NVIDIA GeForce RTX 3070",
+    "2026-10-10T14:11:21Z INFO 7HcBFTkM9im8ODuZ libobs | Loading up D3D11 on adapter NVIDIA GeForce RTX 3070 (0)",
+    "2026-10-10T14:11:22Z INFO 7HcBFTkM9im8ODuZ NVIDIA Audio Effects: | version: 1.6.1.2",
+    "2026-10-10T14:11:22Z INFO 7HcBFTkM9im8ODuZ NVIDIA Audio Effects: | enabled",
+    "2026-10-10T14:11:22Z INFO 7HcBFTkM9im8ODuZ NVIDIA VIDEO FX | : NVIDIA VIDEO FX version: 0.7.6.0",
+    "2026-10-10T14:11:22Z INFO 7HcBFTkM9im8ODuZ NVIDIA VIDEO FX | : enabled, redistributable found"
+  ],
+  "sdkDiagnostics": [],
+  "qualification": "installed-SDK synthetic regression; excludes voice/person quality, full-package CI and hardware capacity",
+  "passed": true
+}

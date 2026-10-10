@@ -3,6 +3,34 @@
 The name is historical: in 3.0.0 this is Pulsar's **headless frontend and
 production controller**, not a frozen single-scene mock.
 
+The host-controlled WebM capability is documented in
+[configurable-transitions](../../docs/contracts/configurable-transitions.md).
+`src/pulsar-media-transition.cpp` owns the private decoder and media-only
+audio settings; `src/pulsar-media-transition-config.cpp` validates the host
+configuration; `pulsar-frontend-stub.cpp` owns its vendor API,
+lane admission and frame-boundary completion. It starts without a media
+resource, can be configured at runtime, and supports Take and same-lane
+replacement without changing the role map for the latter. The historical
+environment-only demo stinger described below remains an explicit opt-in;
+there is no automatically selected demo path.
+
+`src/pulsar-preview-frame.cpp` owns the single canvas-sized GPU capture used
+while the host prepares a persistent cockpit composite in place. It registers
+its source kind at frontend initialization and renders/captures on the OBS
+graphics thread. The frontend owns the private overlay's lifetime; the media
+owner clones one bounded Preview decoder per operation. Host readiness then
+starts continuous playback, with an incoming-composite reveal at the media
+cut point and native restoration on completion/abort. The decoder isolation
+prevents prior asynchronous stop callbacks from truncating immediate replays.
+`scripts/probe-preview-transition.py` covers that runtime contract.
+
+`libobs` exposes a `frontend-api` layer (`obs-frontend-api.dll`) whose
+function table is filled by whichever frontend is running — the OBS
+Studio Qt UI in upstream, this stub in Pulsar. Without callbacks set,
+every `obs_frontend_*` call logs `"Tried to call X with no callbacks"`
+and returns null. obs-websocket's `EventHandler` registers an event
+callback through this layer; if no frontend is in place its events
+never fire and v5 clients see a frozen state.
 It is a static C++ library linked into `pulsar.exe`, not a loadable OBS
 plugin. It implements `obs_frontend_callbacks` so obs-websocket and other
 modules can use frontend state without the OBS Studio UI.

@@ -28,7 +28,7 @@ missing files to recreate in `patches/`:
 | [7e7a5a383](https://github.com/ZabLaboratory/obs-studio/commit/7e7a5a383) | Adds a separate Program-return camera. |
 | [b33f831b8](https://github.com/ZabLaboratory/obs-studio/commit/b33f831b8) | Resolves embedded modules and registers Program return. |
 
-On top of this pin, 3.0.0 carries **52 patch files**: 51 root-OBS patches
+On top of this pin, 3.0.0 carries **61 patch files**: 60 root-OBS patches
 and one nested obs-browser patch. [build-win.ps1](../scripts/build-win.ps1)
 sorts complete filenames lexically, routes names containing `obs-browser`
 to `upstream/plugins/obs-browser/`, and applies the others to `upstream/`.
@@ -553,7 +553,113 @@ Further restricts automatic current readback to a physical graphics adapter. A s
 
 Affected files: `libobs/obs-video.c`.
 
+### 0057-feat-source-core-memory-readback
+
+[Source patch](../patches/0057-feat-source-core-memory-readback.patch)
+
+Adds core-owned source memory statistics consumed by the native GetSourceStats
+request. Windows reads allocations and cached frames under the source async
+mutex; other platforms return an unavailable sentinel. This lower bound excludes
+plugin, driver and GPU allocations. Affected files: `libobs/obs-source.c`,
+`libobs/obs.h`.
+
+### 0058-fix-build-provision-cef-for-full-pulsar
+
+[Source patch](../patches/0058-fix-build-provision-cef-for-full-pulsar.patch)
+
+Allows PULSAR_REQUIRE_CEF to request the pinned, hash-verified CEF dependency
+independently of the upstream browser target. Full builds opt in; light builds
+do not. Affected file: `cmake/common/buildspec_common.cmake`.
+
+### 0059-fix-source-telemetry-profiling-lease
+
+[Source patch](../patches/0059-fix-source-telemetry-profiling-lease.patch)
+
+Bounds read-owned source profiling to a five-second lease independently of
+explicit resource tracing. Native telemetry covers polling and idle expiry.
+Affected files: `libobs/util/source-profiler.c`, `libobs/util/source-profiler.h`.
+
+### 0060-fix-nvidia-effect-initialization-and-logging
+
+[Source patch](../patches/0060-fix-nvidia-effect-initialization-and-logging.patch)
+
+Defers initial/recreated blur loading until source and destination images are
+bound. Live intensity updates retain reload and report failed SDK statuses.
+Null/empty logger messages are ignored; real SDK diagnostics are preserved.
+The installed-SDK probe exercises live intensity, exact video bypass, stacked
+filters, 20 native scene changes and native audio meters. A passing load or
+readback does not qualify audio intensity: the probe rejects the reproduced
+AFX 1.6.1.2 zero-intensity failure.
+
+Affected files: `plugins/nv-filters/nvidia-audiofx-filter.c`,
+`plugins/nv-filters/nvidia-videofx-filter.c`.
+
+### 0061-fix-nvidia-audio-zero-intensity-bypass
+
+[Source patch](../patches/0061-fix-nvidia-audio-zero-intensity-bypass.patch)
+
+Guarantees that intensity zero passes original PCM through the existing 10 ms
+FIFO, including bypass of VAD. An atomic flag preserves native enabled state
+and avoids the reproduced AFX 1.6.1.2 denoiser near-silence at zero. Nonzero SDK
+processing remains unchanged. No reset/reload, allocation or additional audio
+thread lock is introduced. The regression checks all three methods against a
+contemporaneous disabled-filter control and reapplies intensity one.
+
+Affected file: `plugins/nv-filters/nvidia-audiofx-filter.c`.
+
+### 0062-fix-nvidia-audio-settings-worker
+
+[Source patch](../patches/0062-fix-nvidia-audio-settings-worker.patch)
+
+Recreates private AFX handles off the audio/settings thread when method,
+intensity or VAD changes. The installed AFX denoiser captures intensity at
+load and VAD is a load-time SDK parameter. Settings coalesce on a persistent
+worker; original PCM passes through the existing FIFO during loading.
+The audio callback never waits for model loading. Destruction joins the worker
+outside its mutex before releasing buffers or handles. The global SDK logger
+lives until module unload rather than an individual filter's destruction.
+The probe adds 72 rapid settings changes, six removals during loading, two
+audio filters and optional native recording of synthetic fixtures.
+
+Affected file: `plugins/nv-filters/nvidia-audiofx-filter.c`.
+
 ## Validation boundaries and retained studies
+
+### 0063-add-nvidia-video-denoise-and-comparison
+
+[Source patch](../patches/0063-add-nvidia-video-denoise-and-comparison.patch)
+
+Registers `nv_denoise_filter` only with the installed conservative/aggressive
+VFX models. Inputs use normalized planar BGR float and outputs convert back
+to the existing GPU texture. Closed model modes 0/1, live blend intensity,
+temporal state and exact zero bypass are native. Comparison preserves the
+original left half and processes the right half of the same source frame;
+it also appears in Program. An exported module flag gates the Prism setting.
+
+Affected files: `plugins/nv-filters/nvidia-videofx-filter.c`, `nv-filters.c`,
+`data/rtx_blur.effect` and `data/rtx_greenscreen.effect` in the same directory.
+
+### 0064-add-nvidia-ar-effects-and-demand-processing
+
+[Source patch](../patches/0064-add-nvidia-ar-effects-and-demand-processing.patch)
+
+Adds `nv_autoframe_filter` and `nv_eye_contact_filter` using the separately
+installed AR 0.8.7 SDK and existing VFX texture/CUDA interop. The owned minimal
+ABI adapter lives outside upstream. Auto Frame follows the largest valid face,
+clamps the crop and returns smoothly to the original frame after one second
+without a face. Eye Contact binds the required gaze and landmark outputs;
+strength blends the processed image and zero bypasses it exactly.
+
+Image/model allocation begins on actual render demand. Unused sources perform
+no inference; warmed allocations remain retained for resumption. The native
+`get_nvidia_processing` procedure reads processed counts and pipeline wall time
+on the graphics thread. This measures the native pipeline, not GPU-only time.
+Creation failures return to one cleanup owner; destroyed handles are nulled;
+partial image allocations and both background-blur textures are released.
+
+Affected files: `plugins/nv-filters/nvidia-videofx-filter.c`, `nv-filters.c`
+and `data/rtx_blur.effect`. The native probes use synthetic patterns and an
+explicit official portrait fixture; real webcam quality is a separate check.
 
 The native CPU readback study records 100 warm-up and 100 measured Cuts per
 trial, a changed decoded-image oracle, media timestamps and common Program

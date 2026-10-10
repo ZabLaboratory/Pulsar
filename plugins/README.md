@@ -6,7 +6,7 @@ builds them against the same patched OBS headers and libraries.
 
 | Component | Built artifact | Ownership |
 |---|---|---|
-| [pulsar-headless](pulsar-headless/README.md) | `pulsar.exe` | Bootstrap, runtime namespace, readiness, logs and teardown. |
+| [pulsar-headless](pulsar-headless/README.md) | `pulsar.exe` | Bootstrap, runtime namespace, Windows RTWQ audio platform, readiness, logs and teardown. |
 | [pulsar-frontend-stub](pulsar-frontend-stub/README.md) | Static library in `pulsar.exe` | Frontend API, hot production lanes/views, encoders, singleton outputs, common audio and scene-switch vendor. |
 | [pulsar-websocket](pulsar-websocket/README.md) | `obs-websocket.dll` | v5 control/authentication/events and vendor dispatch. |
 | [pulsar-multi-stream](pulsar-multi-stream/README.md) | `pulsar-multi-stream.dll` | Twitch/YouTube/custom RTMP/local destinations, adaptive bitrate, capabilities, audio and diagnostics. |

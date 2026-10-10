@@ -1,5 +1,13 @@
 # @clodocapeo/pulsar-client
 
+`client.transitions` exposes the runtime-local configurable WebM capability:
+`getState()`, `configure(runtimeId, config | null)`, `switchLane(request)`,
+`getResult(runtimeId, commandId)` and `abort(runtimeId, commandId)`.
+Observe `laneSwitchCompleted` for terminal frame/PTS evidence. Configuration
+loads no default file and host persistence remains external. See the
+[native contract and host example](../../docs/contracts/configurable-transitions.md)
+for readiness, Take versus same-lane semantics, media-only gain and errors.
+
 [![npm](https://img.shields.io/npm/v/%40clodocapeo%2Fpulsar-client?logo=npm&color=cb3837)](https://www.npmjs.com/package/@clodocapeo/pulsar-client)
 [![Licence MIT](https://img.shields.io/badge/licence-MIT-blue)](./LICENSE)
 [![Node ≥ 18](https://img.shields.io/badge/node-%E2%89%A518-339933)](https://nodejs.org)

@@ -1,0 +1,793 @@
+{
+  "started": 1791620888.8820999,
+  "mode": "isolated synthetic camera-effect regression",
+  "capabilities": {
+    "active_encoder": "nvenc",
+    "audio_bitrate": [
+      {
+        "value": 64
+      },
+      {
+        "value": 96
+      },
+      {
+        "value": 128
+      },
+      {
+        "value": 160
+      },
+      {
+        "value": 192
+      },
+      {
+        "value": 224
+      },
+      {
+        "value": 256
+      },
+      {
+        "value": 288
+      },
+      {
+        "value": 320
+      },
+      {
+        "value": 352
+      },
+      {
+        "value": 384
+      },
+      {
+        "value": 416
+      },
+      {
+        "value": 448
+      },
+      {
+        "value": 480
+      },
+      {
+        "value": 512
+      }
+    ],
+    "capabilities": {
+      "active_encoder": {
+        "applicability": "boot-fixed",
+        "value": "nvenc"
+      },
+      "audio_bitrate": {
+        "applicability": "live",
+        "max": 512,
+        "min": 64,
+        "step": 32,
+        "values": [
+          {
+            "value": 64
+          },
+          {
+            "value": 96
+          },
+          {
+            "value": 128
+          },
+          {
+            "value": 160
+          },
+          {
+            "value": 192
+          },
+          {
+            "value": 224
+          },
+          {
+            "value": 256
+          },
+          {
+            "value": 288
+          },
+          {
+            "value": 320
+          },
+          {
+            "value": 352
+          },
+          {
+            "value": 384
+          },
+          {
+            "value": 416
+          },
+          {
+            "value": 448
+          },
+          {
+            "value": 480
+          },
+          {
+            "value": 512
+          }
+        ]
+      },
+      "audio_monitoring": {
+        "applicability": "live",
+        "available": true,
+        "device_bound": true,
+        "device_id": "{0.0.0.00000000}.{3a9b3ef5-04ae-4b95-88d7-53e24294bc68}",
+        "device_name": "Default",
+        "device_selectable": true
+      },
+      "audio_sample_rate": {
+        "applicability": "read-only",
+        "hz": 48000
+      },
+      "audio_speaker_layout": {
+        "applicability": "read-only",
+        "channels": 2,
+        "layout": "stereo"
+      },
+      "audio_tracks": {
+        "applicability": "read-only",
+        "bound": 1,
+        "count": 6,
+        "tracks": [
+          {
+            "value": 1
+          }
+        ]
+      },
+      "destination_kinds": {
+        "applicability": "live",
+        "values": [
+          {
+            "value": "rtmp_custom"
+          },
+          {
+            "value": "vod_local"
+          },
+          {
+            "value": "twitch"
+          },
+          {
+            "value": "youtube"
+          }
+        ]
+      },
+      "encoder_families": {
+        "applicability": "boot-fixed",
+        "values": [
+          {
+            "bitrate": {
+              "max": 50000,
+              "min": 200,
+              "step": 50
+            },
+            "keyint_sec": {
+              "max": 20,
+              "min": 0,
+              "step": 1
+            },
+            "presets": [
+              {
+                "value": "ultrafast"
+              },
+              {
+                "value": "superfast"
+              },
+              {
+                "value": "veryfast"
+              },
+              {
+                "value": "faster"
+              },
+              {
+                "value": "fast"
+              },
+              {
+                "value": "medium"
+              },
+              {
+                "value": "slow"
+              },
+              {
+                "value": "slower"
+              },
+              {
+                "value": "veryslow"
+              },
+              {
+                "value": "placebo"
+              }
+            ],
+            "profiles": [
+              {
+                "value": "baseline"
+              },
+              {
+                "value": "main"
+              },
+              {
+                "value": "high"
+              }
+            ],
+            "rate_controls": [
+              {
+                "value": "CBR"
+              },
+              {
+                "value": "VBR"
+              }
+            ],
+            "value": "x264"
+          },
+          {
+            "bitrate": {
+              "max": 50000,
+              "min": 200,
+              "step": 50
+            },
+            "keyint_sec": {
+              "max": 10,
+              "min": 0,
+              "step": 1
+            },
+            "presets": [
+              {
+                "value": "p1"
+              },
+              {
+                "value": "p2"
+              },
+              {
+                "value": "p3"
+              },
+              {
+                "value": "p4"
+              },
+              {
+                "value": "p5"
+              },
+              {
+                "value": "p6"
+              },
+              {
+                "value": "p7"
+              }
+            ],
+            "profiles": [
+              {
+                "value": "high"
+              },
+              {
+                "value": "main"
+              },
+              {
+                "value": "baseline"
+              }
+            ],
+            "rate_controls": [
+              {
+                "value": "CBR"
+              },
+              {
+                "value": "CQP"
+              },
+              {
+                "value": "VBR"
+              }
+            ],
+            "value": "nvenc"
+          }
+        ]
+      },
+      "encoders": {
+        "applicability": "boot-fixed",
+        "values": [
+          {
+            "value": "nvenc"
+          },
+          {
+            "value": "x264"
+          }
+        ]
+      },
+      "filters": {
+        "applicability": "live",
+        "values": [
+          {
+            "value": "mask_filter"
+          },
+          {
+            "value": "mask_filter_v2"
+          },
+          {
+            "value": "crop_filter"
+          },
+          {
+            "value": "gain_filter"
+          },
+          {
+            "value": "basic_eq_filter"
+          },
+          {
+            "value": "hdr_tonemap_filter"
+          },
+          {
+            "value": "color_filter"
+          },
+          {
+            "value": "color_filter_v2"
+          },
+          {
+            "value": "scale_filter"
+          },
+          {
+            "value": "scroll_filter"
+          },
+          {
+            "value": "gpu_delay"
+          },
+          {
+            "value": "color_key_filter"
+          },
+          {
+            "value": "color_key_filter_v2"
+          },
+          {
+            "value": "clut_filter"
+          },
+          {
+            "value": "sharpness_filter"
+          },
+          {
+            "value": "sharpness_filter_v2"
+          },
+          {
+            "value": "chroma_key_filter"
+          },
+          {
+            "value": "chroma_key_filter_v2"
+          },
+          {
+            "value": "async_delay_filter"
+          },
+          {
+            "value": "noise_suppress_filter"
+          },
+          {
+            "value": "noise_suppress_filter_v2"
+          },
+          {
+            "value": "invert_polarity_filter"
+          },
+          {
+            "value": "noise_gate_filter"
+          },
+          {
+            "value": "compressor_filter"
+          },
+          {
+            "value": "limiter_filter"
+          },
+          {
+            "value": "expander_filter"
+          },
+          {
+            "value": "upward_compressor_filter"
+          },
+          {
+            "value": "luma_key_filter"
+          },
+          {
+            "value": "luma_key_filter_v2"
+          },
+          {
+            "value": "pulsar_vignette_filter"
+          }
+        ]
+      },
+      "graphics_adapters": {
+        "active_index": 0,
+        "applicability": "read-only",
+        "values": [
+          {
+            "index": 0,
+            "value": "NVIDIA GeForce RTX 3070"
+          }
+        ]
+      },
+      "nv_filters": {
+        "afx": {
+          "directory_designated": false,
+          "dlls_present": false,
+          "min_version": "1.6.1.2",
+          "models_present": false,
+          "usable": false
+        },
+        "applicability": "read-only",
+        "module_loaded": false,
+        "vfx": {
+          "directory_designated": false,
+          "dlls_present": false,
+          "min_version": "0.7.6.0",
+          "models_present": false,
+          "usable": false
+        }
+      },
+      "output_scales": {
+        "applicability": "boot-fixed",
+        "canvas": {
+          "height": 1080,
+          "width": 1920
+        },
+        "values": [
+          {
+            "height": 1080,
+            "scale": 1.0,
+            "value": "1920x1080",
+            "width": 1920
+          }
+        ]
+      },
+      "record_container": {
+        "applicability": "boot-fixed",
+        "value": "mp4",
+        "values": [
+          {
+            "value": "mp4"
+          },
+          {
+            "value": "mkv"
+          }
+        ]
+      },
+      "record_markers": {
+        "add_chapter": false,
+        "applicability": "read-only",
+        "split_file": true
+      },
+      "source_kinds": {
+        "applicability": "live",
+        "values": [
+          {
+            "value": "audio_line"
+          },
+          {
+            "value": "pulsar_preview_frame"
+          },
+          {
+            "value": "image_source"
+          },
+          {
+            "value": "color_source"
+          },
+          {
+            "value": "color_source_v2"
+          },
+          {
+            "value": "color_source_v3"
+          },
+          {
+            "value": "slideshow"
+          },
+          {
+            "value": "slideshow_v2"
+          },
+          {
+            "value": "ffmpeg_source"
+          },
+          {
+            "value": "text_gdiplus"
+          },
+          {
+            "value": "text_gdiplus_v2"
+          },
+          {
+            "value": "text_gdiplus_v3"
+          },
+          {
+            "value": "browser_source"
+          },
+          {
+            "value": "text_ft2_source"
+          },
+          {
+            "value": "text_ft2_source_v2"
+          },
+          {
+            "value": "vlc_source"
+          },
+          {
+            "value": "monitor_capture"
+          },
+          {
+            "value": "window_capture"
+          },
+          {
+            "value": "game_capture"
+          },
+          {
+            "value": "dshow_input"
+          },
+          {
+            "value": "wasapi_input_capture"
+          },
+          {
+            "value": "wasapi_output_capture"
+          },
+          {
+            "value": "wasapi_process_output_capture"
+          }
+        ]
+      },
+      "video_bitrate": {
+        "applicability": "live",
+        "max": 50000,
+        "min": 200,
+        "step": 50
+      },
+      "video_colorimetry": {
+        "applicability": "read-only",
+        "format": "NV12",
+        "range": "Partial",
+        "value": "709"
+      }
+    },
+    "encoders": [
+      {
+        "value": "nvenc"
+      },
+      {
+        "value": "x264"
+      }
+    ],
+    "version": 1,
+    "video_bitrate": {
+      "max": 50000,
+      "min": 200
+    }
+  },
+  "inputInventoryCount": 16,
+  "baseline": {
+    "center": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "corner": [
+      255,
+      255,
+      255,
+      255
+    ]
+  },
+  "vignette": {
+    "center": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "corner": [
+      51,
+      51,
+      51,
+      255
+    ]
+  },
+  "translucentAlpha": [
+    128,
+    128
+  ],
+  "keyedCenter": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "performance": {
+    "fixture": "1920x1080 white native source; concurrent dev GPU load",
+    "bypass": {
+      "before": {
+        "activeFps": 60.0000024000001,
+        "availableDiskSpace": 116547.265625,
+        "averageFrameRenderTime": 0.350003,
+        "cpuUsage": 1.1316817236217571,
+        "memoryUsage": 97.38671875,
+        "outputSkippedFrames": 0,
+        "outputTotalFrames": 0,
+        "renderSkippedFrames": 0,
+        "renderTotalFrames": 173,
+        "webSocketSessionIncomingMessages": 30,
+        "webSocketSessionOutgoingMessages": 30
+      },
+      "samples": [
+        {
+          "activeFps": 60.0000024000001,
+          "availableDiskSpace": 116547.265625,
+          "averageFrameRenderTime": 0.355645,
+          "cpuUsage": 0.19264057522167538,
+          "memoryUsage": 97.6015625,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 0,
+          "renderTotalFrames": 233,
+          "webSocketSessionIncomingMessages": 31,
+          "webSocketSessionOutgoingMessages": 31
+        },
+        {
+          "activeFps": 60.0000024000001,
+          "availableDiskSpace": 116547.265625,
+          "averageFrameRenderTime": 0.354549,
+          "cpuUsage": 0.4847241984147729,
+          "memoryUsage": 97.81640625,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 0,
+          "renderTotalFrames": 294,
+          "webSocketSessionIncomingMessages": 32,
+          "webSocketSessionOutgoingMessages": 32
+        },
+        {
+          "activeFps": 60.0000024000001,
+          "availableDiskSpace": 116547.265625,
+          "averageFrameRenderTime": 0.372565,
+          "cpuUsage": 0.5789769236287504,
+          "memoryUsage": 98.03515625,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 0,
+          "renderTotalFrames": 355,
+          "webSocketSessionIncomingMessages": 33,
+          "webSocketSessionOutgoingMessages": 33
+        },
+        {
+          "activeFps": 60.0000024000001,
+          "availableDiskSpace": 116547.265625,
+          "averageFrameRenderTime": 0.353403,
+          "cpuUsage": 0.38676768848915993,
+          "memoryUsage": 98.25,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 0,
+          "renderTotalFrames": 415,
+          "webSocketSessionIncomingMessages": 34,
+          "webSocketSessionOutgoingMessages": 34
+        },
+        {
+          "activeFps": 60.0000024000001,
+          "availableDiskSpace": 116547.265625,
+          "averageFrameRenderTime": 0.329988,
+          "cpuUsage": 0.3862124455669089,
+          "memoryUsage": 98.4609375,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 0,
+          "renderTotalFrames": 476,
+          "webSocketSessionIncomingMessages": 35,
+          "webSocketSessionOutgoingMessages": 35
+        }
+      ],
+      "frameDelta": 303,
+      "skippedDelta": 0,
+      "meanRenderMs": 0.35323000000000004
+    },
+    "vignette": {
+      "before": {
+        "activeFps": 60.0000024000001,
+        "availableDiskSpace": 116547.265625,
+        "averageFrameRenderTime": 0.560757,
+        "cpuUsage": 0.5356477529764532,
+        "memoryUsage": 98.87109375,
+        "outputSkippedFrames": 0,
+        "outputTotalFrames": 0,
+        "renderSkippedFrames": 0,
+        "renderTotalFrames": 596,
+        "webSocketSessionIncomingMessages": 37,
+        "webSocketSessionOutgoingMessages": 37
+      },
+      "samples": [
+        {
+          "activeFps": 60.0000024000001,
+          "availableDiskSpace": 116547.265625,
+          "averageFrameRenderTime": 0.38528,
+          "cpuUsage": 0.38736485986639246,
+          "memoryUsage": 98.87109375,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 0,
+          "renderTotalFrames": 657,
+          "webSocketSessionIncomingMessages": 38,
+          "webSocketSessionOutgoingMessages": 38
+        },
+        {
+          "activeFps": 60.0000024000001,
+          "availableDiskSpace": 116547.265625,
+          "averageFrameRenderTime": 0.429996,
+          "cpuUsage": 0.3885995414699503,
+          "memoryUsage": 98.87109375,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 0,
+          "renderTotalFrames": 717,
+          "webSocketSessionIncomingMessages": 39,
+          "webSocketSessionOutgoingMessages": 39
+        },
+        {
+          "activeFps": 60.0000024000001,
+          "availableDiskSpace": 116547.265625,
+          "averageFrameRenderTime": 0.447819,
+          "cpuUsage": 0.386274124147836,
+          "memoryUsage": 98.87109375,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 0,
+          "renderTotalFrames": 778,
+          "webSocketSessionIncomingMessages": 40,
+          "webSocketSessionOutgoingMessages": 40
+        },
+        {
+          "activeFps": 60.0000024000001,
+          "availableDiskSpace": 116547.265625,
+          "averageFrameRenderTime": 0.449339,
+          "cpuUsage": 0.48819591335434565,
+          "memoryUsage": 98.87109375,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 0,
+          "renderTotalFrames": 838,
+          "webSocketSessionIncomingMessages": 41,
+          "webSocketSessionOutgoingMessages": 41
+        },
+        {
+          "activeFps": 60.0000024000001,
+          "availableDiskSpace": 116547.265625,
+          "averageFrameRenderTime": 0.429172,
+          "cpuUsage": 0.5781461709419183,
+          "memoryUsage": 98.87109375,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 0,
+          "renderTotalFrames": 899,
+          "webSocketSessionIncomingMessages": 42,
+          "webSocketSessionOutgoingMessages": 42
+        }
+      ],
+      "frameDelta": 303,
+      "skippedDelta": 0,
+      "meanRenderMs": 0.42832119999999996
+    }
+  },
+  "checks": [
+    "registration",
+    "pixel falloff",
+    "opaque alpha",
+    "partial alpha",
+    "native bypass",
+    "zero intensity",
+    "live update",
+    "filter stack",
+    "transparent center",
+    "1080p realtime",
+    "removal"
+  ],
+  "stats": {
+    "activeFps": 60.0000024000001,
+    "availableDiskSpace": 116547.265625,
+    "averageFrameRenderTime": 0.429172,
+    "cpuUsage": 65.0044931105638,
+    "memoryUsage": 98.875,
+    "outputSkippedFrames": 0,
+    "outputTotalFrames": 0,
+    "renderSkippedFrames": 0,
+    "renderTotalFrames": 899,
+    "webSocketSessionIncomingMessages": 45,
+    "webSocketSessionOutgoingMessages": 45
+  },
+  "shutdown": {
+    "exitCode": 0,
+    "forced": false
+  },
+  "stagingErrors": 0,
+  "passed": true
+}

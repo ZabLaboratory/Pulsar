@@ -1,6 +1,6 @@
 # pulsar-nv-secure-load
 
-Header-only. One header, `pulsar-nv-secure-load.h`, holding the whole of
+Header-only. `pulsar-nv-secure-load.h` owns the common policy, with a minimal AR ABI adapter and a read-only NVML driver query. It holds
 Pulsar's answer to *where may an NVIDIA Maxine SDK DLL or model come from,
 and is one there right now*.
 
@@ -73,3 +73,51 @@ state rather than inferring it from the launcher environment.
 
 NVENC encoding is a different module and does not depend on this effect-SDK
 loader. See [architecture](../../docs/ARCHITECTURE.md).
+
+## Installed SDK regression
+
+AR resolves only the system Known Folder Program Files path
+`NVIDIA Corporation/NVIDIA AR SDK`, never an environment or renderer override.
+Root and models share the non-writable, non-reparse policy. Registration also
+requires the specific face-detection/landmark/gaze model files. Missing AR does
+not disable independent AFX/VFX filters. The AR adapter reuses VFX NvCV interop.
+
+`pulsar-nvidia-gpu.h` samples NVML loaded from System32 only. It reports the
+whole physical GPU, including other applications, and balances its own
+reference-counted init/shutdown. Failed measurements remain absent; no SDK
+binary or model is distributed. This is not per-effect GPU attribution.
+
+`probe-nvidia-video-parity.py` checks both denoise models, alpha preservation,
+live blend and four same-frame VFX splits. `probe-nvidia-ar-parity.py` takes
+`--portrait`, checks face translation, no-face fallback, gaze correction,
+cold allocation, idle inference counts and resumption. It also checks stacked
+AR effects and native Program composition of the segmented portrait over an
+image and a looping video, preserving opaque subject pixels. FFmpeg must be
+on PATH to generate the three-second video fixture inside `--work`.
+No physical camera or microphone is selected by these tests.
+
+[`scripts/probe-nvidia-effects.py`](../../scripts/probe-nvidia-effects.py) is an
+explicit hardware test for a machine with the official compatible AFX/VFX
+redistributables installed. It takes `--exe`, `--work`, `--report`, `--afx` and
+`--vfx` absolute paths. It reuses the existing authenticated wire and isolated
+shutdown helper; the native loader still validates all designated paths.
+Dependencies are Python, NumPy, Pillow and websockets.
+
+The fixture uses 1080p stripes and seeded 48 kHz noise: three video filters must
+change native pixels, bypass must restore exact pixels, and each must sustain
+at least 250 frames across five seconds with no skipped frames. Three audio
+methods must load and process; denoising/combined must reduce the native meter
+magnitude by at least half. Neither microphones, cameras, monitoring speakers,
+network broadcast are used. `--record-video` explicitly records the isolated
+synthetic Program inside `--work`; it never records user devices or Prism's
+antenna. The process must exit normally.
+
+Reports retain SDK warnings/errors separately: passing synthetic checks does
+not certify the absence of SDK diagnostics, portrait segmentation quality,
+room-echo removal quality, or an external hardware output. Native source and
+Program scene pixels, twenty switches with stacked video effects, three audio
+intensity contracts, rapid updates and removal while loading are tested.
+The report records render timing, SDK diagnostics and optional recording
+provenance separately. Patch 0062 owns the private AFX worker lifecycle;
+this header continues to own only SDK loading policy. SDK
+packages/models remain external machine dependencies and are never committed.

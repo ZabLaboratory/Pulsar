@@ -1,0 +1,20 @@
+[
+  {
+    "name": "pulsar-media-transition-config-probe.exe",
+    "exit": 0,
+    "output": "media configuration: valid WebM/MP4 accepted; 22 invalid cases rejected",
+    "sha256": "8DC71096E6623FABB5ABC28B5334C1EA702A66F884C02E0E53D1479E22E12931"
+  },
+  {
+    "name": "pulsar-transition-controller-probe.exe",
+    "exit": 0,
+    "output": "",
+    "sha256": "8588983884425DDB0BA53DFEA7739E21A19EB7C22BA6DFF01855FE3F82492F5E"
+  },
+  {
+    "name": "rtwq-lifecycle-test.exe",
+    "exit": 0,
+    "output": "PASS: reproduced uninitialized Capture queue (0xC00D3E85)\nPASS: three host lifecycles and 36 Capture queue recreations\nPASS: independent platform owner preserved; no startup reference leaked",
+    "sha256": "65CBF67DAD9951505676C36191ED32885366F3389C672E09667E5217DA93F7F6"
+  }
+]

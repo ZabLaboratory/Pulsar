@@ -119,6 +119,11 @@ The Node helper terminates the child with a bounded fallback; Windows
 termination is not a guarantee of graceful CEF/libobs teardown or MP4
 finalization. The native shutdown-event harness is a different path.
 
+Requested termination emits informational `PULSAR_PROCESS_STOPPED`; unexpected
+exits remain `PULSAR_PROCESS_EXITED` errors. The light bundle's
+[lifecycle contract](../pulsar-bundle/README.md#lifecycle-and-restart-policy)
+defines the shared classification and startup-cleanup behavior.
+
 Default generated runtime directories are temporary and may be removed after
 shutdown. Supply persistent recording/log destinations or an explicit
 application-owned runtime directory.

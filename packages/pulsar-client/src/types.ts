@@ -487,6 +487,7 @@ export interface PulsarPrismLogEvent {
 
 /** Mapping of typed event names to their payloads. */
 export interface PulsarEventMap {
+  laneSwitchCompleted: import("./transitions.js").LaneSwitchResult;
   prismLog: PulsarPrismLogEvent;
   bitrateAdjusted: BitrateAdjustedEvent;
   recordStateChanged: RecordStateChangedEvent;

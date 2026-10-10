@@ -62,6 +62,7 @@ consumer. The runtime remains GPL-2.0-or-later; the WebSocket client is MIT.
 | `pulsar-multi-stream` | `pulsar-multi-stream.dll` | Destination registry, shared-encoder fan-out, adaptive bitrate, capabilities, audio/monitoring/diagnostic vendor requests. Owns vendor `pulsar`. |
 | `pulsar-scene-source` | `pulsar-scene-source.dll` | Legacy single browser-capture replacement. Owns vendor `pulsar-scene`. |
 | `pulsar-browser` | `pulsar-browser.dll` + `pulsar-browser-page.exe` | CEF browser source, accelerated/software rendering callbacks, source-task lifecycle and browser shutdown fence. Full distribution only. |
+| `pulsar-camera-effects` | `pulsar-camera-effects.dll` | Embedded GPU source vignette, bounded settings, alpha preservation and bypass. No AI models or new capture producer. |
 | `pulsar-output-classify` | Header-only interface target | Shared stable output-failure classification used by frontend and registry. |
 | `pulsar-nv-secure-load` | Header-only interface target | Shared validated SDK-directory/loading policy used by upstream effect module, capability probe and native tests. |
 | Patched OBS | `obs.dll`, graphics and upstream module binaries | Rendering/audio/video I/O, atomic view swap, encoders, output interleaving, capture and return transport. |

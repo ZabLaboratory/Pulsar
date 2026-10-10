@@ -1,0 +1,13 @@
+{
+  "type": "AGENT_CHECKPOINT",
+  "mandate": "NVIDIA Broadcast vers Prism, 27 capacites",
+  "time": "2026-10-10T07:48:08.726012+00:00",
+  "worktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit",
+  "branch": "eleven/local-20261009-capability-audit",
+  "baseRevision": "e8d0ce456e1c9ee763f6f3d8049b4162ebee7d59",
+  "changedFiles": "Only evidence/local-20261010-nvidia-broadcast-audit/eleven; no product source changes",
+  "validation": "Prism:319/339 targeted test union,20 retained failures,27-row report browser QA; Pulsar:7 classic native filter cycles plus4 screenshot modes andclean shutdown exit0",
+  "runtimeOwnership": "Scene-sync retains common dev; no restart/install by this audit",
+  "remaining": "AI NVIDIA unavailable (SDK absent), native source telemetry incompatible with loaded libobs, missing/partial capability rows,20test failures; noProgram/live/recording or physical disconnect test",
+  "retention": "Audit worktree/branch still attached to unmerged capability-audit PR; foreign and dirty worktrees preserved"
+}

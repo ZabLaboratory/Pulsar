@@ -1,0 +1,730 @@
+{
+  "passed": true,
+  "default": {
+    "busy": false,
+    "config": {},
+    "configured": false,
+    "last_switch": {},
+    "media_duration_ms": 0,
+    "operational": true,
+    "preview_overlay": {},
+    "readiness_error": "NOT_CONFIGURED",
+    "ready": false,
+    "role_map": {
+      "on_air": "A",
+      "preview": "B"
+    },
+    "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+    "transition_duration_ms": 0
+  },
+  "ready": {
+    "busy": false,
+    "config": {
+      "cut_point_ms": 700,
+      "muted": false,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\fix-configurable-probe\\fixture.webm",
+      "volume": 0.5
+    },
+    "configured": true,
+    "last_switch": {},
+    "media_duration_ms": 1508,
+    "operational": true,
+    "preview_overlay": {},
+    "readiness_error": "",
+    "ready": true,
+    "role_map": {
+      "on_air": "A",
+      "preview": "B"
+    },
+    "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+    "transition_duration_ms": 1758
+  },
+  "same_program": {
+    "result": {
+      "command_id": "same-program",
+      "frame_id": 86,
+      "lane_id": "A",
+      "pts_ns": 7578990292805,
+      "role_map": {
+        "on_air": "A",
+        "preview": "B"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "scene_name": "green",
+      "status": "completed"
+    },
+    "recording": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\fix-configurable-probe\\pulsar-20261009-113115.mkv",
+    "frames": 75,
+    "audio_rms": 0.04697546735405922,
+    "centers": [
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        217.0,
+        38.0,
+        38.0
+      ],
+      [
+        212.0,
+        40.0,
+        35.0
+      ],
+      [
+        203.0,
+        47.0,
+        35.0
+      ],
+      [
+        197.0,
+        60.0,
+        33.0
+      ],
+      [
+        193.0,
+        74.0,
+        32.0
+      ],
+      [
+        193.0,
+        91.0,
+        31.0
+      ],
+      [
+        195.0,
+        109.0,
+        28.0
+      ],
+      [
+        201.0,
+        127.0,
+        28.0
+      ],
+      [
+        212.0,
+        146.0,
+        27.0
+      ],
+      [
+        226.0,
+        165.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        233.0,
+        174.0,
+        26.0
+      ],
+      [
+        223.0,
+        173.0,
+        27.0
+      ],
+      [
+        196.0,
+        169.0,
+        27.0
+      ],
+      [
+        171.0,
+        169.0,
+        28.0
+      ],
+      [
+        145.0,
+        173.0,
+        30.0
+      ],
+      [
+        119.0,
+        179.0,
+        31.0
+      ],
+      [
+        96.0,
+        186.0,
+        32.0
+      ],
+      [
+        74.0,
+        194.0,
+        33.0
+      ],
+      [
+        53.0,
+        203.0,
+        35.0
+      ],
+      [
+        41.0,
+        212.0,
+        37.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ],
+      [
+        38.0,
+        218.0,
+        38.0
+      ]
+    ]
+  },
+  "same_preview": {
+    "result": {
+      "command_id": "same-preview",
+      "frame_id": 162,
+      "lane_id": "B",
+      "pts_ns": 7581523626113,
+      "role_map": {
+        "on_air": "A",
+        "preview": "B"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "scene_name": "red",
+      "status": "completed"
+    },
+    "recording": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\fix-configurable-probe\\pulsar-20261009-113117.mkv",
+    "audio_rms": 0.0
+  },
+  "take": {
+    "state": {
+      "contract": "pulsar.scene-switch.v1",
+      "frozen": false,
+      "idempotency_cache_capacity": 4096,
+      "idempotency_cache_entries": 2,
+      "operational": true,
+      "revisions": {
+        "preview": 2,
+        "program": 2,
+        "role_map": 1
+      },
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "schema_version": 1,
+      "server_seq": 4,
+      "state": "ready"
+    },
+    "recording": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\fix-configurable-probe\\pulsar-20261009-113120.mkv",
+    "audio_rms": 0.04694736748933792,
+    "committed_event": {
+      "command_id": "test-take-command",
+      "contract": "pulsar.scene-switch.v1",
+      "event_type": "TakeCommitted",
+      "frame_id": 247,
+      "intent_id": "test-take",
+      "message_type": "event",
+      "observed_at_monotonic_ns": 7584358183700,
+      "payload_sha256": "e08ffe4965fffdce09fa28580b8d840c6cab3340f53421845b93fd2938ae7381",
+      "preview_lane_id": "A",
+      "previous_revisions": {
+        "preview": 2,
+        "program": 1,
+        "role_map": 0
+      },
+      "previous_role_map": {
+        "on_air": "A",
+        "preview": "B"
+      },
+      "program_lane_id": "B",
+      "pts_ns": 7584356959418,
+      "revisions": {
+        "preview": 2,
+        "program": 2,
+        "role_map": 1
+      },
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "schema_version": 1,
+      "server_seq": 4,
+      "source_lane_id": "A",
+      "state": "ready",
+      "take_command_id": "test-take-command",
+      "target_lane_id": "B",
+      "target_scene_id": "red"
+    }
+  },
+  "abort": {
+    "command_id": "abort-me",
+    "frame_id": 280,
+    "lane_id": "B",
+    "pts_ns": 7585456959407,
+    "role_map": {
+      "on_air": "B",
+      "preview": "A"
+    },
+    "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+    "scene_name": "blue",
+    "status": "aborted"
+  },
+  "replacement_muted": {
+    "state": {
+      "busy": false,
+      "config": {
+        "cut_point_ms": 900,
+        "muted": true,
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\fix-configurable-probe\\second-\u00e9ffect.webm",
+        "volume": 0.20000000298023224
+      },
+      "configured": true,
+      "last_switch": {
+        "command_id": "after-abort",
+        "frame_id": 345,
+        "lane_id": "B",
+        "pts_ns": 7587623626052,
+        "role_map": {
+          "on_air": "B",
+          "preview": "A"
+        },
+        "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+        "scene_name": "blue",
+        "status": "completed"
+      },
+      "media_duration_ms": 1508,
+      "operational": true,
+      "preview_overlay": {},
+      "readiness_error": "",
+      "ready": true,
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "transition_duration_ms": 1758
+    },
+    "recording": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\fix-configurable-probe\\pulsar-20261009-113123.mkv",
+    "audio_rms": 0.0
+  },
+  "media_gain": {
+    "recording": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\fix-configurable-probe\\pulsar-20261009-113126.mkv",
+    "audio_rms": 0.018809134140610695,
+    "ratio_to_half_gain": 0.40040334242646697
+  },
+  "clear_cut": {
+    "result": {
+      "command_id": "clear-cut",
+      "frame_id": 469,
+      "lane_id": "B",
+      "pts_ns": 7591756959344,
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "scene_name": "blue",
+      "status": "completed"
+    },
+    "recording": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\fix-configurable-probe\\pulsar-20261009-113129.mkv",
+    "audio_rms": 0.0
+  },
+  "mp4": {
+    "ready": {
+      "busy": false,
+      "config": {
+        "cut_point_ms": 700,
+        "muted": false,
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\fix-configurable-probe\\fixture.mp4",
+        "volume": 0.5
+      },
+      "configured": true,
+      "last_switch": {
+        "command_id": "noop",
+        "lane_id": "B",
+        "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+        "scene_name": "blue",
+        "status": "noop"
+      },
+      "media_duration_ms": 1500,
+      "operational": true,
+      "preview_overlay": {},
+      "readiness_error": "",
+      "ready": true,
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "transition_duration_ms": 1750
+    },
+    "result": {
+      "command_id": "mp4-program",
+      "frame_id": 550,
+      "lane_id": "B",
+      "pts_ns": 7594456959317,
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "scene_name": "red",
+      "status": "completed"
+    }
+  },
+  "terminal_events": [
+    {
+      "command_id": "same-program",
+      "frame_id": 86,
+      "lane_id": "A",
+      "pts_ns": 7578990292805,
+      "role_map": {
+        "on_air": "A",
+        "preview": "B"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "scene_name": "green",
+      "status": "completed"
+    },
+    {
+      "command_id": "same-preview",
+      "frame_id": 162,
+      "lane_id": "B",
+      "pts_ns": 7581523626113,
+      "role_map": {
+        "on_air": "A",
+        "preview": "B"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "scene_name": "red",
+      "status": "completed"
+    },
+    {
+      "command_id": "abort-me",
+      "frame_id": 280,
+      "lane_id": "B",
+      "pts_ns": 7585456959407,
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "scene_name": "blue",
+      "status": "aborted"
+    },
+    {
+      "command_id": "after-abort",
+      "frame_id": 345,
+      "lane_id": "B",
+      "pts_ns": 7587623626052,
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "scene_name": "blue",
+      "status": "completed"
+    },
+    {
+      "command_id": "lower-gain",
+      "frame_id": 435,
+      "lane_id": "B",
+      "pts_ns": 7590623626022,
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "scene_name": "red",
+      "status": "completed"
+    },
+    {
+      "command_id": "clear-cut",
+      "frame_id": 469,
+      "lane_id": "B",
+      "pts_ns": 7591756959344,
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "scene_name": "blue",
+      "status": "completed"
+    },
+    {
+      "command_id": "mp4-program",
+      "frame_id": 550,
+      "lane_id": "B",
+      "pts_ns": 7594456959317,
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "runtime-ca535ef1799b4ab9",
+      "scene_name": "red",
+      "status": "completed"
+    }
+  ],
+  "shutdown": {
+    "exit_code": 0,
+    "forced": false
+  }
+}

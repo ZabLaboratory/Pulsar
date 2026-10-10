@@ -1,0 +1,33 @@
+{
+  "startedAt": "2026-10-08T14:43:39.007Z",
+  "kind": "real native child through compiled full-bundle SDK",
+  "passed": true,
+  "nativePid": 7408,
+  "libobsVersion": "32.1.2-47-g76c902175-modified-pulsar",
+  "streamActive": false,
+  "recordingActive": false,
+  "stops": [
+    {
+      "schemaVersion": 1,
+      "severity": "info",
+      "domain": "service",
+      "source": "pulsar.runtime",
+      "code": "PULSAR_PROCESS_STOPPED",
+      "message": "pulsar.exe stopped after requested termination (code=null, signal=SIGTERM)",
+      "context": {
+        "action": "shutdown"
+      },
+      "details": {
+        "exitCode": null,
+        "signal": "SIGTERM",
+        "reason": "shutdown"
+      }
+    }
+  ],
+  "exitErrors": [],
+  "childExit": {
+    "code": null,
+    "signal": "SIGTERM"
+  },
+  "finishedAt": "2026-10-08T14:43:40.459Z"
+}

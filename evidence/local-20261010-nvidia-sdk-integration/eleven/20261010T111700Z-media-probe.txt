@@ -1,0 +1,26 @@
+import json,subprocess,hashlib
+from pathlib import Path
+import numpy as np
+root=Path(__file__).parents[2]
+report=json.loads((root/'.cache/nvidia-proof-captioned/result.json').read_text())
+video=Path('D:/Documents/Zab/Artifacts/2026-10-10/nvidia-prism-proof/Pulsar-nvidia-native.mp4')
+pcm=np.frombuffer(subprocess.check_output(['ffmpeg','-v','error','-i',str(video),'-vn','-f','f32le','-ac','1','-ar','48000','pipe:1']),np.float32)
+rows=[]
+for method in ['denoiser','dereverb','dereverb_denoiser']:
+ levels={}
+ for ratio in [75,25,0]:
+  entry=next(r for r in report['videoTimeline'] if r['text'].startswith(f'NVIDIA AFX / {method} - demande {ratio}%') or r['text'].startswith(f'NVIDIA AFX / {method} - demande {ratio} %'))
+  start=round((entry['seconds']+1.25)*48000);samples=pcm[start:start+48000]
+  assert len(samples)==48000
+  levels[str(ratio)]=float(np.sqrt(np.mean(samples**2)))
+ assert levels['25']>levels['75']*1.2 and levels['0']>levels['25']*1.1,(method,levels)
+ rows.append({'method':method,'encodedAudioRms':levels})
+samples=[]
+for seconds in [5,14,25,36,52,68]:
+ rgb=subprocess.check_output(['ffmpeg','-v','error','-ss',str(seconds),'-i',str(video),'-frames:v','1','-vf','scale=320:180','-pix_fmt','rgb24','-f','rawvideo','pipe:1'])
+ array=np.frombuffer(rgb,np.uint8).reshape(180,320,3)
+ samples.append({'seconds':seconds,'decodedPixelSha256':hashlib.sha256(rgb).hexdigest(),'bodyMean':float(array[40:].mean()),'bodyStd':float(array[40:].std())})
+assert samples[0]['bodyMean']<5 and samples[1]['bodyMean']>40
+result={'passed':True,'videoSha256':hashlib.sha256(video.read_bytes()).hexdigest(),'check':'decoded H264 pixels and decoded AAC signal follow actual native effect/settings steps; not just metadata','audio':rows,'videoSamples':samples}
+(root/'.cache/nvidia-proof-captioned/media-check.json').write_text(json.dumps(result,indent=2)+'\n')
+print(json.dumps(result,indent=2))

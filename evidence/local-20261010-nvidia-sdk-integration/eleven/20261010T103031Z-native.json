@@ -1,0 +1,847 @@
+{
+  "started": 1791627927.6948059,
+  "mode": "isolated installed NVIDIA SDK synthetic regression",
+  "exe": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\audit-runtime\\bin\\64bit\\pulsar.exe",
+  "exeSha256": "fac3466e90a744bff14ca68dac2967e5a51ecd610e9fcf1c1381f8b203299ac8",
+  "nvFiltersSha256": "59df7e4992d186d83dc5ad8415148b5533111c923336d9ca9dfd32ef92441c3b",
+  "sdkPaths": {
+    "afx": "C:\\Program Files\\NVIDIA Corporation\\NVIDIA Audio Effects SDK",
+    "vfx": "C:\\Program Files\\NVIDIA Corporation\\NVIDIA Video Effects"
+  },
+  "capabilities": {
+    "active_encoder": "nvenc",
+    "audio_bitrate": [
+      {
+        "value": 64
+      },
+      {
+        "value": 96
+      },
+      {
+        "value": 128
+      },
+      {
+        "value": 160
+      },
+      {
+        "value": 192
+      },
+      {
+        "value": 224
+      },
+      {
+        "value": 256
+      },
+      {
+        "value": 288
+      },
+      {
+        "value": 320
+      },
+      {
+        "value": 352
+      },
+      {
+        "value": 384
+      },
+      {
+        "value": 416
+      },
+      {
+        "value": 448
+      },
+      {
+        "value": 480
+      },
+      {
+        "value": 512
+      }
+    ],
+    "capabilities": {
+      "active_encoder": {
+        "applicability": "boot-fixed",
+        "value": "nvenc"
+      },
+      "audio_bitrate": {
+        "applicability": "live",
+        "max": 512,
+        "min": 64,
+        "step": 32,
+        "values": [
+          {
+            "value": 64
+          },
+          {
+            "value": 96
+          },
+          {
+            "value": 128
+          },
+          {
+            "value": 160
+          },
+          {
+            "value": 192
+          },
+          {
+            "value": 224
+          },
+          {
+            "value": 256
+          },
+          {
+            "value": 288
+          },
+          {
+            "value": 320
+          },
+          {
+            "value": 352
+          },
+          {
+            "value": 384
+          },
+          {
+            "value": 416
+          },
+          {
+            "value": 448
+          },
+          {
+            "value": 480
+          },
+          {
+            "value": 512
+          }
+        ]
+      },
+      "audio_monitoring": {
+        "applicability": "live",
+        "available": true,
+        "device_bound": true,
+        "device_id": "{0.0.0.00000000}.{3a9b3ef5-04ae-4b95-88d7-53e24294bc68}",
+        "device_name": "Default",
+        "device_selectable": true
+      },
+      "audio_sample_rate": {
+        "applicability": "read-only",
+        "hz": 48000
+      },
+      "audio_speaker_layout": {
+        "applicability": "read-only",
+        "channels": 2,
+        "layout": "stereo"
+      },
+      "audio_tracks": {
+        "applicability": "read-only",
+        "bound": 1,
+        "count": 6,
+        "tracks": [
+          {
+            "value": 1
+          }
+        ]
+      },
+      "destination_kinds": {
+        "applicability": "live",
+        "values": [
+          {
+            "value": "rtmp_custom"
+          },
+          {
+            "value": "vod_local"
+          },
+          {
+            "value": "twitch"
+          },
+          {
+            "value": "youtube"
+          }
+        ]
+      },
+      "encoder_families": {
+        "applicability": "boot-fixed",
+        "values": [
+          {
+            "bitrate": {
+              "max": 50000,
+              "min": 200,
+              "step": 50
+            },
+            "keyint_sec": {
+              "max": 20,
+              "min": 0,
+              "step": 1
+            },
+            "presets": [
+              {
+                "value": "ultrafast"
+              },
+              {
+                "value": "superfast"
+              },
+              {
+                "value": "veryfast"
+              },
+              {
+                "value": "faster"
+              },
+              {
+                "value": "fast"
+              },
+              {
+                "value": "medium"
+              },
+              {
+                "value": "slow"
+              },
+              {
+                "value": "slower"
+              },
+              {
+                "value": "veryslow"
+              },
+              {
+                "value": "placebo"
+              }
+            ],
+            "profiles": [
+              {
+                "value": "baseline"
+              },
+              {
+                "value": "main"
+              },
+              {
+                "value": "high"
+              }
+            ],
+            "rate_controls": [
+              {
+                "value": "CBR"
+              },
+              {
+                "value": "VBR"
+              }
+            ],
+            "value": "x264"
+          },
+          {
+            "bitrate": {
+              "max": 50000,
+              "min": 200,
+              "step": 50
+            },
+            "keyint_sec": {
+              "max": 10,
+              "min": 0,
+              "step": 1
+            },
+            "presets": [
+              {
+                "value": "p1"
+              },
+              {
+                "value": "p2"
+              },
+              {
+                "value": "p3"
+              },
+              {
+                "value": "p4"
+              },
+              {
+                "value": "p5"
+              },
+              {
+                "value": "p6"
+              },
+              {
+                "value": "p7"
+              }
+            ],
+            "profiles": [
+              {
+                "value": "high"
+              },
+              {
+                "value": "main"
+              },
+              {
+                "value": "baseline"
+              }
+            ],
+            "rate_controls": [
+              {
+                "value": "CBR"
+              },
+              {
+                "value": "CQP"
+              },
+              {
+                "value": "VBR"
+              }
+            ],
+            "value": "nvenc"
+          }
+        ]
+      },
+      "encoders": {
+        "applicability": "boot-fixed",
+        "values": [
+          {
+            "value": "nvenc"
+          },
+          {
+            "value": "x264"
+          }
+        ]
+      },
+      "filters": {
+        "applicability": "live",
+        "values": [
+          {
+            "value": "nvidia_audiofx_filter"
+          },
+          {
+            "value": "nv_greenscreen_filter"
+          },
+          {
+            "value": "nv_blur_filter"
+          },
+          {
+            "value": "nv_background_blur_filter"
+          },
+          {
+            "value": "mask_filter"
+          },
+          {
+            "value": "mask_filter_v2"
+          },
+          {
+            "value": "crop_filter"
+          },
+          {
+            "value": "gain_filter"
+          },
+          {
+            "value": "basic_eq_filter"
+          },
+          {
+            "value": "hdr_tonemap_filter"
+          },
+          {
+            "value": "color_filter"
+          },
+          {
+            "value": "color_filter_v2"
+          },
+          {
+            "value": "scale_filter"
+          },
+          {
+            "value": "scroll_filter"
+          },
+          {
+            "value": "gpu_delay"
+          },
+          {
+            "value": "color_key_filter"
+          },
+          {
+            "value": "color_key_filter_v2"
+          },
+          {
+            "value": "clut_filter"
+          },
+          {
+            "value": "sharpness_filter"
+          },
+          {
+            "value": "sharpness_filter_v2"
+          },
+          {
+            "value": "chroma_key_filter"
+          },
+          {
+            "value": "chroma_key_filter_v2"
+          },
+          {
+            "value": "async_delay_filter"
+          },
+          {
+            "value": "noise_suppress_filter"
+          },
+          {
+            "value": "noise_suppress_filter_v2"
+          },
+          {
+            "value": "invert_polarity_filter"
+          },
+          {
+            "value": "noise_gate_filter"
+          },
+          {
+            "value": "compressor_filter"
+          },
+          {
+            "value": "limiter_filter"
+          },
+          {
+            "value": "expander_filter"
+          },
+          {
+            "value": "upward_compressor_filter"
+          },
+          {
+            "value": "luma_key_filter"
+          },
+          {
+            "value": "luma_key_filter_v2"
+          },
+          {
+            "value": "pulsar_vignette_filter"
+          }
+        ]
+      },
+      "graphics_adapters": {
+        "active_index": 0,
+        "applicability": "read-only",
+        "values": [
+          {
+            "index": 0,
+            "value": "NVIDIA GeForce RTX 3070"
+          }
+        ]
+      },
+      "nv_filters": {
+        "afx": {
+          "directory_designated": true,
+          "dlls_present": true,
+          "min_version": "1.6.1.2",
+          "models_present": true,
+          "usable": true,
+          "version": "1.6.1.2"
+        },
+        "applicability": "read-only",
+        "module_loaded": true,
+        "vfx": {
+          "directory_designated": true,
+          "dlls_present": true,
+          "min_version": "0.7.6.0",
+          "models_present": true,
+          "usable": true,
+          "version": "0.7.6.0"
+        }
+      },
+      "output_scales": {
+        "applicability": "boot-fixed",
+        "canvas": {
+          "height": 1080,
+          "width": 1920
+        },
+        "values": [
+          {
+            "height": 1080,
+            "scale": 1.0,
+            "value": "1920x1080",
+            "width": 1920
+          }
+        ]
+      },
+      "record_container": {
+        "applicability": "boot-fixed",
+        "value": "mp4",
+        "values": [
+          {
+            "value": "mp4"
+          },
+          {
+            "value": "mkv"
+          }
+        ]
+      },
+      "record_markers": {
+        "add_chapter": false,
+        "applicability": "read-only",
+        "split_file": true
+      },
+      "source_kinds": {
+        "applicability": "live",
+        "values": [
+          {
+            "value": "audio_line"
+          },
+          {
+            "value": "pulsar_preview_frame"
+          },
+          {
+            "value": "image_source"
+          },
+          {
+            "value": "color_source"
+          },
+          {
+            "value": "color_source_v2"
+          },
+          {
+            "value": "color_source_v3"
+          },
+          {
+            "value": "slideshow"
+          },
+          {
+            "value": "slideshow_v2"
+          },
+          {
+            "value": "ffmpeg_source"
+          },
+          {
+            "value": "text_gdiplus"
+          },
+          {
+            "value": "text_gdiplus_v2"
+          },
+          {
+            "value": "text_gdiplus_v3"
+          },
+          {
+            "value": "browser_source"
+          },
+          {
+            "value": "text_ft2_source"
+          },
+          {
+            "value": "text_ft2_source_v2"
+          },
+          {
+            "value": "vlc_source"
+          },
+          {
+            "value": "monitor_capture"
+          },
+          {
+            "value": "window_capture"
+          },
+          {
+            "value": "game_capture"
+          },
+          {
+            "value": "dshow_input"
+          },
+          {
+            "value": "wasapi_input_capture"
+          },
+          {
+            "value": "wasapi_output_capture"
+          },
+          {
+            "value": "wasapi_process_output_capture"
+          }
+        ]
+      },
+      "video_bitrate": {
+        "applicability": "live",
+        "max": 50000,
+        "min": 200,
+        "step": 50
+      },
+      "video_colorimetry": {
+        "applicability": "read-only",
+        "format": "NV12",
+        "range": "Partial",
+        "value": "709"
+      }
+    },
+    "encoders": [
+      {
+        "value": "nvenc"
+      },
+      {
+        "value": "x264"
+      }
+    ],
+    "version": 1,
+    "video_bitrate": {
+      "max": 50000,
+      "min": 200
+    }
+  },
+  "video": [
+    {
+      "kind": "nv_greenscreen_filter",
+      "settings": {
+        "mode": 1,
+        "processing_interval": 1,
+        "threshold": 0.8
+      },
+      "pixelDifferenceMean": 137.625,
+      "alphaRange": [
+        0,
+        0
+      ],
+      "frameDelta": 302,
+      "skippedDelta": 0,
+      "meanRenderMs": 3.9544656,
+      "programScenePixelDifferenceMean": 137.625
+    },
+    {
+      "kind": "nv_blur_filter",
+      "settings": {
+        "intensity": 0.8
+      },
+      "pixelDifferenceMean": 58.8734375,
+      "alphaRange": [
+        255,
+        255
+      ],
+      "frameDelta": 302,
+      "skippedDelta": 0,
+      "meanRenderMs": 1.7056802000000002,
+      "programScenePixelDifferenceMean": 58.8734375,
+      "liveIntensity": [
+        {
+          "intensity": 0.0,
+          "pixelDifferenceMean": 0.0
+        },
+        {
+          "intensity": 0.2,
+          "pixelDifferenceMean": 58.86875
+        },
+        {
+          "intensity": 0.8,
+          "pixelDifferenceMean": 58.8734375
+        },
+        {
+          "intensity": 0.0,
+          "pixelDifferenceMean": 0.0
+        },
+        {
+          "intensity": 0.8,
+          "pixelDifferenceMean": 58.8734375
+        }
+      ]
+    },
+    {
+      "kind": "nv_background_blur_filter",
+      "settings": {
+        "intensity": 0.8
+      },
+      "pixelDifferenceMean": 58.8734375,
+      "alphaRange": [
+        255,
+        255
+      ],
+      "frameDelta": 303,
+      "skippedDelta": 0,
+      "meanRenderMs": 5.0464910000000005,
+      "programScenePixelDifferenceMean": 58.8734375,
+      "liveIntensity": [
+        {
+          "intensity": 0.0,
+          "pixelDifferenceMean": 0.0
+        },
+        {
+          "intensity": 0.2,
+          "pixelDifferenceMean": 58.86875
+        },
+        {
+          "intensity": 0.8,
+          "pixelDifferenceMean": 58.8734375
+        },
+        {
+          "intensity": 0.0,
+          "pixelDifferenceMean": 0.0
+        },
+        {
+          "intensity": 0.8,
+          "pixelDifferenceMean": 58.8734375
+        }
+      ]
+    }
+  ],
+  "stackedSceneSwitches": [
+    {
+      "scene": "NvidiaSDKRegressionB",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegression",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegressionB",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegression",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegressionB",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegression",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegressionB",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegression",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegressionB",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegression",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegressionB",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegression",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegressionB",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegression",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegressionB",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegression",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegressionB",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegression",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegressionB",
+      "pixelDifferenceMean": 58.871875
+    },
+    {
+      "scene": "NvidiaSDKRegression",
+      "pixelDifferenceMean": 58.871875
+    }
+  ],
+  "stackedStats": {
+    "frameDelta": 243,
+    "skippedDelta": 0,
+    "lastRenderMs": 5.834009
+  },
+  "audio": {
+    "fixture": "seeded white noise, raw native volume-meter magnitude",
+    "baseline": 0.07978200539946556,
+    "methods": [
+      {
+        "method": "denoiser",
+        "magnitude": 0.004041469331623932,
+        "intermediateIntensities": [
+          {
+            "intensity": 0.75,
+            "magnitude": 2.8712613259601438e-06
+          },
+          {
+            "intensity": 0.25,
+            "magnitude": 1.4277631998795437e-06
+          }
+        ],
+        "intermediateIntensityPassed": false,
+        "liveIntensityZeroMagnitude": 0.07655380286404755,
+        "disabledMagnitude": 0.07982581467009507,
+        "liveIntensityOneMagnitude": 0.00511255815952912,
+        "liveIntensityPassed": true
+      },
+      {
+        "method": "dereverb",
+        "magnitude": 0.02801784102786144,
+        "intermediateIntensities": [
+          {
+            "intensity": 0.75,
+            "magnitude": 0.02073710935280448
+          },
+          {
+            "intensity": 0.25,
+            "magnitude": 0.059435459214352795
+          }
+        ],
+        "intermediateIntensityPassed": true,
+        "liveIntensityZeroMagnitude": 0.07923362904884776,
+        "disabledMagnitude": 0.07996785139235166,
+        "liveIntensityOneMagnitude": 0.008756139909382909,
+        "liveIntensityPassed": true
+      },
+      {
+        "method": "dereverb_denoiser",
+        "magnitude": 0.004756835687226355,
+        "intermediateIntensities": [
+          {
+            "intensity": 0.75,
+            "magnitude": 0.01923845746459998
+          },
+          {
+            "intensity": 0.25,
+            "magnitude": 0.0584067548230543
+          }
+        ],
+        "intermediateIntensityPassed": true,
+        "liveIntensityZeroMagnitude": 0.07933090152519365,
+        "disabledMagnitude": 0.08012001058803155,
+        "liveIntensityOneMagnitude": 0.004474495904754081,
+        "liveIntensityPassed": true
+      }
+    ],
+    "liveIntensityPassed": false
+  },
+  "checks": [
+    "SDK usable/version",
+    "four filters registered",
+    "three VFX source and Program scene pixel changes and exact bypass",
+    "live VFX intensity",
+    "20 scene switches with stacked VFX",
+    "native render timings",
+    "three AFX model methods",
+    "noise suppression signal",
+    "filter removal"
+  ],
+  "failure": {
+    "type": "AssertionError",
+    "message": "('AFX intensity zero is not passthrough', ['denoiser/intermediate'])"
+  },
+  "shutdown": {
+    "exitCode": 0,
+    "forced": false
+  },
+  "sdkLogs": [
+    "2026-10-10T10:25:27Z INFO s7yk-BF-cTeREx9A libobs | \tAdapter 0: NVIDIA GeForce RTX 3070",
+    "2026-10-10T10:25:27Z INFO s7yk-BF-cTeREx9A libobs | Loading up D3D11 on adapter NVIDIA GeForce RTX 3070 (0)",
+    "2026-10-10T10:25:28Z INFO s7yk-BF-cTeREx9A NVIDIA Audio Effects: | version: 1.6.1.2",
+    "2026-10-10T10:25:28Z INFO s7yk-BF-cTeREx9A NVIDIA Audio Effects: | enabled",
+    "2026-10-10T10:25:28Z INFO s7yk-BF-cTeREx9A NVIDIA VIDEO FX | : NVIDIA VIDEO FX version: 0.7.6.0",
+    "2026-10-10T10:25:28Z INFO s7yk-BF-cTeREx9A NVIDIA VIDEO FX | : enabled, redistributable found",
+    "2026-10-10T10:26:11Z INFO s7yk-BF-cTeREx9A NVIDIA Audio Effects: 'sdk/audio' | NVAFX SDK redist path was found here C:\\Program Files\\NVIDIA Corporation\\NVIDIA Audio Effects SDK",
+    "2026-10-10T10:26:31Z INFO s7yk-BF-cTeREx9A NVIDIA Audio Effects: 'sdk/audio' | NVAFX SDK redist path was found here C:\\Program Files\\NVIDIA Corporation\\NVIDIA Audio Effects SDK",
+    "2026-10-10T10:26:51Z INFO s7yk-BF-cTeREx9A NVIDIA Audio Effects: 'sdk/audio' | NVAFX SDK redist path was found here C:\\Program Files\\NVIDIA Corporation\\NVIDIA Audio Effects SDK"
+  ],
+  "sdkDiagnostics": [],
+  "qualification": "synthetic functional/performance regression; SDK diagnostics require separate review",
+  "passed": false
+}

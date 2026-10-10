@@ -1,0 +1,65 @@
+From e2aca78947507d2c75c85e44aa6ea1db81b3c46d Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 12:27:02 +0200
+Subject: [PATCH] fix(nv-filters): guarantee audio intensity zero passes
+ original PCM
+
+The installed AFX 1.6.1.2 denoiser returns near-silence when changing
+intensity from one to zero. Disabling the same filter restores the
+original signal, proving the input continues running.
+
+Publish a bypass flag atomically from the existing settings update.
+At intensity zero, preserve the original PCM through the existing
+10 ms FIFO instead of calling the SDK. Retain the native enabled
+state, timestamps, SDK method/VAD controls and all nonzero processing.
+No reset, model reload, allocation or new lock is added on the audio
+thread. Intensity zero also bypasses VAD as a zero-impact effect.
+
+This affects nv-filters' private audio pipeline and cannot be supplied
+by a separate plugin. Eligible for upstream OBS review. SDK loading
+and model validation policy are unchanged.
+Work unit: Eleven local-20261010-nvidia-sdk-integration, Pulsar PR #301.
+The regression compares zero, disabled and reapplied-one magnitude
+for all three methods; intermediate SDK ratios remain separately tested.
+---
+ plugins/nv-filters/nvidia-audiofx-filter.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/plugins/nv-filters/nvidia-audiofx-filter.c b/plugins/nv-filters/nvidia-audiofx-filter.c
+index fc0c39141..85150ed0b 100644
+--- a/plugins/nv-filters/nvidia-audiofx-filter.c
++++ b/plugins/nv-filters/nvidia-audiofx-filter.c
+@@ -79,6 +79,7 @@ struct nvidia_audio_data {
+ 	 * & the filter is destroyed.
+ 	 */
+ 	bool use_nvafx;
++	volatile bool bypass_nvafx;
+ 
+ 	/* this tracks if the SDK is found */
+ 	bool nvidia_sdk_dir_found;
+@@ -576,6 +577,11 @@ static void nvidia_audio_update(void *data, obs_data_t *s)
+ 	ng->latency = 1000000000LL / (1000 / BUFFER_SIZE_MSEC);
+ 
+ 	float intensity = (float)obs_data_get_double(s, S_NVAFX_INTENSITY);
++	/* SDK 1.6.1.2 denoiser does not pass through at live intensity zero.
++	 * Use the original PCM through the existing 10 ms FIFO instead. This
++	 * is independent of the source's enabled state and needs no model
++	 * reload/reset or allocation on the audio thread. */
++	os_atomic_set_bool(&ng->bypass_nvafx, intensity == 0.0f);
+ 	bool vad = obs_data_get_bool(s, S_NVAFX_VAD);
+ 
+ 	/*-------------------------------------------------------------------*/
+@@ -833,7 +839,8 @@ static inline void process(struct nvidia_audio_data *ng)
+ 	for (size_t i = 0; i < ng->channels; i++)
+ 		deque_pop_front(&ng->input_buffers[i], ng->copy_buffers[i], ng->frames * sizeof(float));
+ 
+-	if (ng->use_nvafx && nvidia_afx_loaded && ng->nvafx_initialized) {
++	if (ng->use_nvafx && nvidia_afx_loaded && ng->nvafx_initialized &&
++	    !os_atomic_load_bool(&ng->bypass_nvafx)) {
+ 		process_fx(ng);
+ 	}
+ 
+-- 
+2.54.0.windows.1
+

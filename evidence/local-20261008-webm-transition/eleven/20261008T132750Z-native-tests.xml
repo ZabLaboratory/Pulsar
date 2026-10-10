@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)"
+	tests="2"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname=""
+	time="0"
+	timestamp="2026-10-08T14:50:26"
+	>
+	<testcase name="pulsar-transition-controller-probe" classname="pulsar-transition-controller-probe" time="0.054924" status="run">
+		<properties>
+			<property name="cmake_labels" value="unit"/>
+		</properties>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="pulsar-media-transition-config-probe" classname="pulsar-media-transition-config-probe" time="0.0583916" status="run">
+		<properties>
+			<property name="cmake_labels" value="unit"/>
+		</properties>
+		<system-out>media configuration: valid custom WebM accepted; 22 invalid cases rejected
+</system-out>
+	</testcase>
+</testsuite>

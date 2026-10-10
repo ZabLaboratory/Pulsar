@@ -1,0 +1,41 @@
+{
+  "startedAt": "2026-10-08T13:46:03.162Z",
+  "provenance": "Running Prism BroadcastEngine client and unmodified PulsarSceneSwitch adapter; development inspector invocation; no UI automation",
+  "limitations": [
+    "Preview UI bridge SetPreviewComposite is absent from tested Pulsar branch",
+    "No subjective visual or audio verdict",
+    "Development reloads interrupted prior visual sampling"
+  ],
+  "events": [],
+  "before": {
+    "pulsarRunning": false,
+    "pulsarPort": null,
+    "libobsVersion": null,
+    "activeDestinations": [],
+    "activeDestinationLabels": [],
+    "captureMode": null,
+    "state": "idle"
+  },
+  "recordingBefore": {
+    "active": false,
+    "paused": false
+  },
+  "pid": 45668,
+  "runtime": "prism-7590f4645ecb4ff297f503521eae7569",
+  "error": "Runtime unavailable",
+  "passed": false,
+  "after": {
+    "pulsarRunning": true,
+    "pulsarPort": 64739,
+    "libobsVersion": "32.1.2-47-g76c902175-modified-pulsar",
+    "activeDestinations": [],
+    "activeDestinationLabels": [],
+    "captureMode": null,
+    "state": "idle"
+  },
+  "recordingAfter": {
+    "active": false,
+    "paused": false
+  },
+  "finishedAt": "2026-10-08T13:46:07.437Z"
+}

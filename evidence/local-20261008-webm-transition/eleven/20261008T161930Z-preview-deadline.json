@@ -1,0 +1,570 @@
+{
+  "accepted": {
+    "channel": "preview",
+    "command_id": "preview-deadline-1791476355872",
+    "operational": true,
+    "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+    "status": "starting"
+  },
+  "busy": {
+    "error": "TRANSITION_BUSY"
+  },
+  "elapsedMs": 22393,
+  "states": [
+    {
+      "elapsed": 10,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "closing"
+    },
+    {
+      "elapsed": 521,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "closing"
+    },
+    {
+      "elapsed": 1037,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 1549,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 2050,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 2552,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 3067,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 3581,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 4099,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 4610,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 5110,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 5623,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 6131,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 6639,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 7144,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 7645,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 8160,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 8669,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 9178,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 9683,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 10184,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 10689,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 11192,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 11694,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 12195,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 12711,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 13227,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 13742,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 14255,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 14771,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 15274,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 15786,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 16301,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 16809,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 17314,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 17816,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 18331,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 18834,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 19344,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 19851,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 20353,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 20865,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 21378,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 21879,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "covered"
+    },
+    {
+      "elapsed": 22393,
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "failure_reason": "PREVIEW_TRANSITION_TIMEOUT_OR_DECODE_ERROR",
+      "frame_id": 20965,
+      "operational": true,
+      "pts_ns": 1680931300171790,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "aborted"
+    }
+  ],
+  "terminal": {
+    "channel": "preview",
+    "command_id": "preview-deadline-1791476355872",
+    "cut_time_ms": 894,
+    "failure_reason": "PREVIEW_TRANSITION_TIMEOUT_OR_DECODE_ERROR",
+    "frame_id": 20965,
+    "operational": true,
+    "pts_ns": 1680931300171790,
+    "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+    "start_frame_id": 19628,
+    "start_pts_ns": 1680909016839348,
+    "status": "aborted"
+  },
+  "programBefore": {
+    "currentProgramSceneName": "Default",
+    "currentProgramSceneUuid": "dcda6008-9844-415e-8f32-8a1883267f16",
+    "sceneName": "Default",
+    "sceneUuid": "dcda6008-9844-415e-8f32-8a1883267f16"
+  },
+  "programAfter": {
+    "currentProgramSceneName": "Default",
+    "currentProgramSceneUuid": "dcda6008-9844-415e-8f32-8a1883267f16",
+    "sceneName": "Default",
+    "sceneUuid": "dcda6008-9844-415e-8f32-8a1883267f16"
+  },
+  "after": {
+    "busy": false,
+    "config": {
+      "cut_point_ms": 875,
+      "muted": false,
+      "path": "D:/Documents/Zab/Artifacts/2026-10-08/zab-transition-trace-sound/zab-smooth-alpha.webm",
+      "volume": 1
+    },
+    "configured": true,
+    "last_switch": {},
+    "media_duration_ms": 2008,
+    "operational": true,
+    "preview_overlay": {
+      "channel": "preview",
+      "command_id": "preview-deadline-1791476355872",
+      "cut_time_ms": 894,
+      "failure_reason": "PREVIEW_TRANSITION_TIMEOUT_OR_DECODE_ERROR",
+      "frame_id": 20965,
+      "operational": true,
+      "pts_ns": 1680931300171790,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 19628,
+      "start_pts_ns": 1680909016839348,
+      "status": "aborted"
+    },
+    "readiness_error": "",
+    "ready": true,
+    "role_map": {
+      "on_air": "A",
+      "preview": "B"
+    },
+    "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+    "transition_duration_ms": 2258
+  }
+}

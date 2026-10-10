@@ -1,0 +1,102 @@
+{
+  "phase": "synthetic-local-only",
+  "started": 1791535463.2837946,
+  "checks": {
+    "all_real_audio_muted": [
+      {
+        "name": "PulsarDesktopAudio",
+        "muted": true
+      }
+    ],
+    "synthetic_program_items_only": true,
+    "program": {
+      "currentProgramSceneName": "AuditSynthetic",
+      "currentProgramSceneUuid": "55df826a-7b03-4762-96bd-e9c55eabb14f",
+      "sceneName": "AuditSynthetic",
+      "sceneUuid": "55df826a-7b03-4762-96bd-e9c55eabb14f"
+    },
+    "video": {
+      "baseHeight": 1080,
+      "baseWidth": 1920,
+      "fpsDenominator": 1,
+      "fpsNumerator": 60,
+      "outputHeight": 1080,
+      "outputWidth": 1920
+    },
+    "encoded_video_and_generated_audio": true
+  },
+  "before": {
+    "activeFps": 60.0000024000001,
+    "availableDiskSpace": 123850.46875,
+    "averageFrameRenderTime": 0.323252,
+    "cpuUsage": 1.7359324111058707,
+    "memoryUsage": 93.31640625,
+    "outputSkippedFrames": 0,
+    "outputTotalFrames": 0,
+    "renderSkippedFrames": 0,
+    "renderTotalFrames": 89,
+    "webSocketSessionIncomingMessages": 17,
+    "webSocketSessionOutgoingMessages": 31
+  },
+  "during": {
+    "activeFps": 60.0000024000001,
+    "availableDiskSpace": 123847.09375,
+    "averageFrameRenderTime": 0.4294,
+    "cpuUsage": 1.437654290001127,
+    "memoryUsage": 208.4921875,
+    "outputSkippedFrames": 0,
+    "outputTotalFrames": 240,
+    "renderSkippedFrames": 0,
+    "renderTotalFrames": 337,
+    "webSocketSessionIncomingMessages": 19,
+    "webSocketSessionOutgoingMessages": 35
+  },
+  "media": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capability-audit\\.cache\\synthetic-recordings\\pulsar-20261009-104425.mp4",
+  "bytes": 3100119,
+  "streams": [
+    {
+      "codec_type": "video",
+      "codec_name": "h264",
+      "width": 1920,
+      "height": 1080,
+      "r_frame_rate": "60/1",
+      "sample_rate": null,
+      "channels": null,
+      "duration": "4.016667",
+      "nb_frames": "241"
+    },
+    {
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "width": null,
+      "height": null,
+      "r_frame_rate": "0/0",
+      "sample_rate": "48000",
+      "channels": 2,
+      "duration": "4.010667",
+      "nb_frames": "188"
+    }
+  ],
+  "duration": "4.016667",
+  "audio_rms": 2118.2212489787275,
+  "audio_440hz_amplitude": 2995.262499024063,
+  "video_average_rgb": [
+    255,
+    0,
+    254
+  ],
+  "exit_code": 0,
+  "forced_kill": false,
+  "elapsed_s": 7.918874740600586,
+  "encoder_markers": [
+    "2026-10-09T08:44:24Z INFO OMzNi3HBnFiwJf9u pulsar-frontend-stub | video encoder allocated: family=nvenc id=jim_nvenc, 6000 kbps (stable ProgramView binding follows)"
+  ],
+  "shutdown_markers": [
+    "PULSAR_SHUTDOWN_CONTROL event=ready id=audit-synthetic-20261009 mechanism=inherited_event",
+    "PULSAR_SHUTDOWN_CONTROL event=signaled id=audit-synthetic-20261009 mechanism=inherited_event",
+    "2026-10-09T08:44:30Z INFO OMzNi3HBnFiwJf9u libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin",
+    "2026-10-09T08:44:30Z INFO OMzNi3HBnFiwJf9u libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_not_running",
+    "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=audit-synthetic-20261009 dir=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\runtimes\\audit-synthetic-20261009 authority=Local\\Pulsar.Authority.31eb85ecb5c9d1cf metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\31eb85ecb5c9d1cf.lock",
+    "PULSAR_RUNTIME_INSTANCE lease=released id=audit-synthetic-20261009 dir=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\runtimes\\audit-synthetic-20261009 authority=Local\\Pulsar.Runtime.audit-synthetic-20261009 metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\b8fa9ec736f9a3bb.lock"
+  ]
+}

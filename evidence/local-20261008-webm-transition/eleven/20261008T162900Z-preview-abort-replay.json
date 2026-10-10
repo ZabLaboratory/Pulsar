@@ -1,0 +1,80 @@
+[
+  {
+    "abort": true,
+    "elapsedMs": 1048,
+    "covered": {
+      "channel": "preview",
+      "command_id": "preview-5c359c01-112d-4f3c-ab75-f1c6bc9ff65e",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-55ee73a4166c4651ba18f3c03e98ce8e",
+      "start_frame_id": 3364,
+      "start_pts_ns": 1681403006786890,
+      "status": "covered"
+    },
+    "terminal": {
+      "channel": "preview",
+      "command_id": "preview-5c359c01-112d-4f3c-ab75-f1c6bc9ff65e",
+      "cut_time_ms": 894,
+      "frame_id": 3424,
+      "operational": true,
+      "pts_ns": 1681404006786850,
+      "runtime_instance_id": "prism-55ee73a4166c4651ba18f3c03e98ce8e",
+      "start_frame_id": 3364,
+      "start_pts_ns": 1681403006786890,
+      "status": "aborted"
+    }
+  },
+  {
+    "abort": true,
+    "elapsedMs": 1059,
+    "covered": {
+      "channel": "preview",
+      "command_id": "preview-1fa425fc-d3f8-4273-81af-f42bc7749614",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-55ee73a4166c4651ba18f3c03e98ce8e",
+      "start_frame_id": 3430,
+      "start_pts_ns": 1681404106786846,
+      "status": "covered"
+    },
+    "terminal": {
+      "channel": "preview",
+      "command_id": "preview-1fa425fc-d3f8-4273-81af-f42bc7749614",
+      "cut_time_ms": 894,
+      "frame_id": 3488,
+      "operational": true,
+      "pts_ns": 1681405073453474,
+      "runtime_instance_id": "prism-55ee73a4166c4651ba18f3c03e98ce8e",
+      "start_frame_id": 3430,
+      "start_pts_ns": 1681404106786846,
+      "status": "aborted"
+    }
+  },
+  {
+    "abort": false,
+    "elapsedMs": 2253,
+    "covered": {
+      "channel": "preview",
+      "command_id": "preview-bc1203e1-5852-4f39-9a20-b9ea0155cdb3",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-55ee73a4166c4651ba18f3c03e98ce8e",
+      "start_frame_id": 3493,
+      "start_pts_ns": 1681405156786804,
+      "status": "covered"
+    },
+    "terminal": {
+      "channel": "preview",
+      "command_id": "preview-bc1203e1-5852-4f39-9a20-b9ea0155cdb3",
+      "cut_time_ms": 894,
+      "frame_id": 3622,
+      "operational": true,
+      "pts_ns": 1681407306786718,
+      "runtime_instance_id": "prism-55ee73a4166c4651ba18f3c03e98ce8e",
+      "start_frame_id": 3493,
+      "start_pts_ns": 1681405156786804,
+      "status": "completed"
+    }
+  }
+]

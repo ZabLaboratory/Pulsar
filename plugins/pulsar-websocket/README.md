@@ -96,6 +96,18 @@ allocations. Non-Windows returns null. Reads do not activate inactive sources.
 Each valid read renews a five-second CPU/GPU profiling lease (patch 0059).
 When polling stops, the render thread expires that lease and releases profiler
 samples/timers. Explicit resource-trace profiling keeps its independent policy.
+On Windows, an overlay using an older libobs without the lease API keeps the
+WebSocket plugin loadable and returns `NotReady` with
+`SOURCE_TELEMETRY_REQUIRES_UPDATED_LIBOBS` for this request. It never enables
+permanent profiling as a compatibility fallback.
 `cpuTickMaxMs`, `cpuRenderFirstPassMaxMs` and `gpuRenderFirstPassMaxMs` report
 individual tick/first-render maxima. They are not combined per-frame maxima for
 the summed CPU/GPU average costs.
+
+Screenshot requests refuse inputs without video dimensions before allocating
+D3D11 resources, including width-only and height-only requests. Computed dimensions
+are bounded by D3D11 texture limits; image/render/staging allocation failures
+return the existing processing failure without dereferencing null resources.
+`scripts/probe-source-screenshot.py --exe <isolated-copy> --output <explicit-dir>`
+verifies unavailable/valid sources and modern filter round-trips with synthetic
+inputs, no recording, and graceful shutdown.

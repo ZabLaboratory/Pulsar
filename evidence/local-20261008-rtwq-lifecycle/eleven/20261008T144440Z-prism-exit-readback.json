@@ -1,0 +1,14 @@
+{
+  "checkedAt": "2026-10-08T14:44:40.581Z",
+  "mainPid": 8640,
+  "status": {
+    "pulsarRunning": true,
+    "pulsarPort": 53157,
+    "libobsVersion": "32.1.2-47-g76c902175-modified-pulsar",
+    "activeDestinations": [],
+    "activeDestinationLabels": [],
+    "captureMode": null,
+    "state": "idle"
+  },
+  "recentExitErrors": []
+}

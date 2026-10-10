@@ -64,6 +64,7 @@ add_executable(pulsar-headless
     log-handler.cpp
     dir-hardening.cpp
     runtime-identity.cpp
+    realtime-work-queue.cpp
 )
 
 target_include_directories(pulsar-headless PRIVATE
