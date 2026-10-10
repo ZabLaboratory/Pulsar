@@ -1,0 +1,69 @@
+{
+  "nativeDllSha256": "e52040f52b9510ec34afd3e142df276b0252745f8713b655b8943d27f40b1365",
+  "sourceCandidate": "6fc5905315af589cde8dc1f7c85212d5ee6ad65a",
+  "nativeRecordingOriginalSha256": "b2a6f59edcafc5a520e8d094aae69ac1b463b567879ba1d232275712d7ed776d",
+  "videos": {
+    "Prism-preview-nvidia.mp4": {
+      "sha256": "0a75b1fc840cd362a9dff74f68349f2b0a317e807e23b5fa34200d45c20bb08c",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "h264",
+            "width": 1440,
+            "height": 900,
+            "r_frame_rate": "30/1",
+            "nb_frames": "550",
+            "side_data_list": [
+              {}
+            ]
+          }
+        ],
+        "format": {
+          "duration": "18.333333",
+          "size": "654403"
+        }
+      }
+    },
+    "Pulsar-nvidia-native.mp4": {
+      "sha256": "ecec251eed0ab5bd9542871ab5ed79d4c28ef455d3a4e59a8510f618036369ec",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "60/1",
+            "nb_frames": "7414"
+          },
+          {
+            "index": 1,
+            "codec_name": "aac",
+            "sample_rate": "48000",
+            "channels": 2,
+            "r_frame_rate": "0/0",
+            "nb_frames": "5792"
+          }
+        ],
+        "format": {
+          "duration": "123.566667",
+          "size": "94045686"
+        }
+      }
+    }
+  },
+  "prismUiCapture": {
+    "frames": 112,
+    "lastFrameSeconds": 18.254805999999867,
+    "encoding": "variable capture timestamps, encoded at 30 fps with repeated frames; does not measure native preview fps"
+  },
+  "sdkVersions": {
+    "afx": "1.6.1.2",
+    "vfx": "0.7.6.0"
+  }
+}

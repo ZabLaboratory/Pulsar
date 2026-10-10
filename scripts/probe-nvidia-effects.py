@@ -83,7 +83,7 @@ async def exercise(proc, work, report, record_video=False):
             baseline_program = await image("NvidiaSDKRegression")
         report["video"] = []
         for kind in KINDS[:3]:
-            await caption("NVIDIA / Pulsar - sortie native 1080p60\n"+kind+" - traitement actif (fixture synthetique)")
+            await caption("NVIDIA / Pulsar - sortie native 1080p60\n"+kind+" - activation puis mesure (fixture synthetique)")
             settings = {"mode": 1, "threshold": .8, "processing_interval": 1} if kind == KINDS[0] else {"intensity": .8}
             await wire.call("CreateSourceFilter", {"sourceName": "Stripes", "filterName": "sdk/test", "filterKind": kind, "filterSettings": settings})
             actual = await wire.call("GetSourceFilter", {"sourceName": "Stripes", "filterName": "sdk/test"})
