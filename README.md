@@ -215,6 +215,12 @@ file path. See [destinations](plugins/pulsar-multi-stream/README.md) and the
 
 ## Capture, composition and browser rendering
 
+The native [camera-effects module](plugins/pulsar-camera-effects/README.md) adds
+`pulsar_vignette_filter`. It darkens source edges on the GPU while preserving
+alpha, with independent enable/bypass and bounded intensity, radius and softness.
+Hosts expose it only when the runtime filter inventory registers it. It does
+not require NVIDIA AI SDKs or create another capture producer.
+
 Pulsar retains OBS's source and scene model. The engine loads the source types
 provided by the selected bundle and the host's available hardware; query
 `GetInputKindList` and the capability manifest instead of assuming that a DLL
