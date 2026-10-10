@@ -1,0 +1,434 @@
+From 6fc5905315af589cde8dc1f7c85212d5ee6ad65a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 12:59:56 +0200
+Subject: [PATCH] fix(nv-filters): reload audio settings off the real-time
+ thread
+
+AFX 1.6.1.2 captures denoiser intensity and VAD at model load. Live
+SetFloat readback does not prove processing changed. Recreate handles
+on a persistent worker when settings change, coalescing rapid requests.
+The audio callback uses trylock and preserves original PCM/FIFO timing
+during loading rather than waiting for CUDA/model initialization.
+
+Join the worker before releasing its data, outside the loader mutex.
+Keep the global SDK logger until module unload, independently of filter
+lifetimes. Destroy each actual channel handle, including partial loads.
+Zero intensity keeps the atomic PCM bypass from patch 0061.
+
+This modifies nv-filters' private SDK handles and audio pipeline; an
+external plugin cannot intercept it. Eligible for upstream OBS review.
+Work unit: Eleven local-20261010-nvidia-sdk-integration, Pulsar PR #301.
+Validation: installed-SDK native intensity oracle, rapid updates, VAD
+changes, removal while loading, multiple filters and clean shutdown.
+---
+ plugins/nv-filters/nvidia-audiofx-filter.c | 239 +++++++++------------
+ 1 file changed, 104 insertions(+), 135 deletions(-)
+
+diff --git a/plugins/nv-filters/nvidia-audiofx-filter.c b/plugins/nv-filters/nvidia-audiofx-filter.c
+index 85150ed0b..36471ef11 100644
+--- a/plugins/nv-filters/nvidia-audiofx-filter.c
++++ b/plugins/nv-filters/nvidia-audiofx-filter.c
+@@ -50,6 +50,7 @@
+ #endif
+ 
+ bool nvafx_new_sdk = false;
++static void nvafx_logger_callback(void *data, const char *msg);
+ 
+ struct nvidia_audio_data {
+ 	obs_source_t *context;
+@@ -64,20 +65,8 @@ struct nvidia_audio_data {
+ 	struct deque input_buffers[MAX_PREPROC_CHANNELS];
+ 	struct deque output_buffers[MAX_PREPROC_CHANNELS];
+ 
+-	/* This bool is quite important but it is easy to get lost. So let's
+-	 * explain how it's used. One big issue is that the NVIDIA FX takes
+-	 * ages to load an FX; so its initialization is deferred to a separate
+-	 * thread.
+-	 * First stage (creation):
+-	 * - use_nvafx is set to true at creation of the filter, IF the SDK dir
+-	 * path is set.
+-	 * - if initialization fails, the bool is set to false & the filter is
+-	 * destroyed.
+-	 * Later stages (running or updating of the FX):
+-	 * - they are executed ONLY if initialization was successful;
+-	 * - if at any step, there's an FX failure, the bool is updated to false
+-	 * & the filter is destroyed.
+-	 */
++	/* Owned by the configuration worker and read under nvafx_mutex.
++	 * Failed initialization keeps original PCM until a later retry. */
+ 	bool use_nvafx;
+ 	volatile bool bypass_nvafx;
+ 
+@@ -94,7 +83,7 @@ struct nvidia_audio_data {
+ 	float intensity_ratio;
+ 	unsigned int num_samples_per_frame, num_channels;
+ 	char *model;
+-	bool nvafx_initialized;
++	volatile bool nvafx_initialized;
+ 	const char *fx;
+ 	char *sdk_path;
+ 
+@@ -102,12 +91,16 @@ struct nvidia_audio_data {
+ 	audio_resampler_t *nvafx_resampler;
+ 	audio_resampler_t *nvafx_resampler_back;
+ 
+-	/* We load the DLL in a separate thread because its loading is very 
+-	 * long and unnecessarily blocks OBS initial loading.
+-	 * This bool is true once the thread which side loads the FX DLL is started */
+-	bool nvafx_loading;
++	/* Persistent control worker; audio never waits for model loading. */
+ 	pthread_t nvafx_thread;
+ 	pthread_mutex_t nvafx_mutex;
++	pthread_mutex_t settings_mutex;
++	pthread_cond_t settings_changed;
++	bool worker_started, stopping;
++	uint64_t settings_generation;
++	char *requested_fx;
++	float requested_intensity;
++	bool requested_vad;
+ 
+ 	/* PCM buffers */
+ 	float *copy_buffers[MAX_PREPROC_CHANNELS];
+@@ -134,14 +127,18 @@ static void nvidia_audio_destroy(void *data)
+ 	if (!ng)
+ 		return;
+ 
+-	if (ng->nvidia_sdk_dir_found)
++	/* Never join while holding the mutex needed by the loader. */
++	if (ng->nvidia_sdk_dir_found) {
++		pthread_mutex_lock(&ng->settings_mutex);
++		ng->stopping = true;
++		pthread_cond_signal(&ng->settings_changed);
++		pthread_mutex_unlock(&ng->settings_mutex);
++		if (ng->worker_started)
++			pthread_join(ng->nvafx_thread, NULL);
+ 		pthread_mutex_lock(&ng->nvafx_mutex);
+-
+-	if (nvafx_new_sdk)
+-		NvAFX_UninitializeLogger();
+-
++	}
+ 	for (size_t i = 0; i < ng->channels; i++) {
+-		if (ng->handle[0]) {
++		if (ng->handle[i]) {
+ 			if (NvAFX_DestroyEffect) {
+ 				NvAFX_Status err = NvAFX_DestroyEffect(ng->handle[i]);
+ 				if (err != NVAFX_STATUS_SUCCESS) {
+@@ -163,9 +160,11 @@ static void nvidia_audio_destroy(void *data)
+ 	bfree(ng->sdk_path);
+ 	bfree((void *)ng->fx);
+ 	if (ng->nvidia_sdk_dir_found) {
+-		pthread_join(ng->nvafx_thread, NULL);
+ 		pthread_mutex_unlock(&ng->nvafx_mutex);
+ 		pthread_mutex_destroy(&ng->nvafx_mutex);
++		pthread_cond_destroy(&ng->settings_changed);
++		pthread_mutex_destroy(&ng->settings_mutex);
++		bfree(ng->requested_fx);
+ 	}
+ 
+ 	bfree(ng->copy_buffers[0]);
+@@ -335,6 +334,9 @@ bool load_nvidia_afx(void)
+ 	}
+ 
+ 	nvidia_afx_loaded = true;
++	if (nvafx_new_sdk && NvAFX_InitializeLogger(NVAFX_LOG_LEVEL_ERROR, LOG_TARGET_CALLBACK, NULL,
++						 &nvafx_logger_callback, NULL) != NVAFX_STATUS_SUCCESS)
++		blog(LOG_WARNING, "[NVIDIA Audio Effects:] logger failed to initialize");
+ 	blog(LOG_INFO, "[NVIDIA Audio Effects:] enabled");
+ 	return true;
+ 
+@@ -351,6 +353,8 @@ unload_everything:
+ 
+ void unload_nvidia_afx(void)
+ {
++	if (nvafx_new_sdk && NvAFX_UninitializeLogger)
++		NvAFX_UninitializeLogger();
+ 	release_afxlib();
+ 
+ 	if (nvidia_afx_initializer_mutex_initialized) {
+@@ -439,15 +443,6 @@ failure:
+ 	return false;
+ }
+ 
+-static void *nvidia_audio_disable(void *data)
+-{
+-	struct nvidia_audio_data *ng = data;
+-	obs_source_t *filter = ng->context;
+-	obs_source_set_enabled(filter, false);
+-	info("NVIDIA Audio FX disabled due to an internal error.");
+-	return NULL;
+-}
+-
+ static void *nvidia_audio_initialize(void *data)
+ {
+ 	struct nvidia_audio_data *ng = data;
+@@ -456,7 +451,6 @@ static void *nvidia_audio_initialize(void *data)
+ 	if (!ng->use_nvafx && !nvidia_afx_loaded) {
+ 		return NULL;
+ 	}
+-	pthread_mutex_lock(&ng->nvafx_mutex);
+ 	pthread_mutex_lock(&nvidia_afx_initializer_mutex);
+ 	if (!nvidia_audio_initialize_internal(data)) {
+ 		goto failure;
+@@ -484,17 +478,15 @@ static void *nvidia_audio_initialize(void *data)
+ 			goto failure;
+ 		}
+ 	}
+-	ng->nvafx_initialized = true;
+-	ng->nvafx_loading = false;
++	os_atomic_set_bool(&ng->nvafx_initialized, true);
+ 	pthread_mutex_unlock(&nvidia_afx_initializer_mutex);
+-	pthread_mutex_unlock(&ng->nvafx_mutex);
+ 	return NULL;
+ 
+ failure:
+ 	ng->use_nvafx = false;
++	os_atomic_set_bool(&ng->nvafx_initialized, false);
+ 	pthread_mutex_unlock(&nvidia_afx_initializer_mutex);
+-	pthread_mutex_unlock(&ng->nvafx_mutex);
+-	nvidia_audio_disable(ng);
++	info("NVIDIA Audio FX initialization failed; preserving original PCM.");
+ 	return NULL;
+ }
+ 
+@@ -566,94 +558,67 @@ static void set_nv_model(void *data, const char *method)
+ 	ng->model = buffer;
+ }
+ 
+-static void nvidia_audio_update(void *data, obs_data_t *s)
++/* The installed AFX denoiser captures intensity at NvAFX_Load. Recreate
++ * on a persistent control worker, never on the audio or settings thread.
++ * Updates coalesce to the latest requested configuration. While a model is
++ * loading, the audio callback passes original PCM through its existing FIFO. */
++static void *nvidia_audio_worker(void *data)
+ {
+ 	struct nvidia_audio_data *ng = data;
+-
+-	if (!ng->use_nvafx)
+-		return;
+-
+-	const char *method = obs_data_get_string(s, S_METHOD);
+-	ng->latency = 1000000000LL / (1000 / BUFFER_SIZE_MSEC);
+-
+-	float intensity = (float)obs_data_get_double(s, S_NVAFX_INTENSITY);
+-	/* SDK 1.6.1.2 denoiser does not pass through at live intensity zero.
+-	 * Use the original PCM through the existing 10 ms FIFO instead. This
+-	 * is independent of the source's enabled state and needs no model
+-	 * reload/reset or allocation on the audio thread. */
+-	os_atomic_set_bool(&ng->bypass_nvafx, intensity == 0.0f);
+-	bool vad = obs_data_get_bool(s, S_NVAFX_VAD);
+-
+-	/*-------------------------------------------------------------------*/
+-	/* STAGE 1 : the following is run only when the filter is created. */
+-
+-	/* If the DLL hasn't been loaded & isn't loading, start the side loading. */
+-	if (!ng->nvafx_initialized && !ng->nvafx_loading) {
+-		ng->intensity_ratio = intensity;
+-		ng->vad = vad;
+-		ng->nvafx_loading = true;
+-		pthread_create(&ng->nvafx_thread, NULL, nvidia_audio_initialize, ng);
+-	}
+-
+-	/*-------------------------------------------------------------------*/
+-	/* STAGE 2 : this is executed only after the FX has been initialized */
+-	if (ng->nvafx_initialized) {
+-		/* updating the intensity of the FX */
+-		if (intensity != ng->intensity_ratio && (strcmp(ng->fx, method) == 0)) {
+-			NvAFX_Status err;
+-			ng->intensity_ratio = intensity;
+-			pthread_mutex_lock(&ng->nvafx_mutex);
+-			for (size_t i = 0; i < ng->channels; i++) {
+-				err = NvAFX_SetFloat(ng->handle[i], NVAFX_PARAM_INTENSITY_RATIO, ng->intensity_ratio);
+-				if (err != NVAFX_STATUS_SUCCESS) {
+-					do_log(LOG_ERROR, "NvAFX_SetFloat(Intensity Ratio: %f) failed, error %i",
+-					       ng->intensity_ratio, err);
+-					nvidia_audio_disable(ng);
+-				}
+-			}
+-			pthread_mutex_unlock(&ng->nvafx_mutex);
+-		}
+-		/* updating for VAD toggled on or off */
+-		if (nvafx_new_sdk) {
+-			if (vad != ng->vad && (strcmp(ng->fx, method) == 0)) {
+-				NvAFX_Status err;
+-				ng->vad = vad;
+-				pthread_mutex_lock(&ng->nvafx_mutex);
+-				for (size_t i = 0; i < ng->channels; i++) {
+-					err = NvAFX_SetU32(ng->handle[i], NVAFX_PARAM_ENABLE_VAD, ng->vad);
+-					if (err != NVAFX_STATUS_SUCCESS) {
+-						do_log(LOG_ERROR, "NvAFX_SetU32(VAD: %i) failed, error %i", ng->vad,
+-						       err);
+-						nvidia_audio_disable(ng);
+-					}
+-				}
+-				pthread_mutex_unlock(&ng->nvafx_mutex);
+-			}
++	uint64_t applied = 0;
++	for (;;) {
++		pthread_mutex_lock(&ng->settings_mutex);
++		while (!ng->stopping && applied == ng->settings_generation)
++			pthread_cond_wait(&ng->settings_changed, &ng->settings_mutex);
++		if (ng->stopping) {
++			pthread_mutex_unlock(&ng->settings_mutex);
++			break;
+ 		}
+-		/* swapping to a new FX requires a reinitialization */
+-		if ((strcmp(ng->fx, method) != 0)) {
+-			pthread_mutex_lock(&ng->nvafx_mutex);
+-			bfree((void *)ng->fx);
+-			ng->fx = bstrdup(method);
+-			ng->intensity_ratio = intensity;
+-			ng->vad = vad;
+-			set_nv_model(ng, method);
+-			os_atomic_set_bool(&ng->reinit_done, false);
+-			for (int i = 0; i < (int)ng->channels; i++) {
+-				/* Destroy previous FX */
+-				if (NvAFX_DestroyEffect(ng->handle[i]) != NVAFX_STATUS_SUCCESS) {
+-					do_log(LOG_ERROR, "FX failed to be destroyed.");
+-					nvidia_audio_disable(ng);
+-				} else {
+-					ng->handle[i] = NULL;
+-				}
+-			}
+-			if (!nvidia_audio_initialize_internal(data))
+-				nvidia_audio_disable(ng);
++		uint64_t generation = ng->settings_generation;
++		char *method = bstrdup(ng->requested_fx);
++		float intensity = ng->requested_intensity;
++		bool vad = ng->requested_vad;
++		pthread_mutex_unlock(&ng->settings_mutex);
+ 
+-			pthread_mutex_unlock(&ng->nvafx_mutex);
++		pthread_mutex_lock(&ng->nvafx_mutex);
++		os_atomic_set_bool(&ng->nvafx_initialized, false);
++		os_atomic_set_bool(&ng->reinit_done, false);
++		for (size_t i = 0; i < ng->channels; i++) {
++			if (ng->handle[i])
++				NvAFX_DestroyEffect(ng->handle[i]);
++			ng->handle[i] = NULL;
+ 		}
++		bfree((void *)ng->fx);
++		ng->fx = method;
++		ng->intensity_ratio = intensity;
++		ng->vad = vad;
++		ng->use_nvafx = true;
++		set_nv_model(ng, method);
++		nvidia_audio_initialize(ng);
++		pthread_mutex_unlock(&ng->nvafx_mutex);
++		applied = generation;
+ 	}
++	return NULL;
++}
++
++static void nvidia_audio_update(void *data, obs_data_t *s)
++{
++	struct nvidia_audio_data *ng = data;
++	float intensity = (float)obs_data_get_double(s, S_NVAFX_INTENSITY);
++	const char *method = obs_data_get_string(s, S_METHOD);
++	bool vad = obs_data_get_bool(s, S_NVAFX_VAD);
++	os_atomic_set_bool(&ng->bypass_nvafx, intensity == 0.0f);
++	pthread_mutex_lock(&ng->settings_mutex);
++	if (!ng->requested_fx || strcmp(ng->requested_fx, method) != 0 ||
++	    ng->requested_intensity != intensity || ng->requested_vad != vad) {
++		bfree(ng->requested_fx);
++		ng->requested_fx = bstrdup(method);
++		ng->requested_intensity = intensity;
++		ng->requested_vad = vad;
++		ng->settings_generation++;
++		pthread_cond_signal(&ng->settings_changed);
++	}
++	pthread_mutex_unlock(&ng->settings_mutex);
+ }
+ 
+ static void nvafx_logger_callback(void *data, const char *msg)
+@@ -684,10 +649,11 @@ static void *nvidia_audio_create(obs_data_t *settings, obs_source_t *filter)
+ 		strcpy(ng->sdk_path, sdk_path);
+ 		ng->nvidia_sdk_dir_found = true;
+ 		ng->nvafx_initialized = false;
+-		ng->nvafx_loading = false;
+ 		ng->fx = NULL;
+ 
+ 		pthread_mutex_init(&ng->nvafx_mutex, NULL);
++		pthread_mutex_init(&ng->settings_mutex, NULL);
++		pthread_cond_init(&ng->settings_changed, NULL);
+ 
+ 		info("NVAFX SDK redist path was found here %s", sdk_path);
+ 		// set FX
+@@ -702,6 +668,7 @@ static void *nvidia_audio_create(obs_data_t *settings, obs_source_t *filter)
+ 	uint32_t sample_rate = audio_output_get_sample_rate(obs_get_audio());
+ 	size_t channels = audio_output_get_channels(obs_get_audio());
+ 	size_t frames = (size_t)sample_rate / (1000 / BUFFER_SIZE_MSEC);
++	ng->latency = 1000000000LL / (1000 / BUFFER_SIZE_MSEC);
+ 	ng->frames = frames;
+ 	ng->channels = channels;
+ 
+@@ -741,21 +708,24 @@ static void *nvidia_audio_create(obs_data_t *settings, obs_source_t *filter)
+ 	ng->vad = 1;
+ 
+ 	nvidia_audio_update(ng, settings);
+-
+-	/* Setup NVIDIA logger */
+-	if (nvafx_new_sdk) {
+-		NvAFX_Status err = NvAFX_InitializeLogger(NVAFX_LOG_LEVEL_ERROR, LOG_TARGET_CALLBACK, NULL,
+-							  &nvafx_logger_callback, ng);
+-		if (err != NVAFX_STATUS_SUCCESS) {
+-			warn("NvAFX logger failed to initialize.");
+-		}
++	if (pthread_create(&ng->nvafx_thread, NULL, nvidia_audio_worker, ng) != 0) {
++		do_log(LOG_ERROR, "could not create audio configuration worker");
++		nvidia_audio_destroy(ng);
++		return NULL;
+ 	}
++	ng->worker_started = true;
+ 
+ 	return ng;
+ }
+ 
+ static inline void process_fx(struct nvidia_audio_data *ng)
+ {
++	if (pthread_mutex_trylock(&ng->nvafx_mutex) != 0)
++		return;
++	if (!ng->use_nvafx || !ng->reinit_done || !os_atomic_load_bool(&ng->nvafx_initialized)) {
++		pthread_mutex_unlock(&ng->nvafx_mutex);
++		return;
++	}
+ 	/* Resample if necessary */
+ 	if (ng->nvafx_resampler) {
+ 		float *output[MAX_PREPROC_CHANNELS];
+@@ -785,7 +755,6 @@ static inline void process_fx(struct nvidia_audio_data *ng)
+ 	/* Execute */
+ 	size_t runs = ng->has_mono_src ? 1 : ng->channels;
+ 	if (ng->reinit_done) {
+-		pthread_mutex_lock(&ng->nvafx_mutex);
+ 		for (size_t i = 0; i < runs; i++) {
+ 			NvAFX_Status err = NvAFX_Run(ng->handle[i], &ng->nvafx_segment_buffers[i],
+ 						     &ng->nvafx_segment_buffers[i], ng->num_samples_per_frame,
+@@ -802,7 +771,6 @@ static inline void process_fx(struct nvidia_audio_data *ng)
+ 				}
+ 			}
+ 		}
+-		pthread_mutex_unlock(&ng->nvafx_mutex);
+ 	}
+ 	if (ng->has_mono_src) {
+ 		memcpy(ng->nvafx_segment_buffers[1], ng->nvafx_segment_buffers[0], NVAFX_FRAME_SIZE * sizeof(float));
+@@ -831,6 +799,7 @@ static inline void process_fx(struct nvidia_audio_data *ng)
+ 			}
+ 		}
+ 	}
++	pthread_mutex_unlock(&ng->nvafx_mutex);
+ }
+ 
+ static inline void process(struct nvidia_audio_data *ng)
+@@ -839,7 +808,7 @@ static inline void process(struct nvidia_audio_data *ng)
+ 	for (size_t i = 0; i < ng->channels; i++)
+ 		deque_pop_front(&ng->input_buffers[i], ng->copy_buffers[i], ng->frames * sizeof(float));
+ 
+-	if (ng->use_nvafx && nvidia_afx_loaded && ng->nvafx_initialized &&
++	if (nvidia_afx_loaded && os_atomic_load_bool(&ng->nvafx_initialized) &&
+ 	    !os_atomic_load_bool(&ng->bypass_nvafx)) {
+ 		process_fx(ng);
+ 	}
+-- 
+2.54.0.windows.1
+

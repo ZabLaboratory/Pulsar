@@ -88,9 +88,16 @@ change native pixels, bypass must restore exact pixels, and each must sustain
 at least 250 frames across five seconds with no skipped frames. Three audio
 methods must load and process; denoising/combined must reduce the native meter
 magnitude by at least half. Neither microphones, cameras, monitoring speakers,
-recording nor network broadcast are used. The process must exit normally.
+network broadcast are used. `--record-video` explicitly records the isolated
+synthetic Program inside `--work`; it never records user devices or Prism's
+antenna. The process must exit normally.
 
 Reports retain SDK warnings/errors separately: passing synthetic checks does
 not certify the absence of SDK diagnostics, portrait segmentation quality,
-room-echo removal quality, scene switches, or an external native output. SDK
+room-echo removal quality, or an external hardware output. Native source and
+Program scene pixels, twenty switches with stacked video effects, three audio
+intensity contracts, rapid updates and removal while loading are tested.
+The report records render timing, SDK diagnostics and optional recording
+provenance separately. Patch 0062 owns the private AFX worker lifecycle;
+this header continues to own only SDK loading policy. SDK
 packages/models remain external machine dependencies and are never committed.

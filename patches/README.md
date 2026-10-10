@@ -1,6 +1,6 @@
 # Pulsar OBS patch stack
 
-Pulsar 3.0.0 carries **58 patches** above the pinned
+Pulsar 3.0.0 carries **59 patches** above the pinned
 `ZabLaboratory/obs-studio` revision
 `bd73b922891e56839b0bc86bdc519802802f9d68`.
 Five foundational changes are already in that fork revision.
@@ -67,6 +67,14 @@ Patch 0061 supplies a zero-impact audio bypass through the existing PCM FIFO
 using an atomic settings flag. It retains the filter's enabled state and does
 not reset/reload SDK models. Nonzero intensity remains an SDK operation and
 must be qualified separately, including intermediate values.
+
+Patch 0062 recreates AFX handles on a persistent control worker when method,
+intensity or VAD changes. The installed denoiser captures settings at model
+load; live SetFloat alone is insufficient. Audio uses a nonblocking lock and
+original PCM during loading. Destruction joins the worker before releasing
+its data, outside the loader mutex. The SDK logger survives individual filters.
+The installed-SDK probe covers rapid changes, destruction during loading,
+multiple audio filters and optional synthetic native Program recording.
 
 The build records the upstream pin, patch-content fingerprint and applied
 HEAD. It reuses only an exact clean match; `-RefreshPatches` forces replay.

@@ -28,7 +28,7 @@ missing files to recreate in `patches/`:
 | [7e7a5a383](https://github.com/ZabLaboratory/obs-studio/commit/7e7a5a383) | Adds a separate Program-return camera. |
 | [b33f831b8](https://github.com/ZabLaboratory/obs-studio/commit/b33f831b8) | Resolves embedded modules and registers Program return. |
 
-On top of this pin, 3.0.0 carries **58 patch files**: 57 root-OBS patches
+On top of this pin, 3.0.0 carries **59 patch files**: 58 root-OBS patches
 and one nested obs-browser patch. [build-win.ps1](../scripts/build-win.ps1)
 sorts complete filenames lexically, routes names containing `obs-browser`
 to `upstream/plugins/obs-browser/`, and applies the others to `upstream/`.
@@ -604,6 +604,22 @@ and avoids the reproduced AFX 1.6.1.2 denoiser near-silence at zero. Nonzero SDK
 processing remains unchanged. No reset/reload, allocation or additional audio
 thread lock is introduced. The regression checks all three methods against a
 contemporaneous disabled-filter control and reapplies intensity one.
+
+Affected file: `plugins/nv-filters/nvidia-audiofx-filter.c`.
+
+### 0062-fix-nvidia-audio-settings-worker
+
+[Source patch](../patches/0062-fix-nvidia-audio-settings-worker.patch)
+
+Recreates private AFX handles off the audio/settings thread when method,
+intensity or VAD changes. The installed AFX denoiser captures intensity at
+load and VAD is a load-time SDK parameter. Settings coalesce on a persistent
+worker; original PCM passes through the existing FIFO during loading.
+The audio callback never waits for model loading. Destruction joins the worker
+outside its mutex before releasing buffers or handles. The global SDK logger
+lives until module unload rather than an individual filter's destruction.
+The probe adds 72 rapid settings changes, six removals during loading, two
+audio filters and optional native recording of synthetic fixtures.
 
 Affected file: `plugins/nv-filters/nvidia-audiofx-filter.c`.
 
