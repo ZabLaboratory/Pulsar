@@ -28,7 +28,7 @@ missing files to recreate in `patches/`:
 | [7e7a5a383](https://github.com/ZabLaboratory/obs-studio/commit/7e7a5a383) | Adds a separate Program-return camera. |
 | [b33f831b8](https://github.com/ZabLaboratory/obs-studio/commit/b33f831b8) | Resolves embedded modules and registers Program return. |
 
-On top of this pin, 3.0.0 carries **54 patch files**: 53 root-OBS patches
+On top of this pin, 3.0.0 carries **58 patch files**: 57 root-OBS patches
 and one nested obs-browser patch. [build-win.ps1](../scripts/build-win.ps1)
 sorts complete filenames lexically, routes names containing `obs-browser`
 to `upstream/plugins/obs-browser/`, and applies the others to `upstream/`.
@@ -552,6 +552,32 @@ Affected files: `libobs/obs-video.c`.
 Further restricts automatic current readback to a physical graphics adapter. A software-only Microsoft Basic Render Driver runner stays on historical staging; an explicit diagnostic override remains available.
 
 Affected files: `libobs/obs-video.c`.
+
+### 0057-feat-source-core-memory-readback
+
+[Source patch](../patches/0057-feat-source-core-memory-readback.patch)
+
+Adds core-owned source memory statistics consumed by the native GetSourceStats
+request. Windows reads allocations and cached frames under the source async
+mutex; other platforms return an unavailable sentinel. This lower bound excludes
+plugin, driver and GPU allocations. Affected files: `libobs/obs-source.c`,
+`libobs/obs.h`.
+
+### 0058-fix-build-provision-cef-for-full-pulsar
+
+[Source patch](../patches/0058-fix-build-provision-cef-for-full-pulsar.patch)
+
+Allows PULSAR_REQUIRE_CEF to request the pinned, hash-verified CEF dependency
+independently of the upstream browser target. Full builds opt in; light builds
+do not. Affected file: `cmake/common/buildspec_common.cmake`.
+
+### 0059-fix-source-telemetry-profiling-lease
+
+[Source patch](../patches/0059-fix-source-telemetry-profiling-lease.patch)
+
+Bounds read-owned source profiling to a five-second lease independently of
+explicit resource tracing. Native telemetry covers polling and idle expiry.
+Affected files: `libobs/util/source-profiler.c`, `libobs/util/source-profiler.h`.
 
 ### 0060-fix-nvidia-effect-initialization-and-logging
 

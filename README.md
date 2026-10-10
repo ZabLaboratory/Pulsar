@@ -473,7 +473,7 @@ does not recover scene identity from arbitrary pixels.
 Pulsar is a maintained native fork, not only a JavaScript wrapper around stock
 OBS. Its OBS submodule is pinned to
 `bd73b922891e56839b0bc86bdc519802802f9d68`, an OBS 32.1.2-derived revision.
-Five foundational modifications are incorporated in that pin; **54 additional
+Five foundational modifications are incorporated in that pin; **58 additional
 patch files** build the current media core.
 
 | Area | What Pulsar changes |
@@ -598,7 +598,7 @@ as a troubleshooting shortcut.
 | [Client](packages/pulsar-client/README.md) | TypeScript API, typed events, errors and examples. |
 | [Embedding](docs/PRISM-EMBEDDING.md) | Host lifecycle, readiness and verified bundle integration. |
 | [Architecture](docs/ARCHITECTURE.md) | Runtime structure and ownership boundaries. |
-| [All libobs changes](docs/LIBOBS-CHANGES.md) | Integrated OBS changes and all 54 source patches. |
+| [All libobs changes](docs/LIBOBS-CHANGES.md) | Integrated OBS changes and all 58 source patches. |
 | [All documentation](docs/README.md) | Current guides, operational runbooks, contracts and historical studies. |
 | [Development](docs/DEVELOPMENT.md) | Build toolchain and local development. |
 | [Dual-lane canary](docs/runbooks/pulsar-dual-lane-canary.md) | Qualification and operational checks. |

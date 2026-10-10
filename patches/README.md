@@ -1,6 +1,6 @@
 # Pulsar OBS patch stack
 
-Pulsar 3.0.0 carries **54 patches** above the pinned
+Pulsar 3.0.0 carries **58 patches** above the pinned
 `ZabLaboratory/obs-studio` revision
 `bd73b922891e56839b0bc86bdc519802802f9d68`.
 Five foundational changes are already in that fork revision.
