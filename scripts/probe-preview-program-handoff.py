@@ -80,6 +80,7 @@ async def exercise(args, proc, server, report):
         if not args.baseline:
             async def preview_cover(tag, abort=False):
                 program_before = (await wire.call("GetCurrentProgramScene"))["currentProgramSceneName"]
+                await wire.poll("GetState", {}, lambda s: s.get("ready") and not s.get("busy"))
                 begun = await wire.vendor("BeginPreview", {**guard, "command_id": tag})
                 assert "error" not in begun, begun
                 covered = await wire.poll("GetPreviewResult", {**guard, "command_id": tag},
@@ -210,6 +211,10 @@ async def exercise(args, proc, server, report):
             cover_a = await preview_cover("cover-a-abort", abort=True)
             await rotate("ZabPreviewComposite", "take-a")
             assert (await wire.call("GetCurrentProgramScene"))["currentProgramSceneName"] == "ZabPreviewComposite"
+            unbound = await wire.vendor("BeginPreview", {**guard, "command_id": "cover-b-after-third-take"})
+            assert unbound.get("error") == "PREVIEW_COMPOSITE_REQUIRED", unbound
+            assert (await wire.vendor("SetPreviewComposite", {"enabled": True, "scene_name": "ZabPreviewComposite-B"}, "pulsar-scene-switch"))["ok"]
+            cover_b_again = await preview_cover("cover-b-after-third-take")
             final = next(x for x in (await wire.call("GetInputList"))["inputs"] if x["inputName"] == "handoff-browser")
             assert final["inputUuid"] == before["inputUuid"] and Producer.documents == 2
             final_b = next(x for x in (await wire.call("GetInputList"))["inputs"] if x["inputName"] == "handoff-browser-B")
@@ -220,7 +225,8 @@ async def exercise(args, proc, server, report):
                 "browser_a_uuid": final["inputUuid"], "browser_b_uuid": final_b["inputUuid"], "documents": Producer.documents,
                 "stinger_configuration_retained": True, "takes_completed": 3}
             report["preview_media_after_take"] = {"named_b_completed": cover_b, "named_a_aborted": cover_a,
-                "program_unchanged": True, "bound_composite_restored": True}
+                "named_b_completed_after_third_take": cover_b_again,
+                "root_requires_explicit_composite_rebinding": True, "program_unchanged": True, "bound_composite_restored": True}
 
 
 def main():

@@ -1,0 +1,5 @@
+# Preview composite rebinding after the third Take
+
+The existing f911e5114bf821d11a54789bd8a1b6344a3ff3248a6122261c0d837c55301b63 executable is unchanged. Only scripts/probe-preview-program-handoff.py extends the regression: after the third native Take, BeginPreview on the physical root refuses PREVIEW_COMPOSITE_REQUIRED. Explicitly rebinding the retained second composite then completes another Begin/covered/End/playback/restoration. WebM and MP4 both pass, with Program unchanged, both browser UUIDs and exactly two document acquisitions preserved, and graceful shutdown0. JSON evidence uses this report's prefix.
+
+The additional run initially exposed MEDIA_NOT_READY when the synthetic caller started a cover immediately after a Take. The probe now observes the public GetState ready=true/busy=false contract before starting each cover; it does not blindly replay a media command. No product guard or binary changed. Prism must bind the current composite even when its graph remains admitted after returning to Preview; coordinator Main1 owns that correction and the common rendering proof.
