@@ -16,4 +16,5 @@ Private native A/B/A tests passed with WebM and MP4. Two Browser UUIDs and exact
 
 No streaming, recording, physical microphone, capture device, shared restart or installed plugin replacement. This probe proves native source identity and document acquisition, not Solar/LSDP output pixels or Blue execution continuity. Orion and Prism integration remains a separate qualification owned by Main 1.
 
-Evidence: 20261012T-native-{baseline,webm,mp4,trace-fault}.json, 20261012T-regression.log, 20261012T-build.log. Reproduction: scripts/probe-preview-program-handoff.py --exe <isolated distribution exe> --output <worktree temp> --container webm|mp4; --baseline and --trace-anchor-fault are explicit modes.
+Evidence: 20261012T082756Z-native-{baseline,webm,mp4,trace-fault}.json, 20261012T082756Z-regression.log, 20261012T082756Z-build.log. Reproduction: scripts/probe-preview-program-handoff.py --exe <isolated distribution exe> --output <worktree temp> --container webm|mp4; --baseline and --trace-anchor-fault are explicit modes.
+
