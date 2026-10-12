@@ -1,0 +1,157 @@
+{
+  "passed": true,
+  "baseline": false,
+  "exe_sha256": "f911e5114bf821d11a54789bd8a1b6344a3ff3248a6122261c0d837c55301b63",
+  "recording_started": false,
+  "stream_started": false,
+  "physical_microphone_opened": false,
+  "container": "webm",
+  "trace_anchor_fault": false,
+  "producer_before": {
+    "uuid": "5eafe024-b872-4060-a634-e4afd6c126d6",
+    "documents": 1
+  },
+  "reads_during_take": [
+    {
+      "operation": "GetAdaptiveState",
+      "elapsed_ms": 0.3092000260949135,
+      "result": {
+        "adjustments_total": 0,
+        "current_kbps": 0,
+        "enabled": true,
+        "floor_kbps": 0,
+        "last_delta_dropped": 0,
+        "last_delta_total": 0,
+        "last_drop_ratio": 0.0,
+        "samples": 0,
+        "stable_ticks": 0,
+        "target_kbps": 0
+      }
+    },
+    {
+      "operation": "GetVideoSettings",
+      "elapsed_ms": 0.3839000128209591,
+      "result": {
+        "audio_bitrate": 160,
+        "fps": 30,
+        "height": 1080,
+        "video_bitrate": 6000,
+        "video_encoder": "x264",
+        "video_keyint_sec": 2,
+        "video_preset": "veryfast",
+        "video_profile": "high",
+        "video_rate_control": "CBR",
+        "width": 1920
+      }
+    },
+    {
+      "operation": "GetDestinations",
+      "elapsed_ms": 0.23329997202381492,
+      "result": {
+        "destinations": []
+      }
+    }
+  ],
+  "unsafe_vendor_calls_gated": 5,
+  "program_preview_alias_rejected": true,
+  "invalid_composite_names_refused": 6,
+  "committed": {
+    "command_id": "handoff-take",
+    "contract": "pulsar.scene-switch.v1",
+    "event_type": "TakeCommitted",
+    "frame_id": 86,
+    "intent_id": "handoff",
+    "message_type": "event",
+    "observed_at_monotonic_ns": 265396080584900,
+    "payload_sha256": "2215ea91f79ba44af418c15b792308e86c65fdf6d328814731af23032ae501dc",
+    "preview_lane_id": "A",
+    "previous_revisions": {
+      "preview": 1,
+      "program": 0,
+      "role_map": 0
+    },
+    "previous_role_map": {
+      "on_air": "A",
+      "preview": "B"
+    },
+    "program_lane_id": "B",
+    "pts_ns": 265396079276505,
+    "revisions": {
+      "preview": 1,
+      "program": 1,
+      "role_map": 1
+    },
+    "role_map": {
+      "on_air": "B",
+      "preview": "A"
+    },
+    "runtime_instance_id": "runtime-0d7f5e68128dcff0",
+    "schema_version": 1,
+    "server_seq": 4,
+    "source_lane_id": "A",
+    "state": "ready",
+    "take_command_id": "handoff-take",
+    "target_lane_id": "B",
+    "target_scene_id": "ZabPreviewComposite"
+  },
+  "role_map": {
+    "on_air": "B",
+    "preview": "A"
+  },
+  "program": "ZabPreviewComposite",
+  "preview": "Default",
+  "producer_after": {
+    "uuid": "5eafe024-b872-4060-a634-e4afd6c126d6",
+    "documents": 1
+  },
+  "two_producer_rotation": {
+    "program_sequence": [
+      "ZabPreviewComposite",
+      "ZabPreviewComposite-B",
+      "ZabPreviewComposite"
+    ],
+    "browser_a_uuid": "5eafe024-b872-4060-a634-e4afd6c126d6",
+    "browser_b_uuid": "e3989445-28c6-4ed4-86f4-c00aad6564ab",
+    "documents": 2,
+    "stinger_configuration_retained": true,
+    "takes_completed": 3
+  },
+  "preview_media_after_take": {
+    "named_b_completed": {
+      "channel": "preview",
+      "command_id": "cover-b",
+      "cover_kind": "outgoing_frame",
+      "cut_time_ms": 700,
+      "frame_id": 146,
+      "media_paused": false,
+      "media_time_ms": 1500,
+      "operational": true,
+      "playback_start_frame_id": 96,
+      "playback_start_pts_ns": 265396412609835,
+      "pts_ns": 265398079276485,
+      "runtime_instance_id": "runtime-0d7f5e68128dcff0",
+      "start_frame_id": 94,
+      "start_pts_ns": 265396345943169,
+      "status": "completed"
+    },
+    "named_a_aborted": {
+      "channel": "preview",
+      "command_id": "cover-a-abort",
+      "cover_kind": "outgoing_frame",
+      "frame_id": 207,
+      "operational": true,
+      "pts_ns": 265400112609798,
+      "runtime_instance_id": "runtime-0d7f5e68128dcff0",
+      "start_frame_id": 204,
+      "start_pts_ns": 265400012609799,
+      "status": "aborted"
+    },
+    "program_unchanged": true,
+    "bound_composite_restored": true
+  },
+  "shutdown": {
+    "exit_code": 0,
+    "forced": false
+  },
+  "disabled_trace_errors": 0
+}

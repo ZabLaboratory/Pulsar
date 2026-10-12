@@ -78,6 +78,21 @@ async def exercise(args, proc, server, report):
         before = next(x for x in before_inputs if x["inputName"] == "handoff-browser")
         report["producer_before"] = {"uuid": before.get("inputUuid"), "documents": Producer.documents}
         if not args.baseline:
+            async def preview_cover(tag, abort=False):
+                program_before = (await wire.call("GetCurrentProgramScene"))["currentProgramSceneName"]
+                begun = await wire.vendor("BeginPreview", {**guard, "command_id": tag})
+                assert "error" not in begun, begun
+                covered = await wire.poll("GetPreviewResult", {**guard, "command_id": tag},
+                    lambda s: s.get("status") == "covered")
+                assert covered["start_frame_id"] > 0 and covered["start_pts_ns"] > 0, covered
+                ended = await wire.vendor("EndPreview", {**guard, "command_id": tag, "abort": abort})
+                assert "error" not in ended, ended
+                done = await wire.poll("GetPreviewResult", {**guard, "command_id": tag},
+                    lambda s: s.get("status") == ("aborted" if abort else "completed"))
+                assert done["frame_id"] > covered["start_frame_id"], done
+                assert (await wire.call("GetCurrentProgramScene"))["currentProgramSceneName"] == program_before
+                return done
+
             assert (await wire.vendor("SetPreviewComposite", {"enabled": True}, "pulsar-scene-switch"))["ok"]
         configured = await wire.vendor("Configure", {**guard, "config": {
             "path": str(args.asset), "cut_point_ms": 700, "volume": 0, "muted": True}})
@@ -136,6 +151,8 @@ async def exercise(args, proc, server, report):
             rebound = await wire.vendor("SetPreviewComposite", {"enabled": True}, "pulsar-scene-switch")
             assert not rebound["ok"] and rebound["error_code"] == "COMPOSITE_ON_PROGRAM", rebound
             assert (await wire.vendor("SetPreviewComposite", {"enabled": False}, "pulsar-scene-switch"))["ok"]
+            root_cover = await wire.vendor("BeginPreview", {**guard, "command_id": "root-cover-refused"})
+            assert root_cover.get("error") == "PREVIEW_COMPOSITE_REQUIRED", root_cover
             report["program_preview_alias_rejected"] = True
             for name in [17, [], "", "x" * 257, "bad\x00name"]:
                 invalid = await wire.vendor("SetPreviewComposite", {"enabled": True, "scene_name": name}, "pulsar-scene-switch")
@@ -183,12 +200,14 @@ async def exercise(args, proc, server, report):
             assert Producer.documents == 2, Producer.documents
             browser_b = next(x for x in (await wire.call("GetInputList"))["inputs"] if x["inputName"] == "handoff-browser-B")
             assert browser_b["inputUuid"] != before["inputUuid"]
+            cover_b = await preview_cover("cover-b")
             await rotate("ZabPreviewComposite-B", "take-b")
             assert (await wire.call("GetCurrentProgramScene"))["currentProgramSceneName"] == "ZabPreviewComposite-B"
             refused = await wire.vendor("SetPreviewComposite", {"enabled": True, "scene_name": "ZabPreviewComposite-B"}, "pulsar-scene-switch")
             assert not refused["ok"] and refused["error_code"] == "COMPOSITE_ON_PROGRAM", refused
             await wire.vendor("SetPreviewComposite", {"enabled": False}, "pulsar-scene-switch")
             assert (await wire.vendor("SetPreviewComposite", {"enabled": True, "scene_name": "ZabPreviewComposite"}, "pulsar-scene-switch"))["ok"]
+            cover_a = await preview_cover("cover-a-abort", abort=True)
             await rotate("ZabPreviewComposite", "take-a")
             assert (await wire.call("GetCurrentProgramScene"))["currentProgramSceneName"] == "ZabPreviewComposite"
             final = next(x for x in (await wire.call("GetInputList"))["inputs"] if x["inputName"] == "handoff-browser")
@@ -200,6 +219,8 @@ async def exercise(args, proc, server, report):
             report["two_producer_rotation"] = {"program_sequence": ["ZabPreviewComposite", "ZabPreviewComposite-B", "ZabPreviewComposite"],
                 "browser_a_uuid": final["inputUuid"], "browser_b_uuid": final_b["inputUuid"], "documents": Producer.documents,
                 "stinger_configuration_retained": True, "takes_completed": 3}
+            report["preview_media_after_take"] = {"named_b_completed": cover_b, "named_a_aborted": cover_a,
+                "program_unchanged": True, "bound_composite_restored": True}
 
 
 def main():

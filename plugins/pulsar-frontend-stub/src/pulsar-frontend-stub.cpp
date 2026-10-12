@@ -4539,7 +4539,11 @@ json PulsarFrontendAPI::beginPreviewMedia(const std::string &commandId)
     if (dualLaneCutPending.load() || previewMediaOverlay || !sceneSwitchPreparedCommandId.empty())
         return {{"error", "TRANSITION_BUSY"}};
     OBSSourceAutoRelease base = obs_view_get_source(previewView, 0);
-    if (!base || std::strcmp(obs_source_get_name(base), "ZabPreviewComposite") != 0)
+    // The physical Preview producer changes after each Take. Its bound
+    // composite is authoritative; a legacy name cannot identify its role.
+    // Reject lane roots and Program aliases before capturing or rebinding.
+    if (!base || !obs_scene_from_source(base) || base == laneSources[0] || base == laneSources[1] ||
+        base == programSelection || base == currentScene)
         return {{"error", "PREVIEW_COMPOSITE_REQUIRED"}};
     uint32_t duration = 0;
     std::string error;

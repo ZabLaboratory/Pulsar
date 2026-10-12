@@ -180,6 +180,9 @@ A successful request dispatch is not itself a STARTED state.
 
 Hot-lane role changes preserve producers. Actual source replacement and
 shutdown release owned references only after relevant callback/task fences.
+Preview media covers use the scene bound to PreviewView after either physical
+lane becomes Preview. Physical lane roots and Program aliases are refused;
+completion or abort restores the exact retained composite reference.
 The legacy managed browser-source replacement lives in
 `pulsar-scene-source`; it is not the Prepare implementation.
 
