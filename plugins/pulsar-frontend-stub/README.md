@@ -81,6 +81,39 @@ The state API reports that freeze explicitly.
 
 ## Transitions
 
+### Handing off an existing Preview composite
+
+`pulsar-scene-switch.SetPreviewComposite({enabled:true, scene_name?:string})`
+binds an existing scene to PreviewView. The optional name defaults to
+`ZabPreviewComposite` for older hosts; it must be nonempty, at most 256 bytes
+and contain no NUL. Preparing that same scene retains
+its source as the hot lane child; it creates neither a scene clone nor a new
+browser. The ordinary Prepare/PreviewReady/Take/TakeCommitted contract then
+exchanges the lane roles and detaches PreviewView from the incoming Program
+composite at the native frame boundary. `enabled:false` restores the outgoing
+Preview lane after commit. Binding the composite to Preview again while it is
+the Program selection is refused with `ok:false, error_code:COMPOSITE_ON_PROGRAM`.
+
+For two independent producers, the host keeps two composite/browser identities
+and selects the physical Preview composite by name. A→B→A changes only the
+native roles; browser source UUIDs and loaded documents survive the transfers.
+The host must also route LSDP writers to stable physical topics, so a promoted
+producer cannot keep following logical Preview mutations. That stream-authority
+mapping belongs to Orion/Prism, not to this native scene binding.
+
+Stopping an output does not swap lanes. Returning to the same document must
+observe the existing Program composite; preparing a source already on Program
+is still refused. A host can treat an already-current Take as a no-op rather
+than duplicate the producer. A new process starts from its bootstrap graph and
+cannot reuse another process's preparation. See
+`scripts/probe-preview-program-handoff.py`: real private browser UUID/document
+reuse, frame/PTS commit, pending reads, unsafe vendor refusals and alias guard.
+This probe starts no recording, stream or physical capture.
+
+The runtime trace producer is optional. A disabled producer makes no Take
+reservation and emits no failed-acceptance diagnostic. Configured integrity
+faults remain fail-stop through the existing `integrityFaulted()` guard.
+
 Cut is the default. `PULSAR_DUAL_LANE_TRANSITIONS=1` enables the optional
 Fade/Stinger controller above the same stable views. It tracks queued,
 running, final-queued and terminal phases with actual frame/PTS observations.

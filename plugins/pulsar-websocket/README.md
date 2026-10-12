@@ -32,6 +32,16 @@ supported baseline and explicit refusals.
 
 ## Vendor namespaces
 
+During a pending Take, the three observational `pulsar` vendor requests
+`GetAdaptiveState`, `GetVideoSettings` and `GetDestinations` bypass the scene
+mutation lease, like ordinary top-level reads. This is an exact allowlist:
+other vendors, unknown Get-prefixed vendor operations, malformed envelopes and
+mutations stay gated. A read also never retires another request's telemetry
+ingress envelope. Only the request which supplied that envelope clears it.
+The private runtime regression is `scripts/probe-preview-program-handoff.py`;
+its baseline mode reproduces code 702 `PREVIEW_FROZEN`, and the patched mode
+checks successful reads while `take_accepted` is still observable.
+
 | Vendor | Owner |
 |---|---|
 | `pulsar` | Multi-stream: destinations, capabilities, video/audio, adaptive control and diagnostics. |

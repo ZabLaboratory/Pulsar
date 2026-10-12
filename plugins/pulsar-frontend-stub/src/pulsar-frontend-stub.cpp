@@ -1032,7 +1032,11 @@ public:
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             if (!enabled_) {
-                rejectReason = "producer_disabled";
+                // This producer is opt-in. An ordinary Take without a trace
+                // has no reservation to make and is not a failed acceptance.
+                // The separate integrityFaulted gate still fail-stops active
+                // traces which lost their authenticated producer contract.
+                return false;
             } else if (degraded_) {
                 rejectReason = "telemetry_degraded";
             } else if (!pending_.valid) {
@@ -2931,7 +2935,7 @@ public:
 
     bool setup();
     void emit(obs_frontend_event event);
-    bool setPreviewCompositeSource(bool enabled);
+    bool setPreviewCompositeSource(bool enabled, const std::string &sceneName, const char **errorCode = nullptr);
     bool sceneSwitchPrepare(const std::string &commandId, char laneId, const std::string &sceneId);
     bool sceneSwitchTake(const std::string &takeCommandId);
     bool sceneSwitchAbort(const std::string &takeCommandId);
@@ -4273,11 +4277,29 @@ private:
         }
 
         const bool enabled = raw["enabled"].get<bool>();
-        const bool ok = g_api->setPreviewCompositeSource(enabled);
+        std::string sceneName = "ZabPreviewComposite";
+        if (raw.contains("scene_name")) {
+            if (!raw["scene_name"].is_string()) {
+                obs_data_set_bool(response, "ok", false);
+                obs_data_set_string(response, "error", "requestData.scene_name must be a string");
+                return;
+            }
+            sceneName = raw["scene_name"].get<std::string>();
+            if (sceneName.empty() || sceneName.size() > 256 || sceneName.find('\0') != std::string::npos) {
+                obs_data_set_bool(response, "ok", false);
+                obs_data_set_string(response, "error", "requestData.scene_name must be a nonempty name of at most 256 bytes without NUL");
+                return;
+            }
+        }
+        const char *errorCode = nullptr;
+        const bool ok = g_api->setPreviewCompositeSource(enabled, sceneName, &errorCode);
         obs_data_set_bool(response, "ok", ok);
-        obs_data_set_string(response, "source_name", enabled ? "ZabPreviewComposite" : "PulsarPreviewLane");
-        if (!ok)
-            obs_data_set_string(response, "error", enabled ? "ZabPreviewComposite is unavailable" : "PreviewView lane restore failed");
+        obs_data_set_string(response, "source_name", enabled ? sceneName.c_str() : "PulsarPreviewLane");
+        if (!ok) {
+            obs_data_set_string(response, "error", enabled ? "Preview composite binding refused" : "PreviewView lane restore failed");
+            if (errorCode)
+                obs_data_set_string(response, "error_code", errorCode);
+        }
     }
     static void Tick(void *priv, float) { static_cast<PulsarSceneSwitchVendor *>(priv)->expire(); }
     void dispatch(obs_data_t *request, obs_data_t *response, const char *requestType)
@@ -5068,10 +5090,14 @@ bool PulsarFrontendAPI::dualLaneInvariantLocked(const char *where) const
     return valid;
 }
 
-bool PulsarFrontendAPI::setPreviewCompositeSource(bool enabled)
+bool PulsarFrontendAPI::setPreviewCompositeSource(bool enabled, const std::string &sceneName, const char **errorCode)
 {
     std::lock_guard<std::mutex> lock(dualLaneMutex);
+    if (errorCode)
+        *errorCode = nullptr;
     if (!dualLaneReady || !dualLaneOperational || !previewView || !previewScene) {
+        if (errorCode)
+            *errorCode = "TOPOLOGY_UNAVAILABLE";
         blog(LOG_WARNING,
              "[pulsar-scene-switch] PreviewView composite binding rejected: topology unavailable");
         return false;
@@ -5079,12 +5105,22 @@ bool PulsarFrontendAPI::setPreviewCompositeSource(bool enabled)
 
     obs_source_t *source = previewScene;
     if (enabled) {
-        source = obs_get_source_by_name("ZabPreviewComposite");
+        source = obs_get_source_by_name(sceneName.c_str());
         if (!source || !obs_scene_from_source(source)) {
+            if (errorCode)
+                *errorCode = "COMPOSITE_UNAVAILABLE";
             if (source)
                 obs_source_release(source);
             blog(LOG_WARNING,
-                 "[pulsar-scene-switch] PreviewView composite binding rejected: ZabPreviewComposite is missing");
+                 "[pulsar-scene-switch] PreviewView composite binding rejected: scene is missing (%s)", sceneName.c_str());
+            return false;
+        }
+        if (source == programSelection || source == currentScene) {
+            if (errorCode)
+                *errorCode = "COMPOSITE_ON_PROGRAM";
+            obs_source_release(source);
+            blog(LOG_WARNING,
+                 "[pulsar-scene-switch] PreviewView composite binding rejected: scene is on Program (%s)", sceneName.c_str());
             return false;
         }
     }
@@ -5099,7 +5135,7 @@ bool PulsarFrontendAPI::setPreviewCompositeSource(bool enabled)
     if (enabled)
         obs_source_release(source);
     blog(LOG_INFO, "[pulsar-scene-switch] PreviewView source bound=%s source=%s", enabled ? "composite" : "lane",
-         enabled ? "ZabPreviewComposite" : obs_source_get_name(previewScene));
+         enabled ? sceneName.c_str() : obs_source_get_name(previewScene));
     return true;
 }
 

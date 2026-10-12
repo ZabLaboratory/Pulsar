@@ -40,13 +40,27 @@ std::string DeadlineDelta(uint64_t deadline, uint64_t now)
     return std::string("-") + std::to_string(now - deadline);
 }
 
-bool IsReadOnlyRequest(const std::string &requestType)
+bool IsReadOnlyRequest(const Request &request)
 {
 	// The control plane deliberately has a small allowlist: explicit Get*
 	// requests are observational, while every other current or future request
 	// is treated as potentially mutating. This keeps a newly added command from
 	// bypassing the Preview freeze by accident.
-	return requestType.rfind("Get", 0) == 0;
+	if (request.RequestType.rfind("Get", 0) == 0)
+		return true;
+	// The outer vendor envelope is not an operation. These registered Pulsar
+	// handlers only read their owners, so a pending Take must not turn cockpit
+	// health polling into a rejected scene mutation. Unknown vendors/requests
+	// remain gated; a future Get-prefixed vendor command is not implicitly safe.
+	if (request.RequestType != "CallVendorRequest" || !request.RequestData.is_object())
+		return false;
+	const auto vendor = request.RequestData.find("vendorName");
+	const auto nested = request.RequestData.find("requestType");
+	if (vendor == request.RequestData.end() || nested == request.RequestData.end() ||
+	    !vendor->is_string() || !nested->is_string() || vendor->get<std::string>() != "pulsar")
+		return false;
+	const std::string operation = nested->get<std::string>();
+	return operation == "GetAdaptiveState" || operation == "GetVideoSettings" || operation == "GetDestinations";
 }
 
 bool IsSafetyStopRequest(const std::string &requestType)
@@ -360,7 +374,7 @@ RequestResult RequestHandler::ProcessRequest(const Request &request)
 	const bool controlledSceneSwitchBypass = IsControlledSceneSwitchPendingBypass(request);
 	const bool safetyStop = IsSafetyStopRequest(request.RequestType);
 	pulsar_dual_lane_control::MutationLease mutationLease(
-		!IsReadOnlyRequest(request.RequestType) && !controlledSceneSwitchBypass && !safetyStop);
+		!IsReadOnlyRequest(request) && !controlledSceneSwitchBypass && !safetyStop);
 	if (!mutationLease.allowed()) {
 		const char *reason = mutationLease.frozen()
 			? "PREVIEW_FROZEN: WebSocket mutation rejected after the dual-lane rollback freeze."
@@ -394,7 +408,10 @@ RequestResult RequestHandler::ProcessRequest(const Request &request)
     // queueDualLaneCut consumes a valid envelope synchronously.  Retire any
     // envelope left by a rejected/non-Take route before another request can
     // inherit its command/intent identity.
-    pulsar_runtime_telemetry::cancel_take();
+    // Observation requests can run concurrently with a mutation's trace
+    // ingress. Only the request which supplied that envelope may retire it.
+    if (telemetry.requested)
+        pulsar_runtime_telemetry::cancel_take();
     return result;
 }
 

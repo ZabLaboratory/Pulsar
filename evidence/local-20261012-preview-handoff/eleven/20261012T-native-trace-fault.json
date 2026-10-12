@@ -1,0 +1,50 @@
+{
+  "passed": true,
+  "baseline": false,
+  "exe_sha256": "071d846b724a3163838c57b2e28e72f4a2637cb5161ed99d0e2d3ae1e297ba38",
+  "recording_started": false,
+  "stream_started": false,
+  "physical_microphone_opened": false,
+  "container": "webm",
+  "trace_anchor_fault": true,
+  "producer_before": {
+    "uuid": "a8e3b4c3-19fb-41a0-b7e9-51eee8a1fd63",
+    "documents": 1
+  },
+  "configured_trace_fault_blocks_take": true,
+  "refused": {
+    "command_id": "handoff-take",
+    "contract": "pulsar.scene-switch.v1",
+    "error_code": "TAKE_NOT_PENDING",
+    "error_details": {},
+    "error_message": "atomic frame-boundary swap was not admitted",
+    "event_type": "CommandRejected",
+    "intent_id": "handoff",
+    "message_type": "event",
+    "observed_at_monotonic_ns": 260928274142000,
+    "payload_sha256": "f7a520fd86a93f29e731fd1f59e0d351d862a5ce990fbf3d4f2b28b249c60119",
+    "previous_revisions": {
+      "preview": 1,
+      "program": 0,
+      "role_map": 0
+    },
+    "revisions": {
+      "preview": 1,
+      "program": 0,
+      "role_map": 0
+    },
+    "role_map": {
+      "on_air": "A",
+      "preview": "B"
+    },
+    "runtime_instance_id": "runtime-3cf03dcf39475876",
+    "schema_version": 1,
+    "server_seq": 3,
+    "state": "ready"
+  },
+  "shutdown": {
+    "exit_code": 0,
+    "forced": false
+  },
+  "disabled_trace_errors": 0
+}

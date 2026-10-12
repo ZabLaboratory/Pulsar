@@ -1,0 +1,96 @@
+{
+  "passed": true,
+  "baseline": true,
+  "exe_sha256": "fac3466e90a744bff14ca68dac2967e5a51ecd610e9fcf1c1381f8b203299ac8",
+  "recording_started": false,
+  "stream_started": false,
+  "physical_microphone_opened": false,
+  "producer_before": {
+    "uuid": "3424a3e0-5b6d-432e-af28-d6f10949c651",
+    "documents": 1
+  },
+  "reads_during_take": [
+    {
+      "operation": "GetAdaptiveState",
+      "elapsed_ms": 0.25690000620670617,
+      "result": {
+        "code": 702,
+        "comment": "PREVIEW_FROZEN: WebSocket mutation rejected while a dual-lane Take is pending.",
+        "result": false
+      }
+    },
+    {
+      "operation": "GetVideoSettings",
+      "elapsed_ms": 0.24280001525767148,
+      "result": {
+        "code": 702,
+        "comment": "PREVIEW_FROZEN: WebSocket mutation rejected while a dual-lane Take is pending.",
+        "result": false
+      }
+    },
+    {
+      "operation": "GetDestinations",
+      "elapsed_ms": 0.21239998750388622,
+      "result": {
+        "code": 702,
+        "comment": "PREVIEW_FROZEN: WebSocket mutation rejected while a dual-lane Take is pending.",
+        "result": false
+      }
+    }
+  ],
+  "unsafe_vendor_calls_gated": 4,
+  "committed": {
+    "command_id": "handoff-take",
+    "contract": "pulsar.scene-switch.v1",
+    "event_type": "TakeCommitted",
+    "frame_id": 88,
+    "intent_id": "handoff",
+    "message_type": "event",
+    "observed_at_monotonic_ns": 259923429263300,
+    "payload_sha256": "884b55c8c8978870a1c9f04f8191f357d97697cc15345aa5568fdfd50bf712b1",
+    "preview_lane_id": "A",
+    "previous_revisions": {
+      "preview": 1,
+      "program": 0,
+      "role_map": 0
+    },
+    "previous_role_map": {
+      "on_air": "A",
+      "preview": "B"
+    },
+    "program_lane_id": "B",
+    "pts_ns": 259923427859871,
+    "revisions": {
+      "preview": 1,
+      "program": 1,
+      "role_map": 1
+    },
+    "role_map": {
+      "on_air": "B",
+      "preview": "A"
+    },
+    "runtime_instance_id": "runtime-2d311b3b26213cc7",
+    "schema_version": 1,
+    "server_seq": 4,
+    "source_lane_id": "A",
+    "state": "ready",
+    "take_command_id": "handoff-take",
+    "target_lane_id": "B",
+    "target_scene_id": "ZabPreviewComposite"
+  },
+  "role_map": {
+    "on_air": "B",
+    "preview": "A"
+  },
+  "program": "ZabPreviewComposite",
+  "preview": "Default",
+  "producer_after": {
+    "uuid": "3424a3e0-5b6d-432e-af28-d6f10949c651",
+    "documents": 1
+  },
+  "shutdown": {
+    "exit_code": 0,
+    "forced": false
+  },
+  "disabled_trace_errors": 1
+}
