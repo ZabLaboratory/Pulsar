@@ -1,0 +1,76 @@
+Pulsar version: 3.0.1
+Variant       : full
+Source rundir : D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\rundir\RelWithDebInfo
+Output target : D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\dist\pulsar-windows-x64-full-v3.0.1
+
+
+--- Copying bin/64bit/ ---
+
+--- Copying obs-plugins/64bit/ (filtered) ---
+  strip   aja.dll
+  strip   coreaudio-encoder.dll
+  strip   decklink.dll
+  strip   obs-vst.dll
+  strip   obs-webrtc.dll
+  kept 32 plugin(s), stripped 5
+
+--- Copying data/ (filtered on stripped plugins) ---
+  strip data/obs-plugins/aja/
+  strip data/obs-plugins/coreaudio-encoder/
+  strip data/obs-plugins/decklink/
+  strip data/obs-plugins/obs-vst/
+  strip data/obs-plugins/obs-webrtc/
+{
+  "schema": "pulsar.source-telemetry-bundle.v1",
+  "coherent": true,
+  "obs_sha256": "10dea4cfde75e7a1feeed8532a130df2c247c9a10d15511c9b6643d070d14a8b",
+  "required_exports": [
+    "obs_source_get_core_memory_usage",
+    "source_profiler_enable",
+    "source_profiler_fill_result",
+    "source_profiler_gpu_enable",
+    "source_profiler_request_telemetry"
+  ],
+  "binaries": [
+    {
+      "path": "bin\\64bit\\pulsar.exe",
+      "sha256": "04f87a55aff8c2b61de7e04ecc930899dbb0c5f52d011d6a180683edba33d3fe",
+      "libobs_imports_checked": 177
+    },
+    {
+      "path": "obs-plugins\\64bit\\obs-websocket.dll",
+      "sha256": "491d3b0fedff85b7f25b1d2d42ed37cde0054b16219f561138962c1e52599d71",
+      "libobs_imports_checked": 296
+    },
+    {
+      "path": "obs-plugins\\64bit\\pulsar-browser.dll",
+      "sha256": "54a9b788512de4be1cf54837c9b9ba4fa5ff3dfb671f4184071bc4bc876872cc",
+      "libobs_imports_checked": 100
+    },
+    {
+      "path": "obs-plugins\\64bit\\pulsar-camera-effects.dll",
+      "sha256": "55caeda4a1382ffe63b16f8bbf4e83961e8accb26b543f91de49da7fd959d2fb",
+      "libobs_imports_checked": 14
+    },
+    {
+      "path": "obs-plugins\\64bit\\pulsar-capture-effects.dll",
+      "sha256": "8bc7415031d1839acb3134746fefaa7d228967548bad5332d258ef73a63df646",
+      "libobs_imports_checked": 94
+    },
+    {
+      "path": "obs-plugins\\64bit\\pulsar-multi-stream.dll",
+      "sha256": "c5bab933134cd7f12c117a4a278bb49e6a5cecbdd7249b5c98120262602fd9e6",
+      "libobs_imports_checked": 100
+    },
+    {
+      "path": "obs-plugins\\64bit\\pulsar-scene-source.dll",
+      "sha256": "c841f512a9eaacc9dab0997377af0e7777b126413eb1def958227cd96d78f557",
+      "libobs_imports_checked": 28
+    }
+  ]
+}
+
+--- Summary ---
+Files : 1256
+Size  : 379 MB
+Path  : D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\dist\pulsar-windows-x64-full-v3.0.1
