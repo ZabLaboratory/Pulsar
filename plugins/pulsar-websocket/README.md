@@ -100,6 +100,12 @@ On Windows, an overlay using an older libobs without the lease API keeps the
 WebSocket plugin loadable and returns `NotReady` with
 `SOURCE_TELEMETRY_REQUIRES_UPDATED_LIBOBS` for this request. It never enables
 permanent profiling as a compatibility fallback.
+Native packaging now rejects that mixed cohort before stamping a bundle:
+`scripts/check-source-telemetry-bundle.py` checks PE exports and module imports;
+`scripts/probe-source-telemetry.py --exe ... --work-dir ... --report ...`
+verifies color/CEF samples, source-local RAM, idle lease expiry and graceful
+shutdown on an isolated runtime without starting Stream or Record. See the
+[development guide](../../docs/DEVELOPMENT.md) for complete commands and limits.
 `cpuTickMaxMs`, `cpuRenderFirstPassMaxMs` and `gpuRenderFirstPassMaxMs` report
 individual tick/first-render maxima. They are not combined per-frame maxima for
 the summed CPU/GPU average costs.
