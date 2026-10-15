@@ -12,6 +12,7 @@ builds them against the same patched OBS headers and libraries.
 | [pulsar-multi-stream](pulsar-multi-stream/README.md) | `pulsar-multi-stream.dll` | Twitch/YouTube/custom RTMP/local destinations, adaptive bitrate, capabilities, audio and diagnostics. |
 | [pulsar-browser](pulsar-browser/README.md) | `pulsar-browser.dll`, `pulsar-browser-page.exe` | Full-bundle CEF rendering and callback/task lifetime. |
 | [pulsar-scene-source](pulsar-scene-source/README.md) | `pulsar-scene-source.dll` | Legacy managed browser-capture replacement. |
+| [pulsar-capture-effects](pulsar-capture-effects/README.md) | `pulsar-capture-effects.dll` | Scene-owned capture appearance, ordered paint, framing, ancestor clips and isolated object blend; no physical device or scene-switch authority. |
 | [pulsar-nv-secure-load](pulsar-nv-secure-load/README.md) | Header-only interface | Shared effect-SDK loading/probe policy. |
 | [pulsar-output-classify](pulsar-output-classify/README.md) | Header-only interface | Shared stable output-failure classification. |
 
@@ -21,6 +22,11 @@ The `pulsar` vendor belongs to multi-stream, `pulsar-scene` to scene-source
 and `pulsar-scene-switch` to the frontend production controller.
 All are reached through obs-websocket's `CallVendorRequest`; a plugin must
 not attempt a second registration under another owner's vendor name.
+
+The `pulsar-capture-effects` vendor belongs to the capture paint module. Its
+`CommitAppearance` and `CommitObjectBlend` admit paint on existing scene-owned
+layers. Analytic rounded ancestor clipping does not provide arbitrary alpha,
+luminance or composited-group mask coverage; that integration remains separate.
 
 Baseline OBS-compatible scene authoring is distinct from the deterministic
 Prepare/Take contract. A source-replacement helper is not an atomic production

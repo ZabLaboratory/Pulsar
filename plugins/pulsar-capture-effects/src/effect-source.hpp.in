@@ -1,0 +1,2 @@
+#pragma once
+static const char *capture_effect_source = R"PULSAR_SHADER(@CAPTURE_EFFECT_SOURCE@)PULSAR_SHADER";

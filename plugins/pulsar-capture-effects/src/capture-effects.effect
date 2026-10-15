@@ -1,0 +1,166 @@
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform texture2d backdrop;
+uniform float2 dimensions;
+uniform float2 source_dimensions;
+uniform float2 capture_size;
+uniform float2 capture_position;
+uniform float2 canvas_size;
+uniform float padding;
+uniform float corner_radius;
+uniform int kind;
+uniform int blend_mode;
+uniform float radius;
+uniform float spread;
+uniform float2 offset;
+uniform float4 tint;
+uniform float4 secondary;
+uniform float density;
+uniform float clip_to_shape;
+uniform float2 grain_size;
+uniform int noise_type;
+uniform float refraction;
+uniform float depth;
+uniform float angle;
+uniform float intensity;
+uniform float dispersion;
+uniform float splay;
+uniform float capture_opacity;
+uniform float capture_rotation;
+uniform int ancestor_count;
+uniform float4 ancestor_x[32];
+uniform float4 ancestor_y[32];
+uniform float4 ancestor_size[32];
+sampler_state linear_sampler { Filter = Linear; AddressU = Clamp; AddressV = Clamp; };
+struct VertData { float4 pos : POSITION; float2 uv : TEXCOORD0; };
+VertData VSDefault(VertData v) { v.pos = mul(float4(v.pos.xyz, 1.0), ViewProj); return v; }
+float4 sample_image(float2 p) {
+  if (p.x < 0.0 || p.y < 0.0 || p.x >= source_dimensions.x || p.y >= source_dimensions.y) return float4(0.0,0.0,0.0,0.0);
+  return image.Sample(linear_sampler, p / source_dimensions);
+}
+float4 blur_image(float2 p, float r) {
+  float4 c = sample_image(p) * 0.25;
+  float q = r * 0.65;
+  c += (sample_image(p+float2(q,0.0))+sample_image(p-float2(q,0.0))+sample_image(p+float2(0.0,q))+sample_image(p-float2(0.0,q))) * 0.125;
+  c += (sample_image(p+float2(q,q))+sample_image(p+float2(-q,q))+sample_image(p+float2(q,-q))+sample_image(p-float2(q,q))) * 0.0625;
+  return c;
+}
+float signed_box(float2 p) {
+  float rr = min(corner_radius,min(capture_size.x,capture_size.y)*0.5);
+  float2 d = abs(p-capture_size*0.5)-(capture_size*0.5-rr);
+  return length(max(d,float2(0.0,0.0)))+min(max(d.x,d.y),0.0)-rr;
+}
+float shape_alpha(float2 p, float expansion, float softness) {
+  return 1.0-smoothstep(-max(softness,0.5),max(softness,0.5),signed_box(p)-expansion);
+}
+float hash_cell(float2 p) { return frac(sin(dot(p,float2(12.9898,78.233)))*43758.5453); }
+float4 background(float2 p) {
+  float2 local=p-capture_size*0.5;
+  float cr=cos(capture_rotation), sr=sin(capture_rotation);
+  float2 world=float2(local.x*cr-local.y*sr,local.x*sr+local.y*cr)+capture_size*0.5+capture_position;
+  float2 uv=world/canvas_size;
+  return backdrop.Sample(linear_sampler, uv);
+}
+float4 blur_background(float2 p, float r) {
+  float4 c=background(p)*0.25;float q=r*0.65;
+  c+=(background(p+float2(q,0.0))+background(p-float2(q,0.0))+background(p+float2(0.0,q))+background(p-float2(0.0,q)))*0.125;
+  c+=(background(p+float2(q,q))+background(p+float2(-q,q))+background(p+float2(q,-q))+background(p-float2(q,q)))*0.0625;
+  return c;
+}
+float blend_channel(float b, float s) {
+  if(blend_mode==1)return b*s;
+  if(blend_mode==2)return b+s-b*s;
+  if(blend_mode==3)return s<=0.5?2.0*b*s:1.0-2.0*(1.0-b)*(1.0-s);
+  if(blend_mode==4){if(s<=0.5)return b-(1.0-2.0*s)*b*(1.0-b);float d=b<=0.25?((16.0*b-12.0)*b+4.0)*b:sqrt(max(b,0.0));return b+(2.0*s-1.0)*(d-b);}
+  if(blend_mode==5)return b<=0.5?2.0*b*s:1.0-2.0*(1.0-b)*(1.0-s);
+  if(blend_mode==6)return min(b,s);
+  if(blend_mode==7)return max(b,s);
+  if(blend_mode==8)return abs(b-s);
+  if(blend_mode==9)return b+s-2.0*b*s;
+  if(blend_mode==11)return b<=0.0?0.0:(s>=1.0?1.0:min(1.0,b/(1.0-s)));
+  if(blend_mode==12)return b>=1.0?1.0:(s<=0.0?0.0:1.0-min(1.0,(1.0-b)/s));
+  return s;
+}
+float lum(float3 c){return dot(c,float3(0.3,0.59,0.11));}
+float sat(float3 c){return max(c.r,max(c.g,c.b))-min(c.r,min(c.g,c.b));}
+float3 set_lum(float3 color,float l){float3 c=color+(l-lum(color));float n=min(c.r,min(c.g,c.b));float x=max(c.r,max(c.g,c.b));if(n<0.0)c=l+(c-l)*l/max(l-n,0.000001);if(x>1.0)c=l+(c-l)*(1.0-l)/max(x-l,0.000001);return c;}
+float3 set_sat(float3 c,float s){float n=min(c.r,min(c.g,c.b));float d=sat(c);return d<=0.0?float3(0.0,0.0,0.0):(c-n)*s/d;}
+float3 blend_color(float3 b,float3 s){
+  if(blend_mode==13)return set_lum(set_sat(s,sat(b)),lum(b));
+  if(blend_mode==14)return set_lum(set_sat(b,sat(s)),lum(b));
+  if(blend_mode==15)return set_lum(s,lum(b));
+  if(blend_mode==16)return set_lum(b,lum(s));
+  return float3(blend_channel(b.r,s.r),blend_channel(b.g,s.g),blend_channel(b.b,s.b));
+}
+float4 Paint(VertData v) {
+  float2 p=v.uv*dimensions;
+  if(kind==0){ float2 local=p-float2(padding,padding); return sample_image(local)*shape_alpha(local,0.0,0.5)*capture_opacity; }
+  float2 local=p-float2(padding,padding);
+  if(kind==9) return sample_image(p)*shape_alpha(local,0.0,0.5);
+  float4 c=sample_image(p);
+  if(kind==8){
+    float4 b=background(local);
+    float3 cb=b.a>0.000001?b.rgb/b.a:float3(0.0,0.0,0.0);
+    float3 cs=c.a>0.000001?c.rgb/c.a:float3(0.0,0.0,0.0);
+    // Return only the source contribution. The scene's normal alpha-over adds
+    // its existing backdrop once, including native captures and lower bands.
+    return float4(((1.0-b.a)*cs+b.a*blend_color(cb,cs))*c.a,c.a);
+  }
+  if(kind==1){
+    float a=shape_alpha(local-offset,spread,radius)*tint.a*capture_opacity;
+    float4 s=float4(tint.rgb*a,a);return c+s*(1.0-c.a);
+  }
+  if(kind==2){
+    float a=(1.0-shape_alpha(local-offset,-spread,radius))*tint.a;
+    c.rgb=lerp(c.rgb,tint.rgb*c.a,a);return c;
+  }
+  if(kind==31 || kind==32){ float4 b=float4(0.0,0.0,0.0,0.0); float sum=0.0; for(int i=-16;i<=16;i++){ float z=float(i)/5.3333; float weight=exp(-0.5*z*z); float2 step=kind==31?float2(z*radius*0.5,0.0):float2(0.0,z*radius*0.5); b+=sample_image(p+step)*weight; sum+=weight; } return b/sum; }
+  if(kind==4){
+    float a=shape_alpha(local,0.0,0.5)*capture_opacity;
+    float4 b=blur_background(local,radius)*a;return c+b*(1.0-c.a);
+  }
+  if(kind==5){
+    float n=hash_cell(floor(local/max(grain_size,float2(0.25,0.25))));
+    float3 col=noise_type==1?float3(n,hash_cell(floor(local/grain_size)+13.0),hash_cell(floor(local/grain_size)+39.0)):lerp(tint.rgb,secondary.rgb,n);
+    float a=density*(noise_type==2?lerp(tint.a,secondary.a,n):tint.a);
+    c.rgb=lerp(c.rgb,col*c.a,a);return c;
+  }
+  if(kind==6){
+    float n=hash_cell(floor(local/max(grain_size,float2(0.25,0.25))));
+    float3 grain=lerp(float3(0.4,0.4,0.4),float3(1.0,1.0,1.0),n);
+    float4 soft=blur_image(p,radius);
+    if(clip_to_shape>0.5){ c.rgb=soft.rgb*grain*c.a/max(soft.a,0.0001);return c; }
+    return float4(soft.rgb*grain,soft.a);
+  }
+  if(kind==7){
+    float2 direction=float2(cos(angle),sin(angle));
+    float2 center=local/max(capture_size,float2(1.0,1.0))-0.5;
+    float2 shift=center*refraction*depth*24.0+direction*splay*12.0;
+    float4 own=blur_image(p+shift,radius);
+    own.r=lerp(own.r,sample_image(p+shift+direction*dispersion*8.0).r,dispersion);
+    own.b=lerp(own.b,sample_image(p+shift-direction*dispersion*8.0).b,dispersion);
+    float4 bg=blur_background(local+shift,radius);
+    float a=shape_alpha(local,0.0,0.5)*capture_opacity;
+    own+=bg*a*(1.0-own.a);
+    float highlight=saturate(dot(center,direction)+0.5)*intensity*0.25;
+    own.rgb=lerp(own.rgb,float3(own.a,own.a,own.a),highlight);return own;
+  }
+  return c;
+}
+float4 PSEffect(VertData v) : TARGET {
+  float4 c=Paint(v);
+  float2 local=v.uv*dimensions-float2(padding,padding);
+  float coverage=1.0;
+  for(int i=0;i<ancestor_count;i++){
+    float2 q=float2(dot(ancestor_x[i].xyz,float3(local,1.0)),dot(ancestor_y[i].xyz,float3(local,1.0)));
+    float2 size=ancestor_size[i].xy;
+    float rr=min(ancestor_size[i].z,min(size.x,size.y)*0.5);
+    float2 d=abs(q-size*0.5)-(size*0.5-rr);
+    float distance=length(max(d,float2(0.0,0.0)))+min(max(d.x,d.y),0.0)-rr;
+    coverage*=1.0-smoothstep(-0.5,0.5,distance);
+  }
+  return c*coverage;
+}
+technique Draw { pass { vertex_shader=VSDefault(v); pixel_shader=PSEffect(v); } }
+
+

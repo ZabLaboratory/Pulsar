@@ -83,6 +83,9 @@ if(PULSAR_BUILD_SCENE_SOURCE)
     add_subdirectory(plugins/pulsar-scene-source)
 endif()
 
+# Authored capture paint is scene-owned and separate from physical camera effects.
+add_subdirectory(plugins/pulsar-capture-effects)
+
 if(PULSAR_BUILD_CAMERA_EFFECTS)
     add_subdirectory(plugins/pulsar-camera-effects)
 endif()

@@ -1,0 +1,14 @@
+[
+  {
+    "copy": "20261015T183300Z-historical-report.md",
+    "source": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capture-effects\\evidence\\local-20261013-ancestor-clips\\eleven\\20261013T091857Z-report.md",
+    "sha256": "F1B9F3626BE8E9A0E9A5E8884E0A8DB8DA380650FC182D24D78A2AD0AA1A9C6F",
+    "interpretation": "Historical provenance only; not a new test result"
+  },
+  {
+    "copy": "20261015T183300Z-historical-build.json",
+    "source": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capture-effects\\evidence\\local-20261013-ancestor-clips\\eleven\\20261013T091857Z-build.json",
+    "sha256": "1CF8FFC4932A89CE260E87F3C6785424FD023C8968364F48AE95CC22E14622BF",
+    "interpretation": "Historical provenance only; not a new test result"
+  }
+]

@@ -1,0 +1,49 @@
+{
+  "passed": true,
+  "cases": [
+    {
+      "case": "left-half",
+      "insidePixels": 8816,
+      "outsidePixels": 21596,
+      "leakedPixels": 0
+    },
+    {
+      "case": "translated",
+      "insidePixels": 8816,
+      "outsidePixels": 21596,
+      "leakedPixels": 0
+    },
+    {
+      "case": "rotated",
+      "insidePixels": 11350,
+      "outsidePixels": 19334,
+      "leakedPixels": 0
+    },
+    {
+      "case": "nested-intersection",
+      "insidePixels": 5776,
+      "outsidePixels": 24950,
+      "leakedPixels": 0
+    },
+    {
+      "case": "rounded",
+      "insidePixels": 5540,
+      "outsidePixels": 25444,
+      "leakedPixels": 0
+    },
+    {
+      "case": "empty-frame",
+      "insidePixels": 0,
+      "outsidePixels": 31996,
+      "leakedPixels": 0
+    },
+    {
+      "case": "shadow-boundary",
+      "leakedPixels": 0
+    },
+    {
+      "case": "reset",
+      "identical": true
+    }
+  ]
+}
