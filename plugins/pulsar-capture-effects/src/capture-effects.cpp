@@ -1,4 +1,5 @@
 #include "effect-source.hpp"
+#include "group-composition.hpp"
 #include "obs-websocket-api.h"
 #include <algorithm>
 #include <array>
@@ -47,6 +48,7 @@ struct Effect {
   vec2 content_origin{}, content_size{};
   uint32_t source_width = 0, source_height = 0;
   bool clip_effects = false;
+  bool skip_content_fit = false;
   int ancestor_count = 0;
   std::array<vec4, 32> ancestor_x{}, ancestor_y{}, ancestor_size{};
   float source_zoom = 1;
@@ -95,6 +97,7 @@ void update(void *data, obs_data_t *settings) {
   f->content_origin = {number(settings, "content_box_x", -32768, 32768), number(settings, "content_box_y", -32768, 32768)};
   f->content_size = {number(settings, "content_box_width", 1, 16384, f->size.x), number(settings, "content_box_height", 1, 16384, f->size.y)};
   f->clip_effects = obs_data_get_bool(settings, "clip_effects");
+  f->skip_content_fit = obs_data_get_bool(settings, "skip_content_fit");
   auto *clips = obs_data_get_array(settings, "ancestor_clips");
   f->ancestor_count = clips ? int(std::min(size_t(32), obs_data_array_count(clips))) : 0;
   for (int i = 0; i < f->ancestor_count; ++i) {
@@ -409,6 +412,8 @@ void fit_content(Effect *effect, obs_sceneitem_t *inner) {
 }
 void tick(void *data, float) {
   auto *effect = static_cast<Effect *>(data);
+  if (effect->skip_content_fit)
+    return;
   std::lock_guard<std::mutex> lock(effect->mutex);
   auto *parent = obs_filter_get_parent(effect->context);
   auto *scene = parent ? obs_scene_from_source(parent) : nullptr;
@@ -604,6 +609,9 @@ void blend_request(obs_data_t *request, obs_data_t *response, void *) {
 }
 } // namespace
 bool obs_module_load(void) {
+  if (!group_composition_load())
+    return false;
+  blog(LOG_INFO, "PULSAR_GROUP_COMPOSITION event=module_load");
   obs_source_info info{};
   info.id = "pulsar_capture_effects";
   info.type = OBS_SOURCE_TYPE_FILTER;
@@ -629,4 +637,12 @@ void obs_module_post_load(void) {
                                           commit_request, nullptr);
   if (vendor)
     obs_websocket_vendor_register_request(vendor, "CommitObjectBlend", blend_request, nullptr);
+  if (vendor)
+    obs_websocket_vendor_register_request(vendor, "CommitGroupComposition",
+                                          group_composition_request, nullptr);
+  if (vendor)
+    obs_websocket_vendor_register_request(vendor, "ResetGroupComposition",
+                                          reset_group_composition_request, nullptr);
 }
+
+void obs_module_unload(void) { group_composition_unload(); }

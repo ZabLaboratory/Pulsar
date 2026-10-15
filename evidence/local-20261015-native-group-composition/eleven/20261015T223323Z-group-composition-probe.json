@@ -1,0 +1,125 @@
+{
+  "startedUtc": "2026-10-15T22:33:23.891595+00:00",
+  "passed": true,
+  "provenance": {
+    "runtimeSource": "D:\\Documents\\Zab\\Pulsar\\upstream\\build_x64\\rundir\\RelWithDebInfo",
+    "runtimeExeSha256": "0ff68d43e6e615bf99f01f858fd114f0308b9ff100a4bbe761b3dbc7e3a1559a",
+    "runtimeObsSha256": "fc8eb80e1104b39501e5c23113c5b2e73138334cd4c1c0f98f9e158f9cf46048",
+    "privateCapturePlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "privateCapturePluginSha256": "77db2834db2015015d69e62a3e27cb20dee09b8df7013a782a927c7462e337c6",
+    "privateWebsocketPlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\websocket-build\\private-runtime\\obs-plugins\\64bit\\obs-websocket.dll",
+    "privateWebsocketPluginSha256": "0d12aa1e1a887a5402f1d6c275d8eb5fa8735d6373de2e46a7ac465c13ff6e52",
+    "jsonBridgeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\plugins\\pulsar-websocket\\src\\utils\\Json.cpp",
+    "jsonBridgeSourceSha256": "e40f65258346441c4435928e46c929ba20b8e0eabcc9a8334f6edfa538fadc0f",
+    "jsonBridgeBuiltFrom": "the supplied private obs-websocket.dll, built by this unit from this checkout"
+  },
+  "ownedPid": 58360,
+  "syntheticOnlyBootstrap": {
+    "desktopAudioDeviceId": "pulsar-synthetic-test-no-device",
+    "microphoneConfigured": false,
+    "processAudioConfigured": false,
+    "initializedWasapiDevices": [],
+    "result": "no WASAPI endpoint initialized during private bootstrap"
+  },
+  "probe": {
+    "scene": "native-group-proof-2a7a31829c",
+    "runtimeInstanceId": "group-proof-9522d790781d4f7c90a5578ef7855e99",
+    "generation": 2,
+    "planHash": "53b7a91b9ab490a225635ed04179a785dba4365b50e3955ae51488c14e34b1d9",
+    "sceneItemIds": {
+      "red": 1,
+      "blue": 2
+    },
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "overlapPixel": [
+      127,
+      0,
+      0,
+      127
+    ],
+    "expectedGroupOpacityAlpha": 128,
+    "sourcePixels": {
+      "red": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "blue": [
+        255,
+        0,
+        0,
+        255
+      ]
+    },
+    "malformedNumericArray": {
+      "response": {
+        "error": "invalid-affine: expected named affine object",
+        "ok": false
+      },
+      "pixelsUnchanged": true,
+      "reason": "The actual obs-websocket bridge preserves only object entries inside arrays."
+    },
+    "successiveCommit": {
+      "generation": 2,
+      "planHash": "ba286a2e8d40611c1a05f2a4cd32cf9ab3bc329b85c6c12dd2b103960cfe80c3",
+      "overlapPixel": [
+        0,
+        0,
+        191,
+        191
+      ],
+      "expectedGroupOpacityAlpha": 191
+    },
+    "reset": {
+      "generation": 2,
+      "ok": true,
+      "reset": true
+    },
+    "restoredPixel": [
+      0,
+      0,
+      255,
+      255
+    ],
+    "readbackImages": [
+      {
+        "phase": "source-red",
+        "path": "20261015T223340Z-2a7a31829c-group-source-red.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "source-blue",
+        "path": "20261015T223340Z-2a7a31829c-group-source-blue.png",
+        "sha256": "69efafc1b75b4424c1a82bfc668afcac6e4b1e22139b38ac269d48783b2e1225"
+      },
+      {
+        "phase": "before-reset",
+        "path": "20261015T223340Z-2a7a31829c-group-before-reset.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-refusal",
+        "path": "20261015T223340Z-2a7a31829c-group-after-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-update",
+        "path": "20261015T223340Z-2a7a31829c-group-after-update.png",
+        "sha256": "e9854a935f10b25f3a7ac7c39df0a783c57c5c9473e5e05af28d162699140ca4"
+      },
+      {
+        "phase": "after-reset",
+        "path": "20261015T223340Z-2a7a31829c-group-after-reset.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      }
+    ]
+  },
+  "ownedProcessExited": true,
+  "scratchRemoved": true,
+  "finishedUtc": "2026-10-15T22:33:42.785825+00:00",
+  "limits": "Private synthetic GPU readback only; capture-only native groups; no solarBand, masks, physical capture, public output, transition or switch proof"
+}

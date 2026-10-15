@@ -129,3 +129,39 @@ physical capture, arbitrary alpha/luminance masks or composited group masks.
 Those masks require a separate coverage/composition contract; analytic ancestor
 rectangles do not supply it. No shared Prism runtime is admitted by this probe.
 
+Native group composition is admitted through the same vendor with
+`CommitGroupComposition` and `ResetGroupComposition`. It builds an ordered,
+scene-owned hierarchy from explicit capture and Solar-band scene-item references;
+the plan is validated before the current front is replaced. Source-removal
+callbacks enqueue their graph cleanup while libobs is rendering. During normal
+`obs_shutdown`, libobs stops and joins its graphics thread before unloading
+modules, so `group_composition_unload` first disconnects and drains source-removal
+callbacks, releases any removal-event payload still owned by the stopped task
+queue, then releases the remaining graph under the still-live graphics context
+directly. It must not wait on a graphics task after that thread has stopped.
+Non-null coverage masks, non-normal group blend modes, and affine shear are
+currently refused before the active graph is changed.
+
+`scripts/probe-group-composition.py` uses a disposable private runtime and
+synthetic sources to check ordered capture/Solar-band pixels, successive
+commits, reset, source removal, UUID recreation, and shutdown cleanup. Its
+`--shutdown-control-only` mode starts the same isolated host without a
+composition to distinguish module shutdown from composition teardown. The
+probe does not exercise a physical capture device, public output, transition,
+or scene switch.
+
+The post-stop pending-removal check is deliberately synthetic: after libobs has
+stopped the graphics thread, a test-only helper removes a retained private
+source and forwards that source pointer through the global `source_remove`
+signal to the plugin's real listener. The latest run recorded one pending event
+at capture-plugin unload and released it there. This exercises payload ownership
+at the stopped-queue boundary; it is not evidence that ordinary private-source
+removal emits the global signal.
+
+The same run exited without forced termination (exit code 0 in 0.265 seconds)
+and removed its scratch directory, but its global shutdown result remains RED:
+libobs logged `Tried to call obs_frontend_remove_event_callback with no
+callbacks!` after the frontend stub uninstalled callbacks and during
+obs-websocket module unload. The probe preserves that diagnostic and does not
+attribute it to group composition. This private build/probe is not an installed
+runtime admission, and clean global shutdown is not claimed.

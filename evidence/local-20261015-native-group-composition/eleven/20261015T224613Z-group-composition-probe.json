@@ -1,0 +1,206 @@
+{
+  "startedUtc": "2026-10-15T22:46:13.325024+00:00",
+  "passed": true,
+  "provenance": {
+    "runtimeSource": "D:\\Documents\\Zab\\Pulsar\\upstream\\build_x64\\rundir\\RelWithDebInfo",
+    "runtimeExeSha256": "0ff68d43e6e615bf99f01f858fd114f0308b9ff100a4bbe761b3dbc7e3a1559a",
+    "runtimeObsSha256": "fc8eb80e1104b39501e5c23113c5b2e73138334cd4c1c0f98f9e158f9cf46048",
+    "privateCapturePlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "privateCapturePluginSha256": "02372bdb05812db433b04dfadf6688e8e3e9b472b89784d1ab089b91bc592635",
+    "privateWebsocketPlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\websocket-build\\private-runtime\\obs-plugins\\64bit\\obs-websocket.dll",
+    "privateWebsocketPluginSha256": "0d12aa1e1a887a5402f1d6c275d8eb5fa8735d6373de2e46a7ac465c13ff6e52",
+    "jsonBridgeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\plugins\\pulsar-websocket\\src\\utils\\Json.cpp",
+    "jsonBridgeSourceSha256": "e40f65258346441c4435928e46c929ba20b8e0eabcc9a8334f6edfa538fadc0f",
+    "jsonBridgeBuiltFrom": "the supplied private obs-websocket.dll, built by this unit from this checkout"
+  },
+  "ownedPid": 50340,
+  "syntheticOnlyBootstrap": {
+    "desktopAudioDeviceId": "pulsar-synthetic-test-no-device",
+    "microphoneConfigured": false,
+    "processAudioConfigured": false,
+    "initializedWasapiDevices": [],
+    "result": "no WASAPI endpoint initialized during private bootstrap"
+  },
+  "probe": {
+    "scene": "native-group-proof-07648505e5",
+    "runtimeInstanceId": "group-proof-bbe5677bfb4b423bb1073f4fe33cb54f",
+    "generation": 2,
+    "planHash": "4a18d57f421007c271416874c8f5108d9869959dd7d3bb8688d7e0c9cde973b7",
+    "sceneItemIds": {
+      "red": 1,
+      "blue": 2
+    },
+    "appearanceWrapper": {
+      "sceneName": "native-appearance-07648505e5",
+      "sourceIsNestedScene": true,
+      "stagingSceneItemEnabled": false,
+      "authoredCaptureVisible": true
+    },
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "overlapPixel": [
+      127,
+      0,
+      0,
+      127
+    ],
+    "expectedGroupOpacityAlpha": 128,
+    "colorSourceV3Convention": {
+      "redInputReportedRgb": [
+        0,
+        0,
+        255
+      ],
+      "blueInputReportedRgb": [
+        255,
+        0,
+        0
+      ]
+    },
+    "sourcePixels": {
+      "red": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "blue": [
+        255,
+        0,
+        0,
+        255
+      ]
+    },
+    "malformedNumericArray": {
+      "response": {
+        "error": "invalid-affine: expected named affine object",
+        "ok": false
+      },
+      "pixelsUnchanged": true,
+      "reason": "The actual obs-websocket bridge preserves only object entries inside arrays."
+    },
+    "unsafeJsonIntegers": {
+      "generationResponse": {
+        "error": "invalid-generation: generation must be a positive integer",
+        "ok": false
+      },
+      "generationPixelsUnchanged": true,
+      "sceneItemIdResponse": {
+        "error": "invalid-capture: sceneItemId must be positive",
+        "ok": false
+      },
+      "sceneItemIdPixelsUnchanged": true,
+      "maximumSafeInteger": 9007199254740991
+    },
+    "successiveCommit": {
+      "generation": 2,
+      "planHash": "d8b3929d4b36f2364fb3b055f4a928f1ece4e0d2e59dbcfa00fc4d71bd85252c",
+      "overlapPixel": [
+        0,
+        0,
+        191,
+        191
+      ],
+      "expectedGroupOpacityAlpha": 191
+    },
+    "reset": {
+      "generation": 2,
+      "ok": true,
+      "reset": true
+    },
+    "restoredPixel": [
+      0,
+      0,
+      255,
+      255
+    ],
+    "translatedLocalOpacity": {
+      "sourceDimensions": [
+        64,
+        64
+      ],
+      "translationX": 256,
+      "opacity": 0.5,
+      "sampleAt": [
+        288,
+        32
+      ],
+      "pixel": [
+        0,
+        0,
+        127,
+        127
+      ],
+      "sourcePixel": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "reset": {
+        "generation": 1,
+        "ok": true,
+        "reset": true
+      },
+      "stagingVisibilityRestored": false
+    },
+    "readbackImages": [
+      {
+        "phase": "source-red",
+        "path": "20261015T224631Z-07648505e5-group-source-red.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "source-blue",
+        "path": "20261015T224631Z-07648505e5-group-source-blue.png",
+        "sha256": "69efafc1b75b4424c1a82bfc668afcac6e4b1e22139b38ac269d48783b2e1225"
+      },
+      {
+        "phase": "before-reset",
+        "path": "20261015T224631Z-07648505e5-group-before-reset.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-refusal",
+        "path": "20261015T224631Z-07648505e5-group-after-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-unsafe-generation-refusal",
+        "path": "20261015T224631Z-07648505e5-group-after-unsafe-generation-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-unsafe-scene-item-refusal",
+        "path": "20261015T224631Z-07648505e5-group-after-unsafe-scene-item-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-update",
+        "path": "20261015T224631Z-07648505e5-group-after-update.png",
+        "sha256": "e9854a935f10b25f3a7ac7c39df0a783c57c5c9473e5e05af28d162699140ca4"
+      },
+      {
+        "phase": "after-reset",
+        "path": "20261015T224631Z-07648505e5-group-after-reset.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "offset-source",
+        "path": "20261015T224631Z-07648505e5-group-offset-source.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "translated-local-opacity",
+        "path": "20261015T224631Z-07648505e5-group-translated-local-opacity.png",
+        "sha256": "6a60fa863cfea733ebee0ee3c3c4766676748c9f87069423009ab52c8298e2f6"
+      }
+    ]
+  },
+  "ownedProcessExited": true,
+  "scratchRemoved": true,
+  "finishedUtc": "2026-10-15T22:46:33.980682+00:00",
+  "limits": "Private synthetic GPU readback only; capture-only native groups; no solarBand, masks, physical capture, public output, transition or switch proof"
+}

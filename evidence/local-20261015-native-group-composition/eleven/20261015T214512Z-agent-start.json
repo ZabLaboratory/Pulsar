@@ -1,0 +1,23 @@
+{
+  "schema": "zab.agent-start/v1",
+  "timestamp": "20261015T214512Z",
+  "role": "eleven",
+  "unit": "local-20261015-native-group-composition",
+  "repository": "Pulsar",
+  "worktree": "D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261015-native-group-composition",
+  "commonGitDir": "D:/Documents/Zab/Pulsar/.git",
+  "branch": "eleven/local-20261015-native-group-composition",
+  "base": "b64bf5c2eaf09ddbc8a842f26208a5a354536a1c",
+  "head": "b64bf5c2eaf09ddbc8a842f26208a5a354536a1c",
+  "worktreeStatus": [],
+  "authorizedScope": "isolated active-scene native group composition; source-to-render geometry, opacity, masks, order, atomic validation and lifecycle",
+  "exclusions": [
+    "scene transition",
+    "prepare/commit/readiness",
+    "switch duration",
+    "common runtime replacement/restart",
+    "public stream",
+    "remote push/merge",
+    "foreign worktrees"
+  ]
+}
