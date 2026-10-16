@@ -1,0 +1,923 @@
+{
+  "startedUtc": "2026-10-16T03:16:51.697769+00:00",
+  "passed": true,
+  "browserPreShutdownFixture": {
+    "enabled": true,
+    "mode": "private-test-helper-no-browser-source-fence",
+    "browserModulesInRuntime": [],
+    "helperCheck": "enumerates OBS sources when the host requests the browser fence and returns success only when no browser_source/browser_source_v2 exists",
+    "cefShutdownExercised": false
+  },
+  "hostExecutable": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\pulsar.exe",
+    "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973",
+    "copiedFromPrivateBuild": true
+  },
+  "provenance": {
+    "runtimeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\probe-runtime\\rundir\\RelWithDebInfo",
+    "runtimeExeSha256": "cdd3a8d4589d712e32fc9c25357a7d240e8289fba359519e5e76906b42b9b25b",
+    "runtimeObsSha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1",
+    "privateCapturePlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261016-global-texel-composition\\.cache\\global-texel-composition\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "privateCapturePluginSha256": "52e0c2117bc13e647c032dee4f528e58edc0c63007d3fb6a75319cb76884ffb1",
+    "privateWebsocketPlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+    "privateWebsocketPluginSha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b",
+    "privateGraphicsRemoveHelper": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\pulsar-private-build\\plugins\\pulsar-capture-effects\\RelWithDebInfo\\z-group-composition-shutdown-test-helper.dll",
+    "privateGraphicsRemoveHelperSha256": "f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff",
+    "graphicsRemoveHelperPurpose": "test-only module calls obs_source_remove within an OBS graphics task and queues a second removal during module unload after stop_video",
+    "jsonBridgeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261016-global-texel-composition\\plugins\\pulsar-websocket\\src\\utils\\Json.cpp",
+    "jsonBridgeSourceSha256": "e40f65258346441c4435928e46c929ba20b8e0eabcc9a8334f6edfa538fadc0f",
+    "jsonBridgeBuiltFrom": "the supplied private obs-websocket.dll, built by this unit from this checkout"
+  },
+  "upstreamShutdownContract": {
+    "revision": "70a58302435308e609e0b1114efe3ef402f810b7",
+    "obsSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_shutdown:1477; stop_video:1512; module unload loop:1517",
+      "contract": "the graphics video thread is stopped and joined before module unload callbacks"
+    },
+    "graphicsTaskSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-video.c",
+      "sha256": "1fa1ede0abaa100b3362dd9fefee4fdfbb77a63afd3ef73989c17e993fd38512",
+      "locations": "execute_graphics_tasks:1024; task execution:1216; loop stop check:1248",
+      "contract": "graphics tasks are executed before the loop checks whether to exit; final-boundary races are handled by the plugin-owned pending-event set"
+    },
+    "queueSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_queue_task:3518-3544",
+      "contract": "same-task-thread callbacks execute inline; otherwise graphics tasks enter the queue, so module unload cannot wait on a stopped graphics worker"
+    },
+    "videoTaskReleaseSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_shutdown module unload loop:1516-1528; obs_free_video/deque_free(video.tasks):909-950, called at 1534",
+      "contract": "graphics tasks enqueued after stop_video cannot execute; after module unload the video task deque is freed without invoking the callbacks, so payload ownership must be discharged by the plugin before the queue storage is released"
+    },
+    "moduleListSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-module.c",
+      "sha256": "175abd54c06153b75c893162522ce95086e509dbf9f46864ac71c7f1b483e6ae",
+      "locations": "obs_open_module prepends at 181-198; free_module:777-817; obs_shutdown:1516-1528",
+      "contract": "the module list is prepended on successful load and unloaded from its head; the runtime probe records load and unload marker order instead of assuming file enumeration order"
+    },
+    "globalSourceRemoveSignal": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-internal.h",
+      "sha256": "bb79629027174c25ba262d17ca00956308346f7626f62ecd889ec27d5ab6057e",
+      "locations": "obs_source_dosignal:1100-1111",
+      "contract": "private sources intentionally omit global source_remove; the private helper removes its retained synthetic source then forwards the same source pointer through the global source_remove handler so the plugin's actual listener queues an event after stop_video without registering an input for frontend cleanup"
+    }
+  },
+  "ownedPid": 14132,
+  "syntheticOnlyBootstrap": {
+    "desktopAudioDeviceId": "pulsar-synthetic-test-no-device",
+    "microphoneConfigured": false,
+    "processAudioConfigured": false,
+    "initializedWasapiDevices": [],
+    "browserModulesInRuntime": [],
+    "browserPreShutdownFixture": "test-only no-browser source assertion",
+    "result": "no WASAPI endpoint initialized during private bootstrap"
+  },
+  "probe": {
+    "scene": "native-group-proof-515e2bd1df",
+    "runtimeInstanceId": "group-proof-7fc489df5e964f7097d109e59e962c2a",
+    "generation": 2,
+    "planHash": "a03d4761780d4ea112521132a8c122d873e760f362a7a01dadcf000ac96b0fcc",
+    "sceneItemIds": {
+      "red": 1,
+      "blue": 2
+    },
+    "appearanceWrapper": {
+      "sceneName": "native-appearance-515e2bd1df",
+      "sourceIsNestedScene": true,
+      "stagingSceneItemEnabled": false,
+      "authoredCaptureVisible": true
+    },
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "overlapPixel": [
+      127,
+      0,
+      0,
+      127
+    ],
+    "expectedGroupOpacityAlpha": 128,
+    "colorSourceV3Convention": {
+      "redInputReportedRgb": [
+        0,
+        0,
+        255
+      ],
+      "blueInputReportedRgb": [
+        255,
+        0,
+        0
+      ]
+    },
+    "sourcePixels": {
+      "red": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "blue": [
+        255,
+        0,
+        0,
+        255
+      ]
+    },
+    "malformedNumericArray": {
+      "response": {
+        "error": "invalid-affine: expected named affine object",
+        "ok": false
+      },
+      "pixelsUnchanged": true,
+      "reason": "The actual obs-websocket bridge preserves only object entries inside arrays."
+    },
+    "unsafeJsonIntegers": {
+      "generationResponse": {
+        "error": "invalid-generation: generation must be a positive integer",
+        "ok": false
+      },
+      "generationPixelsUnchanged": true,
+      "sceneItemIdResponse": {
+        "error": "invalid-capture: sceneItemId must be positive",
+        "ok": false
+      },
+      "sceneItemIdPixelsUnchanged": true,
+      "maximumSafeInteger": 9007199254740991
+    },
+    "successiveCommit": {
+      "generation": 2,
+      "planHash": "03ed33347649d1e8bc8f36097a95213dc6525a39d4e4493f83dd3b4392adadb7",
+      "overlapPixel": [
+        0,
+        0,
+        191,
+        191
+      ],
+      "expectedGroupOpacityAlpha": 191
+    },
+    "reset": {
+      "generation": 2,
+      "ok": true,
+      "reset": true
+    },
+    "restoredPixel": [
+      0,
+      0,
+      255,
+      255
+    ],
+    "translatedLocalOpacity": {
+      "sourceDimensions": [
+        64,
+        64
+      ],
+      "translationX": 256,
+      "opacity": 0.5,
+      "sampleAt": [
+        288,
+        32
+      ],
+      "pixel": [
+        0,
+        0,
+        127,
+        127
+      ],
+      "sourcePixel": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "reset": {
+        "generation": 1,
+        "ok": true,
+        "reset": true
+      },
+      "stagingVisibilityRestored": false
+    },
+    "solarBand": {
+      "scene": "native-solar-band-515e2bd1df",
+      "sceneItemId": 2,
+      "sourceInput": "image_source",
+      "sourceDimensions": [
+        1920,
+        1080
+      ],
+      "sourceSceneItemEnabledBefore": false,
+      "sourceSceneItemEnabledAfterReset": false,
+      "legacyVisibleItemId": 1,
+      "legacyVisibleBefore": true,
+      "legacyVisibleAfterCommit": false,
+      "legacyVisibleAfterReset": true,
+      "legacyPixelBefore": [
+        208,
+        32,
+        90,
+        255
+      ],
+      "legacyPixelAfterReset": [
+        208,
+        32,
+        90,
+        255
+      ],
+      "bands": [
+        17,
+        18
+      ],
+      "sameSceneItemReused": true,
+      "cropPixels": [
+        {
+          "left": 700,
+          "top": 350,
+          "right": 1160,
+          "bottom": 670
+        },
+        {
+          "left": 900,
+          "top": 350,
+          "right": 960,
+          "bottom": 670
+        }
+      ],
+      "ownerLocalRects": [
+        {
+          "x": 30,
+          "y": 20,
+          "width": 60,
+          "height": 60
+        },
+        {
+          "x": 130,
+          "y": 20,
+          "width": 60,
+          "height": 60
+        }
+      ],
+      "ownerAffine": {
+        "m00": 1,
+        "m01": 0,
+        "tx": 200,
+        "m10": 0,
+        "m11": 1,
+        "ty": 100
+      },
+      "sampleSceneCoordinates": [
+        [
+          260,
+          150
+        ],
+        [
+          360,
+          150
+        ]
+      ],
+      "sourcePixels": {
+        "red": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "green": [
+          0,
+          255,
+          0,
+          255
+        ]
+      },
+      "compositedPixels": {
+        "red": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "green": [
+          0,
+          255,
+          0,
+          255
+        ]
+      },
+      "invalidCrop": {
+        "error": "invalid-crop: crop removes source or dimensions are unknown",
+        "ok": false
+      },
+      "invalidCropPixelsUnchanged": true,
+      "invalidRect": {
+        "error": "invalid-band-rect: atlas page rectangle must fit its declared coordinate space bounds",
+        "ok": false
+      },
+      "invalidRectPixelsUnchanged": true,
+      "duplicateBand": {
+        "error": "duplicate-solar-band: 17",
+        "ok": false
+      },
+      "duplicateBandPixelsUnchanged": true,
+      "replacementSetMismatchSameHash": {
+        "error": "stale-generation: native-solar-band-515e2bd1df",
+        "ok": false
+      },
+      "replacementSetMismatchPixelsUnchanged": true,
+      "replacementSetMismatchChangedHash": {
+        "error": "stale-generation: native-solar-band-515e2bd1df",
+        "ok": false
+      },
+      "replacementSetMismatchChangedHashPixelsUnchanged": true,
+      "unsupportedMask": {
+        "error": "unsupported-mask: coverage must be materialized before group mutation",
+        "ok": false
+      },
+      "unsupportedMaskPixelsUnchanged": true,
+      "reset": {
+        "generation": 1,
+        "ok": true,
+        "reset": true
+      },
+      "resetRestoresLegacyPixels": true,
+      "staleAfterReset": {
+        "error": "stale-generation: native-solar-band-515e2bd1df",
+        "ok": false
+      },
+      "staleReplayPreservesLegacyPixels": true
+    },
+    "mixedComposition": {
+      "scene": "native-mixed-composition-515e2bd1df",
+      "childrenInPaintOrder": [
+        "solarBand:31",
+        "capture:green",
+        "solarBand:32",
+        "capture:green@0.25",
+        "capture:green@0.75",
+        "group:rotated"
+      ],
+      "sameCaptureSceneItemReused": true,
+      "captureAndBandOverlap": {
+        "scenePoint": [
+          260,
+          150
+        ],
+        "pixel": [
+          0,
+          127,
+          0,
+          127
+        ],
+        "expectedAlphaAfterGroupOpacity": [
+          127,
+          128
+        ],
+        "groupOpacity": 0.5,
+        "captureAuthoredVisibleWhileSourceSceneItemDisabled": true
+      },
+      "repeatedCaptureOccurrences": [
+        {
+          "localOpacity": 0.25,
+          "pixel": [
+            0,
+            32,
+            0,
+            32
+          ],
+          "expectedAlphaAfterGroupOpacity": [
+            31,
+            32
+          ],
+          "scenePoint": [
+            532,
+            282
+          ]
+        },
+        {
+          "localOpacity": 0.75,
+          "pixel": [
+            0,
+            95,
+            0,
+            95
+          ],
+          "expectedAlphaAfterGroupOpacity": [
+            95,
+            96
+          ],
+          "scenePoint": [
+            632,
+            282
+          ]
+        }
+      ],
+      "nestedGroup": {
+        "affine": {
+          "m00": 0,
+          "m01": -1,
+          "tx": 600,
+          "m10": 1,
+          "m11": 0,
+          "ty": 250
+        },
+        "parentTranslation": {
+          "m00": 1,
+          "m01": 0,
+          "tx": 200,
+          "m10": 0,
+          "m11": 1,
+          "ty": 100
+        },
+        "sourcePixel": [
+          0,
+          128,
+          255,
+          255
+        ],
+        "sourcePixelAfterGroupOpacity": [
+          0,
+          64,
+          128,
+          127
+        ],
+        "expectedScenePixelBounds": [
+          764,
+          370,
+          780,
+          386
+        ],
+        "observedScenePixelBounds": [
+          764,
+          370,
+          780,
+          386
+        ]
+      },
+      "replacementItems": [
+        1,
+        3,
+        4
+      ],
+      "resetRestoresLegacyAndStagingVisibility": true,
+      "reset": {
+        "generation": 1,
+        "ok": true,
+        "reset": true
+      }
+    },
+    "sourceRemovalLifecycle": {
+      "removeInput": {
+        "removedInput": "native-remove-input-515e2bd1df",
+        "response": {},
+        "compositedPixel": [
+          0,
+          255,
+          0,
+          255
+        ],
+        "restored": {
+          "attempts": 2,
+          "pixel": [
+            208,
+            90,
+            42,
+            255
+          ],
+          "remainingSceneItemIds": [
+            1
+          ],
+          "legacyVisible": true
+        }
+      },
+      "graphicsTaskSourceRemove": {
+        "sourceName": "native-graphics-remove-input-515e2bd1df",
+        "response": {
+          "executedOnGraphicsTask": true,
+          "ok": true,
+          "removedSourceUuid": "aecd06a6-4e5e-45bc-9125-06701d2c1de3"
+        },
+        "restored": {
+          "attempts": 1,
+          "pixel": [
+            208,
+            90,
+            42,
+            255
+          ],
+          "remainingSceneItemIds": [
+            1
+          ],
+          "legacyVisible": true
+        },
+        "executedOnGraphicsTask": true
+      },
+      "sameNameSceneRecreation": {
+        "oldSceneUuid": "eb28c551-14ef-41f9-9d63-a82804bc4a41",
+        "newSceneUuid": "47de5799-06ee-4219-a17b-6b4e753fb460",
+        "differentUuid": true,
+        "newSceneGenerationOneCommit": {
+          "generation": 1,
+          "ok": true,
+          "planHash": "bd633a08ef23ee9d184de54b41e1f8c20990501d26ad44be86a8a50c0ad50b18"
+        },
+        "readbackPixel": [
+          0,
+          255,
+          0,
+          255
+        ],
+        "reset": {
+          "generation": 1,
+          "ok": true,
+          "reset": true
+        }
+      },
+      "activeCompositionAtModuleUnload": {
+        "scene": "native-unload-active-515e2bd1df",
+        "generation": 1,
+        "leftActiveForShutdown": true
+      },
+      "sourceRemovalArmedForModuleUnload": {
+        "ok": true,
+        "sourceName": "native-pending-unload-515e2bd1df",
+        "sourceUuid": "4c59879a-02e6-4ac3-8d76-15f53fce2387"
+      }
+    },
+    "readbackImages": [
+      {
+        "phase": "source-red",
+        "path": "20261016T031656Z-515e2bd1df-group-source-red.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "source-blue",
+        "path": "20261016T031656Z-515e2bd1df-group-source-blue.png",
+        "sha256": "69efafc1b75b4424c1a82bfc668afcac6e4b1e22139b38ac269d48783b2e1225"
+      },
+      {
+        "phase": "before-reset",
+        "path": "20261016T031656Z-515e2bd1df-group-before-reset.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-refusal",
+        "path": "20261016T031656Z-515e2bd1df-group-after-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-unsafe-generation-refusal",
+        "path": "20261016T031656Z-515e2bd1df-group-after-unsafe-generation-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-unsafe-scene-item-refusal",
+        "path": "20261016T031656Z-515e2bd1df-group-after-unsafe-scene-item-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-update",
+        "path": "20261016T031656Z-515e2bd1df-group-after-update.png",
+        "sha256": "e9854a935f10b25f3a7ac7c39df0a783c57c5c9473e5e05af28d162699140ca4"
+      },
+      {
+        "phase": "after-reset",
+        "path": "20261016T031656Z-515e2bd1df-group-after-reset.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "offset-source",
+        "path": "20261016T031656Z-515e2bd1df-group-offset-source.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "translated-local-opacity",
+        "path": "20261016T031656Z-515e2bd1df-group-translated-local-opacity.png",
+        "sha256": "6a60fa863cfea733ebee0ee3c3c4766676748c9f87069423009ab52c8298e2f6"
+      },
+      {
+        "phase": "solar-legacy-before-commit",
+        "path": "20261016T031656Z-515e2bd1df-group-solar-legacy-before-commit.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4"
+      },
+      {
+        "phase": "solar-atlas-source",
+        "path": "20261016T031656Z-515e2bd1df-group-solar-atlas-source.png",
+        "sha256": "264e290a7fcaac040762569f76ddb40dd4ff397b878e97df608e7d8e4de00f3a"
+      },
+      {
+        "phase": "solar-band-committed",
+        "path": "20261016T031656Z-515e2bd1df-group-solar-band-committed.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-replacement-set-mismatch",
+        "path": "20261016T031656Z-515e2bd1df-group-solar-band-after-replacement-set-mismatch.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-plan-hash-mismatch",
+        "path": "20261016T031656Z-515e2bd1df-group-solar-band-after-plan-hash-mismatch.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-invalid-crop",
+        "path": "20261016T031656Z-515e2bd1df-group-solar-band-after-invalid-crop.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-invalid-rect",
+        "path": "20261016T031656Z-515e2bd1df-group-solar-band-after-invalid-rect.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-duplicate-band",
+        "path": "20261016T031656Z-515e2bd1df-group-solar-band-after-duplicate-band.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-unsupported-mask",
+        "path": "20261016T031656Z-515e2bd1df-group-solar-band-after-unsupported-mask.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-reset",
+        "path": "20261016T031656Z-515e2bd1df-group-solar-band-after-reset.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4"
+      },
+      {
+        "phase": "solar-band-after-stale-generation",
+        "path": "20261016T031656Z-515e2bd1df-group-solar-band-after-stale-generation.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4"
+      },
+      {
+        "phase": "mixed-legacy-before",
+        "path": "20261016T031656Z-515e2bd1df-group-mixed-legacy-before.png",
+        "sha256": "c20168750e3e69439053b03f9329c44ea533047798aab131f749153297d193cc"
+      },
+      {
+        "phase": "mixed-atlas-source",
+        "path": "20261016T031656Z-515e2bd1df-group-mixed-atlas-source.png",
+        "sha256": "264e290a7fcaac040762569f76ddb40dd4ff397b878e97df608e7d8e4de00f3a"
+      },
+      {
+        "phase": "mixed-capture-source",
+        "path": "20261016T031656Z-515e2bd1df-group-mixed-capture-source.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      },
+      {
+        "phase": "nested-capture-source",
+        "path": "20261016T031656Z-515e2bd1df-group-nested-capture-source.png",
+        "sha256": "d31d93e6390169e3f4573963b8077e1b6e69afd20ab3a0160b4aa52fd0864ee5"
+      },
+      {
+        "phase": "mixed-composition-committed",
+        "path": "20261016T031656Z-515e2bd1df-group-mixed-composition-committed.png",
+        "sha256": "b7b48351530013b950797c0ebb47cbef9be81e71ed55f6e323b38bd88ab40b45"
+      },
+      {
+        "phase": "mixed-composition-after-reset",
+        "path": "20261016T031656Z-515e2bd1df-group-mixed-composition-after-reset.png",
+        "sha256": "c20168750e3e69439053b03f9329c44ea533047798aab131f749153297d193cc"
+      },
+      {
+        "phase": "remove-dependency-legacy-before",
+        "path": "20261016T031656Z-515e2bd1df-group-remove-dependency-legacy-before.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301"
+      },
+      {
+        "phase": "remove-dependency-before-removal",
+        "path": "20261016T031656Z-515e2bd1df-group-remove-dependency-before-removal.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      },
+      {
+        "phase": "remove-dependency-restored-1",
+        "path": "20261016T031656Z-515e2bd1df-group-remove-dependency-restored-1.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      },
+      {
+        "phase": "remove-dependency-restored-2",
+        "path": "20261016T031656Z-515e2bd1df-group-remove-dependency-restored-2.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301"
+      },
+      {
+        "phase": "graphics-source-remove-restored-1",
+        "path": "20261016T031656Z-515e2bd1df-group-graphics-source-remove-restored-1.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301"
+      },
+      {
+        "phase": "same-name-new-uuid-generation-1",
+        "path": "20261016T031656Z-515e2bd1df-group-same-name-new-uuid-generation-1.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      }
+    ],
+    "globalSceneTexels": {
+      "coordinateSpace": "global-scene-texels",
+      "viewport": [
+        1920,
+        1080
+      ],
+      "generations": [
+        {
+          "generation": 1,
+          "exactCheckerboardPixels": 1024
+        },
+        {
+          "generation": 2,
+          "sample": [
+            0,
+            50,
+            50,
+            127
+          ]
+        }
+      ],
+      "refusals": [
+        {
+          "case": "unknown-space",
+          "error": "unsupported-coordinate-space: unknown",
+          "pixelsPreserved": true
+        },
+        {
+          "case": "scaled-band",
+          "error": "global-band-resampling: global texels require exact integer placement without scaling",
+          "pixelsPreserved": true
+        },
+        {
+          "case": "fractional-band",
+          "error": "global-band-resampling: global texels require exact integer placement without scaling",
+          "pixelsPreserved": true
+        },
+        {
+          "case": "float-overflow",
+          "error": "invalid-affine: transform exceeds native float range",
+          "pixelsPreserved": true
+        },
+        {
+          "case": "same-generation-different-space",
+          "error": "stale-generation: global-texel-proof-6dc92dea81"
+        }
+      ],
+      "images": [
+        {
+          "phase": "exact-grid",
+          "path": "20261016T031655Z-6dc92dea81-world-exact-grid.png",
+          "sha256": "6b7de5300cf4f5f4281af91024d27d01f7586bd59da7dd39411cbc14dad8fa92"
+        },
+        {
+          "phase": "mixed-shear-opacity",
+          "path": "20261016T031655Z-6dc92dea81-world-mixed-shear-opacity.png",
+          "sha256": "c964f9e534dcf2b4625ed473da6c6755bfbf5a4e242a962f2f51bf84a1110743"
+        },
+        {
+          "phase": "unknown-space",
+          "path": "20261016T031655Z-6dc92dea81-world-unknown-space.png",
+          "sha256": "c964f9e534dcf2b4625ed473da6c6755bfbf5a4e242a962f2f51bf84a1110743"
+        },
+        {
+          "phase": "scaled-band",
+          "path": "20261016T031655Z-6dc92dea81-world-scaled-band.png",
+          "sha256": "c964f9e534dcf2b4625ed473da6c6755bfbf5a4e242a962f2f51bf84a1110743"
+        },
+        {
+          "phase": "fractional-band",
+          "path": "20261016T031655Z-6dc92dea81-world-fractional-band.png",
+          "sha256": "c964f9e534dcf2b4625ed473da6c6755bfbf5a4e242a962f2f51bf84a1110743"
+        },
+        {
+          "phase": "float-overflow",
+          "path": "20261016T031655Z-6dc92dea81-world-float-overflow.png",
+          "sha256": "c964f9e534dcf2b4625ed473da6c6755bfbf5a4e242a962f2f51bf84a1110743"
+        }
+      ],
+      "capture": "synthetic image with vertical source-space crop; full affine shear",
+      "physicalPresentation": "not-measured",
+      "passed": true
+    }
+  },
+  "shutdownWaitSeconds": 0.156,
+  "shutdownTimeoutSeconds": 30.0,
+  "ownedProcessExited": true,
+  "gracefulShutdownRequested": true,
+  "forcedTerminationUsed": false,
+  "redactedShutdownTail": [
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | source 'native-mixed-atlas-515e2bd1df' destroyed",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | source 'native-mixed-capture-515e2bd1df' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | source 'native-nested-capture-515e2bd1df' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | source 'native-unload-legacy-515e2bd1df' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | source 'Pulsar composition bounds 73' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | source 'Pulsar composition group 74 mixed-owner' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | source 'PulsarCapture' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | source 'PulsarDesktopAudio' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | private source 'PulsarLaneA' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | private source 'PulsarLaneB' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | private source 'Fade' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | source 'Pulsar composition bounds 75' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | source 'native-unload-input-515e2bd1df' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | source 'Default' destroyed",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | private source 'PulsarPreviewBootstrap' destroyed",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=0",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp pulsar-frontend-stub | callbacks uninstalled",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_unload_removed_source uuid=4c59879a-02e6-4ac3-8d76-15f53fce2387 on_graphics_task=0 removed=1 global_signal_forwarded=1",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=1 pending_released=1",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | private source 'native-pending-unload-515e2bd1df' destroyed",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | [obs_module_unload] Shutting down...",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | [WebSocketServer::Stop] Server stopped successfully",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | [obs_module_unload] Finished shutting down.",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | Freeing OBS context data",
+    "2026-10-16T03:17:00Z DEBUG nlR1SP4zJbsSaMJp libobs | canvas 'Main' (6c69626f-6273-4c00-9d88-c5136d61696e) destroyed",
+    "PULSAR_LEGACY_ALIAS lease=released id=group-proof-7fc489df5e964f7097d109e59e962c2a path=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261016-global-texel-composition\\.cache\\global-texel-composition\\private-runtime-c4714042383a4a149ecec9599c8de0f9\\state\\leases\\directshow-program-preview.lock authority=Local\\Pulsar.DirectShowProgramPreview metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\9eab04979f2b22fc.lock",
+    "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=group-proof-7fc489df5e964f7097d109e59e962c2a dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261016-global-texel-composition\\.cache\\global-texel-composition\\private-runtime-c4714042383a4a149ecec9599c8de0f9\\state\\runtime authority=Local\\Pulsar.Authority.6d7bf6445df4c803 metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\6d7bf6445df4c803.lock",
+    "PULSAR_RUNTIME_INSTANCE lease=released id=group-proof-7fc489df5e964f7097d109e59e962c2a dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261016-global-texel-composition\\.cache\\global-texel-composition\\private-runtime-c4714042383a4a149ecec9599c8de0f9\\state\\runtime authority=Local\\Pulsar.Runtime.group-proof-7fc489df5e964f7097d109e59e962c2a metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\0e01bba02c77f406.lock"
+  ],
+  "shutdownMilestones": [
+    "PULSAR_SHUTDOWN_CONTROL event=ready id=group-proof-7fc489df5e964f7097d109e59e962c2a mechanism=inherited_event",
+    "2026-10-16T03:16:53Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_GROUP_COMPOSITION event=module_load",
+    "2026-10-16T03:16:53Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_load",
+    "2026-10-16T03:16:53Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=no_browser_pre_shutdown_fixture_registered scope=no_browser_sources_only cef_shutdown=not_exercised",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=pending_unload_source_armed",
+    "PULSAR_SHUTDOWN_CONTROL event=signaled id=group-proof-7fc489df5e964f7097d109e59e962c2a mechanism=inherited_event",
+    "[pulsar-headless] shutting down",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | PULSAR_WEBSOCKET_QUIESCE event=ack active_handlers=0 sessions=0 no_handlers_after_ack=1",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=no_browser_pre_shutdown success=1 browser_sources=0",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=scripting_shutdown",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=started",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=complete",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=exit",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=duplicate_skipped",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_detached phase=exit",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_begin scenes=5 sources=12",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=0",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_unload_removed_source uuid=4c59879a-02e6-4ac3-8d76-15f53fce2387 on_graphics_task=0 removed=1 global_signal_forwarded=1",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=1 pending_released=1",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | [obs_module_unload] Shutting down...",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached",
+    "2026-10-16T03:17:00Z INFO nlR1SP4zJbsSaMJp obs-websocket | [obs_module_unload] Finished shutting down."
+  ],
+  "shutdownDiagnostics": {
+    "errorFree": true,
+    "errorCount": 0,
+    "errors": [],
+    "attribution": "No shutdown ERROR log was observed after the shutdown signal."
+  },
+  "gracefulShutdownEvidence": {
+    "eventAdopted": true,
+    "eventSignaled": true,
+    "hostShutdownReached": true,
+    "exitCode": 0
+  },
+  "frontendCallbackShutdownLifecycle": {
+    "scriptShutdownThenExitRunsCleanupOnce": true,
+    "exitCleanupMarkerCountsAreExact": true,
+    "exitCallbackDetachedBeforeTableUninstall": true,
+    "destructorSkippedDuplicateRemovalAfterUninstall": true,
+    "noMissingFrontendCallbackError": true,
+    "markerIndexes": {
+      "scriptingShutdownReceived": 432,
+      "exitReceived": 438,
+      "exitCleanupStarted": 434,
+      "exitCleanupComplete": 436,
+      "duplicateCleanupSkipped": 439,
+      "exitDetach": 441,
+      "callbacksUninstalled": 477,
+      "websocketUnloadStarted": 481,
+      "destructorSkip": 483,
+      "websocketUnloadFinished": 484
+    },
+    "passed": true
+  },
+  "compositionModuleUnloadCleanup": {
+    "markerObserved": true,
+    "activeCompositionsBeforeCleanup": 0,
+    "generationFencesBeforeCleanup": 0,
+    "pendingRemovalEventsBeforeCleanup": 1,
+    "pendingRemovalEventsReleased": 1
+  },
+  "pendingRemovalUnloadProof": {
+    "testHelperLoadedAfterCapturePlugin": true,
+    "testRemovalRanBeforeCapturePluginUnload": true,
+    "helperRemovalOnStoppedGraphicsThread": true,
+    "pendingEventObservedAtCaptureUnload": true,
+    "pendingEventReleasedAtCaptureUnload": true,
+    "markerIndexes": {
+      "captureModuleLoad": 97,
+      "testHelperModuleLoad": 101,
+      "testHelperUnloadRemoval": 478,
+      "captureModuleUnloadCleanup": 479
+    },
+    "passed": true
+  },
+  "boundedExitWithoutForcedTermination": true,
+  "cleanShutdown": true,
+  "activeCompositionCleanlyUnloaded": false,
+  "activeCompositionDisposedBeforeModuleUnload": true,
+  "gracefulShutdownAfterActiveComposition": true,
+  "scratchRemoved": true,
+  "finishedUtc": "2026-10-16T03:17:00.705845+00:00",
+  "limits": "Private synthetic GPU readback only; SolarBand source crops and owner-local placement are covered, masks remain explicitly unsupported, and no physical capture, public output, transition or switch is exercised. The private no-browser shutdown fixture does not exercise CEF teardown."
+}

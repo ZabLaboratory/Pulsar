@@ -11,6 +11,7 @@ configure_file(src/effect-source.hpp.in generated/effect-source.hpp @ONLY)
 add_library(pulsar-capture-effects MODULE
   src/capture-effects.cpp
   src/group-composition.cpp
+  src/group-composition-world-source.cpp
   src/group-composition-plan.cpp
   src/group-composition-source-validation.cpp)
 target_include_directories(pulsar-capture-effects PRIVATE "${PULSAR_OBS_HEADERS}" "${PULSAR_UPSTREAM_BUILD_DIR}/config" "${PULSAR_UPSTREAM_BUILD_DIR}/libobs" "${CMAKE_CURRENT_BINARY_DIR}/generated" "${CMAKE_CURRENT_SOURCE_DIR}/../pulsar-websocket/lib")

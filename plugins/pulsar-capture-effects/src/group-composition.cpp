@@ -1,6 +1,7 @@
 #include "group-composition.hpp"
 #include "group-composition-plan.hpp"
 #include "group-composition-source-validation.hpp"
+#include "group-composition-world-source.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -33,6 +34,7 @@ struct OriginalItem {
   bool visible = false;
 };
 struct ActiveComposition {
+  CoordinateSpace coordinate_space = CoordinateSpace::OwnerLocal;
   obs_sceneitem_t *root = nullptr;
   std::string scene_uuid;
   std::string runtime_instance_id;
@@ -215,7 +217,7 @@ bool apply_crop(obs_sceneitem_t *item, const Crop &crop,
 }
 
 bool add_capture(obs_scene_t *scene, const Child &child,
-                 const ResolvedCapture &resolved, obs_data_t *response)
+                 const ResolvedCapture &resolved, obs_data_t *response, bool global_texels = false)
 {
   const bool contribution_visible = child.has_visible ? child.visible : resolved.visible;
   Transform transform;
@@ -232,7 +234,8 @@ bool add_capture(obs_scene_t *scene, const Child &child,
     apply_transform(item, transform);
     obs_sceneitem_set_visible(item, contribution_visible && !transform.empty);
     obs_sceneitem_set_blending_mode(item, obs_sceneitem_get_blending_mode(resolved.item));
-    obs_sceneitem_set_blending_method(item, obs_sceneitem_get_blending_method(resolved.item));
+    obs_sceneitem_set_blending_method(item, global_texels ? OBS_BLEND_METHOD_SRGB_OFF
+                                                       : obs_sceneitem_get_blending_method(resolved.item));
     obs_sceneitem_set_scale_filter(item, obs_sceneitem_get_scale_filter(resolved.item));
     return true;
   }
@@ -264,7 +267,8 @@ bool add_capture(obs_scene_t *scene, const Child &child,
   apply_transform(item, identity_transform);
   obs_sceneitem_set_visible(item, contribution_visible);
   obs_sceneitem_set_blending_mode(item, obs_sceneitem_get_blending_mode(resolved.item));
-  obs_sceneitem_set_blending_method(item, obs_sceneitem_get_blending_method(resolved.item));
+  obs_sceneitem_set_blending_method(item, global_texels ? OBS_BLEND_METHOD_SRGB_OFF
+                                                       : obs_sceneitem_get_blending_method(resolved.item));
   obs_sceneitem_set_scale_filter(item, obs_sceneitem_get_scale_filter(resolved.item));
   obs_sceneitem_set_blending_method(wrapper, OBS_BLEND_METHOD_SRGB_OFF);
   if (!add_opacity_filter(wrapper, wrapper_bounds, child.local_opacity, response))
@@ -274,12 +278,60 @@ bool add_capture(obs_scene_t *scene, const Child &child,
   return true;
 }
 
+bool add_world_capture(obs_scene_t *scene, const Child &child,
+                        const ResolvedCapture &resolved, const Rect &viewport,
+                        obs_data_t *response)
+{
+  // Crop in source space before the full source-to-scene affine. A private
+  // scene reuses libobs' crop/filter/scale-filter path, without mutating the
+  // physical input or decomposing a shear into lossy rotation/scale fields.
+  obs_scene_t *cropped = obs_scene_create_private(unique_name("crop-scene").c_str());
+  if (!cropped) {
+    set_error(response, "capture-crop-scene-create-failed");
+    return false;
+  }
+  SourceRef crop_source(obs_source_get_ref(obs_scene_get_source(cropped)));
+  obs_scene_release(cropped);
+  if (!crop_source) {
+    set_error(response, "capture-crop-scene-not-retainable");
+    return false;
+  }
+  obs_sceneitem_t *item = obs_scene_add(cropped, resolved.source);
+  if (!item || !apply_crop(item, child.crop, resolved, response)) {
+    if (!item) set_error(response, "capture-crop-item-create-failed");
+    return false;
+  }
+  Transform identity;
+  apply_transform(item, identity);
+  obs_sceneitem_set_visible(item, true);
+  obs_sceneitem_set_blending_mode(item, OBS_BLEND_NORMAL);
+  obs_sceneitem_set_blending_method(item, OBS_BLEND_METHOD_SRGB_OFF);
+  obs_sceneitem_set_scale_filter(item, obs_sceneitem_get_scale_filter(resolved.item));
+  SourceRef world(create_group_world_source(unique_name("world-capture").c_str(), crop_source.get(), child.affine,
+                                             uint32_t(viewport.width),
+                                             uint32_t(viewport.height)));
+  if (!world) {
+    set_error(response, "capture-world-source-create-failed");
+    return false;
+  }
+  ResolvedCapture contribution = resolved;
+  contribution.source = world.get();
+  contribution.width = uint32_t(viewport.width);
+  contribution.height = uint32_t(viewport.height);
+  Child world_child = child;
+  world_child.affine = {};
+  world_child.crop = {};
+  return add_capture(scene, world_child, contribution, response, true);
+}
+
 bool build_group(Plan &plan, const Group &group, obs_scene_t *parent_scene,
                  const std::unordered_map<int64_t, ResolvedCapture> &captures,
                  obs_sceneitem_t **out, obs_data_t *response)
 {
   Transform transform;
-  if (!to_transform(group.affine, transform, response))
+  const bool world = plan.coordinate_space == CoordinateSpace::GlobalSceneTexels;
+  const Rect &bounds = world ? plan.groups[plan.by_id.at(root_id)].bounds : group.bounds;
+  if (!world && !to_transform(group.affine, transform, response))
     return false;
   obs_sceneitem_t *item = obs_scene_add_group(parent_scene,
                                               unique_name("group", group.id).c_str());
@@ -293,13 +345,15 @@ bool build_group(Plan &plan, const Group &group, obs_scene_t *parent_scene,
     *out = item;
   }
   obs_scene_t *inner = obs_sceneitem_group_get_scene(item);
-  if (!inner || !add_bounds_anchor(inner, group.bounds, response))
+  if (!inner || !add_bounds_anchor(inner, bounds, response))
     return false;
 
   for (const auto &child : group.children) {
     if (child.kind == ChildKind::Capture) {
       const auto it = captures.find(child.scene_item_id);
-      if (it == captures.end() || !add_capture(inner, child, it->second, response))
+      if (it == captures.end() ||
+          !(world ? add_world_capture(inner, child, it->second, bounds, response)
+                  : add_capture(inner, child, it->second, response)))
         return false;
     } else if (child.kind == ChildKind::Group) {
       const auto group_it = plan.by_id.find(child.group_id);
@@ -327,18 +381,29 @@ bool build_group(Plan &plan, const Group &group, obs_scene_t *parent_scene,
                   std::to_string(child.band).c_str());
         return false;
       }
+      if (world &&
+          (child.rect.width != cropped_width || child.rect.height != cropped_height ||
+           std::trunc(child.rect.x) != child.rect.x ||
+           std::trunc(child.rect.y) != child.rect.y ||
+           child.rect.x < 0 || child.rect.y < 0 ||
+           child.rect.x + child.rect.width > bounds.width ||
+           child.rect.y + child.rect.height > bounds.height)) {
+        set_error(response, "global-band-resampling",
+                  "global texels require exact integer placement without scaling");
+        return false;
+      }
       Child page = child;
       page.affine = {child.rect.width / cropped_width, 0, child.rect.x,
                      0, child.rect.height / cropped_height, child.rect.y};
       page.local_opacity = 1;
       page.has_visible = true;
       page.visible = true;
-      if (!add_capture(inner, page, it->second, response))
+      if (!add_capture(inner, page, it->second, response, world))
         return false;
     }
   }
   if (group.id != root_id &&
-      !add_opacity_filter(item, group.bounds, group.opacity, response))
+      !add_opacity_filter(item, bounds, group.opacity, response))
     return false;
   obs_sceneitem_set_blending_mode(item, OBS_BLEND_NORMAL);
   obs_sceneitem_set_blending_method(item, OBS_BLEND_METHOD_SRGB_OFF);
@@ -526,7 +591,9 @@ bool resolve_captures(Plan &plan, obs_scene_t *scene,
         return false;
       }
       Transform transform;
-      if (!to_transform(child.affine, transform, response))
+      if (!(plan.coordinate_space == CoordinateSpace::GlobalSceneTexels
+                ? validate_world_affine(child.affine, response)
+                : to_transform(child.affine, transform, response)))
         return false;
     }
   }
@@ -604,6 +671,7 @@ void commit_graphics(void *data)
       if (previous && plan.generation == previous->generation &&
           plan.plan_hash == previous->plan_hash &&
           plan.replaced_scene_item_ids == previous->replaced_scene_item_ids &&
+          plan.coordinate_space == previous->coordinate_space &&
           plan.runtime_instance_id == previous->runtime_instance_id) {
         obs_data_set_bool(commit.response, "ok", true);
         obs_data_set_bool(commit.response, "idempotent", true);
@@ -627,6 +695,7 @@ void commit_graphics(void *data)
     }
 
     CandidateGuard candidate;
+    candidate.state.coordinate_space = plan.coordinate_space;
     candidate.state.scene_uuid = scene_uuid;
     candidate.state.runtime_instance_id = plan.runtime_instance_id;
     candidate.state.generation = plan.generation;
@@ -978,6 +1047,7 @@ bool group_composition_load()
   std::lock_guard<std::mutex> lock(source_remove_mutex);
   if (global_signal_handler)
     return true;
+  register_group_world_source();
   global_signal_handler = obs_get_signal_handler();
   if (!global_signal_handler)
     return false;
