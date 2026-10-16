@@ -1,0 +1,92 @@
+La génération a démarré 16/10/2026 02:32:12.
+
+Projet "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261015-native-group-composition\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-headless\pulsar-headless.vcxproj" sur le nœud 1 (Rebuild cible(s)).
+_PrepareForClean:
+  Suppression du fichier "pulsar-headless.dir\RelWithDebInfo\pulsar-headless.tlog\pulsar-headless.lastbuildstate".
+Le projet "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261015-native-group-composition\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-headless\pulsar-headless.vcxproj" (1) génère "X:\.cache\native-group-composition\pulsar-private-build\ZERO_CHECK.vcxproj" (2) sur le nœud 1 (Clean cible(s)).
+_PrepareForClean:
+  Suppression du fichier "x64\RelWithDebInfo\ZERO_CHECK\ZERO_CHECK.tlog\ZERO_CHECK.lastbuildstate".
+Génération du projet "X:\.cache\native-group-composition\pulsar-private-build\ZERO_CHECK.vcxproj" terminée (Clean cible(s)).
+Le projet "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261015-native-group-composition\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-headless\pulsar-headless.vcxproj" (1) génère "X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-frontend-stub\pulsar-frontend-stub.vcxproj" (3) sur le nœud 1 (Clean cible(s)).
+_PrepareForClean:
+  Suppression du fichier "pulsar-frontend-stub.dir\RelWithDebInfo\pulsar-f.C5B5C3EF.tlog\pulsar-frontend-stub.lastbuildstate".
+Génération du projet "X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-frontend-stub\pulsar-frontend-stub.vcxproj" terminée (Clean cible(s)).
+Le projet "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261015-native-group-composition\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-headless\pulsar-headless.vcxproj" (1) génère "X:\.cache\native-group-composition\pulsar-private-build\ZERO_CHECK.vcxproj" (2:3) sur le nœud 1 (cibles par défaut).
+PrepareForBuild:
+  La sortie structurée est activée. La mise en forme du compilateur diagnostics reflète la hiérarchie des erreurs. Pour plus d’informations, consultez https://aka.ms/cpp/structured-output.
+InitializeBuildStatus:
+  Création de "x64\RelWithDebInfo\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild", car "AlwaysCreate" a été spécifié.
+  Mise à jour de l'horodatage "x64\RelWithDebInfo\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild".
+PreBuildEvent:
+  Checking File Globs
+  setlocal
+  "C:\Program Files\CMake\bin\cmake.exe" -P X:/.cache/native-group-composition/pulsar-private-build/CMakeFiles/VerifyGlobs.cmake
+  if %errorlevel% neq 0 goto :cmEnd
+  :cmEnd
+  endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+  :cmErrorLevel
+  exit /b %1
+  :cmDone
+  if %errorlevel% neq 0 goto :VCEnd
+  :VCEnd
+CustomBuild:
+  1>Checking Build System
+FinalizeBuildStatus:
+  Suppression du fichier "x64\RelWithDebInfo\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild".
+  Mise à jour de l'horodatage "x64\RelWithDebInfo\ZERO_CHECK\ZERO_CHECK.tlog\ZERO_CHECK.lastbuildstate".
+Génération du projet "X:\.cache\native-group-composition\pulsar-private-build\ZERO_CHECK.vcxproj" terminée (cibles par défaut).
+Le projet "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261015-native-group-composition\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-headless\pulsar-headless.vcxproj" (1) génère "X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-frontend-stub\pulsar-frontend-stub.vcxproj" (3:2) sur le nœud 1 (cibles par défaut).
+PrepareForBuild:
+  La sortie structurée est activée. La mise en forme du compilateur diagnostics reflète la hiérarchie des erreurs. Pour plus d’informations, consultez https://aka.ms/cpp/structured-output.
+InitializeBuildStatus:
+  Création de "pulsar-frontend-stub.dir\RelWithDebInfo\pulsar-f.C5B5C3EF.tlog\unsuccessfulbuild", car "AlwaysCreate" a été spécifié.
+  Mise à jour de l'horodatage "pulsar-frontend-stub.dir\RelWithDebInfo\pulsar-f.C5B5C3EF.tlog\unsuccessfulbuild".
+CustomBuild:
+  Building Custom Rule X:/.cache/native-group-composition/pulsar-private-source/plugins/pulsar-frontend-stub/CMakeLists.txt
+ClCompile:
+  C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\HostX86\x64\CL.exe /c /I"X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-frontend-stub\include" /I"X:\.cache\native-group-composition\pulsar-private-source\upstream\libobs" /I"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\libobs" /I"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\config" /I"X:\.cache\native-group-composition\pulsar-private-source\upstream\frontend\api" /I"X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-frontend-stub\..\pulsar-websocket\lib" /Zi /nologo /W1 /WX- /diagnostics:column /MP2 /O2 /Ob1 /D _MBCS /D WIN32 /D _WINDOWS /D NDEBUG /D "CMAKE_INTDIR=\"RelWithDebInfo\"" /EHsc /MD /std:c++17 /Fo"pulsar-frontend-stub.dir\RelWithDebInfo\\" /Fd"X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-frontend-stub\RelWithDebInfo\pulsar-frontend-stub.pdb" /external:W0 /TP /errorReport:queue  /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-2025-08-23-x64/include" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-frontend-stub\src\pulsar-frontend-stub.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-frontend-stub\src\pulsar-media-transition.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-frontend-stub\src\pulsar-media-transition-config.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-frontend-stub\src\pulsar-preview-frame.cpp"
+  pulsar-frontend-stub.cpp
+  pulsar-media-transition.cpp
+  pulsar-media-transition-config.cpp
+  pulsar-preview-frame.cpp
+Lib:
+  C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\HostX86\x64\Lib.exe /OUT:"X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-frontend-stub\RelWithDebInfo\pulsar-frontend-stub.lib" /NOLOGO /MACHINE:X64  /machine:x64 "pulsar-frontend-stub.dir\RelWithDebInfo\pulsar-frontend-stub.obj"
+  "pulsar-frontend-stub.dir\RelWithDebInfo\pulsar-media-transition.obj"
+  "pulsar-frontend-stub.dir\RelWithDebInfo\pulsar-media-transition-config.obj"
+  "pulsar-frontend-stub.dir\RelWithDebInfo\pulsar-preview-frame.obj"
+  pulsar-frontend-stub.vcxproj -> X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-frontend-stub\RelWithDebInfo\pulsar-frontend-stub.lib
+FinalizeBuildStatus:
+  Suppression du fichier "pulsar-frontend-stub.dir\RelWithDebInfo\pulsar-f.C5B5C3EF.tlog\unsuccessfulbuild".
+  Mise à jour de l'horodatage "pulsar-frontend-stub.dir\RelWithDebInfo\pulsar-f.C5B5C3EF.tlog\pulsar-frontend-stub.lastbuildstate".
+Génération du projet "X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-frontend-stub\pulsar-frontend-stub.vcxproj" terminée (cibles par défaut).
+PrepareForBuild:
+  La sortie structurée est activée. La mise en forme du compilateur diagnostics reflète la hiérarchie des erreurs. Pour plus d’informations, consultez https://aka.ms/cpp/structured-output.
+InitializeBuildStatus:
+  Création de "pulsar-headless.dir\RelWithDebInfo\pulsar-headless.tlog\unsuccessfulbuild", car "AlwaysCreate" a été spécifié.
+  Mise à jour de l'horodatage "pulsar-headless.dir\RelWithDebInfo\pulsar-headless.tlog\unsuccessfulbuild".
+CustomBuild:
+  Building Custom Rule X:/.cache/native-group-composition/pulsar-private-source/plugins/pulsar-headless/CMakeLists.txt
+ClCompile:
+  C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\HostX86\x64\CL.exe /c /I"X:\.cache\native-group-composition\pulsar-private-source\upstream\libobs" /I"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\libobs" /I"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\config" /I"X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-frontend-stub\include" /Zi /nologo /W1 /WX- /diagnostics:column /MP2 /O2 /Ob1 /D _UNICODE /D UNICODE /D WIN32 /D _WINDOWS /D NDEBUG /D QT_CORE_LIB /D QT_NO_DEBUG /D _ENABLE_EXTENDED_ALIGNED_STORAGE /D WIN64 /D _WIN64 /D UNICODE /D _UNICODE /D QT_WIDGETS_LIB /D QT_GUI_LIB /D "CMAKE_INTDIR=\"RelWithDebInfo\"" /EHsc /MD /std:c++17 /permissive- /Fo"pulsar-headless.dir\RelWithDebInfo\\" /Fd"pulsar-headless.dir\RelWithDebInfo\vc143.pdb" /external:W0 /TP /errorReport:queue  /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-2025-08-23-x64/include" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include/QtCore" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/mkspecs/win32-msvc" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include/QtWidgets" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include/QtGui" -Zc:__cplusplus -utf-8 "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-headless\main.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-headless\log-handler.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-headless\dir-hardening.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-headless\runtime-identity.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-headless\realtime-work-queue.cpp"
+  main.cpp
+  log-handler.cpp
+  dir-hardening.cpp
+  runtime-identity.cpp
+  realtime-work-queue.cpp
+Link:
+  C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\HostX86\x64\link.exe /OUT:"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\rundir\RelWithDebInfo\bin\64bit\pulsar.exe" /INCREMENTAL /ILK:"pulsar-headless.dir\RelWithDebInfo\pulsar.ilk" /NOLOGO /NATVIS:"X:\.cache\native-group-composition\pulsar-private-source\upstream\.deps\obs-deps-2025-08-23-x64\nlohmann_json.natvis" "X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\libobs\RelWithDebInfo\obs.lib" "..\pulsar-frontend-stub\RelWithDebInfo\pulsar-frontend-stub.lib" "X:\.cache\native-group-composition\pulsar-private-source\upstream\.deps\obs-deps-qt6-2025-08-23-x64\lib\Qt6Widgets.lib" Advapi32.lib Ws2_32.lib "X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\libobs\RelWithDebInfo\obs.lib" "X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\frontend\api\RelWithDebInfo\obs-frontend-api.lib" bcrypt.lib "X:\.cache\native-group-composition\pulsar-private-source\upstream\.deps\obs-deps-qt6-2025-08-23-x64\lib\Qt6Gui.lib" "X:\.cache\native-group-composition\pulsar-private-source\upstream\.deps\obs-deps-qt6-2025-08-23-x64\lib\Qt6Core.lib" mpr.lib userenv.lib d3d11.lib dxgi.lib dxguid.lib d3d12.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"X:/.cache/native-group-composition/upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout/build_x64/rundir/RelWithDebInfo/bin/64bit/pulsar.pdb" /SUBSYSTEM:WINDOWS /TLBID:1 /ENTRY:"mainCRTStartup" /IMPLIB:"X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-headless/RelWithDebInfo/pulsar.lib" /MACHINE:X64  /machine:x64 "pulsar-headless.dir\RelWithDebInfo\main.obj"
+  "pulsar-headless.dir\RelWithDebInfo\log-handler.obj"
+  "pulsar-headless.dir\RelWithDebInfo\dir-hardening.obj"
+  "pulsar-headless.dir\RelWithDebInfo\runtime-identity.obj"
+  "pulsar-headless.dir\RelWithDebInfo\realtime-work-queue.obj"
+  pulsar-headless.vcxproj -> X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\rundir\RelWithDebInfo\bin\64bit\pulsar.exe
+FinalizeBuildStatus:
+  Suppression du fichier "pulsar-headless.dir\RelWithDebInfo\pulsar-headless.tlog\unsuccessfulbuild".
+  Mise à jour de l'horodatage "pulsar-headless.dir\RelWithDebInfo\pulsar-headless.tlog\pulsar-headless.lastbuildstate".
+Génération du projet "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261015-native-group-composition\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-headless\pulsar-headless.vcxproj" terminée (Rebuild cible(s)).
+
+La génération a réussi.
+    0 Avertissement(s)
+    0 Erreur(s)
+
+Temps écoulé 00:00:16.75

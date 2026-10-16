@@ -93,9 +93,13 @@ stream has reached live.
 
 On graceful native shutdown, quiesce WebSocket, drain browser callbacks/tasks,
 stop/release frontend outputs/sources, then stop libobs, stop RTWQ and release leases.
-A failed barrier refuses unsafe continuation. Forceful process termination
-does not exercise these same barriers and must not be described as an MP4
-finalization guarantee.
+A failed WebSocket or browser barrier refuses unsafe continuation. If the browser
+pre-shutdown proc is missing or reports failure, the host emits a flushed failure
+marker and terminates without returning through C++/DLL teardown; it keeps the
+runtime leases until the operating system ends the process. This preserves the
+fail-closed boundary while callbacks may still be live, but it is not evidence of
+graceful CEF shutdown. Forceful process termination does not exercise the graceful
+barriers and must not be described as an MP4 finalization guarantee.
 
 [Architecture](../../docs/ARCHITECTURE.md),
 [embedding lifecycle](../../docs/PRISM-EMBEDDING.md) and

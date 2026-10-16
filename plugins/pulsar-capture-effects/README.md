@@ -193,10 +193,28 @@ Its 33 PNG readbacks use the `20261016T002200Z-4be7089ad6-` prefix. The earlier
 `20261016T000843Z-0e250102c7-` readbacks remain preserved. These are private
 synthetic proofs, not an installed-runtime admission.
 
-The earlier missing-callback error is also retained in the prior shutdown
-evidence; the latest control and full probe do not reproduce it. A no-browser
-test fixture does not make the fail-closed browser-fence failure safe: that
-separate crash path still needs a lifecycle fix and a real browser-aware
-qualification before it can be called clean. Group coverage masks, non-normal
-group blend modes, and affine shear remain explicitly unsupported and are
-refused before replacing the active graph.
+The historical `0xC0000005` missing-proc run remains preserved as the pre-fix
+failure. The bounded fix now routes a missing browser proc through the no-
+destructor process-exit boundary while retaining runtime leases and skipping
+frontend/libobs teardown. The current private missing-proc run exits 1 without
+an access violation; the normal shutdown control and full composition probe both
+exit 0 using the rebuilt host executable
+`69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973`. The
+missing-proc fixture contains no browser modules or sources and does not
+exercise real CEF shutdown; it proves only the host's fail-closed response to
+the absent-proc case.
+
+The post-fix missing-proc, normal-control and full-probe reports are
+[`20261016T003448Z-browser-fence-failure.json`](../../evidence/local-20261015-native-group-composition/eleven/20261016T003448Z-browser-fence-failure.json),
+[`20261016T003456Z-group-composition-shutdown-control.json`](../../evidence/local-20261015-native-group-composition/eleven/20261016T003456Z-group-composition-shutdown-control.json),
+and [`20261016T003503Z-group-composition-probe.json`](../../evidence/local-20261015-native-group-composition/eleven/20261016T003503Z-group-composition-probe.json).
+The latest full run again records 33 PNG readbacks, the overlap and translated
+opacity pixels, and pending-removal cleanup. The private host rebuild log is
+[`20261016T003208Z-browser-fence-host-build.raw.txt`](../../evidence/local-20261015-native-group-composition/eleven/20261016T003208Z-browser-fence-host-build.raw.txt).
+Build inputs/outputs and the three run results are cross-referenced in
+[`20261016T003624Z-browser-failclosed-provenance.json`](../../evidence/local-20261015-native-group-composition/eleven/20261016T003624Z-browser-failclosed-provenance.json);
+the targeted structural test output is
+[`20261016T003604Z-browser-failclosed-tests.raw.txt`](../../evidence/local-20261015-native-group-composition/eleven/20261016T003604Z-browser-failclosed-tests.raw.txt).
+These runs do not establish installed-runtime admission or graceful CEF teardown.
+Group coverage masks, non-normal group blend modes, and affine shear remain
+explicitly unsupported and are refused before replacing the active graph.

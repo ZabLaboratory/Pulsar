@@ -1390,6 +1390,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime", type=pathlib.Path, required=True,
                         help="Compatible prebuilt runtime rundir/RelWithDebInfo")
+    parser.add_argument(
+        "--host-executable", type=pathlib.Path,
+        help="Optional private pulsar.exe copied into the disposable runtime")
     parser.add_argument("--plugin", type=pathlib.Path, required=True,
                         help="Private pulsar-capture-effects.dll")
     parser.add_argument("--websocket-plugin", type=pathlib.Path, required=True,
@@ -1397,11 +1400,18 @@ def main():
     parser.add_argument("--graphics-remove-helper", type=pathlib.Path, required=True,
                         help="Private helper for graphics-task and module-unload source removal tests")
     parser.add_argument("--output", type=pathlib.Path, required=True)
-    parser.add_argument(
+    shutdown_mode = parser.add_mutually_exclusive_group()
+    shutdown_mode.add_argument(
         "--shutdown-control-only", action="store_true",
         help="start the same private host but do not create any composition")
+    shutdown_mode.add_argument(
+        "--expect-browser-fence-failure", action="store_true",
+        help=("omit the test-only browser proc and prove the private host exits "
+              "fail-closed with code 1 after a shutdown request"))
     args = parser.parse_args()
     runtime_source = args.runtime.resolve()
+    host_executable_source = (
+        args.host_executable.resolve() if args.host_executable else None)
     plugin_source = args.plugin.resolve()
     websocket_source = args.websocket_plugin.resolve()
     graphics_remove_helper_source = args.graphics_remove_helper.resolve()
@@ -1416,8 +1426,12 @@ def main():
     runtime = scratch / "runtime"
     output.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    report_type = ("group-composition-shutdown-control"
-                   if args.shutdown_control_only else "group-composition-probe")
+    report_type = (
+        "browser-fence-failure"
+        if args.expect_browser_fence_failure else
+        "group-composition-shutdown-control"
+        if args.shutdown_control_only else
+        "group-composition-probe")
     report_path = output / f"{stamp}-{report_type}.json"
     if report_path.exists():
         raise FileExistsError(report_path)
@@ -1437,10 +1451,16 @@ def main():
                 "the no-browser shutdown fixture cannot run with browser modules: "
                 + ", ".join(browser_modules))
         report["browserPreShutdownFixture"] = {
-            "enabled": True,
-            "mode": "private-test-helper-no-browser-source-fence",
+            "enabled": not args.expect_browser_fence_failure,
+            "mode": (
+                "missing-private-browser-proc"
+                if args.expect_browser_fence_failure else
+                "private-test-helper-no-browser-source-fence"),
             "browserModulesInRuntime": browser_modules,
             "helperCheck": (
+                "no test procedure is registered; the host must reject the missing "
+                "browser pre-shutdown proc"
+                if args.expect_browser_fence_failure else
                 "enumerates OBS sources when the host requests the browser fence and "
                 "returns success only when no browser_source/browser_source_v2 exists"),
             "cefShutdownExercised": False,
@@ -1448,6 +1468,15 @@ def main():
         for directory in ("bin", "data", "obs-plugins"):
             shutil.copytree(runtime_source / directory, runtime / directory)
         exe = runtime / "bin" / "64bit" / "pulsar.exe"
+        if host_executable_source is not None:
+            if not host_executable_source.is_file():
+                raise FileNotFoundError(host_executable_source)
+            shutil.copyfile(host_executable_source, exe)
+        report["hostExecutable"] = {
+            "path": str(host_executable_source or exe),
+            "sha256": sha256(host_executable_source or exe),
+            "copiedFromPrivateBuild": host_executable_source is not None,
+        }
         capture_target = runtime / "obs-plugins" / "64bit" / "pulsar-capture-effects.dll"
         websocket_target = runtime / "obs-plugins" / "64bit" / "obs-websocket.dll"
         graphics_remove_helper_target = (
@@ -1527,8 +1556,9 @@ def main():
             "PULSAR_RUNTIME_DIR": str(scratch / "state" / "runtime"),
             "PULSAR_RUNTIME_INSTANCE_ID": runtime_id,
             "PULSAR_DESKTOP_AUDIO_DEVICE_ID": "pulsar-synthetic-test-no-device",
-            "PULSAR_TEST_NO_BROWSER_PRE_SHUTDOWN": "1",
         })
+        if not args.expect_browser_fence_failure:
+            os.environ["PULSAR_TEST_NO_BROWSER_PRE_SHUTDOWN"] = "1"
         port = process_protocol.pick_free_port()
         password = uuid.uuid4().hex + uuid.uuid4().hex
         process = GracefulPrivatePulsarProcess(
@@ -1549,13 +1579,20 @@ def main():
             "processAudioConfigured": False,
             "initializedWasapiDevices": initialized_audio_devices,
             "browserModulesInRuntime": browser_modules,
-            "browserPreShutdownFixture": "test-only no-browser source assertion",
+            "browserPreShutdownFixture": (
+                "missing-proc fail-closed test"
+                if args.expect_browser_fence_failure else
+                "test-only no-browser source assertion"),
             "result": "no WASAPI endpoint initialized during private bootstrap",
         }
-        if args.shutdown_control_only:
+        if args.shutdown_control_only or args.expect_browser_fence_failure:
             report["shutdownControl"] = {
                 "compositionCreated": False,
                 "reason": (
+                    "exercise the fail-closed path for an absent browser proc; the "
+                    "runtime contains no browser modules or sources, so CEF shutdown "
+                    "is outside this test"
+                    if args.expect_browser_fence_failure else
                     "compare host bootstrap/shutdown without group ownership; a "
                     "test-only fence attests no browser source is loaded, so CEF "
                     "shutdown is outside this control"),
@@ -1779,7 +1816,69 @@ def main():
                     report.get("probe", {}).get("sourceRemovalLifecycle", {})
                     .get("activeCompositionAtModuleUnload", {})
                     .get("leftActiveForShutdown"))
-                if args.shutdown_control_only:
+                if args.expect_browser_fence_failure:
+                    fail_marker = "PULSAR_BROWSER_QUIESCE event=fail_closed_exit"
+                    fail_index = next((i for i, line in enumerate(shutdown_lines)
+                                       if fail_marker in line), None)
+                    exit_code = process.proc.proc.returncode
+                    forbidden_markers = (
+                        "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin",
+                        "PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete",
+                        "PULSAR_FRONTEND_CLEANUP event=",
+                        "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released",
+                        "PULSAR_RUNTIME_INSTANCE lease=released",
+                        "PULSAR_LEGACY_ALIAS lease=released",
+                        "pulsar-frontend-stub | callbacks uninstalled",
+                        "obs-websocket | [obs_module_unload] Shutting down...",
+                    )
+                    no_teardown_after_failure = (
+                        fail_index is not None and
+                        not any(
+                            marker in line
+                            for line in shutdown_lines[fail_index + 1:]
+                            for marker in forbidden_markers))
+                    no_teardown_during_failed_shutdown = not any(
+                        marker in line
+                        for line in shutdown_lines[shutdown_signal_index:]
+                        for marker in forbidden_markers)
+                    no_leases_released = not any(
+                        marker in line
+                        for line in shutdown_lines
+                        for marker in (
+                            "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released",
+                            "PULSAR_RUNTIME_INSTANCE lease=released",
+                            "PULSAR_LEGACY_ALIAS lease=released"))
+                    no_av = exit_code not in (0xC0000005, -1073741819)
+                    browser_failure_evidence = {
+                        "missingProcReasonObserved": any(
+                            "browser_pre_shutdown_proc_unavailable" in line
+                            for line in shutdown_lines),
+                        "failClosedMarkerObserved": fail_index is not None,
+                        "exitCode": exit_code,
+                        "intentionalExitCodeOne": exit_code == 1,
+                        "noAccessViolation": no_av,
+                        "noForcedTermination": not process.forced_termination_used,
+                        "shutdownEventWasSignaled": process.graceful_shutdown_requested,
+                        "ownedProcessExited": report["ownedProcessExited"],
+                        "runtimeLeasesHeldUntilProcessExit": no_leases_released,
+                        "noFrontendLibobsTeardownDuringFailedShutdown": (
+                            no_teardown_during_failed_shutdown),
+                        "noTeardownAfterFailureMarker": no_teardown_after_failure,
+                        "cefShutdownExercised": False,
+                    }
+                    browser_failure_evidence["passed"] = all(
+                        value for key, value in browser_failure_evidence.items()
+                        if key not in ("exitCode", "cefShutdownExercised")) and no_av
+                    report["browserFenceFailureEvidence"] = browser_failure_evidence
+                    report["gracefulHostShutdownWithoutComposition"] = False
+                    report["activeCompositionCleanlyUnloaded"] = None
+                    report["passed"] = bool(
+                        report.get("passed") and browser_failure_evidence["passed"])
+                    if not browser_failure_evidence["passed"]:
+                        report["shutdownError"] = {
+                            "type": "BrowserFenceFailClosedProofFailed",
+                            "message": "the missing-proc path did not meet the expected bounded process-exit contract"}
+                elif args.shutdown_control_only:
                     report["gracefulHostShutdownWithoutComposition"] = graceful_plugin_shutdown
                     report["activeCompositionCleanlyUnloaded"] = None
                     if report.get("passed") and not graceful_plugin_shutdown:
@@ -1842,7 +1941,10 @@ def main():
                 "Private synthetic GPU readback only; SolarBand source crops and owner-local "
                 "placement are covered, masks remain explicitly unsupported, and no physical "
                 "capture, public output, transition or switch is exercised. The private "
-                "no-browser shutdown fixture does not exercise CEF teardown")
+                "no-browser shutdown fixture does not exercise CEF teardown."
+                if not args.expect_browser_fence_failure else
+                "Private synthetic no-browser missing-proc lifecycle probe only; no real "
+                "browser module/source is loaded, so this does not exercise CEF teardown.")
             report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
             print(json.dumps({"report": str(report_path), "passed": report["passed"],
                               "ownedProcessExited": report["ownedProcessExited"],
