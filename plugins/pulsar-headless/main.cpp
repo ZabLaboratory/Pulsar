@@ -1011,32 +1011,42 @@ bool websocket_pre_shutdown_ready(std::string &reason)
     return true;
 }
 
-// A failed websocket quiesce is a process-integrity failure, not a recoverable
-// module error.  Returning through main would run the DLL/static destructors;
-// WebSocketServer::~WebSocketServer() calls the unbounded Stop(), which can
-// retain admitted worker threads after the host has already released its
-// runtime/alias leases.  Emit a direct, credential-free and flushed marker,
-// then bypass C++/Qt/libobs teardown entirely.  On Windows, _Exit ultimately
-// permits DLL_PROCESS_DETACH and a plugin's static destructors to run, so use
-// TerminateProcess for the stronger no-destructor boundary.  Kernel-backed
-// leases and handles are released by the operating system only once this
-// process exits, so no successor can overlap a still-live failed runtime.
-[[noreturn]] void fail_closed_websocket_quiesce(const std::string &reason)
+// A failed lifecycle fence is a process-integrity failure, not a recoverable
+// module error. Returning through main would run DLL/static destructors while
+// a callback or admitted worker may still be live. Emit a direct,
+// credential-free and flushed marker, then bypass C++/Qt/libobs teardown
+// entirely. On Windows, _Exit is only the fallback: TerminateProcess provides
+// the stronger no-destructor boundary. Kernel-backed leases and handles are
+// released by the operating system only once this process exits, so no
+// successor can overlap a still-live failed runtime.
+[[noreturn]] void fail_closed_process_exit(const char *subsystem,
+                                           const std::string &reason)
 {
     std::fprintf(stderr,
-                 "PULSAR_WEBSOCKET_QUIESCE event=fail_closed_exit action=process_exit reason=%s\n",
-                 reason.c_str());
+                 "PULSAR_%s_QUIESCE event=fail_closed_exit action=process_exit reason=%s\n",
+                 subsystem, reason.c_str());
     std::fflush(stderr);
     std::fflush(stdout);
 #ifdef _WIN32
     if (!TerminateProcess(GetCurrentProcess(), 1)) {
         std::fprintf(stderr,
-                     "PULSAR_WEBSOCKET_QUIESCE event=terminate_process_failed error=%lu fallback=exit\n",
+                     "PULSAR_%s_QUIESCE event=terminate_process_failed error=%lu fallback=exit\n",
+                     subsystem,
                      static_cast<unsigned long>(GetLastError()));
         std::fflush(stderr);
     }
 #endif
     std::_Exit(1);
+}
+
+[[noreturn]] void fail_closed_websocket_quiesce(const std::string &reason)
+{
+    fail_closed_process_exit("WEBSOCKET", reason);
+}
+
+[[noreturn]] void fail_closed_browser_pre_shutdown(const std::string &reason)
+{
+    fail_closed_process_exit("BROWSER", reason);
 }
 
 // Browser CEF/audio teardown must complete before obs_shutdown() stops the
@@ -1402,11 +1412,9 @@ int main(int argc, char **argv)
                          browser_shutdown_error.c_str());
             // Do not enter obs_shutdown after the browser fence failed: that
             // path stops libobs audio while a CEF callback may still be live.
-            runtime_state->release();
-#ifdef _WIN32
-            close_shutdown_event();
-#endif
-            return 1;
+            // Keep the runtime leases until the OS terminates this process;
+            // returning would run DLL/static destructors on the unsafe path.
+            fail_closed_browser_pre_shutdown(browser_shutdown_error);
         }
         pulsar_frontend_shutdown();
         if (!pulsar_frontend_cleanup_succeeded()) {
@@ -1495,12 +1503,9 @@ int main(int argc, char **argv)
                      browser_shutdown_error.c_str());
         // A failed or missing browser proc is deliberately fail-closed.  The
         // host must not call obs_shutdown and tear down libobs audio under a
-        // still-live CEF callback; process exit performs the final cleanup.
-        runtime_state->release();
-#ifdef _WIN32
-        close_shutdown_event();
-#endif
-        return 1;
+        // still-live CEF callback. Keep leases until the OS terminates the
+        // process, without running C++/DLL teardown on the failed fence path.
+        fail_closed_browser_pre_shutdown(browser_shutdown_error);
     }
     pulsar_frontend_shutdown();
     if (!pulsar_frontend_cleanup_succeeded()) {

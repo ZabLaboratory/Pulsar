@@ -15,6 +15,7 @@ import asyncio
 import importlib.util
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import sys
@@ -145,7 +146,7 @@ def test_native_contract_has_single_admission_and_drain_boundary() -> None:
     # itself exits and let the kernel release them atomically.
     for marker in (
         "fail_closed_websocket_quiesce",
-        "PULSAR_WEBSOCKET_QUIESCE event=fail_closed_exit",
+        "PULSAR_%s_QUIESCE event=fail_closed_exit",
         "std::fflush(stderr)",
         "std::fflush(stdout)",
         "TerminateProcess(GetCurrentProcess(), 1)",
@@ -156,6 +157,19 @@ def test_native_contract_has_single_admission_and_drain_boundary() -> None:
     failed_quiesce = failed_quiesce[: failed_quiesce.index("std::string browser_shutdown_error")]
     assert "fail_closed_websocket_quiesce(websocket_shutdown_error)" in failed_quiesce
     assert "runtime_state->release()" not in failed_quiesce
+    browser_failures = list(
+        re.finditer(r"if\s*\(!browser_pre_shutdown_ready\(browser_shutdown_error\)\)", headless)
+    )
+    assert len(browser_failures) == 2
+    for failure in browser_failures:
+        browser_branch = headless[
+            failure.start() : headless.index("pulsar_frontend_shutdown();", failure.start())
+        ]
+        assert "fail_closed_browser_pre_shutdown(browser_shutdown_error)" in browser_branch
+        assert "runtime_state->release()" not in browser_branch
+        assert "close_shutdown_event()" not in browser_branch
+        assert "return 1;" not in browser_branch
+        assert "obs_shutdown()" not in browser_branch
     test_source = Path(__file__).read_text(encoding="utf-8")
     timeout_test = test_source[test_source.index("def _run_windows_quiesce_timeout_integration") :]
     assert "process failure tail:" in timeout_test
@@ -198,13 +212,32 @@ def test_group_probe_no_browser_fence_is_explicitly_test_only() -> None:
     assert 'group-composition-graphics-remove-helper MODULE EXCLUDE_FROM_ALL' in cmake
 
 
+def test_browser_fence_failure_probe_expects_process_exit_without_teardown() -> None:
+    probe = GROUP_COMPOSITION_PROBE.read_text(encoding="utf-8")
+    headless = HEADLESS_CPP.read_text(encoding="utf-8")
+    assert "--expect-browser-fence-failure" in probe
+    assert "--host-executable" in probe
+    assert 'PULSAR_TEST_NO_BROWSER_PRE_SHUTDOWN' in probe
+    assert 'PULSAR_%s_QUIESCE event=fail_closed_exit' in headless
+    assert 'fail_closed_process_exit("BROWSER", reason);' in headless
+    assert 'browser_pre_shutdown_proc_unavailable' in headless
+    assert 'exit_code == 1' in probe
+    assert '0xC0000005' in probe
+    assert 'noFrontendLibobsTeardownDuringFailedShutdown' in probe
+    assert 'PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released' in probe
+    assert 'PULSAR_FRONTEND_CLEANUP event=' in probe
+    assert 'obs-websocket | [obs_module_unload] Shutting down...' in probe
+
+
 def test_failed_quiesce_model_keeps_leases_until_process_exit() -> None:
     source = HEADLESS_CPP.read_text(encoding="utf-8")
-    helper_start = source.index("[[noreturn]] void fail_closed_websocket_quiesce")
+    helper_start = source.index("[[noreturn]] void fail_closed_process_exit")
     helper = source[helper_start : source.index("// Browser CEF/audio teardown", helper_start)]
     assert "std::fflush(stderr)" in helper
     assert "std::fflush(stdout)" in helper
     assert "std::_Exit(1)" in helper
+    assert 'fail_closed_process_exit("WEBSOCKET", reason);' in helper
+    assert 'fail_closed_process_exit("BROWSER", reason);' in helper
 
     # The model captures the ownership contract: a failed bounded drain never
     # explicitly releases a lease while the process is alive.  The OS is the
