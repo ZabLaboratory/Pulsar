@@ -1,0 +1,99 @@
+{
+  "capturedUtc": "2026-10-16T00:10:36.3813605Z",
+  "sourceReport": "evidence/local-20261015-native-group-composition/eleven/20261016T000840Z-group-composition-probe.json",
+  "sourceReportSha256": "d8523fa9667428e23103e3ff147efc27285dcce6a685fed2ec95be0bedc25f9d",
+  "rootVerification": {
+    "pngHashMatches": 33,
+    "pixelDecoder": "System.Drawing.Bitmap.GetPixel from persisted mixed-composition-committed PNG",
+    "pixels": [
+      {
+        "point": [
+          260,
+          150
+        ],
+        "rgba": [
+          0,
+          127,
+          0,
+          127
+        ]
+      },
+      {
+        "point": [
+          532,
+          282
+        ],
+        "rgba": [
+          0,
+          32,
+          0,
+          32
+        ]
+      },
+      {
+        "point": [
+          632,
+          282
+        ],
+        "rgba": [
+          0,
+          95,
+          0,
+          95
+        ]
+      },
+      {
+        "point": [
+          772,
+          378
+        ],
+        "rgba": [
+          0,
+          64,
+          127,
+          127
+        ]
+      }
+    ]
+  },
+  "shutdown": {
+    "exitCode": 0,
+    "seconds": 0.188,
+    "forced": false,
+    "errorFree": true,
+    "frontendCallbacks": {
+      "scriptShutdownThenExitRunsCleanupOnce": true,
+      "exitCleanupMarkerCountsAreExact": true,
+      "exitCallbackDetachedBeforeTableUninstall": true,
+      "destructorSkippedDuplicateRemovalAfterUninstall": true,
+      "noMissingFrontendCallbackError": true,
+      "markerIndexes": {
+        "scriptingShutdownReceived": 382,
+        "exitReceived": 385,
+        "exitCleanupStarted": 383,
+        "exitCleanupComplete": 384,
+        "duplicateCleanupSkipped": 386,
+        "exitDetach": 387,
+        "callbacksUninstalled": 418,
+        "websocketUnloadStarted": 422,
+        "destructorSkip": 424,
+        "websocketUnloadFinished": 425
+      },
+      "passed": true
+    },
+    "pendingRemovalEvents": {
+      "markerObserved": true,
+      "activeCompositionsBeforeCleanup": 0,
+      "generationFencesBeforeCleanup": 0,
+      "pendingRemovalEventsBeforeCleanup": 1,
+      "pendingRemovalEventsReleased": 1
+    }
+  },
+  "limits": [
+    "Private synthetic GPU input; no physical capture/public output/common runtime install",
+    "No browser module loaded; explicit helper fence only asserts absence of browser sources; CEF shutdown not exercised",
+    "Pending-removal helper explicitly forwards source_remove for private source; active composition count already0 at unload, not direct active-map-at-unload proof",
+    "Masks/non-normal blends/shear remain incomplete"
+  ],
+  "classification": "Root independently verified persisted PNG hashes/four pixel values and reviewed native shutdown markers; owner checkpoint pending"
+}
