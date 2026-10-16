@@ -8,10 +8,28 @@ endif()
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/capture-effects.effect" CAPTURE_EFFECT_SOURCE)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/capture-effects.effect")
 configure_file(src/effect-source.hpp.in generated/effect-source.hpp @ONLY)
-add_library(pulsar-capture-effects MODULE src/capture-effects.cpp)
+add_library(pulsar-capture-effects MODULE
+  src/capture-effects.cpp
+  src/group-composition.cpp
+  src/group-composition-plan.cpp
+  src/group-composition-source-validation.cpp)
 target_include_directories(pulsar-capture-effects PRIVATE "${PULSAR_OBS_HEADERS}" "${PULSAR_UPSTREAM_BUILD_DIR}/config" "${PULSAR_UPSTREAM_BUILD_DIR}/libobs" "${CMAKE_CURRENT_BINARY_DIR}/generated" "${CMAKE_CURRENT_SOURCE_DIR}/../pulsar-websocket/lib")
 target_link_libraries(pulsar-capture-effects PRIVATE "${PULSAR_UPSTREAM_BUILD_DIR}/libobs/RelWithDebInfo/obs.lib")
 set_target_properties(pulsar-capture-effects PROPERTIES PREFIX "")
+# Private integration-probe helper. This is excluded from normal builds and
+# exercises source_remove on OBS' graphics task and after video shutdown.
+add_library(group-composition-graphics-remove-helper MODULE EXCLUDE_FROM_ALL
+  tests/group-composition-graphics-remove-helper.cpp)
+target_include_directories(group-composition-graphics-remove-helper PRIVATE
+  "${PULSAR_OBS_HEADERS}"
+  "${PULSAR_UPSTREAM_BUILD_DIR}/config"
+  "${PULSAR_UPSTREAM_BUILD_DIR}/libobs"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../pulsar-websocket/lib")
+target_link_libraries(group-composition-graphics-remove-helper PRIVATE
+  "${PULSAR_UPSTREAM_BUILD_DIR}/libobs/RelWithDebInfo/obs.lib")
+set_target_properties(group-composition-graphics-remove-helper PROPERTIES PREFIX "")
+set_target_properties(group-composition-graphics-remove-helper PROPERTIES
+  OUTPUT_NAME "z-group-composition-shutdown-test-helper")
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(PULSAR_OBS_PLUGINS_DIR "${PULSAR_UPSTREAM_BUILD_DIR}/rundir/RelWithDebInfo/obs-plugins/64bit")
   set_target_properties(pulsar-capture-effects PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${PULSAR_OBS_PLUGINS_DIR}")
