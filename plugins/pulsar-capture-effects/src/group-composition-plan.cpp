@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <obs.h>
 #include <string>
 #include <unordered_set>
@@ -392,6 +393,17 @@ bool validate_graph(Plan &plan, obs_data_t *response);
 
 bool parse_plan(obs_data_t *request, Plan &plan, obs_data_t *response)
 {
+  if (obs_data_has_user_value(request, "coordinateSpace")) {
+    std::string space;
+    if (!read_string(request, "coordinateSpace", space, response, 64))
+      return false;
+    if (space == "global-scene-texels")
+      plan.coordinate_space = CoordinateSpace::GlobalSceneTexels;
+    else if (space != "owner-local") {
+      set_error(response, "unsupported-coordinate-space", space.c_str());
+      return false;
+    }
+  }
   std::string protocol;
   if (!read_string(request, "protocol", protocol, response, 64) ||
       protocol != protocol_name) {
@@ -520,8 +532,22 @@ bool identity(const Affine &a)
          std::abs(a.m11 - 1) < 1e-9 && std::abs(a.ty) < 1e-9;
 }
 
+bool validate_world_affine(const Affine &a, obs_data_t *response)
+{
+  for (const double value : {a.m00, a.m01, a.tx, a.m10, a.m11, a.ty}) {
+    if (!std::isfinite(value) ||
+        std::abs(value) > std::numeric_limits<float>::max()) {
+      set_error(response, "invalid-affine", "transform exceeds native float range");
+      return false;
+    }
+  }
+  return true;
+}
+
 bool validate_group_affine(const Affine &a, obs_data_t *response)
 {
+  if (!validate_world_affine(a, response))
+    return false;
   const double det = a.m00 * a.m11 - a.m01 * a.m10;
   if (std::abs(det) < 1e-12)
     return true; // A finite singular node is a valid empty visual.
@@ -545,6 +571,11 @@ bool validate_graph(Plan &plan, obs_data_t *response)
     return false;
   }
   const Group &root = plan.groups[root_it->second];
+  if (plan.coordinate_space == CoordinateSpace::GlobalSceneTexels &&
+      (root.bounds.x != 0 || root.bounds.y != 0)) {
+    set_error(response, "invalid-global-viewport", "scene origin must be zero");
+    return false;
+  }
   if (!root.parent_is_null || root.order != 0 || !identity(root.affine) ||
       std::abs(root.opacity - 1) > 1e-9 || root.blend_mode != "normal" ||
       !root.visible || !root.mask_is_null) {
@@ -559,7 +590,9 @@ bool validate_graph(Plan &plan, obs_data_t *response)
       set_error(response, "invalid-parent", group.id.c_str());
       return false;
     }
-    if (!validate_group_affine(group.affine, response))
+    if (!(plan.coordinate_space == CoordinateSpace::GlobalSceneTexels
+              ? validate_world_affine(group.affine, response)
+              : validate_group_affine(group.affine, response)))
       return false;
     if (group.parent_id == group.id) {
       set_error(response, "cyclic-group-reference", group.id.c_str());
@@ -568,6 +601,8 @@ bool validate_graph(Plan &plan, obs_data_t *response)
   }
   for (const auto &group : plan.groups) {
     std::unordered_set<std::string> seen_children;
+    const auto &band_bounds = plan.coordinate_space == CoordinateSpace::GlobalSceneTexels
+                                  ? root.bounds : group.bounds;
     for (size_t i = 0; i < group.children.size(); ++i) {
       const auto &child = group.children[i];
       if (child.kind == ChildKind::SolarBand &&
@@ -578,10 +613,10 @@ bool validate_graph(Plan &plan, obs_data_t *response)
       }
       if (child.kind == ChildKind::SolarBand &&
           (child.rect.x < 0 || child.rect.y < 0 ||
-           child.rect.x + child.rect.width > group.bounds.width + 1e-6 ||
-           child.rect.y + child.rect.height > group.bounds.height + 1e-6)) {
+           child.rect.x + child.rect.width > band_bounds.width + 1e-6 ||
+           child.rect.y + child.rect.height > band_bounds.height + 1e-6)) {
         set_error(response, "invalid-band-rect",
-                  "atlas page rectangle must fit the owning group bounds");
+                  "atlas page rectangle must fit its declared coordinate space bounds");
         return false;
       }
       if (child.kind != ChildKind::Group)

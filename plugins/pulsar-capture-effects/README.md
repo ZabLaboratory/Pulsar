@@ -216,5 +216,44 @@ Build inputs/outputs and the three run results are cross-referenced in
 the targeted structural test output is
 [`20261016T003604Z-browser-failclosed-tests.raw.txt`](../../evidence/local-20261015-native-group-composition/eleven/20261016T003604Z-browser-failclosed-tests.raw.txt).
 These runs do not establish installed-runtime admission or graceful CEF teardown.
-Group coverage masks, non-normal group blend modes, and affine shear remain
-explicitly unsupported and are refused before replacing the active graph.
+Group coverage masks and non-normal group blend modes remain explicitly
+unsupported and are refused before replacing the active graph. Owner-local
+affine shear remains unsupported; the explicit global grid path below supports it.
+
+
+## Global scene texel composition
+
+`CommitGroupComposition` accepts optional `coordinateSpace` in the existing
+`pulsar.group-composition/1` plan. Omitted or `owner-local` retains the existing
+local-band contract. `global-scene-texels` admits Vision's already rasterized
+scene-space bands. The root bounds define the zero-origin viewport. Every
+native group keeps its hierarchy, order, visibility and once-only opacity, but
+uses an identity transform and that viewport; authored owner transforms have
+already affected the texels. Group bounds do not clip these global bands.
+
+A Solar band must use exact integer scene placement and the exact dimensions
+of its cropped atlas rectangle. Scaling or fractional placement is refused
+before replacing the current graph. Capture child affines instead express the
+full source-to-scene transform, including shear and rotation. A private crop
+scene applies the source-space crop; `group-composition-world-source.cpp`
+then draws this live scene through its full affine. It retains the underlying
+source reference, owns no physical device and keeps no rendered-frame cache.
+Private contributions have unique names because public OBS groups register
+scene-item hotkeys using their source names. Encoded-channel alpha compositing
+is applied to both global bands and captures, matching the premultiplied texel
+contract. Owner-local blending behavior remains unchanged.
+
+The plan parser/validator owns coordinate-space admission, the world-source
+module owns the live affine draw, and `group-composition.cpp` owns candidate
+construction and the existing atomic swap/lifetime fences. Coordinate space is
+part of the idempotent-replay check. Non-finite/native-float-overflow affines,
+invalid atlas placement and unknown spaces cannot replace an active graph.
+
+`scripts/probe-global-texel-composition.py` reuses the disposable native runner
+and the unchanged owner-local regression suite. It adds exact 1px checkerboard
+readback, interleaved capture/bands, shear, vertical source crop, nested opacity,
+rotation, refusal pixel preservation and coordinate-space replay checks at
+1920x1080. Use the same private build/runtime arguments as
+`probe-group-composition.py`. The probe never starts Live or REC. These synthetic
+GPU readbacks do not certify physical capture availability, CEF teardown,
+installed-runtime admission, group masks, non-normal group blends or effects.

@@ -22,6 +22,7 @@ struct Crop {
   int left = 0, top = 0, right = 0, bottom = 0;
 };
 enum class ChildKind { Capture, Group, SolarBand };
+enum class CoordinateSpace { OwnerLocal, GlobalSceneTexels };
 struct Child {
   ChildKind kind = ChildKind::Capture;
   int64_t scene_item_id = 0;
@@ -48,6 +49,7 @@ struct Group {
   std::vector<Child> children;
 };
 struct Plan {
+  CoordinateSpace coordinate_space = CoordinateSpace::OwnerLocal;
   std::string scene_name;
   std::string plan_hash;
   std::string runtime_instance_id;
@@ -66,5 +68,6 @@ bool read_integer(obs_data_t *data, const char *key, int64_t &out,
                   obs_data_t *response);
 bool parse_plan(obs_data_t *request, Plan &plan, obs_data_t *response);
 bool validate_group_affine(const Affine &a, obs_data_t *response);
+bool validate_world_affine(const Affine &a, obs_data_t *response);
 
 } // namespace group_composition
