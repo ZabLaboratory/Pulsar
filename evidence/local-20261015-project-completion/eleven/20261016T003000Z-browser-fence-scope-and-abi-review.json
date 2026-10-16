@@ -1,0 +1,48 @@
+{
+  "capturedUtc": "2026-10-16T00:28:49.5120055Z",
+  "parentUnit": "local-20261015-project-completion",
+  "workUnit": "local-20261015-native-group-composition",
+  "owner": "/root/style_responsibility_split",
+  "status": "active",
+  "decision": "Authorize bounded browser-fence fail-closed lifecycle correction",
+  "repository": "D:/Documents/Zab/Pulsar",
+  "worktree": "D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261015-native-group-composition",
+  "sourceCheckpoint": "198bf3e2a886017e82bf5bcddeb3a09117a502bc",
+  "additionalScope": [
+    "plugins/pulsar-headless/main.cpp: existing websocket fail-closed primitive and two failed browser fence branches",
+    "Direct lifecycle tests, private synthetic failure probe, owner documentation/evidence"
+  ],
+  "observedDefect": "Both failed-browser-fence branches release RuntimeState leases and return1, executing process/static destructors while CEF quiescence is not established; private missing-proc proof recorded STATUS_ACCESS_VIOLATION",
+  "approvedBehavior": [
+    "Use existing noreturn process-exit primitive shared by websocket/browser failures with distinct markers",
+    "Preserve exact websocket marker compatibility",
+    "Flush credential-free failure marker before hard exit",
+    "Do not call frontend/OBS teardown, release leases or close ownership handles after failed browser fence; OS owns final process cleanup",
+    "Retain normal successful browser and normal shutdown paths"
+  ],
+  "validation": [
+    "Both browser failure call sites take noreturn path",
+    "Websocket existing failure contract unchanged",
+    "Private missing-browser-proc run exits1 with browser marker and no access violation; no CEF-real claim",
+    "Normal no-browser synthetic composition shutdown remains green"
+  ],
+  "limits": [
+    "No shared runtime installation",
+    "No transition or switch-duration work",
+    "No claim of actual CEF callback quiescence",
+    "Frontend source-cleanup-failure branches require separate review before changes"
+  ],
+  "abiReview": {
+    "manifest": "evidence/local-20261015-native-group-composition/eleven/20261016T002526Z-websocket-abi-provenance.json",
+    "sha256": "e0a4d78e48d51fec0dbb055571a8ae86573ced2366e85f2d0f8386c0e25495b9",
+    "rootVerified": [
+      "12 cached build/import-library/runtime/tlog artifacts match hashes",
+      "4 compiler-visible headers match exact private checkout",
+      "3 worktree/build-source copy pairs match hashes",
+      "Raw build log hash matches",
+      "Link tlog references exact private obs.lib and obs-frontend-api.lib",
+      "Current upstream HEAD70a58302435308e609e0b1114efe3ef402f810b7"
+    ],
+    "nativePixels": "Root signed review ab3c60d7,33 images and4 pixels verified"
+  }
+}
