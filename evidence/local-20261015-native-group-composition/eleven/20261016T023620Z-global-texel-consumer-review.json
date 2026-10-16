@@ -1,0 +1,52 @@
+{
+  "capturedUtc": "2026-10-16T02:36:20.1221687Z",
+  "owner": "Eleven",
+  "sourceHead": "716b168c55386d2cacdb18dc5685ea8bed91fa4e",
+  "scope": "Read-only design review of native consumer compatibility with canonical Vision global-scene-texel contribution bands",
+  "canonicalVisionAuthority": "D:/Documents/Lumencast/lumencast-vision/.worktrees/eleven-local-20261015-vision3d-integration/evidence/local-20261016-native-contribution-atlas/eleven/20261016T022301Z-global-texel-continuation-authority.json",
+  "observed": [
+    {
+      "facts": [
+        "Group uses obs_scene_add_group and applies affine to its item after adding every child",
+        "SolarBand is cropped from atlas and scaled/positioned into child.rect, then inherits group transform",
+        "Opacity filter belongs to native group and is applied once after child composition",
+        "Current design assumes all child coordinates local to group"
+      ],
+      "symbols": [
+        "to_transform",
+        "apply_transform",
+        "build_group",
+        "add_opacity_filter"
+      ],
+      "path": "plugins/pulsar-capture-effects/src/group-composition.cpp"
+    },
+    {
+      "fact": "Current affine admission rejects shear before graph replacement",
+      "symbol": "validate_group_affine",
+      "path": "plugins/pulsar-capture-effects/src/group-composition-plan.cpp"
+    }
+  ],
+  "conclusion": "Current native hierarchy cannot directly consume pre-rasterized global-scene-texel bands without applying owner transforms again. Using inverse-owner transforms is not a general correction and adds a resampling boundary; group affine shear is unsupported.",
+  "candidate_contract": [
+    "Explicitly distinguish global-scene-texel bands from local physical capture geometry",
+    "An isolated native group must composite ordered children into canonical global grid: world raster bands at identity pixel mapping, physical captures through composed owner/world affine exactly once",
+    "Apply group opacity once after mixed capture/band composition; nested group operation order must remain authoritative",
+    "Preserve authored capture crop, source-local effects, visibility and group masks/effects at their correct existing semantic boundary",
+    "Validate complete typed revisions and resources before replacing current accepted graph; never silently degrade unsupported masks/blends/shear",
+    "Use bounded reusable targets and explicit render-stack memory accounting; no new inactive scene retention or physical device clone",
+    "Re-use existing libobs source refs/removal fences, graphics queue atomic admission and coherent private ABI build"
+  ],
+  "open_before_implementation": [
+    "Select concrete libobs isolation/render primitive after inspecting native matrix and filtered source semantics",
+    "Determine world-grid effect/mask kernels that preserve canonical transformed group semantics; a rotated local blur must not silently become axis-aligned world blur",
+    "Prove all affine cases with real mixed physical stand-in and global bands, nested opacity, alpha, paint ordering, reset and teardown",
+    "Qualify color-space/premultiplication and zero additional subpixel atlas sampling",
+    "Measure retained targets and steady-state native render cost separately from Vision GPU timestamps"
+  ],
+  "limits": [
+    "Proposal only; no product/native code edits or consumer ABI authorization",
+    "No common runtime installation",
+    "Current private native foundation tests do not establish this new global-grid consumer parity",
+    "Retained composite-group-render worktree086086 inspected read-only; no matching implementation found in inspected plugin file inventory, not an exhaustive semantic absence proof"
+  ]
+}
