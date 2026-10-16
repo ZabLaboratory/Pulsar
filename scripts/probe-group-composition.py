@@ -1428,6 +1428,23 @@ def main():
                     if key.startswith("PULSAR_")}
     runtime_id = "group-proof-" + uuid.uuid4().hex
     try:
+        runtime_plugin_dir = runtime_source / "obs-plugins" / "64bit"
+        browser_modules = sorted(
+            path.name for path in runtime_plugin_dir.glob("*.dll")
+            if "browser" in path.name.casefold())
+        if browser_modules:
+            raise RuntimeError(
+                "the no-browser shutdown fixture cannot run with browser modules: "
+                + ", ".join(browser_modules))
+        report["browserPreShutdownFixture"] = {
+            "enabled": True,
+            "mode": "private-test-helper-no-browser-source-fence",
+            "browserModulesInRuntime": browser_modules,
+            "helperCheck": (
+                "enumerates OBS sources when the host requests the browser fence and "
+                "returns success only when no browser_source/browser_source_v2 exists"),
+            "cefShutdownExercised": False,
+        }
         for directory in ("bin", "data", "obs-plugins"):
             shutil.copytree(runtime_source / directory, runtime / directory)
         exe = runtime / "bin" / "64bit" / "pulsar.exe"
@@ -1510,6 +1527,7 @@ def main():
             "PULSAR_RUNTIME_DIR": str(scratch / "state" / "runtime"),
             "PULSAR_RUNTIME_INSTANCE_ID": runtime_id,
             "PULSAR_DESKTOP_AUDIO_DEVICE_ID": "pulsar-synthetic-test-no-device",
+            "PULSAR_TEST_NO_BROWSER_PRE_SHUTDOWN": "1",
         })
         port = process_protocol.pick_free_port()
         password = uuid.uuid4().hex + uuid.uuid4().hex
@@ -1530,12 +1548,17 @@ def main():
             "microphoneConfigured": False,
             "processAudioConfigured": False,
             "initializedWasapiDevices": initialized_audio_devices,
+            "browserModulesInRuntime": browser_modules,
+            "browserPreShutdownFixture": "test-only no-browser source assertion",
             "result": "no WASAPI endpoint initialized during private bootstrap",
         }
         if args.shutdown_control_only:
             report["shutdownControl"] = {
                 "compositionCreated": False,
-                "reason": "compare host bootstrap/shutdown without group ownership",
+                "reason": (
+                    "compare host bootstrap/shutdown without group ownership; a "
+                    "test-only fence attests no browser source is loaded, so CEF "
+                    "shutdown is outside this control"),
             }
         else:
             report["probe"] = asyncio.run(exercise(
@@ -1586,7 +1609,7 @@ def main():
                     if any(marker in line for marker in (
                         "PULSAR_SHUTDOWN_CONTROL", "[pulsar-headless] shutting down",
                         "PULSAR_FRONTEND_CLEANUP", "obs_module_unload",
-                        "[obs_module_unload]", "module_unload",
+                        "[obs_module_unload]", "module_unload", "PULSAR_WEBSOCKET",
                         "PULSAR_GROUP_COMPOSITION"))]
                 shutdown_signal_index = next((i for i, line in enumerate(shutdown_lines)
                     if "PULSAR_SHUTDOWN_CONTROL event=signaled" in line), 0)
@@ -1599,11 +1622,79 @@ def main():
                     "errors": [process_protocol.redact_boot_line(line)
                                for line in shutdown_error_lines],
                     "attribution": (
+                        "No shutdown ERROR log was observed after the shutdown signal."
+                        if not shutdown_error_lines else
                         "The observed error follows frontend callback uninstall and "
                         "occurs during obs-websocket module unload; this report does "
                         "not attribute it to group composition."),
                 }
                 report["gracefulShutdownEvidence"] = shutdown_evidence
+                frontend_callback_markers = {
+                    "scriptingShutdownReceived": next((i for i, line in enumerate(shutdown_lines)
+                        if "PULSAR_WEBSOCKET event=frontend_exit_received phase=scripting_shutdown" in line), None),
+                    "exitReceived": next((i for i, line in enumerate(shutdown_lines)
+                        if "PULSAR_WEBSOCKET event=frontend_exit_received phase=exit" in line), None),
+                    "exitCleanupStarted": next((i for i, line in enumerate(shutdown_lines)
+                        if "PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=started" in line), None),
+                    "exitCleanupComplete": next((i for i, line in enumerate(shutdown_lines)
+                        if "PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=complete" in line), None),
+                    "duplicateCleanupSkipped": next((i for i, line in enumerate(shutdown_lines)
+                        if "PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=duplicate_skipped" in line), None),
+                    "exitDetach": next((i for i, line in enumerate(shutdown_lines)
+                        if "PULSAR_WEBSOCKET event=frontend_callback_detached phase=exit" in line), None),
+                    "callbacksUninstalled": next((i for i, line in enumerate(shutdown_lines)
+                        if "pulsar-frontend-stub | callbacks uninstalled" in line), None),
+                    "websocketUnloadStarted": next((i for i, line in enumerate(shutdown_lines)
+                        if "obs-websocket | [obs_module_unload] Shutting down..." in line), None),
+                    "destructorSkip": next((i for i, line in enumerate(shutdown_lines)
+                        if "PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached" in line), None),
+                    "websocketUnloadFinished": next((i for i, line in enumerate(shutdown_lines)
+                        if "obs-websocket | [obs_module_unload] Finished shutting down." in line), None),
+                }
+                frontend_callback_lifecycle = {
+                    "scriptShutdownThenExitRunsCleanupOnce": (
+                        frontend_callback_markers["scriptingShutdownReceived"] is not None and
+                        frontend_callback_markers["exitReceived"] is not None and
+                        frontend_callback_markers["exitCleanupStarted"] is not None and
+                        frontend_callback_markers["exitCleanupComplete"] is not None and
+                        frontend_callback_markers["duplicateCleanupSkipped"] is not None and
+                        frontend_callback_markers["scriptingShutdownReceived"] <
+                        frontend_callback_markers["exitCleanupStarted"] <
+                        frontend_callback_markers["exitCleanupComplete"] <
+                        frontend_callback_markers["exitReceived"] <
+                        frontend_callback_markers["duplicateCleanupSkipped"]),
+                    "exitCleanupMarkerCountsAreExact": (
+                        sum("PULSAR_WEBSOCKET event=frontend_exit_received phase=scripting_shutdown" in line
+                            for line in shutdown_lines) == 1 and
+                        sum("PULSAR_WEBSOCKET event=frontend_exit_received phase=exit" in line
+                            for line in shutdown_lines) == 1 and
+                        sum("PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=started" in line
+                            for line in shutdown_lines) == 1 and
+                        sum("PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=complete" in line
+                            for line in shutdown_lines) == 1 and
+                        sum("PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=duplicate_skipped" in line
+                            for line in shutdown_lines) == 1),
+                    "exitCallbackDetachedBeforeTableUninstall": (
+                        frontend_callback_markers["exitDetach"] is not None and
+                        frontend_callback_markers["callbacksUninstalled"] is not None and
+                        frontend_callback_markers["exitDetach"] <
+                        frontend_callback_markers["callbacksUninstalled"]),
+                    "destructorSkippedDuplicateRemovalAfterUninstall": (
+                        frontend_callback_markers["callbacksUninstalled"] is not None and
+                        frontend_callback_markers["websocketUnloadStarted"] is not None and
+                        frontend_callback_markers["destructorSkip"] is not None and
+                        frontend_callback_markers["websocketUnloadFinished"] is not None and
+                        frontend_callback_markers["callbacksUninstalled"] <
+                        frontend_callback_markers["websocketUnloadStarted"] <
+                        frontend_callback_markers["destructorSkip"] <
+                        frontend_callback_markers["websocketUnloadFinished"]),
+                    "noMissingFrontendCallbackError": not shutdown_error_lines,
+                    "markerIndexes": frontend_callback_markers,
+                }
+                frontend_callback_lifecycle["passed"] = all(
+                    value for key, value in frontend_callback_lifecycle.items()
+                    if key != "markerIndexes")
+                report["frontendCallbackShutdownLifecycle"] = frontend_callback_lifecycle
                 unload_cleanup_line = next(
                     (line for line in shutdown_lines
                      if "PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete" in line),
@@ -1679,7 +1770,8 @@ def main():
                     shutdown_evidence["eventAdopted"] and
                     shutdown_evidence["eventSignaled"] and
                     shutdown_evidence["hostShutdownReached"] and
-                    shutdown_evidence["exitCode"] == 0)
+                    shutdown_evidence["exitCode"] == 0 and
+                    frontend_callback_lifecycle["passed"])
                 graceful_plugin_shutdown = (
                     graceful_host_shutdown and
                     report["compositionModuleUnloadCleanup"]["markerObserved"])
@@ -1749,7 +1841,8 @@ def main():
             report["limits"] = (
                 "Private synthetic GPU readback only; SolarBand source crops and owner-local "
                 "placement are covered, masks remain explicitly unsupported, and no physical "
-                "capture, public output, transition or switch is exercised")
+                "capture, public output, transition or switch is exercised. The private "
+                "no-browser shutdown fixture does not exercise CEF teardown")
             report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
             print(json.dumps({"report": str(report_path), "passed": report["passed"],
                               "ownedProcessExited": report["ownedProcessExited"],

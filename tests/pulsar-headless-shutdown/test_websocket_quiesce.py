@@ -30,7 +30,16 @@ SERVER_HPP = ROOT / "plugins" / "pulsar-websocket" / "src" / "websocketserver" /
 PROTOCOL_CPP = ROOT / "plugins" / "pulsar-websocket" / "src" / "websocketserver" / "WebSocketServer_Protocol.cpp"
 REQUEST_BATCH_CPP = ROOT / "plugins" / "pulsar-websocket" / "src" / "requesthandler" / "RequestBatchHandler.cpp"
 PLUGIN_CPP = ROOT / "plugins" / "pulsar-websocket" / "src" / "obs-websocket.cpp"
+EVENT_HANDLER_CPP = ROOT / "plugins" / "pulsar-websocket" / "src" / "eventhandler" / "EventHandler.cpp"
+EVENT_HANDLER_HPP = ROOT / "plugins" / "pulsar-websocket" / "src" / "eventhandler" / "EventHandler.h"
+FRONTEND_STUB_CPP = ROOT / "plugins" / "pulsar-frontend-stub" / "src" / "pulsar-frontend-stub.cpp"
 HEADLESS_CPP = ROOT / "plugins" / "pulsar-headless" / "main.cpp"
+GROUP_COMPOSITION_HELPER_CPP = (
+    ROOT / "plugins" / "pulsar-capture-effects" / "tests" /
+    "group-composition-graphics-remove-helper.cpp"
+)
+GROUP_COMPOSITION_CMAKE = ROOT / "plugins" / "pulsar-capture-effects" / "CMakeLists.txt"
+GROUP_COMPOSITION_PROBE = ROOT / "scripts" / "probe-group-composition.py"
 PROBE_PATH = ROOT / "scripts" / "probe-dual-lane.py"
 
 
@@ -151,6 +160,42 @@ def test_native_contract_has_single_admission_and_drain_boundary() -> None:
     timeout_test = test_source[test_source.index("def _run_windows_quiesce_timeout_integration") :]
     assert "process failure tail:" in timeout_test
     assert "probe.failure_tail(process.snapshot(), 120)" in timeout_test
+
+
+def test_frontend_exit_cleanup_is_once_across_upstream_shutdown_events() -> None:
+    stub = FRONTEND_STUB_CPP.read_text(encoding="utf-8")
+    handler = EVENT_HANDLER_CPP.read_text(encoding="utf-8")
+    header = EVENT_HANDLER_HPP.read_text(encoding="utf-8")
+
+    shutdown = stub[stub.index('extern "C" void pulsar_frontend_shutdown(void)') :]
+    scripting_shutdown = shutdown.index("g_api->emit(OBS_FRONTEND_EVENT_SCRIPTING_SHUTDOWN);")
+    exit_event = shutdown.index("g_api->emit(OBS_FRONTEND_EVENT_EXIT);")
+    callback_uninstall = shutdown.index("obs_frontend_set_callbacks_internal(nullptr);")
+    assert scripting_shutdown < exit_event < callback_uninstall
+
+    assert "std::atomic<bool> _frontendExitHandled = false;" in header
+    cleanup_start = handler.index("void EventHandler::FrontendExitMultiHandler()")
+    cleanup_end = handler.index("// Only called for creation of a public source", cleanup_start)
+    cleanup = handler[cleanup_start:cleanup_end]
+    assert cleanup.index("_frontendExitHandled.compare_exchange_strong") < cleanup.index("HandleExitStarted();")
+    assert cleanup.count("HandleExitStarted();") == 1
+    assert cleanup.count("_obsReadyCallback(false);") == 1
+    assert cleanup.count("DisconnectSourceSignals(transition);") == 1
+    assert "phase=duplicate_skipped" in cleanup
+
+
+def test_group_probe_no_browser_fence_is_explicitly_test_only() -> None:
+    helper = GROUP_COMPOSITION_HELPER_CPP.read_text(encoding="utf-8")
+    cmake = GROUP_COMPOSITION_CMAKE.read_text(encoding="utf-8")
+    probe = GROUP_COMPOSITION_PROBE.read_text(encoding="utf-8")
+
+    assert 'std::getenv("PULSAR_TEST_NO_BROWSER_PRE_SHUTDOWN")' in helper
+    assert 'proc_handler_add(global,' in helper
+    assert 'obs_enum_sources(count_browser_sources, &browser_sources);' in helper
+    assert 'browser_sources.count == 0' in helper
+    assert 'path.name.casefold()' in probe and '"browser" in path.name.casefold()' in probe
+    assert '"cefShutdownExercised": False' in probe
+    assert 'group-composition-graphics-remove-helper MODULE EXCLUDE_FROM_ALL' in cmake
 
 
 def test_failed_quiesce_model_keeps_leases_until_process_exit() -> None:

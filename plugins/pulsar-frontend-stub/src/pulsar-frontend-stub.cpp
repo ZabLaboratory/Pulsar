@@ -7882,6 +7882,10 @@ extern "C" void pulsar_frontend_shutdown(void)
 {
     if (!g_api)
         return;
+
+    // Match OBS frontend shutdown ordering: listeners stop admitting frontend
+    // work before EXIT detaches callbacks and the callback table is removed.
+    g_api->emit(OBS_FRONTEND_EVENT_SCRIPTING_SHUTDOWN);
     g_mediaTransitionVendor.stop();
     g_sceneSwitchVendor.store(nullptr, std::memory_order_release);
     g_sceneSwitchVendorStorage.stop();

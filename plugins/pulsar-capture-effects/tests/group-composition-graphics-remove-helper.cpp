@@ -1,8 +1,11 @@
 #include <obs-module.h>
 #include <obs-websocket-api.h>
 #include <callback/calldata.h>
+#include <callback/proc.h>
 #include <callback/signal.h>
 
+#include <cstdlib>
+#include <cstring>
 #include <string>
 
 OBS_DECLARE_MODULE()
@@ -15,6 +18,35 @@ struct RemoveRequest {
 };
 
 obs_source_t *pending_unload_source = nullptr;
+
+struct BrowserSourceCount {
+  size_t count = 0;
+};
+
+bool count_browser_sources(void *data, obs_source_t *source)
+{
+  auto &count = *static_cast<BrowserSourceCount *>(data);
+  const char *id = obs_source_get_id(source);
+  if (id && (std::strcmp(id, "browser_source") == 0 ||
+             std::strcmp(id, "browser_source_v2") == 0)) {
+    ++count.count;
+    return false;
+  }
+  return true;
+}
+
+void no_browser_pre_shutdown(void *, calldata_t *cd)
+{
+  BrowserSourceCount browser_sources;
+  obs_enum_sources(count_browser_sources, &browser_sources);
+  const bool success = browser_sources.count == 0;
+  if (cd)
+    calldata_set_bool(cd, "success", success);
+  blog(LOG_INFO,
+       "PULSAR_GROUP_COMPOSITION_TEST_HELPER event=no_browser_pre_shutdown "
+       "success=%d browser_sources=%zu",
+       success ? 1 : 0, browser_sources.count);
+}
 
 void remove_source_graphics(void *data)
 {
@@ -88,6 +120,25 @@ void arm_pending_unload_removal(obs_data_t *request, obs_data_t *response, void 
 bool obs_module_load(void)
 {
   blog(LOG_INFO, "PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_load");
+  const char *no_browser_fixture =
+      std::getenv("PULSAR_TEST_NO_BROWSER_PRE_SHUTDOWN");
+  if (no_browser_fixture && std::strcmp(no_browser_fixture, "1") == 0) {
+    proc_handler_t *global = obs_get_proc_handler();
+    if (!global) {
+      blog(LOG_ERROR,
+           "PULSAR_GROUP_COMPOSITION_TEST_HELPER "
+           "event=no_browser_pre_shutdown_registration_failed "
+           "reason=proc_handler_unavailable");
+      return false;
+    }
+    proc_handler_add(global,
+                     "void pulsar_browser_pre_shutdown(out bool success)",
+                     no_browser_pre_shutdown, nullptr);
+    blog(LOG_INFO,
+         "PULSAR_GROUP_COMPOSITION_TEST_HELPER "
+         "event=no_browser_pre_shutdown_fixture_registered "
+         "scope=no_browser_sources_only cef_shutdown=not_exercised");
+  }
   return true;
 }
 

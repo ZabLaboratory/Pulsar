@@ -1,0 +1,49 @@
+{
+  "capturedUtc": "2026-10-15T23:42:03Z",
+  "worktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition",
+  "branch": "eleven/local-20261015-native-group-composition",
+  "head": "c03d4f9ef77874e8b90d679f74b73d6999e21776",
+  "purpose": "Record the exact CMake source mismatch before synchronizing only EventHandler.cpp and EventHandler.h into the owned private build source copy. The stale RED run is retained unchanged.",
+  "cmake": {
+    "cachePath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\websocket-build\\CMakeCache.txt",
+    "homeDirectory": "D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261015-native-group-composition/.cache/native-group-composition/websocket-source",
+    "buildDirectory": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\websocket-build"
+  },
+  "sourceComparisonBeforeSync": [
+    {
+      "role": "versioned-product-source",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\plugins\\pulsar-websocket\\src\\eventhandler\\EventHandler.cpp",
+      "sha256": "4f181f775895c8d795e3683e1c64607e16302641db5aada0705241c896885d94"
+    },
+    {
+      "role": "private-cmake-source-copy",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\websocket-source\\src\\eventhandler\\EventHandler.cpp",
+      "sha256": "21a99abfe4acd05638dcf319d8b35fb62aab51730e2d000f4ca250d4bdc6a13b"
+    },
+    {
+      "role": "versioned-product-header",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\plugins\\pulsar-websocket\\src\\eventhandler\\EventHandler.h",
+      "sha256": "212c3ec53c8052b91348f406b187a3ce353630ecee592569c90da7acc42b54d3"
+    },
+    {
+      "role": "private-cmake-header-copy",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\websocket-source\\src\\eventhandler\\EventHandler.h",
+      "sha256": "db620d2cbc98fa7cec709e8db178c5847a1ec23d31ac1a493359e459b6df752d"
+    }
+  ],
+  "privateBuildArtifactBeforeSync": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\websocket-build\\private-runtime\\obs-plugins\\64bit\\obs-websocket.dll",
+    "sha256": "0d12aa1e1a887a5402f1d6c275d8eb5fa8735d6373de2e46a7ac465c13ff6e52"
+  },
+  "staleRedProbe": {
+    "path": "evidence/local-20261015-native-group-composition/eleven/20261015T233857Z-group-composition-shutdown-control.json",
+    "dllSha256": "0d12aa1e1a887a5402f1d6c275d8eb5fa8735d6373de2e46a7ac465c13ff6e52",
+    "classification": "red result produced by a prior successful CMake build from the stale private source copy, not a test of the current versioned EventHandler sources"
+  },
+  "upstreamShutdownOrdering": {
+    "revision": "76c902175d102476b4263cac85af76b31c8f01c9",
+    "sourcePath": "D:\\Documents\\Zab\\Pulsar\\upstream\\frontend\\widgets\\OBSBasic.cpp",
+    "sourceSha256": "d1cfbec86aa3ef698e820ada42af180674df089ed8f195c48b2adc7b14993880",
+    "observedOrder": "OnEvent(OBS_FRONTEND_EVENT_SCRIPTING_SHUTDOWN); ClearSceneData(); OnEvent(OBS_FRONTEND_EVENT_EXIT); obs_frontend_set_callbacks_internal(nullptr)"
+  }
+}

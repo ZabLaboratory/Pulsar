@@ -64,6 +64,11 @@ See the [failure runbook](../../docs/runbooks/diagnose-a-failed-go-live.md).
 The frontend callback table is installed before this module loads, so
 event subscriptions have a live owner. Teardown stops request/event admission
 and drains active callbacks before libobs/frontend state is released.
+The frontend sends `OBS_FRONTEND_EVENT_SCRIPTING_SHUTDOWN` before
+`OBS_FRONTEND_EVENT_EXIT`. `EventHandler` runs its exit cleanup once across
+those events, then removes its frontend callback during EXIT while the callback
+table is still installed. Its later module-unload destructor is idempotent and
+does not call the frontend API after the table has been removed.
 
 `src/websocketserver/` owns transport, `src/requesthandler/` baseline
 requests, `src/eventhandler/` libobs-to-v5 events, `Config.cpp`

@@ -1,0 +1,468 @@
+{
+  "schemaVersion": 1,
+  "unit": "local-20261015-native-group-composition",
+  "recordedUtc": "2026-10-16T00:25:27.3702759Z",
+  "conclusion": "The websocket DLL loaded by the probe is the exact artifact freshly rebuilt by the generated private pulsar-websocket project against the pinned private OBS checkout and its import libraries.",
+  "upstream": {
+    "checkout": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout",
+    "head": "70a58302435308e609e0b1114efe3ef402f810b7",
+    "signatureStatus": [
+      "Good \"git\" signature for 159788250+ClodoCapeo@users.noreply.github.com with ED25519 key SHA256:MapYMa1vrJOGkrrLAqmGE+sIrPhN9evifI4qzoVlkl8",
+      "G"
+    ],
+    "pinnedSubmoduleCommit": "25ed780b7f392a1690dfca929cd57679959cf3ad",
+    "pinnedCommitIsAncestor": true,
+    "workingTreeStatus": [
+      " M plugins/obs-browser",
+      "?? plugins/pulsar-nv-secure-load/"
+    ],
+    "excludedFromThisBuild": [
+      "ENABLE_BROWSER=OFF",
+      "ENABLE_FRONTEND=OFF",
+      "ENABLE_WEBSOCKET=OFF"
+    ],
+    "cmakeCache": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\CMakeCache.txt",
+      "length": 43067,
+      "lastWriteUtc": "2026-10-15T23:57:17.5799055Z",
+      "sha256": "B14C6230B8265CBFBD5F549525B16910AD406D869611D6240F33305EFBD3DDFA"
+    },
+    "cacheOptions": [
+      "ENABLE_BROWSER:BOOL=OFF",
+      "ENABLE_FRONTEND:BOOL=OFF",
+      "ENABLE_WEBSOCKET:BOOL=OFF",
+      "CMAKE_GENERATOR:INTERNAL=Visual Studio 17 2022",
+      "CMAKE_HOME_DIRECTORY:INTERNAL=X:/.cache/native-group-composition/upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout"
+    ],
+    "compilerVisibleHeaders": [
+      {
+        "path": "upstream\\libobs\\obs.h",
+        "sha256": "44638B1A6174D3781D0E14DF9B667A7F2FC98296B402CF473AF28FE2A7E553E8",
+        "matchesPrivateCheckout": true
+      },
+      {
+        "path": "upstream\\libobs\\obs-internal.h",
+        "sha256": "BB79629027174C25BA262D17CA00956308346F7626F62ECD889EC27D5AB6057E",
+        "matchesPrivateCheckout": true
+      },
+      {
+        "path": "upstream\\libobs\\graphics\\graphics.h",
+        "sha256": "FC49957A963E53A5775F2F327949B454DFF70BC12C7600F0C9B3C6BB80D5257A",
+        "matchesPrivateCheckout": true
+      },
+      {
+        "path": "upstream\\frontend\\api\\obs-frontend-api.h",
+        "sha256": "582D4005C3AE2FFA457590D47F49FBF37EE2495EB1803B8DB484535100AAA556",
+        "matchesPrivateCheckout": true
+      }
+    ],
+    "sourceBuildJunction": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\build_x64",
+      "type": "Junction",
+      "target": "X:\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad"
+    }
+  },
+  "build": {
+    "generatedProject": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\pulsar-private-build\\plugins\\pulsar-websocket\\pulsar-websocket.vcxproj",
+    "target": "pulsar-websocket.vcxproj -> obs-websocket.dll",
+    "configuration": "RelWithDebInfo|x64",
+    "command": "MSBuild.exe <pulsar-websocket.vcxproj> /t:Rebuild /p:Configuration=RelWithDebInfo /p:Platform=x64 /m:1 /nologo",
+    "buildTools": "Visual Studio 2022 Build Tools, MSBuild 17",
+    "privatePulsarBuildCache": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\pulsar-private-build\\CMakeCache.txt",
+      "length": 60906,
+      "lastWriteUtc": "2026-10-16T00:01:29.9496742Z",
+      "sha256": "28FCBC92929627D49E6734999E351F85926299E86DA5A92AB86161C283280444"
+    },
+    "cacheOptions": [
+      "PULSAR_BUILD_FRONTEND_STUB:BOOL=ON",
+      "PULSAR_BUILD_HEADLESS:BOOL=ON",
+      "PULSAR_BUILD_WEBSOCKET:BOOL=ON",
+      "PULSAR_UPSTREAM_BUILD_DIR:PATH=X:/.cache/native-group-composition/upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout/build_x64",
+      "CMAKE_GENERATOR:INTERNAL=Visual Studio 17 2022",
+      "CMAKE_HOME_DIRECTORY:INTERNAL=X:/.cache/native-group-composition/pulsar-private-source"
+    ],
+    "currentSources": [
+      {
+        "path": "plugins\\pulsar-websocket\\src\\eventhandler\\EventHandler.cpp",
+        "worktreeSha256": "4F181F775895C8D795E3683E1C64607E16302641DB5AADA0705241C896885D94",
+        "buildCopySha256": "4F181F775895C8D795E3683E1C64607E16302641DB5AADA0705241C896885D94",
+        "identical": true
+      },
+      {
+        "path": "plugins\\pulsar-websocket\\src\\eventhandler\\EventHandler.h",
+        "worktreeSha256": "212C3EC53C8052B91348F406B187A3CE353630ECEE592569C90DA7ACC42B54D3",
+        "buildCopySha256": "212C3EC53C8052B91348F406B187A3CE353630ECEE592569C90DA7ACC42B54D3",
+        "identical": true
+      },
+      {
+        "path": "plugins\\pulsar-websocket\\CMakeLists.txt",
+        "worktreeSha256": "6FD8E2610C7E0463170EA3DD095E4548F30DEBC703A96E07D5AA2CCBC0278DDE",
+        "buildCopySha256": "6FD8E2610C7E0463170EA3DD095E4548F30DEBC703A96E07D5AA2CCBC0278DDE",
+        "identical": true
+      }
+    ],
+    "upstreamOutputDirectory": "X:\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\build_x64\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\",
+    "linkedOutput": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+      "length": 2855936,
+      "lastWriteUtc": "2026-10-16T00:21:07.5949128Z",
+      "sha256": "D3ECAF55D8ADC4A9E593589D0EC232AC4974DB00980A41361A3FB8DF989EF26B"
+    },
+    "pdb": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.pdb",
+      "length": 39923712,
+      "lastWriteUtc": "2026-10-16T00:21:07.6049611Z",
+      "sha256": "9B315C67362D33932ABA18D9BCEDA08C119535141D024C88F8FCD99732931E37"
+    },
+    "previousProbeDllSha256": "3130C2CF8485BFBF80B67B4EE09126F21A38A90229457AABDB03126526374F3A",
+    "rebuiltHashChanged": true,
+    "obsImportLibrary": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\libobs\\RelWithDebInfo\\obs.lib",
+      "length": 421556,
+      "lastWriteUtc": "2026-10-15T23:57:48.9988585Z",
+      "sha256": "B11EEE9EA91C6BCFF2D9FE62CFE6EDBA2FBCFF57036C8CFB9D8F3F1B5A0729E4"
+    },
+    "frontendImportLibrary": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\frontend\\api\\RelWithDebInfo\\obs-frontend-api.lib",
+      "length": 29856,
+      "lastWriteUtc": "2026-10-15T23:59:08.9922469Z",
+      "sha256": "44472E94652FA8DF8E911D652467EC79759D5E76D9BFD8D8598F0FF39BD9F20E"
+    },
+    "obsRuntime": {
+      "probeAndBuildCopies": [
+        {
+          "runtime": {
+            "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\probe-runtime\\rundir\\RelWithDebInfo\\bin\\64bit\\obs.dll",
+            "length": 1491968,
+            "lastWriteUtc": "2026-10-16T00:01:51.4553470Z",
+            "sha256": "891F6C58B1A9E865836FB94F03F8D90B238198B55C70D2656214CDE4790478B1"
+          },
+          "privateBuild": {
+            "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\obs.dll",
+            "length": 1491968,
+            "lastWriteUtc": "2026-10-16T00:04:42.4953799Z",
+            "sha256": "891F6C58B1A9E865836FB94F03F8D90B238198B55C70D2656214CDE4790478B1"
+          },
+          "identical": true
+        },
+        {
+          "runtime": {
+            "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\probe-runtime\\rundir\\RelWithDebInfo\\bin\\64bit\\obs-frontend-api.dll",
+            "length": 80896,
+            "lastWriteUtc": "2026-10-15T23:59:09.6064498Z",
+            "sha256": "DC2E88B05AB15C5EE42E12ED7CC779198E807CB78C02B417F1E53AFCB7CAD983"
+          },
+          "privateBuild": {
+            "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\obs-frontend-api.dll",
+            "length": 80896,
+            "lastWriteUtc": "2026-10-15T23:59:09.6064498Z",
+            "sha256": "DC2E88B05AB15C5EE42E12ED7CC779198E807CB78C02B417F1E53AFCB7CAD983"
+          },
+          "identical": true
+        }
+      ]
+    },
+    "linkTlog": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\pulsar-private-build\\plugins\\pulsar-websocket\\pulsar-websocket.dir\\RelWithDebInfo\\pulsar-websocket.tlog\\link.command.1.tlog",
+      "length": 32180,
+      "lastWriteUtc": "2026-10-16T00:21:07.7002675Z",
+      "sha256": "AF09AD8F4BCC6B3712B1F6E04C2BA883D86240FB0758CF7A8FF44986916C19ED"
+    },
+    "compileTlog": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\pulsar-private-build\\plugins\\pulsar-websocket\\pulsar-websocket.dir\\RelWithDebInfo\\pulsar-websocket.tlog\\CL.command.1.tlog",
+      "length": 331040,
+      "lastWriteUtc": "2026-10-16T00:21:05.8833304Z",
+      "sha256": "9F4AB2B4F4180E185EAE0E888120E0FDB83EB9ABC33943EB43E39BAEC41BE985"
+    },
+    "buildLogEvidence": {
+      "path": "20261016T002430Z-websocket-build.raw.txt",
+      "sha256": "D745FA0FD00D63ED1B4367D49EEC7D716C92B3D6BDEBEE89999E77EFF0D21BFE",
+      "length": 24758,
+      "successful": true
+    },
+    "linkInvocation": "  C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX86\\x64\\link.exe /OUT:\"X:\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\build_x64\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll\" /INCREMENTAL /ILK:\"pulsar-websocket.dir\\RelWithDebInfo\\obs-websocket.ilk\" /NOLOGO /NATVIS:\"X:\\.cache\\native-group-composition\\pulsar-private-source\\upstream\\.deps\\obs-deps-2025-08-23-x64\\nlohmann_json.natvis\" \"X:\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\build_x64\\libobs\\RelWithDebInfo\\obs.lib\" \"X:\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\build_x64\\frontend\\api\\RelWithDebInfo\\obs-frontend-api.lib\" \"X:\\.cache\\native-group-composition\\pulsar-private-source\\upstream\\.deps\\obs-deps-qt6-2025-08-23-x64\\lib\\Qt6Widgets.lib\" \"X:\\.cache\\native-group-composition\\pulsar-private-source\\upstream\\.deps\\obs-deps-qt6-2025-08-23-x64\\lib\\Qt6Network.lib\" \"X:\\.cache\\native-group-composition\\pulsar-private-source\\upstream\\.deps\\obs-deps-qt6-2025-08-23-x64\\lib\\Qt6Gui.lib\" d3d11.lib dxgi.lib dxguid.lib d3d12.lib \"X:\\.cache\\native-group-composition\\pulsar-private-source\\upstream\\.deps\\obs-deps-qt6-2025-08-23-x64\\lib\\Qt6Core.lib\" mpr.lib userenv.lib ws2_32.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:\"level='asInvoker' uiAccess='false'\" /manifest:embed /DEBUG /PDB:\"X:/.cache/native-group-composition/upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout/build_x64/rundir/RelWithDebInfo/obs-plugins/64bit/obs-websocket.pdb\" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:\"X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/RelWithDebInfo/obs-websocket.lib\" /MACHINE:X64  /machine:x64 /DLL \"pulsar-websocket.dir\\RelWithDebInfo\\cmake_pch.obj\""
+  },
+  "probe": {
+    "report": "20261016T002156Z-group-composition-probe.json",
+    "reportSha256": "DAD04FDBF24631C7EA9E8C939E2169619A529AFA524C4D6062826541A537DD84",
+    "passed": true,
+    "exitCode": 0,
+    "privateWebsocketPluginPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+    "privateWebsocketPluginSha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b",
+    "buildArtifactMatchesLoadedPlugin": true,
+    "seconds": 0.172,
+    "ownedProcessExited": true,
+    "forcedTerminationUsed": false,
+    "scratchRemoved": true,
+    "cleanShutdown": true,
+    "pendingRemovalUnloadProofPassed": true,
+    "cefShutdownExercised": false,
+    "readbackCount": 33,
+    "allReadbackHashesMatch": true,
+    "readbacks": [
+      {
+        "phase": "source-red",
+        "path": "20261016T002200Z-4be7089ad6-group-source-red.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "source-blue",
+        "path": "20261016T002200Z-4be7089ad6-group-source-blue.png",
+        "sha256": "69efafc1b75b4424c1a82bfc668afcac6e4b1e22139b38ac269d48783b2e1225",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "before-reset",
+        "path": "20261016T002200Z-4be7089ad6-group-before-reset.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "after-refusal",
+        "path": "20261016T002200Z-4be7089ad6-group-after-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "after-unsafe-generation-refusal",
+        "path": "20261016T002200Z-4be7089ad6-group-after-unsafe-generation-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "after-unsafe-scene-item-refusal",
+        "path": "20261016T002200Z-4be7089ad6-group-after-unsafe-scene-item-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "after-update",
+        "path": "20261016T002200Z-4be7089ad6-group-after-update.png",
+        "sha256": "e9854a935f10b25f3a7ac7c39df0a783c57c5c9473e5e05af28d162699140ca4",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "after-reset",
+        "path": "20261016T002200Z-4be7089ad6-group-after-reset.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "offset-source",
+        "path": "20261016T002200Z-4be7089ad6-group-offset-source.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "translated-local-opacity",
+        "path": "20261016T002200Z-4be7089ad6-group-translated-local-opacity.png",
+        "sha256": "6a60fa863cfea733ebee0ee3c3c4766676748c9f87069423009ab52c8298e2f6",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "solar-legacy-before-commit",
+        "path": "20261016T002200Z-4be7089ad6-group-solar-legacy-before-commit.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "solar-atlas-source",
+        "path": "20261016T002200Z-4be7089ad6-group-solar-atlas-source.png",
+        "sha256": "264e290a7fcaac040762569f76ddb40dd4ff397b878e97df608e7d8e4de00f3a",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "solar-band-committed",
+        "path": "20261016T002200Z-4be7089ad6-group-solar-band-committed.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "solar-band-after-replacement-set-mismatch",
+        "path": "20261016T002200Z-4be7089ad6-group-solar-band-after-replacement-set-mismatch.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "solar-band-after-plan-hash-mismatch",
+        "path": "20261016T002200Z-4be7089ad6-group-solar-band-after-plan-hash-mismatch.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "solar-band-after-invalid-crop",
+        "path": "20261016T002200Z-4be7089ad6-group-solar-band-after-invalid-crop.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "solar-band-after-invalid-rect",
+        "path": "20261016T002200Z-4be7089ad6-group-solar-band-after-invalid-rect.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "solar-band-after-duplicate-band",
+        "path": "20261016T002200Z-4be7089ad6-group-solar-band-after-duplicate-band.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "solar-band-after-unsupported-mask",
+        "path": "20261016T002200Z-4be7089ad6-group-solar-band-after-unsupported-mask.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "solar-band-after-reset",
+        "path": "20261016T002200Z-4be7089ad6-group-solar-band-after-reset.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "solar-band-after-stale-generation",
+        "path": "20261016T002200Z-4be7089ad6-group-solar-band-after-stale-generation.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "mixed-legacy-before",
+        "path": "20261016T002200Z-4be7089ad6-group-mixed-legacy-before.png",
+        "sha256": "c20168750e3e69439053b03f9329c44ea533047798aab131f749153297d193cc",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "mixed-atlas-source",
+        "path": "20261016T002200Z-4be7089ad6-group-mixed-atlas-source.png",
+        "sha256": "264e290a7fcaac040762569f76ddb40dd4ff397b878e97df608e7d8e4de00f3a",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "mixed-capture-source",
+        "path": "20261016T002200Z-4be7089ad6-group-mixed-capture-source.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "nested-capture-source",
+        "path": "20261016T002200Z-4be7089ad6-group-nested-capture-source.png",
+        "sha256": "d31d93e6390169e3f4573963b8077e1b6e69afd20ab3a0160b4aa52fd0864ee5",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "mixed-composition-committed",
+        "path": "20261016T002200Z-4be7089ad6-group-mixed-composition-committed.png",
+        "sha256": "b7b48351530013b950797c0ebb47cbef9be81e71ed55f6e323b38bd88ab40b45",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "mixed-composition-after-reset",
+        "path": "20261016T002200Z-4be7089ad6-group-mixed-composition-after-reset.png",
+        "sha256": "c20168750e3e69439053b03f9329c44ea533047798aab131f749153297d193cc",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "remove-dependency-legacy-before",
+        "path": "20261016T002200Z-4be7089ad6-group-remove-dependency-legacy-before.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "remove-dependency-before-removal",
+        "path": "20261016T002200Z-4be7089ad6-group-remove-dependency-before-removal.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "remove-dependency-restored-1",
+        "path": "20261016T002200Z-4be7089ad6-group-remove-dependency-restored-1.png",
+        "sha256": "aa67cfce4050fff9b1bf4da486cd0a48df73a8c0837c6570659a0881ce6efab3",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "remove-dependency-restored-2",
+        "path": "20261016T002200Z-4be7089ad6-group-remove-dependency-restored-2.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "graphics-source-remove-restored-1",
+        "path": "20261016T002200Z-4be7089ad6-group-graphics-source-remove-restored-1.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301",
+        "matchesProbeReport": true
+      },
+      {
+        "phase": "same-name-new-uuid-generation-1",
+        "path": "20261016T002200Z-4be7089ad6-group-same-name-new-uuid-generation-1.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33",
+        "matchesProbeReport": true
+      }
+    ],
+    "pixelChecks": [
+      {
+        "phase": "mixed-composition-committed",
+        "path": "20261016T002200Z-4be7089ad6-group-mixed-composition-committed.png",
+        "at": [
+          260,
+          150
+        ],
+        "rgba": [
+          0,
+          127,
+          0,
+          127
+        ]
+      },
+      {
+        "phase": "after-update",
+        "path": "20261016T002200Z-4be7089ad6-group-after-update.png",
+        "at": [
+          32,
+          32
+        ],
+        "rgba": [
+          0,
+          0,
+          191,
+          191
+        ]
+      },
+      {
+        "phase": "translated-local-opacity",
+        "path": "20261016T002200Z-4be7089ad6-group-translated-local-opacity.png",
+        "at": [
+          288,
+          32
+        ],
+        "rgba": [
+          0,
+          0,
+          127,
+          127
+        ]
+      },
+      {
+        "phase": "mixed-composition-committed",
+        "path": "20261016T002200Z-4be7089ad6-group-mixed-composition-committed.png",
+        "at": [
+          772,
+          378
+        ],
+        "rgba": [
+          0,
+          64,
+          127,
+          127
+        ]
+      }
+    ],
+    "limitations": "Private synthetic GPU readback only; SolarBand source crops and owner-local placement are covered, masks remain explicitly unsupported, and no physical capture, public output, transition or switch is exercised. The private no-browser shutdown fixture does not exercise CEF teardown"
+  },
+  "previousRun": {
+    "report": "20261016T000840Z-group-composition-probe.json",
+    "oldPrivateWebsocketPluginSha256": "3130C2CF8485BFBF80B67B4EE09126F21A38A90229457AABDB03126526374F3A",
+    "preserved": true
+  }
+}

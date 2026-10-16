@@ -158,10 +158,45 @@ at capture-plugin unload and released it there. This exercises payload ownership
 at the stopped-queue boundary; it is not evidence that ordinary private-source
 removal emits the global signal.
 
-The same run exited without forced termination (exit code 0 in 0.265 seconds)
-and removed its scratch directory, but its global shutdown result remains RED:
-libobs logged `Tried to call obs_frontend_remove_event_callback with no
-callbacks!` after the frontend stub uninstalled callbacks and during
-obs-websocket module unload. The probe preserves that diagnostic and does not
-attribute it to group composition. This private build/probe is not an installed
-runtime admission, and clean global shutdown is not claimed.
+The first retry without the private no-browser fence provider is retained as a
+failed run: the host stopped at `browser_pre_shutdown_proc_unavailable`, then
+exited with `0xC0000005` before a normal frontend shutdown sequence. That run
+does not establish clean shutdown or exercise CEF. The succeeding isolated
+control and full-probe runs use the test-only provider described above. Both
+assert that no browser source is loaded; neither tests browser teardown. The
+control run exits 0 without a composition. The latest full run exits 0 in 0.172
+seconds without forced termination or shutdown errors, and removes its scratch
+directory. Its lifecycle markers show `pending_before=1` and
+`pending_released=1` at capture-plugin unload.
+
+In the full run, a composition is left active at shutdown request, but the
+frontend source-graph cleanup removes it before capture-plugin unload. The
+report records this distinction as
+`activeCompositionCleanlyUnloaded=false` and
+`activeCompositionDisposedBeforeModuleUnload=true`; it is not evidence that the
+plugin unload callback disposed a still-active graph. The separate pending
+event check verifies that a queued source-removal payload is released after the
+graphics thread has stopped. The initial full run is preserved in
+[`20261016T000505Z-group-composition-shutdown-control.json`](../../evidence/local-20261015-native-group-composition/eleven/20261016T000505Z-group-composition-shutdown-control.json),
+[`20261016T000825Z-group-composition-shutdown-control.json`](../../evidence/local-20261015-native-group-composition/eleven/20261016T000825Z-group-composition-shutdown-control.json),
+[`20261016T000840Z-group-composition-probe.json`](../../evidence/local-20261015-native-group-composition/eleven/20261016T000840Z-group-composition-probe.json),
+and the rebuilt-binary run
+[`20261016T002156Z-group-composition-probe.json`](../../evidence/local-20261015-native-group-composition/eleven/20261016T002156Z-group-composition-probe.json).
+The latter loaded `obs-websocket.dll` with SHA-256
+`d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b`; its
+build, headers, import libraries, private runtime copies, and source ancestry
+are recorded in
+[`20261016T002526Z-websocket-abi-provenance.json`](../../evidence/local-20261015-native-group-composition/eleven/20261016T002526Z-websocket-abi-provenance.json)
+with the raw MSBuild output at
+[`20261016T002430Z-websocket-build.raw.txt`](../../evidence/local-20261015-native-group-composition/eleven/20261016T002430Z-websocket-build.raw.txt).
+Its 33 PNG readbacks use the `20261016T002200Z-4be7089ad6-` prefix. The earlier
+`20261016T000843Z-0e250102c7-` readbacks remain preserved. These are private
+synthetic proofs, not an installed-runtime admission.
+
+The earlier missing-callback error is also retained in the prior shutdown
+evidence; the latest control and full probe do not reproduce it. A no-browser
+test fixture does not make the fail-closed browser-fence failure safe: that
+separate crash path still needs a lifecycle fix and a real browser-aware
+qualification before it can be called clean. Group coverage masks, non-normal
+group blend modes, and affine shear remain explicitly unsupported and are
+refused before replacing the active graph.

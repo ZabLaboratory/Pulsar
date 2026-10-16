@@ -44,6 +44,13 @@ modules can use frontend state without the OBS Studio UI.
 | `pulsar_frontend_shutdown()` | Stop/release owned state and signal exit after upstream WebSocket/browser barriers have quiesced. |
 | `pulsar_frontend_cleanup_succeeded()` | Expose whether cleanup completed safely before the bootstrap continues to libobs shutdown. |
 
+Shutdown follows the upstream frontend event order: it emits
+`OBS_FRONTEND_EVENT_SCRIPTING_SHUTDOWN`, then `OBS_FRONTEND_EVENT_EXIT` while the
+callback table is live, and only then uninstalls the table before `obs_shutdown()`
+begins module unload. WebSocket event owners run exit cleanup once and detach
+their callbacks during EXIT; later plugin destructors must not call the frontend
+API after the table has been removed.
+
 The implementation is [src/pulsar-frontend-stub.cpp](src/pulsar-frontend-stub.cpp).
 Public shared headers under `include/` define production, audio, telemetry,
 transition and egress contracts for other targets.

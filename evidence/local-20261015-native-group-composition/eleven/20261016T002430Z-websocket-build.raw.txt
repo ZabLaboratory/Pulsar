@@ -1,0 +1,187 @@
+La génération a démarré 16/10/2026 02:20:09.
+
+Projet "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261015-native-group-composition\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-websocket\pulsar-websocket.vcxproj" sur le nœud 1 (Rebuild cible(s)).
+_PrepareForClean:
+  Suppression du fichier "pulsar-websocket.dir\RelWithDebInfo\pulsar-websocket.tlog\pulsar-websocket.lastbuildstate".
+Le projet "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261015-native-group-composition\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-websocket\pulsar-websocket.vcxproj" (1) génère "X:\.cache\native-group-composition\pulsar-private-build\ZERO_CHECK.vcxproj" (2) sur le nœud 1 (Clean cible(s)).
+_PrepareForClean:
+  Suppression du fichier "x64\RelWithDebInfo\ZERO_CHECK\ZERO_CHECK.tlog\ZERO_CHECK.lastbuildstate".
+Génération du projet "X:\.cache\native-group-composition\pulsar-private-build\ZERO_CHECK.vcxproj" terminée (Clean cible(s)).
+Le projet "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261015-native-group-composition\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-websocket\pulsar-websocket.vcxproj" (1) génère "X:\.cache\native-group-composition\pulsar-private-build\ZERO_CHECK.vcxproj" (2:2) sur le nœud 1 (cibles par défaut).
+PrepareForBuild:
+  La sortie structurée est activée. La mise en forme du compilateur diagnostics reflète la hiérarchie des erreurs. Pour plus d’informations, consultez https://aka.ms/cpp/structured-output.
+InitializeBuildStatus:
+  Création de "x64\RelWithDebInfo\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild", car "AlwaysCreate" a été spécifié.
+  Mise à jour de l'horodatage "x64\RelWithDebInfo\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild".
+PreBuildEvent:
+  Checking File Globs
+  setlocal
+  "C:\Program Files\CMake\bin\cmake.exe" -P X:/.cache/native-group-composition/pulsar-private-build/CMakeFiles/VerifyGlobs.cmake
+  if %errorlevel% neq 0 goto :cmEnd
+  :cmEnd
+  endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+  :cmErrorLevel
+  exit /b %1
+  :cmDone
+  if %errorlevel% neq 0 goto :VCEnd
+  :VCEnd
+CustomBuild:
+  1>Checking Build System
+FinalizeBuildStatus:
+  Suppression du fichier "x64\RelWithDebInfo\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild".
+  Mise à jour de l'horodatage "x64\RelWithDebInfo\ZERO_CHECK\ZERO_CHECK.tlog\ZERO_CHECK.lastbuildstate".
+Génération du projet "X:\.cache\native-group-composition\pulsar-private-build\ZERO_CHECK.vcxproj" terminée (cibles par défaut).
+PrepareForBuild:
+  La sortie structurée est activée. La mise en forme du compilateur diagnostics reflète la hiérarchie des erreurs. Pour plus d’informations, consultez https://aka.ms/cpp/structured-output.
+InitializeBuildStatus:
+  Création de "pulsar-websocket.dir\RelWithDebInfo\pulsar-websocket.tlog\unsuccessfulbuild", car "AlwaysCreate" a été spécifié.
+  Mise à jour de l'horodatage "pulsar-websocket.dir\RelWithDebInfo\pulsar-websocket.tlog\unsuccessfulbuild".
+PreBuildEvent:
+  Automatic MOC for target pulsar-websocket
+  setlocal
+  cd X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-websocket
+  if %errorlevel% neq 0 goto :cmEnd
+  X:
+  if %errorlevel% neq 0 goto :cmEnd
+  "C:\Program Files\CMake\bin\cmake.exe" -E cmake_autogen X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/CMakeFiles/pulsar-websocket_autogen.dir/AutogenInfo.json RelWithDebInfo
+  if %errorlevel% neq 0 goto :cmEnd
+  :cmEnd
+  endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+  :cmErrorLevel
+  exit /b %1
+  :cmDone
+  if %errorlevel% neq 0 goto :VCEnd
+  :VCEnd
+CustomBuild:
+  Building Custom Rule X:/.cache/native-group-composition/pulsar-private-source/plugins/pulsar-websocket/CMakeLists.txt
+ClCompile:
+  C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\HostX86\x64\CL.exe /c /I"X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-websocket" /I"X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src" /I"X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\lib" /I"X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\..\pulsar-frontend-stub\include" /I"X:\.cache\native-group-composition\pulsar-private-source\upstream\libobs" /I"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\libobs" /I"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\config" /I"X:\.cache\native-group-composition\pulsar-private-source\upstream\frontend\api" /I"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\frontend\api" /Zi /nologo /W1 /WX- /diagnostics:column /MP2 /O2 /Ob1 /D _WINDLL /D _UNICODE /D UNICODE /D WIN32 /D _WINDOWS /D NDEBUG /D ASIO_STANDALONE /D _WEBSOCKETPP_CPP11_STL_ /D _WIN32_WINNT=0x0603 /D QT_CORE_LIB /D QT_NO_DEBUG /D _ENABLE_EXTENDED_ALIGNED_STORAGE /D WIN64 /D _WIN64 /D UNICODE /D _UNICODE /D QT_GUI_LIB /D QT_WIDGETS_LIB /D QT_NETWORK_LIB /D "CMAKE_INTDIR=\"RelWithDebInfo\"" /D pulsar_websocket_EXPORTS /EHsc /MD /std:c++17 /permissive- /Yc"X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/CMakeFiles/pulsar-websocket.dir/RelWithDebInfo/cmake_pch.hxx" /Fp"X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/pulsar-websocket.dir/RelWithDebInfo//cmake_pch.pch" /Fo"pulsar-websocket.dir\RelWithDebInfo\\" /Fd"pulsar-websocket.dir\RelWithDebInfo\vc143.pdb" /external:W0 /TP /wd4267 /wd4996 /FI"X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/CMakeFiles/pulsar-websocket.dir/RelWithDebInfo/cmake_pch.hxx" /errorReport:queue  /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-2025-08-23-x64/include" /external:I "X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/pulsar-websocket_autogen/include_RelWithDebInfo" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include/QtCore" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/mkspecs/win32-msvc" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include/QtGui" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include/QtWidgets" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include/QtNetwork" -Zc:__cplusplus -utf-8 "X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-websocket\CMakeFiles\pulsar-websocket.dir\cmake_pch.cxx"
+  cmake_pch.cxx
+  C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\HostX86\x64\CL.exe /c /I"X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-websocket" /I"X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src" /I"X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\lib" /I"X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\..\pulsar-frontend-stub\include" /I"X:\.cache\native-group-composition\pulsar-private-source\upstream\libobs" /I"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\libobs" /I"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\config" /I"X:\.cache\native-group-composition\pulsar-private-source\upstream\frontend\api" /I"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\frontend\api" /Zi /nologo /W1 /WX- /diagnostics:column /MP2 /O2 /Ob1 /D _WINDLL /D _UNICODE /D UNICODE /D WIN32 /D _WINDOWS /D NDEBUG /D ASIO_STANDALONE /D _WEBSOCKETPP_CPP11_STL_ /D _WIN32_WINNT=0x0603 /D QT_CORE_LIB /D QT_NO_DEBUG /D _ENABLE_EXTENDED_ALIGNED_STORAGE /D WIN64 /D _WIN64 /D UNICODE /D _UNICODE /D QT_GUI_LIB /D QT_WIDGETS_LIB /D QT_NETWORK_LIB /D "CMAKE_INTDIR=\"RelWithDebInfo\"" /D pulsar_websocket_EXPORTS /EHsc /MD /std:c++17 /permissive- /Yu"X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/CMakeFiles/pulsar-websocket.dir/RelWithDebInfo/cmake_pch.hxx" /Fp"X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/pulsar-websocket.dir/RelWithDebInfo//cmake_pch.pch" /Fo"pulsar-websocket.dir\RelWithDebInfo\\" /Fd"pulsar-websocket.dir\RelWithDebInfo\vc143.pdb" /external:W0 /TP /wd4267 /wd4996 /FI"X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/CMakeFiles/pulsar-websocket.dir/RelWithDebInfo/cmake_pch.hxx" /errorReport:queue  /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-2025-08-23-x64/include" /external:I "X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/pulsar-websocket_autogen/include_RelWithDebInfo" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include/QtCore" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/mkspecs/win32-msvc" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include/QtGui" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include/QtWidgets" /external:I "X:/.cache/native-group-composition/pulsar-private-source/upstream/.deps/obs-deps-qt6-2025-08-23-x64/include/QtNetwork" -Zc:__cplusplus -utf-8 "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\Config.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\WebSocketApi.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler_Canvases.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler_Config.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler_Filters.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler_General.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler_Inputs.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler_MediaInputs.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler_Outputs.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler_SceneItems.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler_Scenes.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler_Transitions.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\eventhandler\EventHandler_Ui.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\obs-websocket.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestBatchHandler.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_Canvases.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_Config.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_Filters.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_General.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_Inputs.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_MediaInputs.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_Outputs.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_Record.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_SceneItems.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_Scenes.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_Sources.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_Stream.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_Transitions.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\RequestHandler_Ui.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\rpc\Request.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\rpc\RequestBatchRequest.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\rpc\RequestResult.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Compat.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Crypto.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Json.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Obs.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Obs_ActionHelper.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Obs_ArrayHelper.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Obs_NumberHelper.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Obs_ObjectHelper.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Obs_OutputHelper.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Obs_SearchHelper.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Obs_StringHelper.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Obs_VolumeMeter.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\utils\Platform.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\websocketserver\WebSocketServer.cpp" "X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\websocketserver\WebSocketServer_Protocol.cpp" "X:\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-websocket\pulsar-websocket_autogen\mocs_compilation_RelWithDebInfo.cpp"
+  Config.cpp
+  WebSocketApi.cpp
+  EventHandler.cpp
+  EventHandler_Canvases.cpp
+  EventHandler_Config.cpp
+  EventHandler_Filters.cpp
+  EventHandler_General.cpp
+  EventHandler_Inputs.cpp
+  EventHandler_MediaInputs.cpp
+  EventHandler_Outputs.cpp
+  EventHandler_SceneItems.cpp
+  EventHandler_Scenes.cpp
+  EventHandler_Transitions.cpp
+  EventHandler_Ui.cpp
+  obs-websocket.cpp
+  RequestBatchHandler.cpp
+  RequestHandler.cpp
+  RequestHandler_Canvases.cpp
+  RequestHandler_Config.cpp
+  RequestHandler_Filters.cpp
+  RequestHandler_General.cpp
+  RequestHandler_Inputs.cpp
+  RequestHandler_MediaInputs.cpp
+  RequestHandler_Outputs.cpp
+  RequestHandler_Record.cpp
+  RequestHandler_SceneItems.cpp
+  RequestHandler_Scenes.cpp
+  RequestHandler_Sources.cpp
+  RequestHandler_Stream.cpp
+  RequestHandler_Transitions.cpp
+  RequestHandler_Ui.cpp
+  Request.cpp
+  RequestBatchRequest.cpp
+  RequestResult.cpp
+  Compat.cpp
+  Crypto.cpp
+  Json.cpp
+  Obs.cpp
+  Obs_ActionHelper.cpp
+  Obs_ArrayHelper.cpp
+  Obs_NumberHelper.cpp
+  Obs_ObjectHelper.cpp
+  Obs_OutputHelper.cpp
+  Obs_SearchHelper.cpp
+  Obs_StringHelper.cpp
+  Obs_VolumeMeter.cpp
+  Platform.cpp
+  WebSocketServer.cpp
+  WebSocketServer_Protocol.cpp
+  mocs_compilation_RelWithDebInfo.cpp
+Link:
+  C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\HostX86\x64\link.exe /OUT:"X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\rundir\RelWithDebInfo\obs-plugins\64bit\obs-websocket.dll" /INCREMENTAL /ILK:"pulsar-websocket.dir\RelWithDebInfo\obs-websocket.ilk" /NOLOGO /NATVIS:"X:\.cache\native-group-composition\pulsar-private-source\upstream\.deps\obs-deps-2025-08-23-x64\nlohmann_json.natvis" "X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\libobs\RelWithDebInfo\obs.lib" "X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\frontend\api\RelWithDebInfo\obs-frontend-api.lib" "X:\.cache\native-group-composition\pulsar-private-source\upstream\.deps\obs-deps-qt6-2025-08-23-x64\lib\Qt6Widgets.lib" "X:\.cache\native-group-composition\pulsar-private-source\upstream\.deps\obs-deps-qt6-2025-08-23-x64\lib\Qt6Network.lib" "X:\.cache\native-group-composition\pulsar-private-source\upstream\.deps\obs-deps-qt6-2025-08-23-x64\lib\Qt6Gui.lib" d3d11.lib dxgi.lib dxguid.lib d3d12.lib "X:\.cache\native-group-composition\pulsar-private-source\upstream\.deps\obs-deps-qt6-2025-08-23-x64\lib\Qt6Core.lib" mpr.lib userenv.lib ws2_32.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"X:/.cache/native-group-composition/upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout/build_x64/rundir/RelWithDebInfo/obs-plugins/64bit/obs-websocket.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/RelWithDebInfo/obs-websocket.lib" /MACHINE:X64  /machine:x64 /DLL "pulsar-websocket.dir\RelWithDebInfo\cmake_pch.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Config.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\WebSocketApi.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler_Canvases.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler_Config.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler_Filters.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler_General.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler_Inputs.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler_MediaInputs.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler_Outputs.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler_SceneItems.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler_Scenes.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler_Transitions.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\EventHandler_Ui.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\obs-websocket.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestBatchHandler.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_Canvases.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_Config.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_Filters.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_General.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_Inputs.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_MediaInputs.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_Outputs.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_Record.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_SceneItems.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_Scenes.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_Sources.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_Stream.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_Transitions.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestHandler_Ui.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Request.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestBatchRequest.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\RequestResult.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Compat.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Crypto.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Json.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Obs.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Obs_ActionHelper.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Obs_ArrayHelper.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Obs_NumberHelper.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Obs_ObjectHelper.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Obs_OutputHelper.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Obs_SearchHelper.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Obs_StringHelper.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Obs_VolumeMeter.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\Platform.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\WebSocketServer.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\WebSocketServer_Protocol.obj"
+  "pulsar-websocket.dir\RelWithDebInfo\mocs_compilation_RelWithDebInfo.obj"
+     Création de la bibliothèque X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/RelWithDebInfo/obs-websocket.lib et de l'objet X:/.cache/native-group-composition/pulsar-private-build/plugins/pulsar-websocket/RelWithDebInfo/obs-websocket.exp
+  pulsar-websocket.vcxproj -> X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\build_x64\rundir\RelWithDebInfo\obs-plugins\64bit\obs-websocket.dll
+PostBuildEvent:
+  setlocal
+  "C:\Program Files\CMake\bin\cmake.exe" -E make_directory X:/.cache/native-group-composition/upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout/build_x64/rundir/RelWithDebInfo/data/obs-plugins/obs-websocket/locale
+  if %errorlevel% neq 0 goto :cmEnd
+  "C:\Program Files\CMake\bin\cmake.exe" -E copy_if_different X:/.cache/native-group-composition/pulsar-private-source/plugins/pulsar-websocket/data/locale/en-US.ini X:/.cache/native-group-composition/upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout/build_x64/rundir/RelWithDebInfo/data/obs-plugins/obs-websocket/locale/en-US.ini
+  if %errorlevel% neq 0 goto :cmEnd
+  :cmEnd
+  endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+  :cmErrorLevel
+  exit /b %1
+  :cmDone
+  if %errorlevel% neq 0 goto :VCEnd
+  :VCEnd
+FinalizeBuildStatus:
+  Suppression du fichier "pulsar-websocket.dir\RelWithDebInfo\pulsar-websocket.tlog\unsuccessfulbuild".
+  Mise à jour de l'horodatage "pulsar-websocket.dir\RelWithDebInfo\pulsar-websocket.tlog\pulsar-websocket.lastbuildstate".
+Génération du projet "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261015-native-group-composition\.cache\native-group-composition\pulsar-private-build\plugins\pulsar-websocket\pulsar-websocket.vcxproj" terminée (Rebuild cible(s)).
+
+La génération a réussi.
+    0 Avertissement(s)
+    0 Erreur(s)
+
+Temps écoulé 00:00:58.43
