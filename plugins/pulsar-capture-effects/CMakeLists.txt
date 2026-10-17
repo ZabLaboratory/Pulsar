@@ -33,5 +33,7 @@ set_target_properties(group-composition-graphics-remove-helper PROPERTIES
   OUTPUT_NAME "z-group-composition-shutdown-test-helper")
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(PULSAR_OBS_PLUGINS_DIR "${PULSAR_UPSTREAM_BUILD_DIR}/rundir/RelWithDebInfo/obs-plugins/64bit")
-  set_target_properties(pulsar-capture-effects PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${PULSAR_OBS_PLUGINS_DIR}")
+  set_target_properties(pulsar-capture-effects PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${PULSAR_OBS_PLUGINS_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${PULSAR_OBS_PLUGINS_DIR}")
 endif()

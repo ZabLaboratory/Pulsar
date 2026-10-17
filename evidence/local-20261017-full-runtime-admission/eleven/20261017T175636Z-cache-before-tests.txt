@@ -1,0 +1,22 @@
+test_capture_module_is_required_for_seal_and_legacy_inventory (test_ci_native_cache.NativeCacheTests.test_capture_module_is_required_for_seal_and_legacy_inventory) ... FAIL
+test_every_native_or_unknown_path_invalidates (test_ci_native_cache.NativeCacheTests.test_every_native_or_unknown_path_invalidates) ... ok
+test_gitlink_mode_and_order (test_ci_native_cache.NativeCacheTests.test_gitlink_mode_and_order) ... ok
+test_missing_outputs_cannot_be_sealed (test_ci_native_cache.NativeCacheTests.test_missing_outputs_cannot_be_sealed) ... ok
+test_no_runtime_scripts_or_probe_state_in_payload (test_ci_native_cache.NativeCacheTests.test_no_runtime_scripts_or_probe_state_in_payload) ... ok
+test_reviewed_runtime_and_docs_changes_reuse_native_outputs (test_ci_native_cache.NativeCacheTests.test_reviewed_runtime_and_docs_changes_reuse_native_outputs) ... ok
+test_seal_verify_and_integrity_failures (test_ci_native_cache.NativeCacheTests.test_seal_verify_and_integrity_failures) ... ok
+test_toolchain_image_workspace_and_profile_invalidate (test_ci_native_cache.NativeCacheTests.test_toolchain_image_workspace_and_profile_invalidate) ... ok
+
+======================================================================
+FAIL: test_capture_module_is_required_for_seal_and_legacy_inventory (test_ci_native_cache.NativeCacheTests.test_capture_module_is_required_for_seal_and_legacy_inventory)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\scripts\test_ci_native_cache.py", line 85, in test_capture_module_is_required_for_seal_and_legacy_inventory
+    with self.assertRaisesRegex(ValueError, "Missing required.*pulsar-capture-effects"):
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.256s
+
+FAILED (failures=1)
+Verified 18 native outputs; producer SHA=producer-sha run=local; tests must run against the current checkout

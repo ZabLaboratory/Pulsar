@@ -74,8 +74,13 @@ The build:
 AMD64 binaries, profiler/RAM/lease exports and every named obs.dll import used by
 the executable, WebSocket and Pulsar modules must agree. An older core missing
 `source_profiler_request_telemetry` is refused even when GetVersion advertises
-GetSourceStats. This gate checks binary compatibility; the real protocol probe
+GetSourceStats. Both light and full bundles must contain the mandatory authored
+capture module `pulsar-capture-effects.dll`; checking only the modules present
+would miss a build that failed to stage it. This gate checks binary compatibility
+and required capture-module presence; the real protocol probe
 must separately prove samples and polling-lease expiry.
+The exact CI native cache also requires this module when sealing or restoring
+an artifact, so a build-only job cannot admit an incomplete runtime before packaging.
 
 ```powershell
 python scripts/check-source-telemetry-bundle.py --bundle dist/pulsar-windows-x64-full-v3.0.1 --out .cache/telemetry-cohort.json

@@ -1,0 +1,15 @@
+test_capture_module_is_required_for_seal_and_legacy_inventory (test_ci_native_cache.NativeCacheTests.test_capture_module_is_required_for_seal_and_legacy_inventory) ... ok
+test_every_native_or_unknown_path_invalidates (test_ci_native_cache.NativeCacheTests.test_every_native_or_unknown_path_invalidates) ... ok
+test_gitlink_mode_and_order (test_ci_native_cache.NativeCacheTests.test_gitlink_mode_and_order) ... ok
+test_missing_outputs_cannot_be_sealed (test_ci_native_cache.NativeCacheTests.test_missing_outputs_cannot_be_sealed) ... ok
+test_no_runtime_scripts_or_probe_state_in_payload (test_ci_native_cache.NativeCacheTests.test_no_runtime_scripts_or_probe_state_in_payload) ... ok
+test_reviewed_runtime_and_docs_changes_reuse_native_outputs (test_ci_native_cache.NativeCacheTests.test_reviewed_runtime_and_docs_changes_reuse_native_outputs) ... ok
+test_seal_verify_and_integrity_failures (test_ci_native_cache.NativeCacheTests.test_seal_verify_and_integrity_failures) ... ok
+test_toolchain_image_workspace_and_profile_invalidate (test_ci_native_cache.NativeCacheTests.test_toolchain_image_workspace_and_profile_invalidate) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.368s
+
+OK
+Verified 19 native outputs; producer SHA=producer-sha run=local; tests must run against the current checkout
+Verified 19 native outputs; producer SHA=producer-sha run=local; tests must run against the current checkout
