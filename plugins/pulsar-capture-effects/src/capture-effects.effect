@@ -2,6 +2,7 @@ uniform float4x4 ViewProj;
 uniform texture2d image;
 uniform texture2d backdrop;
 uniform float2 dimensions;
+uniform float2 raster_scale;
 uniform float2 source_dimensions;
 uniform float2 capture_size;
 uniform float2 capture_position;
@@ -40,9 +41,9 @@ float4 sample_image(float2 p) {
 }
 float4 blur_image(float2 p, float r) {
   float4 c = sample_image(p) * 0.25;
-  float q = r * 0.65;
-  c += (sample_image(p+float2(q,0.0))+sample_image(p-float2(q,0.0))+sample_image(p+float2(0.0,q))+sample_image(p-float2(0.0,q))) * 0.125;
-  c += (sample_image(p+float2(q,q))+sample_image(p+float2(-q,q))+sample_image(p+float2(q,-q))+sample_image(p-float2(q,q))) * 0.0625;
+  float2 q = r * 0.65 / raster_scale;
+  c += (sample_image(p+float2(q.x,0.0))+sample_image(p-float2(q.x,0.0))+sample_image(p+float2(0.0,q.y))+sample_image(p-float2(0.0,q.y))) * 0.125;
+  c += (sample_image(p+q)+sample_image(p+float2(-q.x,q.y))+sample_image(p+float2(q.x,-q.y))+sample_image(p-q)) * 0.0625;
   return c;
 }
 float signed_box(float2 p) {
@@ -93,11 +94,11 @@ float3 blend_color(float3 b,float3 s){
   return float3(blend_channel(b.r,s.r),blend_channel(b.g,s.g),blend_channel(b.b,s.b));
 }
 float4 Paint(VertData v) {
-  float2 p=v.uv*dimensions;
-  if(kind==0){ float2 local=p-float2(padding,padding); return sample_image(local)*shape_alpha(local,0.0,0.5)*capture_opacity; }
-  float2 local=p-float2(padding,padding);
-  if(kind==9) return sample_image(p)*shape_alpha(local,0.0,0.5);
-  float4 c=sample_image(p);
+  float2 raster=v.uv*dimensions;
+  float2 local=raster*raster_scale-float2(padding,padding);
+  if(kind==0) return sample_image(local)*shape_alpha(local,0.0,0.5)*capture_opacity;
+  if(kind==9) return sample_image(raster)*shape_alpha(local,0.0,0.5);
+  float4 c=sample_image(raster);
   if(kind==8){
     float4 b=background(local);
     float3 cb=b.a>0.000001?b.rgb/b.a:float3(0.0,0.0,0.0);
@@ -114,7 +115,7 @@ float4 Paint(VertData v) {
     float a=(1.0-shape_alpha(local-offset,-spread,radius))*tint.a;
     c.rgb=lerp(c.rgb,tint.rgb*c.a,a);return c;
   }
-  if(kind==31 || kind==32){ float4 b=float4(0.0,0.0,0.0,0.0); float sum=0.0; for(int i=-16;i<=16;i++){ float z=float(i)/5.3333; float weight=exp(-0.5*z*z); float2 step=kind==31?float2(z*radius*0.5,0.0):float2(0.0,z*radius*0.5); b+=sample_image(p+step)*weight; sum+=weight; } return b/sum; }
+  if(kind==31 || kind==32){ float4 b=float4(0.0,0.0,0.0,0.0); float sum=0.0; for(int i=-16;i<=16;i++){ float z=float(i)/5.3333; float weight=exp(-0.5*z*z); float2 step=kind==31?float2(z*radius*0.5/raster_scale.x,0.0):float2(0.0,z*radius*0.5/raster_scale.y); b+=sample_image(raster+step)*weight; sum+=weight; } return b/sum; }
   if(kind==4){
     float a=shape_alpha(local,0.0,0.5)*capture_opacity;
     float4 b=blur_background(local,radius)*a;return c+b*(1.0-c.a);
@@ -128,7 +129,7 @@ float4 Paint(VertData v) {
   if(kind==6){
     float n=hash_cell(floor(local/max(grain_size,float2(0.25,0.25))));
     float3 grain=lerp(float3(0.4,0.4,0.4),float3(1.0,1.0,1.0),n);
-    float4 soft=blur_image(p,radius);
+    float4 soft=blur_image(raster,radius);
     if(clip_to_shape>0.5){ c.rgb=soft.rgb*grain*c.a/max(soft.a,0.0001);return c; }
     return float4(soft.rgb*grain,soft.a);
   }
@@ -136,9 +137,10 @@ float4 Paint(VertData v) {
     float2 direction=float2(cos(angle),sin(angle));
     float2 center=local/max(capture_size,float2(1.0,1.0))-0.5;
     float2 shift=center*refraction*depth*24.0+direction*splay*12.0;
-    float4 own=blur_image(p+shift,radius);
-    own.r=lerp(own.r,sample_image(p+shift+direction*dispersion*8.0).r,dispersion);
-    own.b=lerp(own.b,sample_image(p+shift-direction*dispersion*8.0).b,dispersion);
+    float2 raster_shift=shift/raster_scale;
+    float4 own=blur_image(raster+raster_shift,radius);
+    own.r=lerp(own.r,sample_image(raster+raster_shift+direction*dispersion*8.0/raster_scale).r,dispersion);
+    own.b=lerp(own.b,sample_image(raster+raster_shift-direction*dispersion*8.0/raster_scale).b,dispersion);
     float4 bg=blur_background(local+shift,radius);
     float a=shape_alpha(local,0.0,0.5)*capture_opacity;
     own+=bg*a*(1.0-own.a);
@@ -149,7 +151,7 @@ float4 Paint(VertData v) {
 }
 float4 PSEffect(VertData v) : TARGET {
   float4 c=Paint(v);
-  float2 local=v.uv*dimensions-float2(padding,padding);
+  float2 local=v.uv*dimensions*raster_scale-float2(padding,padding);
   float coverage=1.0;
   for(int i=0;i<ancestor_count;i++){
     float2 q=float2(dot(ancestor_x[i].xyz,float3(local,1.0)),dot(ancestor_y[i].xyz,float3(local,1.0)));
