@@ -33,7 +33,7 @@ PULSAR_COVERAGE = Path(
 
 PINS = {
     "solarCommit": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
-    "prismCommit": "09b893dee789519bf63a0726427bd663c1e03104",
+    "prismCommit": "328f347bcab1b956f58e1fcdcffcda2a92dfe825",
     "prismProductBaselineCommit": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
     "visionCommit": "044ddb62df050eee9869150a69a1b88fd26f2962",
     "baselinePresenterCommit": "85c49664a029744369b063ddffaa92415a59c8a8",
@@ -59,6 +59,105 @@ PULSAR_ARTIFACTS = {
 }
 
 CEF_REPORTED_WEBSOCKET = "3130c2cf8485bfbf80b67b4ee09126f21a38a90229457aabdb03126526374f3a"
+
+BASE_SCENE_SIZE = (320, 180)
+BASE_SAMPLE_POINTS = {
+    "partial": (16, 40),
+    "overlap": (36, 40),
+    "clippedOverflow": (62, 40),
+    "unclippedChild": (110, 40),
+    "stencilFrameOverflow": (124, 40),
+}
+MAX_GET_SOURCE_SCREENSHOT_DIMENSION = 4096
+VISION_PACKING_TEST_MAX_DIMENSION = 8192
+PNG_READBACK_CHANNELS = 4
+MIB = 1024 * 1024
+
+
+def profile_plan(name: str) -> dict:
+    """Describe the authored scene and exact packed atlas for a private run."""
+    if name == "320x180@30":
+        scale, fps, websocket_max = 1, 30, 32 * MIB
+    elif name == "1920x1080@60":
+        scale, fps, websocket_max = 6, 60, 36 * MIB
+    else:
+        raise ValueError(f"unsupported CEF coverage-chain profile: {name}")
+
+    width, height = (BASE_SCENE_SIZE[0] * scale, BASE_SCENE_SIZE[1] * scale)
+    atlas_width, atlas_height = width + 2, 3 * (height + 2)
+    atlas_bands = [
+        [1, band_index * (height + 2) + 1, width, height]
+        for band_index in range(3)
+    ]
+    atlas_rect = atlas_bands[2]
+    if max(atlas_width, atlas_height) > MAX_GET_SOURCE_SCREENSHOT_DIMENSION:
+        raise ValueError("planned atlas exceeds GetSourceScreenshot's documented 4096-pixel bound")
+    if max(atlas_width, atlas_height) > VISION_PACKING_TEST_MAX_DIMENSION:
+        raise ValueError("planned atlas exceeds Vision's documented packer-test bound")
+
+    atlas_raw_bytes = atlas_width * atlas_height * PNG_READBACK_CHANNELS
+    scene_raw_bytes = width * height * PNG_READBACK_CHANNELS
+    return {
+        "name": name,
+        "geometryScale": scale,
+        "fps": fps,
+        "baseSceneGeometry": list(BASE_SCENE_SIZE),
+        "sceneSize": [width, height],
+        "authoredLayoutGeometry": {
+            "rootAndOwnerSceneRect": [0, 0, width, height],
+            "stencilFrameRect": [0, 0, 120 * scale, 124 * scale],
+            "clippedOpacityFrameRect": [8 * scale, 16 * scale, 52 * scale, 92 * scale],
+            "clippedChildrenRelativeRects": [
+                [0, 0, 36 * scale, 92 * scale],
+                [24 * scale, 0, 44 * scale, 92 * scale],
+            ],
+            "unclippedOpacityFrameRect": [80 * scale, 16 * scale, 20 * scale, 92 * scale],
+            "unclippedChildRelativeRect": [0, 0, 64 * scale, 92 * scale],
+            "captureRect": [250 * scale, 20 * scale, 32 * scale, 32 * scale],
+        },
+        "browserSourceSize": [atlas_width, atlas_height],
+        "atlasSize": [atlas_width, atlas_height],
+        "atlasPacking": {
+            "surfaceCount": 3,
+            "gutterPixels": 1,
+            "bandRects": atlas_bands,
+            "expectedCoverageSceneRect": [0, 0, width, height],
+            "expectedCoverageAtlasRect": atlas_rect,
+            "sourceTestMaxDimension": VISION_PACKING_TEST_MAX_DIMENSION,
+            "sourceTest": "crates/vision-gpu/src/renderer/contribution/packing.rs::canonical_global_texel_shelves_fit_the_1080p_three_band_fixture",
+            "getSourceScreenshotDocumentedMaxDimension": MAX_GET_SOURCE_SCREENSHOT_DIMENSION,
+            "getSourceScreenshotContract": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Sources.cpp:218-220",
+        },
+        "samplePoints": {
+            label: [point[0] * scale, point[1] * scale]
+            for label, point in BASE_SAMPLE_POINTS.items()
+        },
+        "samplePointRationale": {
+            "partial": "inside only the first clipped child",
+            "overlap": "inside both clipped children; group opacity must apply once",
+            "clippedOverflow": "x=62 is beyond the clipped frame's base x=60 edge",
+            "unclippedChild": "x=110 is past the unclipped frame's base x=100 edge but inside the stencil's x=120 edge",
+            "stencilFrameOverflow": "x=124 is outside the stencil frame's base x=120 edge",
+        },
+        "expectedCoverageAlpha": {
+            "initialHalfOpacity": 128,
+            "patchedFullOpacity": 255,
+            "clippedOverflow": 0,
+            "stencilFrameOverflow": 0,
+        },
+        "readbackMemoryEstimate": {
+            "atlasRgbaBytes": atlas_raw_bytes,
+            "nativeSceneRgbaBytes": scene_raw_bytes,
+            "oneAtlasPlusOneNativeSceneRgbaBytes": atlas_raw_bytes + scene_raw_bytes,
+            "websocketMaxMessageBytes": websocket_max,
+            "estimateScope": "decoded pixel buffers only; excludes PNG/base64 copies, GPU/CEF surfaces and allocator overhead",
+        },
+        "qualificationLimits": [
+            "The 8192 value is the max-dimension argument in Vision's packer unit test, not a measurement of the active GPU.",
+            "The actual WebGL MAX_TEXTURE_SIZE and CEF screenshot dimensions must be recorded by the private run.",
+            "A single 60-fps-configured capture is not evidence of sustained 60-fps presentation or frame pacing.",
+        ],
+    }
 
 
 def sha256(path: Path) -> str:
@@ -86,7 +185,8 @@ def file_record(path: Path, expected_size: int | None = None, expected_hash: str
     return record
 
 
-def run() -> dict:
+def run(profile_name: str = "320x180@30") -> dict:
+    selected_profile = profile_plan(profile_name)
     pulsar_root = Path(git(ROOT, "rev-parse", "--show-toplevel"))
     if pulsar_root != ROOT:
         raise ValueError(f"expected assigned Pulsar worktree {ROOT}, got {pulsar_root}")
@@ -201,9 +301,11 @@ def run() -> dict:
         "runtimeStarted": False,
         "buildStarted": False,
         "gpuUsed": False,
+        "runtimeProfile": selected_profile,
         "worktree": git_state,
         "sourcePins": {
             **PINS,
+            "nativeSourceCommitScope": "clean repository reference used for the websocket ABI comparison; not the source checkout that built obs.dll",
             "solarHead": solar_head,
             "prismHead": prism_head,
             "prismProductBaselineCommit": PINS["prismProductBaselineCommit"],
@@ -235,7 +337,7 @@ def run() -> dict:
                 "captureEffectsPath": str(ROOT / "plugins/pulsar-capture-effects/src/capture-effects.cpp"),
                 "captureEffectsSha256": sha256(ROOT / "plugins/pulsar-capture-effects/src/capture-effects.cpp"),
             },
-            "selectionForPrivateStage": "preserve native d3ecaf55 DLL and overlay CEF browser files only; runtime compatibility remains unproved until the private integrated run",
+            "selectionForPrivateStage": "preserve native d3ecaf55 DLL and overlay CEF browser files only; pixel proofs exist for both profiles, while this offline preflight makes no runtime or frame-pacing claim",
         },
         "harness": {
             "page": str(ROOT / "scripts/cef-coverage-chain/index.html"),
@@ -245,6 +347,7 @@ def run() -> dict:
             "offlinePreflight": str(Path(__file__).resolve()),
             "executionGate": "the private runner requires both --execute and --gpu-slot-released",
             "realAtlasRequirement": "use GetSourceScreenshot from this exact CEF browser_source; no generated PNG/image atlas may stand in for it",
+            "selectedProfile": selected_profile["name"],
         },
         "limitations": [
             "No CEF/browser/GPU/native process was started by this preflight.",
@@ -264,12 +367,18 @@ def main() -> int:
         default=EVIDENCE / f"{timestamp}-chain-preflight.json",
         help="canonical evidence JSON file (must be new and under this unit's evidence directory)",
     )
+    parser.add_argument(
+        "--profile",
+        choices=("320x180@30", "1920x1080@60"),
+        default="320x180@30",
+        help="offline sizing/FPS plan to record; this command never starts runtime or GPU",
+    )
     args = parser.parse_args()
     output = args.output.resolve()
     if output.parent != EVIDENCE.resolve() or output.exists():
         raise ValueError(f"output must be a new direct child of {EVIDENCE}")
     EVIDENCE.mkdir(parents=True, exist_ok=True)
-    result = run()
+    result = run(args.profile)
     output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"passed": True, "report": str(output), "runtimeStarted": False, "gpuUsed": False}))
     return 0

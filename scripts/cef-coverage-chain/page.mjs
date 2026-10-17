@@ -3,7 +3,30 @@ import { createMainThreadPresenter } from "/vision/ui/mainpresenter.mjs";
 
 const encoder = new TextEncoder();
 const canvas = document.querySelector("#vision");
+const legacyCanvasElement = document.querySelector("#legacy");
 const LEGACY_COMMIT = "85c49664a029744369b063ddffaa92415a59c8a8";
+const profileResponse = await fetch("/profile.json", { cache: "no-store" });
+if (!profileResponse.ok) throw new Error(`profile route returned HTTP ${profileResponse.status}`);
+const profile = await profileResponse.json();
+const profileQuery = new URL(location.href).searchParams.get("profile");
+if (profileQuery && profileQuery !== profile.name)
+  throw new Error(`page profile ${profileQuery} does not match server profile ${profile.name}`);
+const sceneSize = profile.sceneSize;
+const atlasSize = profile.atlasSize;
+const scale = profile.geometryScale;
+document.documentElement.style.width = `${atlasSize[0]}px`;
+document.documentElement.style.height = `${atlasSize[1]}px`;
+document.body.style.width = `${atlasSize[0]}px`;
+document.body.style.height = `${atlasSize[1]}px`;
+canvas.width = sceneSize[0];
+canvas.height = sceneSize[1];
+canvas.style.width = `${atlasSize[0]}px`;
+canvas.style.height = `${atlasSize[1]}px`;
+legacyCanvasElement.width = sceneSize[0];
+legacyCanvasElement.height = sceneSize[1];
+legacyCanvasElement.style.width = `${atlasSize[0]}px`;
+legacyCanvasElement.style.height = `${atlasSize[1]}px`;
+legacyCanvasElement.style.left = `${-atlasSize[0] - 2}px`;
 
 const canonical = (value) => {
   if (Array.isArray(value)) return value.map(canonical);
@@ -27,7 +50,10 @@ async function pinSceneVersion(scene) {
   return scene;
 }
 
-function makeFrameMaskScene(source) {
+function makeFrameMaskScene(source, profile) {
+  const scale = profile.geometryScale;
+  const point = (x, y) => ({ x: x * scale, y: y * scale });
+  const size = (w, h) => ({ w: w * scale, h: h * scale });
   const capture = structuredClone(
     source.layout.children[0].children.find(
       (child) => child.kind === "x-zab.capture",
@@ -35,8 +61,8 @@ function makeFrameMaskScene(source) {
   );
   if (!capture) throw new Error("Vision fixture has no x-zab.capture node");
   capture.id = "frame-mask-browser-capture";
-  capture.position = { x: 250, y: 20 };
-  capture.size = { w: 32, h: 32 };
+  capture.position = point(250, 20);
+  capture.size = size(32, 32);
   return {
     lsml: "1.2",
     scene_id: "vision-frame-mask-browser-proof",
@@ -45,7 +71,7 @@ function makeFrameMaskScene(source) {
     layout: {
       kind: "frame",
       id: "frame-mask-browser-root",
-      size: { w: 320, h: 180 },
+      size: size(320, 180),
       background: "#0c1119",
       clipsContent: false,
       children: [
@@ -53,7 +79,7 @@ function makeFrameMaskScene(source) {
           kind: "stack",
           id: "frame-mask-browser-owner",
           direction: "horizontal",
-          size: { w: 320, h: 180 },
+          size: size(320, 180),
           clipsContent: false,
           mask: {
             type: "alpha",
@@ -65,7 +91,7 @@ function makeFrameMaskScene(source) {
               kind: "shape",
               id: "frame-mask-browser-paint",
               geometry: "rect",
-              size: { w: 320, h: 180 },
+              size: size(320, 180),
               fill: "#ffffff",
             },
             capture,
@@ -75,28 +101,28 @@ function makeFrameMaskScene(source) {
           kind: "frame",
           id: "frame-mask-browser-stencil",
           visible: false,
-          size: { w: 120, h: 124 },
+          size: size(120, 124),
           clipsContent: true,
           children: [
             {
               kind: "frame",
               id: "frame-mask-opacity-clipped",
-              position: { x: 8, y: 16 },
-              size: { w: 52, h: 92 },
+              position: point(8, 16),
+              size: size(52, 92),
               clipsContent: true,
               bind: { opacity: "mask.opacity" },
               children: [
                 {
                   kind: "shape",
                   geometry: "rect",
-                  size: { w: 36, h: 92 },
+                  size: size(36, 92),
                   fill: "#ffffff",
                 },
                 {
                   kind: "shape",
                   geometry: "rect",
-                  position: { x: 24, y: 0 },
-                  size: { w: 44, h: 92 },
+                  position: point(24, 0),
+                  size: size(44, 92),
                   fill: "#ffffff",
                 },
               ],
@@ -104,15 +130,15 @@ function makeFrameMaskScene(source) {
             {
               kind: "frame",
               id: "frame-mask-opacity-unclipped",
-              position: { x: 80, y: 16 },
-              size: { w: 20, h: 92 },
+              position: point(80, 16),
+              size: size(20, 92),
               clipsContent: false,
               bind: { opacity: "mask.opacity" },
               children: [
                 {
                   kind: "shape",
                   geometry: "rect",
-                  size: { w: 64, h: 92 },
+                  size: size(64, 92),
                   fill: "#ffffff",
                 },
               ],
@@ -156,22 +182,45 @@ async function postFrame(variant, document, message, target, mutation = null) {
   const gl = target.getContext("webgl2");
   if (!gl || gl.isContextLost()) throw new Error("Vision WebGL2 context unavailable");
   const receipt = message.composition;
+  const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+  const coverage = receipt?.coverageSurfaces ?? [];
   if (
     message.type !== "frame-submitted" ||
     receipt?.schema !== "vision.native-composition-frame/2" ||
     receipt.sceneId !== document.scene_id ||
     receipt.sceneVersion !== document.scene_version ||
     receipt.canvasSize?.[0] !== target.width ||
-    receipt.canvasSize?.[1] !== target.height
+    receipt.canvasSize?.[1] !== target.height ||
+    target.width !== atlasSize[0] ||
+    target.height !== atlasSize[1] ||
+    maxTextureSize < Math.max(...atlasSize) ||
+    coverage.length !== 1 ||
+    JSON.stringify(coverage[0]?.sceneRect) !==
+      JSON.stringify(profile.atlasPacking.expectedCoverageSceneRect) ||
+    JSON.stringify(coverage[0]?.atlasRect) !==
+      JSON.stringify(profile.atlasPacking.expectedCoverageAtlasRect)
   ) {
-    throw new Error("actual presenter did not submit the matching /2 receipt");
+    throw new Error(`actual presenter did not submit the matching /2 profile receipt: ${JSON.stringify({
+      messageType: message.type,
+      schema: receipt?.schema,
+      receiptCanvasSize: receipt?.canvasSize,
+      targetSize: [target.width, target.height],
+      expectedAtlasSize: atlasSize,
+      maxTextureSize,
+      coverageCount: coverage.length,
+      coverageSceneRect: coverage[0]?.sceneRect,
+      expectedCoverageSceneRect: profile.atlasPacking.expectedCoverageSceneRect,
+      coverageAtlasRect: coverage[0]?.atlasRect,
+      expectedCoverageAtlasRect: profile.atlasPacking.expectedCoverageAtlasRect,
+    })}`);
   }
   const payload = {
     variant,
+    profileName: profile.name,
     document,
     message,
     canvasSize: [target.width, target.height],
-    maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+    maxTextureSize,
   };
   if (mutation !== null) payload.mutation = mutation;
   const response = await fetch("/frame", {
@@ -241,8 +290,8 @@ async function proveLegacyRejectsExactReceipt(sceneDocument, actualReceipt, curr
       type: "init-empty",
       seq: 0,
       canvas: legacyCanvas,
-      width: 320,
-      height: 180,
+      width: sceneSize[0],
+      height: sceneSize[1],
     });
     await baselineRequest({ type: "native-composition-mode", seq: 1, enabled: true });
     await baselineRequest({
@@ -285,7 +334,7 @@ async function proveLegacyRejectsExactReceipt(sceneDocument, actualReceipt, curr
 }
 
 async function loadInitialScene(source, presenter) {
-  const document = await pinSceneVersion(makeFrameMaskScene(source));
+  const document = await pinSceneVersion(makeFrameMaskScene(source, profile));
   const message = await presenter.request({
     type: "load",
     packageBytes: encoder.encode(JSON.stringify(document)),
@@ -307,8 +356,8 @@ try {
   await presenter.request({
     type: "init-empty",
     canvas,
-    width: 320,
-    height: 180,
+    width: sceneSize[0],
+    height: sceneSize[1],
   });
   await presenter.request({ type: "native-composition-mode", enabled: true });
 

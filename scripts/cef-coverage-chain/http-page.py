@@ -16,10 +16,11 @@ MAX_POST_BYTES = 8 * 1024 * 1024
 class ChainPageServer:
     """Serve pinned local bytes and retain actual frame receipts in memory."""
 
-    def __init__(self, page_root: Path, solar_root: Path, vision_root: Path):
+    def __init__(self, page_root: Path, solar_root: Path, vision_root: Path, profile: dict):
         self.page_root = page_root.resolve(strict=True)
         self.solar_root = solar_root.resolve(strict=True)
         self.vision_root = vision_root.resolve(strict=True)
+        self.profile = profile
         baseline = subprocess.check_output(
             [
                 "git",
@@ -53,7 +54,8 @@ class ChainPageServer:
 
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self.port}/"
+        suffix = "" if self.profile["name"] == "320x180@30" else f"?profile={self.profile['name']}"
+        return f"http://127.0.0.1:{self.port}/{suffix}"
 
     def start(self) -> None:
         if self.thread is not None:
@@ -160,6 +162,9 @@ class ChainPageServer:
                     with owner.condition:
                         self.send_json(200, {"events": owner.events})
                     return
+                if route == "/profile.json":
+                    self.send_json(200, owner.profile)
+                    return
                 routes = {
                     "/": (owner.page_root / "index.html", "text/html; charset=utf-8"),
                     "/page.mjs": (owner.page_root / "page.mjs", "text/javascript; charset=utf-8"),
@@ -198,6 +203,8 @@ class ChainPageServer:
                         variant = body.get("variant")
                         if variant not in ("initial", "updated"):
                             raise ValueError("unknown-frame-variant")
+                        if body.get("profileName") != owner.profile.get("name"):
+                            raise ValueError("submitted-frame-profile-mismatch")
                         if body.get("message", {}).get("type") != "frame-submitted":
                             raise ValueError("frame-submitted-required")
                         if body.get("message", {}).get("composition", {}).get("schema") != "vision.native-composition-frame/2":

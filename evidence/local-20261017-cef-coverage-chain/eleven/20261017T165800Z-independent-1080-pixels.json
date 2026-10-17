@@ -1,0 +1,320 @@
+{
+  "capturedUtc": "2026-10-17T16:57:27.541592+00:00",
+  "passed": true,
+  "report": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T165509Z-cef-coverage-chain.json",
+  "reportSha256": "c67ade01107fab74b36b4f57b26d3502f809673f604df0ef0463002b6a16ffe0",
+  "artifacts": [
+    {
+      "key": "cefAtlasInitial",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T165509Z-087ae2de-cef-atlas-initial.png",
+      "bytes": 30562,
+      "sha256": "159d807d0a5a58a64ec56e0bbff8f39dfb15855b2f73ded8467cf3f6645207d4",
+      "dimensions": [
+        1922,
+        3246
+      ]
+    },
+    {
+      "key": "cefAtlasUpdated",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T165509Z-087ae2de-cef-atlas-updated.png",
+      "bytes": 30561,
+      "sha256": "48fde67524f4664891595f50fdc5ebf2547d7fee6bc8bad01945488f945319e5",
+      "dimensions": [
+        1922,
+        3246
+      ]
+    },
+    {
+      "key": "sceneMask050",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T165509Z-087ae2de-scene-mask-050.png",
+      "bytes": 10715,
+      "sha256": "d113ec706ccfaa027476f3927b4bb94f8d0c84025a03029ed2a896df05257235",
+      "dimensions": [
+        1920,
+        1080
+      ]
+    },
+    {
+      "key": "sceneMask100",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T165509Z-087ae2de-scene-mask-100.png",
+      "bytes": 10715,
+      "sha256": "17d372717ec143af412a4cede1212d63498f4a21372c93d6760b0b0bb42ac599",
+      "dimensions": [
+        1920,
+        1080
+      ]
+    }
+  ],
+  "exactSamples": [
+    {
+      "image": "cefAtlasInitial",
+      "point": [
+        97,
+        2405
+      ],
+      "rgba": [
+        127,
+        127,
+        127,
+        127
+      ]
+    },
+    {
+      "image": "cefAtlasUpdated",
+      "point": [
+        97,
+        2405
+      ],
+      "rgba": [
+        255,
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "image": "sceneMask050",
+      "point": [
+        96,
+        240
+      ],
+      "rgba": [
+        133,
+        136,
+        140,
+        255
+      ]
+    },
+    {
+      "image": "sceneMask100",
+      "point": [
+        96,
+        240
+      ],
+      "rgba": [
+        255,
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "image": "cefAtlasInitial",
+      "point": [
+        217,
+        2405
+      ],
+      "rgba": [
+        127,
+        127,
+        127,
+        127
+      ]
+    },
+    {
+      "image": "cefAtlasUpdated",
+      "point": [
+        217,
+        2405
+      ],
+      "rgba": [
+        255,
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "image": "sceneMask050",
+      "point": [
+        216,
+        240
+      ],
+      "rgba": [
+        133,
+        136,
+        140,
+        255
+      ]
+    },
+    {
+      "image": "sceneMask100",
+      "point": [
+        216,
+        240
+      ],
+      "rgba": [
+        255,
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "image": "cefAtlasInitial",
+      "point": [
+        373,
+        2405
+      ],
+      "rgba": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image": "cefAtlasUpdated",
+      "point": [
+        373,
+        2405
+      ],
+      "rgba": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image": "sceneMask050",
+      "point": [
+        372,
+        240
+      ],
+      "rgba": [
+        12,
+        17,
+        25,
+        255
+      ]
+    },
+    {
+      "image": "sceneMask100",
+      "point": [
+        372,
+        240
+      ],
+      "rgba": [
+        12,
+        17,
+        25,
+        255
+      ]
+    },
+    {
+      "image": "cefAtlasInitial",
+      "point": [
+        661,
+        2405
+      ],
+      "rgba": [
+        127,
+        127,
+        127,
+        127
+      ]
+    },
+    {
+      "image": "cefAtlasUpdated",
+      "point": [
+        661,
+        2405
+      ],
+      "rgba": [
+        255,
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "image": "sceneMask050",
+      "point": [
+        660,
+        240
+      ],
+      "rgba": [
+        133,
+        136,
+        140,
+        255
+      ]
+    },
+    {
+      "image": "sceneMask100",
+      "point": [
+        660,
+        240
+      ],
+      "rgba": [
+        255,
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "image": "cefAtlasInitial",
+      "point": [
+        745,
+        2405
+      ],
+      "rgba": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image": "cefAtlasUpdated",
+      "point": [
+        745,
+        2405
+      ],
+      "rgba": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "image": "sceneMask050",
+      "point": [
+        744,
+        240
+      ],
+      "rgba": [
+        12,
+        17,
+        25,
+        255
+      ]
+    },
+    {
+      "image": "sceneMask100",
+      "point": [
+        744,
+        240
+      ],
+      "rgba": [
+        12,
+        17,
+        25,
+        255
+      ]
+    }
+  ],
+  "rejectedCandidateAll2073600PixelsUnchanged": true,
+  "sceneIdentityStable": true,
+  "pixelRevision": [
+    0,
+    1
+  ],
+  "limitations": [
+    "Full-resolution pixel proof on synthetic scene; not sustained 60fps or installed two-lane/hardware qualification.",
+    "Orion/LSDP full transport is not exercised."
+  ]
+}

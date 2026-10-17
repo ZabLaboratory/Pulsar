@@ -28,15 +28,6 @@ EVIDENCE = ROOT / "evidence/local-20261017-cef-coverage-chain/eleven"
 CACHE = ROOT / ".cache/cef-coverage-chain"
 SOLAR = Path(r"D:\Documents\Zab\Solar\.worktrees\eleven-local-20261015-project-integration")
 PRISM = Path(r"D:\Documents\Zab\Prism\.worktrees\eleven-local-20261015-project-integration")
-CANVAS_SIZE = (322, 546)
-SCENE_SIZE = (320, 180)
-SAMPLE_POINTS = {
-    "partial": (16, 40),
-    "overlap": (36, 40),
-    "clippedOverflow": (62, 40),
-    "unclippedChild": (110, 40),
-    "stencilFrameOverflow": (124, 40),
-}
 
 
 def load(name: str, path: Path):
@@ -92,7 +83,8 @@ def rgba_near_alpha(actual: list[int], expected: int, tolerance: int, label: str
         raise AssertionError({"label": label, "coverageColorAlphaMismatch": actual})
 
 
-def validate_atlas_samples(browser, frame: dict, png: bytes, expected_partial: int) -> dict:
+def validate_atlas_samples(browser, frame: dict, png: bytes, expected_partial: int,
+                           profile: dict) -> dict:
     receipt = frame["message"]["composition"]
     coverage = receipt.get("coverageSurfaces")
     if receipt.get("schema") != "vision.native-composition-frame/2" or not coverage:
@@ -100,12 +92,32 @@ def validate_atlas_samples(browser, frame: dict, png: bytes, expected_partial: i
     width, height, channels, pixels = browser.decode_png(png)
     if (width, height) != tuple(receipt["canvasSize"]):
         raise AssertionError({"cefAtlasSize": [width, height], "receiptCanvasSize": receipt["canvasSize"]})
-    if (width, height) != CANVAS_SIZE:
-        raise AssertionError({"cefAtlasSize": [width, height], "qualifiedAtlasSize": CANVAS_SIZE})
+    expected_atlas_size = tuple(profile["atlasSize"])
+    if (width, height) != expected_atlas_size:
+        raise AssertionError({"cefAtlasSize": [width, height], "plannedAtlasSize": list(expected_atlas_size)})
     if channels != 4:
         raise AssertionError({"cefAtlasChannels": channels, "required": "RGBA to retain mask coverage alpha"})
+    if frame.get("profileName") != profile["name"]:
+        raise AssertionError({"frameProfileMismatch": {
+            "frame": frame.get("profileName"), "selected": profile["name"],
+        }})
+    max_texture_size = int(frame.get("maxTextureSize", 0))
+    if max_texture_size < max(expected_atlas_size):
+        raise AssertionError({"webglTextureLimitBelowAtlas": {
+            "maxTextureSize": max_texture_size, "atlasSize": list(expected_atlas_size),
+        }})
     surface = coverage[0]
     rect = surface["atlasRect"]
+    if surface.get("sceneRect") != profile["atlasPacking"]["expectedCoverageSceneRect"]:
+        raise AssertionError({"coverageSceneRectMismatch": {
+            "actual": surface.get("sceneRect"),
+            "expected": profile["atlasPacking"]["expectedCoverageSceneRect"],
+        }})
+    if rect != profile["atlasPacking"]["expectedCoverageAtlasRect"]:
+        raise AssertionError({"coverageAtlasRectMismatch": {
+            "actual": rect,
+            "expected": profile["atlasPacking"]["expectedCoverageAtlasRect"],
+        }})
     samples = {}
     expected_by_name = {
         "partial": expected_partial,
@@ -114,7 +126,7 @@ def validate_atlas_samples(browser, frame: dict, png: bytes, expected_partial: i
         "unclippedChild": expected_partial,
         "stencilFrameOverflow": 0,
     }
-    for label, (scene_x, scene_y) in SAMPLE_POINTS.items():
+    for label, (scene_x, scene_y) in profile["samplePoints"].items():
         atlas_point = (rect[0] + scene_x, rect[1] + scene_y)
         rgba = pixel(width, channels, pixels, atlas_point)
         expected = expected_by_name[label]
@@ -126,7 +138,8 @@ def validate_atlas_samples(browser, frame: dict, png: bytes, expected_partial: i
             "channels": channels, "coverageSurface": surface, "samples": samples}
 
 
-def root_background_witness(browser, document: dict, projection: dict, wire: dict, png: bytes) -> dict:
+def root_background_witness(browser, document: dict, projection: dict, wire: dict,
+                            png: bytes, profile: dict) -> dict:
     """Read the opaque Vision root band that remains visible where owner coverage is zero."""
     background = document.get("layout", {}).get("background")
     if not isinstance(background, str) or len(background) != 7 or not background.startswith("#"):
@@ -174,10 +187,10 @@ def root_background_witness(browser, document: dict, projection: dict, wire: dic
     rect = root_band.get("rect", {})
     crop = root_band.get("crop", {})
     width, height, channels, pixels = browser.decode_png(png)
-    if (width, height) != CANVAS_SIZE or channels != 4:
+    if (width, height) != tuple(profile["atlasSize"]) or channels != 4:
         raise AssertionError({"rootBandAtlasDimensionsOrChannels": [width, height, channels]})
     root_samples = {}
-    for label, (scene_x, scene_y) in SAMPLE_POINTS.items():
+    for label, (scene_x, scene_y) in profile["samplePoints"].items():
         if not (rect.get("x", 0) <= scene_x < rect.get("x", 0) + rect.get("width", 0)
                 and rect.get("y", 0) <= scene_y < rect.get("y", 0) + rect.get("height", 0)):
             raise AssertionError({"rootBandDoesNotCoverSample": {"label": label, "rect": rect}})
@@ -206,7 +219,12 @@ async def run_probe(args) -> dict:
         raise RuntimeError("both --execute and --gpu-slot-released are required")
 
     preflight = load("coverage_chain_preflight", ROOT / "scripts/cef-coverage-chain/preflight.py")
-    preflight_report = preflight.run()
+    profile = preflight.profile_plan(args.profile)
+    SCENE_SIZE = tuple(profile["sceneSize"])
+    CANVAS_SIZE = tuple(profile["atlasSize"])
+    SAMPLE_POINTS = {label: tuple(point) for label, point in profile["samplePoints"].items()}
+    fps = int(profile["fps"])
+    preflight_report = preflight.run(args.profile)
     browser = load("coverage_chain_browser", ROOT / "scripts/probe-browser-m3.py")
     process_helpers = load("coverage_chain_group", ROOT / "scripts/probe-group-composition.py")
     process_protocol = load("coverage_chain_process", ROOT / "scripts/probe-websocket.py")
@@ -240,6 +258,7 @@ async def run_probe(args) -> dict:
         "gpuUsed": False,
         "gpuSlotReleasedByParent": True,
         "preflight": preflight_report,
+        "runtimeProfile": profile,
         "scratch": str(scratch),
         "reportPath": str(report_path),
         "sourcePins": {
@@ -256,7 +275,7 @@ async def run_probe(args) -> dict:
     }
     process = None
     page = page_module.ChainPageServer(
-        ROOT / "scripts/cef-coverage-chain", SOLAR, preflight.VISION
+        ROOT / "scripts/cef-coverage-chain", SOLAR, preflight.VISION, profile
     )
     old_env = {key: value for key, value in os.environ.items() if key.startswith("PULSAR_")}
     runtime_id = "cef-coverage-" + token
@@ -327,7 +346,7 @@ async def run_probe(args) -> dict:
             "PULSAR_RUNTIME_DIR": str(scratch / "state/runtime"),
             "PULSAR_RUNTIME_INSTANCE_ID": runtime_id,
             "PULSAR_RESOLUTION": f"{SCENE_SIZE[0]}x{SCENE_SIZE[1]}",
-            "PULSAR_FPS": "30",
+            "PULSAR_FPS": str(fps),
             "PULSAR_DESKTOP_AUDIO_DEVICE_ID": "pulsar-synthetic-test-no-device",
         })
         process = process_helpers.GracefulPrivatePulsarProcess(
@@ -345,7 +364,7 @@ async def run_probe(args) -> dict:
             async with websockets.connect(
                 f"ws://127.0.0.1:{process.proc.port}",
                 subprotocols=["obswebsocket.json"],
-                max_size=32 * 1024 * 1024,
+                max_size=profile["readbackMemoryEstimate"]["websocketMaxMessageBytes"],
             ) as ws:
                 hello = json.loads(await ws.recv())["d"]
                 identify = {"rpcVersion": hello["rpcVersion"], "eventSubscriptions": 0}
@@ -380,7 +399,7 @@ async def run_probe(args) -> dict:
                             raise AssertionError({"cefAtlasChannels": shot["channels"],
                                                   "required": "RGBA for coverage alpha"})
                         try:
-                            check = validate_atlas_samples(browser, frame, png, expected_alpha)
+                            check = validate_atlas_samples(browser, frame, png, expected_alpha, profile)
                         except AssertionError as error:
                             last_error = str(error)
                             if time.monotonic() >= deadline:
@@ -426,11 +445,18 @@ async def run_probe(args) -> dict:
 
                 video_after = await call("GetVideoSettings")
                 if ((int(video_after["baseWidth"]), int(video_after["baseHeight"])) != SCENE_SIZE
-                    or (int(video_after["outputWidth"]), int(video_after["outputHeight"])) != SCENE_SIZE):
-                    raise RuntimeError({"videoViewportNotApplied": video_after})
+                    or (int(video_after["outputWidth"]), int(video_after["outputHeight"])) != SCENE_SIZE
+                    or int(video_after.get("fpsNumerator", -1)) != fps
+                    or int(video_after.get("fpsDenominator", -1)) != 1):
+                    raise RuntimeError({"videoViewportOrFpsNotApplied": {
+                        "settings": video_after,
+                        "expectedSceneSize": list(SCENE_SIZE),
+                        "expectedFps": [fps, 1],
+                    }})
                 report["videoSettings"] = {
                     "bootEnvironment": {"PULSAR_RESOLUTION": f"{SCENE_SIZE[0]}x{SCENE_SIZE[1]}",
-                                        "PULSAR_FPS": "30"},
+                                        "PULSAR_FPS": str(fps)},
+                    "expectedFps": [fps, 1],
                     "after": video_after,
                 }
 
@@ -459,7 +485,7 @@ async def run_probe(args) -> dict:
                     "inputKind": "browser_source",
                     "inputSettings": {
                         "url": page.url, "width": CANVAS_SIZE[0], "height": CANVAS_SIZE[1],
-                        "fps": 30, "shutdown": False,
+                        "fps": fps, "shutdown": False,
                         "restart_when_active": False, "reroute_audio": False,
                     },
                     "sceneItemEnabled": True,
@@ -473,8 +499,9 @@ async def run_probe(args) -> dict:
                 report["scene"] = {
                     "sceneName": scene_name,
                     "sceneSize": list(SCENE_SIZE),
+                    "profile": profile["name"],
                     "browserSourceUrl": page.url,
-                    "browserSourceSettings": {"width": CANVAS_SIZE[0], "height": CANVAS_SIZE[1], "fps": 30},
+                    "browserSourceSettings": {"width": CANVAS_SIZE[0], "height": CANVAS_SIZE[1], "fps": fps},
                     "sceneItemIds": scene_item_ids,
                     "captureInputKind": "synthetic color_source_v3; no camera/device opened",
                 }
@@ -568,7 +595,7 @@ async def run_probe(args) -> dict:
                 }
                 initial_root_background = root_background_witness(
                     browser, initial["document"], initial_chain["record"]["solarProjection"],
-                    initial_wire, initial_atlas_png,
+                    initial_wire, initial_atlas_png, profile,
                 )
                 report["rootBackgroundWitness"] = {
                     **initial_root_background,
@@ -677,7 +704,7 @@ async def run_probe(args) -> dict:
                     }})
                 updated_root_background = root_background_witness(
                     browser, updated["document"], updated_chain["record"]["solarProjection"],
-                    updated_wire, updated_atlas_png,
+                    updated_wire, updated_atlas_png, profile,
                 )
                 if any(
                     updated_root_background["atlasSamples"][key]["rgba"]
@@ -786,14 +813,17 @@ async def run_probe(args) -> dict:
             for variant, frame in page.frames.items():
                 receipt = frame.get("message", {}).get("composition", {})
                 frame_summaries[variant] = {
+                    "profileName": frame.get("profileName"),
                     "sceneId": frame.get("document", {}).get("scene_id"),
                     "sceneVersion": frame.get("document", {}).get("scene_version"),
                     "messageType": frame.get("message", {}).get("type"),
                     "schema": receipt.get("schema"),
                     "pixelRevision": receipt.get("pixelRevision"),
                     "canvasSize": frame.get("canvasSize"),
+                    "maxTextureSize": frame.get("maxTextureSize"),
                     "mutation": frame.get("mutation"),
                     "coverageSurfaceCount": len(receipt.get("coverageSurfaces", [])),
+                    "coverageSurfaces": receipt.get("coverageSurfaces", []),
                     "owners": [
                         {key: owner.get(key) for key in ("targetNodeId", "maskPresent", "maskSurfaceIndex")}
                         for owner in receipt.get("owners", [])
@@ -877,6 +907,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--execute", action="store_true", help="start the private host/CEF proof")
     parser.add_argument("--gpu-slot-released", action="store_true", help="explicitly attest parent release of GPU slot")
+    parser.add_argument(
+        "--profile",
+        choices=("320x180@30", "1920x1080@60"),
+        default="320x180@30",
+        help="author the requested LSML scene size/FPS profile before Vision renders its atlas",
+    )
     parser.add_argument("--output", type=Path, help="new canonical evidence JSON path")
     args = parser.parse_args()
     try:
