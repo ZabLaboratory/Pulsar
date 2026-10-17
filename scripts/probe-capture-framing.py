@@ -5,6 +5,7 @@ and graceful shutdown. No physical capture, public Live, REC or CEF is exercised
 """
 import importlib.util
 import pathlib
+import argparse
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -28,6 +29,9 @@ if __name__ == "__main__":
         return result
 
     native.exercise = combined
-    native.EVIDENCE = ROOT / "evidence/local-20261015-capture-paint-integration/eleven"
-    native.CACHE = ROOT / ".cache/fractional-framing"
+    output_parser = argparse.ArgumentParser(add_help=False)
+    output_parser.add_argument("--output", type=pathlib.Path, required=True)
+    output_args, _ = output_parser.parse_known_args()
+    native.EVIDENCE = output_args.output.resolve()
+    native.CACHE = ROOT / ".cache/fractional-capture-box"
     native.main()

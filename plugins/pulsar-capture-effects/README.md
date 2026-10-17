@@ -86,6 +86,21 @@ resolution changes, without a new scene admission or physical-source mutation.
 Native pixel proofs for image/video, actual camera vertical crop and delayed
 first-frame arrival are in evidence/local-20261011-source-box/eleven/.
 
+The external capture block keeps positive fractional width and height in scene
+units, including values below one. Each `CommitAppearance` replaces the previous
+appearance snapshot, so omitted optional geometry returns to the documented
+defaults instead of inheriting stale settings. Its private render target uses
+the ceiling of `size + 2 * padding` for each integer raster dimension; the outer scene item
+is scaled by the exact extent-to-raster ratio. Shader coordinates and blur,
+refraction, and dispersion offsets convert through that same ratio, so the
+integer texture allocation does not enlarge the authored block or its effects.
+Missing or non-finite outer dimensions still default to one; explicit
+nonpositive values retain the one-unit fallback. Native zoom/readback coverage
+is included in `scripts/probe-capture-framing.py`. The probe first commits an
+explicit inner origin and a nonpositive inner height, then omits all four
+`content_box_*` keys on the same existing filter; scene-item readback verifies
+the next complete appearance returns to the outer-box size and zero origin.
+
 Independent content-box geometry uses content_box_x/y and content_box_width/height
 in source-block pixels. The default remains the outer box. Cropping the outer box
 retains the inner rectangle instead of refitting the source; panning supports both
@@ -101,10 +116,11 @@ layout. Missing/non-finite settings retain the outer-box fallback; nonpositive
 explicit dimensions retain the previous one-pixel invalid-input fallback.
 `scripts/probe-capture-framing.py` runs the existing capture-effects pixel probe
 and source-removal regression in the owned private native host. It additionally
-checks fractional horizontal/vertical framing, their pixels outside the fitted
-content, and zero/negative dimension fallbacks. It uses the same explicit runtime,
-host, plugin and helper arguments as `probe-group-composition.py`; it does not
-qualify physical capture or CEF.
+checks fractional inner framing and external block geometry under source and
+scene-item zoom, integer raster allocation, right/bottom edge pixels, pixels
+outside the authored extent, and missing/nonpositive dimension fallbacks. It uses
+the same explicit runtime, host, plugin and helper arguments as
+`probe-group-composition.py`; it does not qualify physical capture or CEF.
 
 Inherited frame clipping accepts up to 32 source-local affine rectangle projections
 through ancestor_clips. Width/height/rounding are admitted with the existing

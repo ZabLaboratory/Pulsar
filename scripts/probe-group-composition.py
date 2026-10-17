@@ -1391,6 +1391,10 @@ def main():
     parser.add_argument("--runtime", type=pathlib.Path, required=True,
                         help="Compatible prebuilt runtime rundir/RelWithDebInfo")
     parser.add_argument(
+        "--upstream-source", type=pathlib.Path,
+        help=("Optional upstream checkout used to record source provenance; "
+              "defaults to the runtime's ancestor layout"))
+    parser.add_argument(
         "--host-executable", type=pathlib.Path,
         help="Optional private pulsar.exe copied into the disposable runtime")
     parser.add_argument("--plugin", type=pathlib.Path, required=True,
@@ -1505,7 +1509,9 @@ def main():
             "jsonBridgeSourceSha256": sha256(ROOT / "plugins/pulsar-websocket/src/utils/Json.cpp"),
             "jsonBridgeBuiltFrom": "the supplied private obs-websocket.dll, built by this unit from this checkout",
         }
-        upstream_root = runtime_source.parents[2]
+        upstream_root = (
+            args.upstream_source.resolve()
+            if args.upstream_source else runtime_source.parents[2])
         upstream_git = subprocess.run(
             ["git", "-C", str(upstream_root), "rev-parse", "HEAD"],
             check=True, capture_output=True, text=True).stdout.strip()

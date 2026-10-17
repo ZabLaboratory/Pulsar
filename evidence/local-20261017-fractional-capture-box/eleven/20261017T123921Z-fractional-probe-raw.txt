@@ -1,0 +1,1 @@
+{"report": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T123921Z-group-composition-probe.json", "passed": true, "ownedProcessExited": true, "scratchRemoved": true, "scratchCleanupError": null}

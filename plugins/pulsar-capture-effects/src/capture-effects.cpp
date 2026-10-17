@@ -42,6 +42,7 @@ struct Effect {
   std::atomic<uint32_t> output_width{1}, output_height{1};
   float padding = 0, corner = 0, opacity = 1, rotation = 0;
   vec2 size{}, position{};
+  vec2 raster_scale{1, 1};
   bool needs_background = false;
   int blend_mode = 0;
   vec4 crop_percent{};
@@ -66,7 +67,7 @@ float number(obs_data_t *s, const char *key, float lo, float hi,
 }
 // Framing is in local scene units, so one texture texel can be less than one
 // local pixel after layout. Keep positive fractional dimensions unchanged.
-float content_dimension(obs_data_t *settings, const char *key, float fallback) {
+float positive_dimension(obs_data_t *settings, const char *key, float fallback) {
   if (!obs_data_has_user_value(settings, key))
     return fallback;
   const double value = obs_data_get_double(settings, key);
@@ -76,6 +77,10 @@ float content_dimension(obs_data_t *settings, const char *key, float fallback) {
     return 1; // Preserve the existing invalid-input fallback.
   return float(std::clamp(value, double(std::numeric_limits<float>::min()),
                           16384.0));
+}
+uint32_t raster_dimension(float size, float padding) {
+  const double extent = double(size) + double(padding) * 2.0;
+  return static_cast<uint32_t>(std::ceil(extent));
 }
 vec4 color(obs_data_t *s, const char *key, vec4 fallback) {
   obs_data_t *c = obs_data_get_obj(s, key);
@@ -89,8 +94,8 @@ vec4 color(obs_data_t *s, const char *key, vec4 fallback) {
 void update(void *data, obs_data_t *settings) {
   auto *f = static_cast<Effect *>(data);
   std::lock_guard<std::mutex> lock(f->mutex);
-  f->size = {number(settings, "width", 1, 16384, 1),
-             number(settings, "height", 1, 16384, 1)};
+  f->size = {positive_dimension(settings, "width", 1),
+             positive_dimension(settings, "height", 1)};
   f->position = {number(settings, "x", -32768, 32768),
                  number(settings, "y", -32768, 32768)};
   f->corner = number(settings, "corner_radius", 0, 8192);
@@ -109,7 +114,7 @@ void update(void *data, obs_data_t *settings) {
   }
   f->content_position = {number(settings, "content_x", 0, 1, 0.5f), number(settings, "content_y", 0, 1, 0.5f)};
   f->content_origin = {number(settings, "content_box_x", -32768, 32768), number(settings, "content_box_y", -32768, 32768)};
-  f->content_size = {content_dimension(settings, "content_box_width", f->size.x), content_dimension(settings, "content_box_height", f->size.y)};
+  f->content_size = {positive_dimension(settings, "content_box_width", f->size.x), positive_dimension(settings, "content_box_height", f->size.y)};
   f->clip_effects = obs_data_get_bool(settings, "clip_effects");
   f->skip_content_fit = obs_data_get_bool(settings, "skip_content_fit");
   auto *clips = obs_data_get_array(settings, "ancestor_clips");
@@ -124,8 +129,13 @@ void update(void *data, obs_data_t *settings) {
   obs_data_array_release(clips);
   f->source_zoom = number(settings, "source_zoom", 0.1f, 10, 1);
   f->source_width = f->source_height = 0;
-  f->output_width = uint32_t(f->size.x) + uint32_t(f->padding) * 2;
-  f->output_height = uint32_t(f->size.y) + uint32_t(f->padding) * 2;
+  const uint32_t raster_width = raster_dimension(f->size.x, f->padding);
+  const uint32_t raster_height = raster_dimension(f->size.y, f->padding);
+  f->output_width = raster_width;
+  f->output_height = raster_height;
+  f->raster_scale = {
+      (f->size.x + f->padding * 2) / float(raster_width),
+      (f->size.y + f->padding * 2) / float(raster_height)};
   f->parent = obs_data_get_string(settings, "background_scene");
   f->stages.clear();
   f->needs_background = false;
@@ -313,8 +323,7 @@ void render(void *data, gs_effect_t *) {
       f->context, obs_get_base_effect(OBS_EFFECT_DEFAULT), f->width, f->height);
   gs_texrender_end(f->input);
   auto *texture = gs_texrender_get_texture(f->input);
-  const uint32_t w = uint32_t(f->size.x) + uint32_t(f->padding) * 2,
-                 h = uint32_t(f->size.y) + uint32_t(f->padding) * 2;
+  const uint32_t w = f->output_width.load(), h = f->output_height.load();
   std::vector<Stage> passes{Stage{}};
   for (auto e : f->stages) {
     if (e.kind == 3) {
@@ -328,9 +337,11 @@ void render(void *data, gs_effect_t *) {
   int index = 0;
   for (auto e : passes) {
     auto *out = f->passes[index % 2];
-    if (!begin(out, w, h))
+    if (!begin(out, w, h)) {
       break;
+    }
     vector2(f, "dimensions", {float(w), float(h)});
+    vector2(f, "raster_scale", f->raster_scale);
     vector2(f, "capture_size", f->size);
     vector2(f, "capture_position", f->position);
     vector2(f, "canvas_size", {float(f->width), float(f->height)});
@@ -494,9 +505,14 @@ void admit(void *data, obs_scene_t *scene) {
       return;
     }
   }
+  const bool created_filter = filter == nullptr;
+  obs_data_t *snapshot = obs_data_create();
+  // libobs retains a reference to creation settings; keep the caller's request
+  // data separate from the filter's stored mutable settings object.
+  obs_data_apply(snapshot, settings);
   if (!filter) {
     filter = obs_source_create("pulsar_capture_effects",
-                               "prism/capture-effects", settings, nullptr);
+                               "prism/capture-effects", snapshot, nullptr);
     if (filter)
       obs_source_filter_add(layer, filter);
   }
@@ -511,14 +527,21 @@ void admit(void *data, obs_scene_t *scene) {
     for (auto *f : retired)
       obs_source_release(f);
     obs_source_release(filter);
+    obs_data_release(snapshot);
     obs_data_release(settings);
     obs_data_set_string(c.response, "error",
                         "Capture effects filter unavailable");
     return;
   }
-  obs_source_update(filter, settings);
+  // CommitAppearance carries a complete appearance snapshot. libobs update
+  // overlays keys on the stored settings, which otherwise retains omitted
+  // optional geometry from a previous commit. Reset first to make omissions
+  // return to defaults. A new filter already owns this snapshot; reset only an
+  // existing filter.
+  if (!created_filter)
+    obs_source_reset_settings(filter, snapshot);
   update(effect,
-         settings); // synchronous admission; next tick repeats the same state
+         snapshot); // synchronous admission; next tick repeats the same state
   obs_source_set_enabled(filter, true);
   for (auto *f : retired) {
     if (f)
@@ -543,7 +566,7 @@ void admit(void *data, obs_scene_t *scene) {
                  : vec2{effect->position.x - effect->padding,
                         effect->position.y - effect->padding};
   info.rot = effect->rotation;
-  info.scale = {1, 1};
+  info.scale = effect->raster_scale;
   info.alignment = effect->rotation != 0 ? 0 : OBS_ALIGN_TOP | OBS_ALIGN_LEFT;
   info.bounds_type = OBS_BOUNDS_NONE;
   obs_sceneitem_crop crop{};
@@ -571,6 +594,7 @@ void admit(void *data, obs_scene_t *scene) {
   obs_sceneitem_set_visible(outer, obs_data_get_bool(r, "visible"));
   obs_data_set_bool(c.response, "ok", true);
   obs_source_release(filter);
+  obs_data_release(snapshot);
   obs_data_release(settings);
 }
 void commit_graphics(void *data) {
