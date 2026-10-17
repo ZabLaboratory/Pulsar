@@ -82,6 +82,9 @@ class PE:
 
 
 def check(bundle: pathlib.Path) -> dict:
+    capture_effects = bundle / "obs-plugins/64bit/pulsar-capture-effects.dll"
+    if not capture_effects.is_file():
+        raise ValueError("INCOMPLETE_NATIVE_BUNDLE: missing pulsar-capture-effects.dll")
     core = PE(bundle / "bin/64bit/obs.dll")
     exports = core.exports()
     required = {"source_profiler_request_telemetry", "source_profiler_fill_result",

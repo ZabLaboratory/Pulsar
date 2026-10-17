@@ -1,6 +1,7 @@
 """Hardware-free invalidation and payload-integrity tests for CI runtime reuse."""
 
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -72,6 +73,28 @@ class NativeCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaisesRegex(ValueError, "Missing required"):
                 cache.seal(Path(temporary), "key-a")
+
+    def test_capture_module_is_required_for_seal_and_legacy_inventory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_payload(root)
+            relative = "upstream/build_x64/rundir/RelWithDebInfo/obs-plugins/64bit/pulsar-capture-effects.dll"
+            capture = root / relative
+            capture.unlink(missing_ok=True)
+            with patch.object(cache, "git", return_value=b"producer-sha\n"):
+                with self.assertRaisesRegex(ValueError, "Missing required.*pulsar-capture-effects"):
+                    cache.seal(root, "key-a")
+                self.assertFalse((root / cache.MANIFEST).exists())
+                capture.write_bytes(b"native output")
+                cache.seal(root, "key-a")
+            cache.verify(root, "key-a")
+            capture.unlink()
+            manifest_path = root / cache.MANIFEST
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            del manifest["files"][relative]
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "inventory mismatch"):
+                cache.verify(root, "key-a")
 
     def test_no_runtime_scripts_or_probe_state_in_payload(self):
         with tempfile.TemporaryDirectory() as temporary:

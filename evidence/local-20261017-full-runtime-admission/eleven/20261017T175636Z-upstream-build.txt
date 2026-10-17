@@ -1,0 +1,654 @@
+Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/libobs/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/deps/w32-pthreads/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/deps/libcaption/CMakeLists.txt
+  obsversion.c
+  pthread.c
+  caption.c
+  cea708.c
+  eia608.c
+  eia608_charmap.c
+  eia608_from_utf8.c
+  mpeg.c
+  scc.c
+  srt.c
+  utf8.c
+  xds.c
+  libobs-version.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\libobs\libobs-version.dir\RelWithDebInfo\libobs-version.lib
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-capture/graphics-hook/CMakeLists.txt
+  d3d10-capture.cpp
+  d3d11-capture.cpp
+  d3d12-capture.cpp
+  d3d8-capture.cpp
+  d3d9-capture.cpp
+  dxgi-capture.cpp
+  caption.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\deps\libcaption\RelWithDebInfo\caption.lib
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/deps/w32-pthreads/RelWithDebInfo/w32-pthreads.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/deps/w32-pthreads/RelWithDebInfo/w32-pthreads.exp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+  w32-pthreads.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\deps\w32-pthreads\RelWithDebInfo\w32-pthreads.dll
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/deps/glad/CMakeLists.txt
+  Copy w32-pthreads to destination
+  d3d11-return-transport.cpp
+  placeholder.cpp
+  virtualcam-filter.cpp
+  virtualcam-module.cpp
+  capture-filter.cpp
+  device-vendor.cpp
+  device.cpp
+  dshow-base.cpp
+  dshow-demux.cpp
+  dshow-encoded-device.cpp
+  dshow-enum.cpp
+  dshow-formats.cpp
+  dshow-media-type.cpp
+  dshowcapture.cpp
+  dshowencode.cpp
+  encoder.cpp
+  glad.c
+  glad_wgl.c
+  log.cpp
+  output-filter.cpp
+  EGAVResult.cpp
+  ElgatoUVCDevice.cpp
+  EGAVHIDImplementation.cpp
+  DriverInterface.cpp
+  gl-capture.c
+  graphics-hook.c
+  vulkan-capture.c
+  pipe-windows.c
+  obfuscate.c
+  obsglad.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\deps\glad\obsglad.dir\RelWithDebInfo\obsglad.lib
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/libobs/CMakeLists.txt
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-capture/graphics-hook/RelWithDebInfo/graphics-hook64.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-capture/graphics-hook/RelWithDebInfo/graphics-hook64.exp
+  graphics-hook.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\win-capture\graphics-hook\RelWithDebInfo\graphics-hook64.dll
+  Build x86 graphics-hook
+  Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+  sleepto.c
+  tiny-nv12-scale.c
+  shared-memory-queue.c
+
+    1>Checking Build System
+    Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-capture/graphics-hook/CMakeLists.txt
+    d3d10-capture.cpp
+    d3d11-capture.cpp
+    d3d12-capture.cpp
+    d3d8-capture.cpp
+    d3d9-capture.cpp
+    dxgi-capture.cpp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-dshow/virtualcam-module/RelWithDebInfo/obs-virtualcam-module64.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-dshow/virtualcam-module/RelWithDebInfo/obs-virtualcam-module64.exp
+  obs-virtualcam-module.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\win-dshow\virtualcam-module\RelWithDebInfo\obs-virtualcam-module64.dll
+  Build x86 obs-virtualcam-module
+    gl-capture.c
+    graphics-hook.c
+    vulkan-capture.c
+    pipe-windows.c
+    obfuscate.c
+  Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+
+    Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+    d3d11-return-transport.cpp
+    placeholder.cpp
+    virtualcam-filter.cpp
+    virtualcam-module.cpp
+    capture-filter.cpp
+    device-vendor.cpp
+    device.cpp
+    dshow-base.cpp
+    dshow-demux.cpp
+    dshow-encoded-device.cpp
+    dshow-enum.cpp
+    dshow-formats.cpp
+    dshow-media-type.cpp
+    dshowcapture.cpp
+    dshowencode.cpp
+    encoder.cpp
+       Cr├®ation de la biblioth├¿que D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x86/plugins/win-capture/graphics-hook/RelWithDebInfo/graphics-hook32.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x86/plugins/win-capture/graphics-hook/RelWithDebInfo/graphics-hook32.exp
+    log.cpp
+    output-filter.cpp
+    EGAVResult.cpp
+    ElgatoUVCDevice.cpp
+    EGAVHIDImplementation.cpp
+    DriverInterface.cpp
+    graphics-hook.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x86\plugins\win-capture\graphics-hook\RelWithDebInfo\graphics-hook32.dll
+  Copy graphics-hook resource D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-capture/graphics-hook/obs-vulkan64.json to library directory
+  Copy graphics-hook resource D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-capture/graphics-hook/obs-vulkan32.json to library directory
+  Copy graphics-hook (x86) to destination
+  Copy graphics-hook to destination
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-capture/get-graphics-offsets/CMakeLists.txt
+  d3d8-offsets.cpp
+  d3d9-offsets.cpp
+  dxgi-offsets.cpp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-capture/inject-helper/CMakeLists.txt
+  inject-helper.c
+  inject-library.c
+  obfuscate.c
+    sleepto.c
+    tiny-nv12-scale.c
+    shared-memory-queue.c
+  inject-helper.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\win-capture\inject-helper\RelWithDebInfo\inject-helper64.exe
+  Build x86 inject-helper
+       Cr├®ation de la biblioth├¿que D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x86/plugins/win-dshow/virtualcam-module/RelWithDebInfo/obs-virtualcam-module32.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x86/plugins/win-dshow/virtualcam-module/RelWithDebInfo/obs-virtualcam-module32.exp
+  Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+
+    Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-capture/inject-helper/CMakeLists.txt
+    inject-helper.c
+    inject-library.c
+    obfuscate.c
+    obs-virtualcam-module.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x86\plugins\win-dshow\virtualcam-module\RelWithDebInfo\obs-virtualcam-module32.dll
+  Copy obs-virtualcam-module resource D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-dshow/virtualcam-module/virtualcam-install.bat to library directory
+  Copy obs-virtualcam-module resource D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-dshow/virtualcam-module/virtualcam-uninstall.bat to library directory
+  Copy obs-virtualcam-module (x86) to destination
+  Copy obs-virtualcam-module to destination
+    inject-helper.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x86\plugins\win-capture\inject-helper\RelWithDebInfo\inject-helper32.exe
+  Copy inject-helper (x86) to destination
+  Copy inject-helper to destination
+  get-graphics-offsets.c
+  obs-hevc.c
+  obs-audio-controls.c
+  obs-audio.c
+  obs-av1.c
+  obs-avc.c
+  obs-canvas.c
+  obs-display.c
+  obs-encoder.c
+  obs-hotkey-name-map.c
+  obs-hotkey.c
+  obs-missing-files.c
+  obs-module.c
+  obs-nal.c
+  obs-output-delay.c
+  obs-output.c
+  obs-properties.c
+  obs-scene.c
+  obs-service.c
+  obs-source-deinterlace.c
+  obs-source-transition.c
+  obs-source.c
+  obs-video-gpu-encode.c
+  obs-video.c
+  obs-view.c
+  obs.c
+  array-serializer.c
+  base.c
+  bitstream.c
+  bmem.c
+  buffered-file-serializer.c
+  cf-lexer.c
+  cf-parser.c
+  config-file.c
+  crc32.c
+  dstr.c
+  file-serializer.c
+  lexer.c
+  pipe.c
+  platform.c
+  profiler.c
+  source-profiler.c
+  task.c
+  text-lookup.c
+  utf8.c
+  calldata.c
+  decl.c
+  proc.c
+  signal.c
+  audio-io.c
+  audio-resampler-ffmpeg.c
+  format-conversion.c
+  media-remux.c
+  video-fourcc.c
+  video-frame.c
+  video-io.c
+  video-matrices.c
+  video-scaler-ffmpeg.c
+  axisang.c
+  bounds.c
+  effect-parser.c
+  effect.c
+  graphics-ffmpeg.c
+  graphics-imports.c
+  graphics.c
+  image-file.c
+  libnsgif.c
+  math-extra.c
+  matrix3.c
+  matrix4.c
+  plane.c
+  quat.c
+  shader-parser.c
+  texture-render.c
+  vec2.c
+  vec3.c
+  vec4.c
+  wasapi-enum-devices.c
+  wasapi-monitoring-available.c
+  wasapi-output.c
+  obs-windows.c
+  pipe-windows.c
+  platform-windows.c
+  threading-windows.c
+  device-enum.c
+  window-helpers.c
+  obfuscate.c
+  get-graphics-offsets.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\win-capture\get-graphics-offsets\RelWithDebInfo\get-graphics-offsets64.exe
+  Build x86 get-graphics-offsets
+  Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+
+  obs-data.c
+    Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-capture/get-graphics-offsets/CMakeLists.txt
+    d3d8-offsets.cpp
+    d3d9-offsets.cpp
+    dxgi-offsets.cpp
+  obs-win-crash-handler.c
+    get-graphics-offsets.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/libobs/RelWithDebInfo/obs.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/libobs/RelWithDebInfo/obs.exp
+  libobs.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\libobs\RelWithDebInfo\obs.dll
+    get-graphics-offsets.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x86\plugins\win-capture\get-graphics-offsets\RelWithDebInfo\get-graphics-offsets32.exe
+  Copy get-graphics-offsets (x86) to destination
+  Copy get-graphics-offsets to destination
+  Copy libobs to destination
+  Copy libobs resources to data directory
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/shared/bpm/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-capture/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/shared/happy-eyeballs/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/coreaudio-encoder/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/image-source/CMakeLists.txt
+  1>Generate idl files
+  Microsoft (R) 32b/64b MIDL Compiler Version 8.01.0628
+  Copyright (c) Microsoft Corporation. All rights reserved.
+  64 bit Processing D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\plugins\decklink\win\decklink-sdk\DeckLinkAPI.idl
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/libobs-d3d11/CMakeLists.txt
+  DeckLinkAPI.idl
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um\unknwn.idl
+  unknwn.idl
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/libobs-winrt/CMakeLists.txt
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\shared\wtypes.idl
+  wtypes.idl
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\shared\wtypesbase.idl
+  wtypesbase.idl
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/nv-filters/CMakeLists.txt
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\shared\basetsd.h
+  basetsd.h
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\shared\guiddef.h
+  guiddef.h
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/shared/opts-parser/CMakeLists.txt
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um\oaidl.idl
+  oaidl.idl
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um\objidl.idl
+  objidl.idl
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-filters/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-qsv11/CMakeLists.txt
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um\oaidl.acf
+  oaidl.acf
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-text/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/decklink/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-transitions/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/rtmp-services/CMakeLists.txt
+  Automatic MOC and UIC for target obs-vst
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/text-freetype2/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/vlc-video/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-wasapi/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-vst/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-webrtc/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/aja/CMakeLists.txt
+  win-wasapi.cpp
+  wasapi-notify.cpp
+  enum-wasapi.cpp
+  plugin-main.cpp
+  vlc-video-plugin.c
+  vlc-video-source.c
+  aja-card-manager.cpp
+  aja-common.cpp
+  aja-presets.cpp
+  aja-props.cpp
+  aja-routing.cpp
+  aja-vpid-data.cpp
+  aja-widget-io.cpp
+  obs-webrtc.cpp
+  whip-output.cpp
+  whip-service.cpp
+  EditorWidget-win.cpp
+  VSTPlugin-win.cpp
+  EditorWidget.cpp
+  obs-vst.cpp
+  VSTPlugin.cpp
+  mocs_compilation_RelWithDebInfo.cpp
+  aja-support.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\aja\aja-support.dir\RelWithDebInfo\aja-support.lib
+  obs-transitions.c
+  transition-cut.c
+  transition-fade-to-color.c
+  transition-fade.c
+  transition-luma-wipe.c
+  transition-slide.c
+  transition-stinger.c
+  transition-swipe.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-transitions/RelWithDebInfo/obs-transitions.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-transitions/RelWithDebInfo/obs-transitions.exp
+  obs-transitions.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-transitions\RelWithDebInfo\obs-transitions.dll
+  Copy obs-transitions to destination
+  Copy obs-transitions resources to data directory
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-wasapi/RelWithDebInfo/win-wasapi.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-wasapi/RelWithDebInfo/win-wasapi.exp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-webrtc/RelWithDebInfo/obs-webrtc.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-webrtc/RelWithDebInfo/obs-webrtc.exp
+  win-wasapi.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\win-wasapi\RelWithDebInfo\win-wasapi.dll
+  Copy win-wasapi to destination
+  obs-webrtc.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-webrtc\RelWithDebInfo\obs-webrtc.dll
+  Copy obs-webrtc to destination
+  Copy win-wasapi resources to data directory
+  Copy obs-webrtc resources to data directory
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-vst/RelWithDebInfo/obs-vst.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-vst/RelWithDebInfo/obs-vst.exp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/vlc-video/RelWithDebInfo/vlc-video.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/vlc-video/RelWithDebInfo/vlc-video.exp
+  obs-vst.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-vst\RelWithDebInfo\obs-vst.dll
+  vlc-video.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\vlc-video\RelWithDebInfo\vlc-video.dll
+  Copy obs-vst to destination
+  Copy vlc-video to destination
+  Copy vlc-video resources to data directory
+  Copy obs-vst resources to data directory
+  obs-text.cpp
+  common_directx11.cpp
+  common_utils_windows.cpp
+  common_utils.cpp
+  QSV_Encoder.cpp
+  QSV_Encoder_Internal.cpp
+  async-delay-filter.c
+  chroma-key-filter.c
+  color-correction-filter.c
+  color-grade-filter.c
+  color-key-filter.c
+  compressor-filter.c
+  crop-filter.c
+  eq-filter.c
+  expander-filter.c
+  gain-filter.c
+  gpu-delay.c
+  hdr-tonemap-filter.c
+  invert-audio-polarity.c
+  limiter-filter.c
+  luma-key-filter.c
+  mask-filter.c
+  noise-gate-filter.c
+  obs-filters.c
+  scale-filter.c
+  scroll-filter.c
+  sharpness-filter.c
+  noise-suppress-filter.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-filters/RelWithDebInfo/obs-filters.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-filters/RelWithDebInfo/obs-filters.exp
+  obs-filters.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-filters\RelWithDebInfo\obs-filters.dll
+  Copy obs-filters to destination
+  Copy obs-filters resources to data directory
+  find-font.c
+  find-font-windows.c
+  obs-convenience.c
+  text-freetype2.c
+  text-functionality.c
+  rtmp-common.c
+  rtmp-custom.c
+  rtmp-services-main.c
+  amazon-ivs.c
+  dacast.c
+  nimotv.c
+  service-ingest.c
+  showroom.c
+  twitch.c
+  file-updater.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-text/RelWithDebInfo/obs-text.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-text/RelWithDebInfo/obs-text.exp
+  obs-text.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-text\RelWithDebInfo\obs-text.dll
+  Copy obs-text to destination
+  Copy obs-text resources to data directory
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/text-freetype2/RelWithDebInfo/text-freetype2.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/text-freetype2/RelWithDebInfo/text-freetype2.exp
+  text-freetype2.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\text-freetype2\RelWithDebInfo\text-freetype2.dll
+  Copy text-freetype2 to destination
+  opts-parser.c
+  obs-qsv11-plugin-main.c
+  obs-qsv11.c
+  Copy text-freetype2 resources to data directory
+  opts-parser.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\shared\opts-parser\opts-parser.dir\RelWithDebInfo\opts-parser.lib
+  nvidia-audiofx-filter.c
+  nvidia-videofx-filter.c
+  nv-filters.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-qsv11/RelWithDebInfo/obs-qsv11.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-qsv11/RelWithDebInfo/obs-qsv11.exp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/rtmp-services/RelWithDebInfo/rtmp-services.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/rtmp-services/RelWithDebInfo/rtmp-services.exp
+  rtmp-services.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\rtmp-services\RelWithDebInfo\rtmp-services.dll
+  obs-qsv11.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-qsv11\RelWithDebInfo\obs-qsv11.dll
+  Copy rtmp-services to destination
+  Copy obs-qsv11 to destination
+  Copy rtmp-services resources to data directory
+  Copy obs-qsv11 resources to data directory
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/nv-filters/RelWithDebInfo/nv-filters.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/nv-filters/RelWithDebInfo/nv-filters.exp
+  encoder.cpp
+  platform.cpp
+  decklink-device-discovery.cpp
+  decklink-device-instance.cpp
+  decklink-device-mode.cpp
+  decklink-device.cpp
+  decklink-devices.cpp
+  decklink-output.cpp
+  decklink-source.cpp
+  DecklinkBase.cpp
+  DecklinkInput.cpp
+  DecklinkOutput.cpp
+  OBSVideoFrame.cpp
+  plugin-main.cpp
+  util.cpp
+  nv-filters.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\nv-filters\RelWithDebInfo\nv-filters.dll
+  Copy nv-filters to destination
+  Copy nv-filters resources to data directory
+  cmake_pch.cxx
+  d3d11-duplicator.cpp
+  d3d11-indexbuffer.cpp
+  d3d11-rebuild.cpp
+  d3d11-samplerstate.cpp
+  d3d11-shader.cpp
+  d3d11-shaderprocessor.cpp
+  d3d11-stagesurf.cpp
+  d3d11-subsystem.cpp
+  d3d11-texture2d.cpp
+  d3d11-texture3d.cpp
+  d3d11-vertexbuffer.cpp
+  d3d11-zstencilbuffer.cpp
+  audio-repack.c
+  DeckLinkAPI_i.c
+  color-source.c
+  image-source.c
+  obs-slideshow.c
+  obs-slideshow-mk2.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/image-source/RelWithDebInfo/image-source.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/image-source/RelWithDebInfo/image-source.exp
+  image-source.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\image-source\RelWithDebInfo\image-source.dll
+  Copy image-source to destination
+  Copy image-source resources to data directory
+  happy-eyeballs.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/libobs-d3d11/RelWithDebInfo/libobs-d3d11.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/libobs-d3d11/RelWithDebInfo/libobs-d3d11.exp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/decklink/RelWithDebInfo/decklink.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/decklink/RelWithDebInfo/decklink.exp
+  libobs-d3d11.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\libobs-d3d11\RelWithDebInfo\libobs-d3d11.dll
+  decklink.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\decklink\RelWithDebInfo\decklink.dll
+  Copy decklink to destination
+  Copy libobs-d3d11 to destination
+  Copy decklink resources to data directory
+  happy-eyeballs.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\shared\happy-eyeballs\happy-eyeballs.dir\RelWithDebInfo\happy-eyeballs.lib
+  bpm.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/coreaudio-encoder/RelWithDebInfo/coreaudio-encoder.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/coreaudio-encoder/RelWithDebInfo/coreaudio-encoder.exp
+  bpm.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-outputs\bpm\bpm.dir\RelWithDebInfo\bpm.lib
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-outputs/CMakeLists.txt
+  coreaudio-encoder.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\coreaudio-encoder\RelWithDebInfo\coreaudio-encoder.dll
+  Copy coreaudio-encoder to destination
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-ffmpeg/CMakeLists.txt
+  Copy coreaudio-encoder resources to data directory
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-x264/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-nvenc/CMakeLists.txt
+  nvenc-d3d11.c
+  cuda-helpers.c
+  nvenc-compat.c
+  nvenc-cuda.c
+  nvenc-helpers.c
+  nvenc-opts-parser.c
+  nvenc-properties.c
+  nvenc.c
+  obs-nvenc.c
+  obs-x264.c
+  obs-x264-plugin-main.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-x264/RelWithDebInfo/obs-x264.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-x264/RelWithDebInfo/obs-x264.exp
+  obs-x264.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-x264\RelWithDebInfo\obs-x264.dll
+  app-helpers.c
+  audio-helpers.c
+  compat-helpers.c
+  cursor-capture.c
+  dc-capture.c
+  duplicator-monitor-capture.c
+  game-capture-file-init.c
+  game-capture.c
+  load-graphics-offsets.c
+  monitor-capture.c
+  nt-stuff.c
+  plugin-main.c
+  window-capture.c
+  file-updater.c
+  inject-library.c
+  obfuscate.c
+  pipe-windows.c
+  Copy obs-x264 to destination
+  Copy obs-x264 resources to data directory
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-capture/RelWithDebInfo/win-capture.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-capture/RelWithDebInfo/win-capture.exp
+  winrt-capture.cpp
+  winrt-dispatch.cpp
+  win-capture.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\win-capture\RelWithDebInfo\win-capture.dll
+  Copy win-capture to destination
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-nvenc/RelWithDebInfo/obs-nvenc.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-nvenc/RelWithDebInfo/obs-nvenc.exp
+  Copy win-capture resources to data directory
+  obs-nvenc.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-nvenc\RelWithDebInfo\obs-nvenc.dll
+  Copy obs-nvenc to destination
+  Copy obs-nvenc resources to data directory
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/aja/CMakeLists.txt
+  obs-ffmpeg-mpegts.c
+  obs-ffmpeg-audio-encoders.c
+  obs-ffmpeg-av1.c
+  obs-ffmpeg-openh264.c
+  obs-ffmpeg-hls-mux.c
+  obs-ffmpeg-mux.c
+  obs-ffmpeg-output.c
+  obs-ffmpeg-source.c
+  obs-ffmpeg-video-encoders.c
+  obs-ffmpeg.c
+  cache.c
+  decode.c
+  media-playback.c
+  media.c
+  aja-output.cpp
+  aja-source.cpp
+  main.cpp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/libobs-winrt/RelWithDebInfo/libobs-winrt.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/libobs-winrt/RelWithDebInfo/libobs-winrt.exp
+  libobs-winrt.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\libobs-winrt\RelWithDebInfo\libobs-winrt.dll
+  Copy libobs-winrt to destination
+  texture-amf.cpp
+  rtmp-hevc.c
+  flv-mux.c
+  flv-output.c
+  amf.c
+  cencode.c
+  hashswf.c
+  log.c
+  md5.c
+  parseurl.c
+  rtmp.c
+  mp4-mux.c
+  mp4-output.c
+  net-if.c
+  null-output.c
+  obs-outputs.c
+  rtmp-av1.c
+  rtmp-stream.c
+  rtmp-windows.c
+  audio-repack.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/aja/RelWithDebInfo/aja.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/aja/RelWithDebInfo/aja.exp
+  aja.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\aja\RelWithDebInfo\aja.dll
+  Copy aja to destination
+  Copy aja resources to data directory
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-outputs/RelWithDebInfo/obs-outputs.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-outputs/RelWithDebInfo/obs-outputs.exp
+  obs-outputs.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-outputs\RelWithDebInfo\obs-outputs.dll
+  Copy obs-outputs to destination
+  Copy obs-outputs resources to data directory
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-dshow/CMakeLists.txt
+  dshow-plugin.cpp
+  win-dshow-encoder.cpp
+  win-dshow.cpp
+  d3d11-return-transport.cpp
+  capture-filter.cpp
+  device-vendor.cpp
+  device.cpp
+  dshow-base.cpp
+  dshow-demux.cpp
+  dshow-encoded-device.cpp
+  dshow-enum.cpp
+  dshow-formats.cpp
+  dshow-media-type.cpp
+  dshowcapture.cpp
+  dshowencode.cpp
+  encoder.cpp
+  log.cpp
+  output-filter.cpp
+  EGAVResult.cpp
+  ElgatoUVCDevice.cpp
+  EGAVHIDImplementation.cpp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-ffmpeg/RelWithDebInfo/obs-ffmpeg.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-ffmpeg/RelWithDebInfo/obs-ffmpeg.exp
+  DriverInterface.cpp
+  obs-ffmpeg.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-ffmpeg\RelWithDebInfo\obs-ffmpeg.dll
+  Copy obs-ffmpeg to destination
+  Copy obs-ffmpeg resources to data directory
+  ffmpeg-decode.c
+  d3d11-return-auth.c
+  virtualcam.c
+  tiny-nv12-scale.c
+  shared-memory-queue.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-dshow/RelWithDebInfo/win-dshow.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/win-dshow/RelWithDebInfo/win-dshow.exp
+  win-dshow.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\win-dshow\RelWithDebInfo\win-dshow.dll
+  Copy win-dshow to destination
+  Copy win-dshow resources to data directory
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-ffmpeg/obs-amf-test/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-ffmpeg/ffmpeg-mux/CMakeLists.txt
+  obs-amf-test.cpp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/frontend/api/CMakeLists.txt
+  ffmpeg-mux.c
+  obs-frontend-api.cpp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/libobs-opengl/CMakeLists.txt
+  obs-ffmpeg-mux.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-ffmpeg\ffmpeg-mux\RelWithDebInfo\obs-ffmpeg-mux.exe
+  Copy obs-ffmpeg-mux to destination
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/frontend/api/RelWithDebInfo/obs-frontend-api.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/frontend/api/RelWithDebInfo/obs-frontend-api.exp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-nvenc/obs-nvenc-test/CMakeLists.txt
+  obs-frontend-api.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\frontend\api\RelWithDebInfo\obs-frontend-api.dll
+  Copy obs-frontend-api to destination
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-qsv11/obs-qsv-test/CMakeLists.txt
+  obs-nvenc-test.cpp
+  obs-qsv-test.cpp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-ffmpeg/obs-amf-test/RelWithDebInfo/obs-amf-test.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-ffmpeg/obs-amf-test/RelWithDebInfo/obs-amf-test.exp
+  obs-amf-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-ffmpeg\obs-amf-test\RelWithDebInfo\obs-amf-test.exe
+  Copy obs-amf-test to destination
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/obs-x264/CMakeLists.txt
+  obs-x264-test.c
+  obs-x264-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-x264\RelWithDebInfo\obs-x264-test.exe
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+  d3d11-return-auth.c
+  shared-memory-queue.c
+  tiny-nv12-scale.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-qsv11/obs-qsv-test/RelWithDebInfo/obs-qsv-test.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/plugins/obs-qsv11/obs-qsv-test/RelWithDebInfo/obs-qsv-test.exp
+  obs-qsv-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-qsv11\obs-qsv-test\RelWithDebInfo\obs-qsv-test.exe
+  Copy obs-qsv-test to destination
+  d3d11-return-transport.cpp
+  pulsar-d3d11-return-helper.cpp
+  gl-windows.c
+  gl-helpers.c
+  gl-indexbuffer.c
+  gl-shader.c
+  gl-shaderparser.c
+  gl-stagesurf.c
+  gl-subsystem.c
+  gl-texture2d.c
+  gl-texture3d.c
+  gl-texturecube.c
+  gl-vertexbuffer.c
+  gl-zstencil.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/libobs-opengl/RelWithDebInfo/libobs-opengl.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64/libobs-opengl/RelWithDebInfo/libobs-opengl.exp
+  libobs-opengl.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\libobs-opengl\RelWithDebInfo\libobs-opengl.dll
+  Copy libobs-opengl to destination
+  pulsar-d3d11-return-helper.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\win-dshow\virtualcam-module\RelWithDebInfo\pulsar-d3d11-return-helper64.exe
+  Copy pulsar-d3d11-return-helper to destination
+  obs-nvenc-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission\upstream\build_x64\plugins\obs-nvenc\obs-nvenc-test\RelWithDebInfo\obs-nvenc-test.exe
+  Copy obs-nvenc-test to destination
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/CMakeLists.txt

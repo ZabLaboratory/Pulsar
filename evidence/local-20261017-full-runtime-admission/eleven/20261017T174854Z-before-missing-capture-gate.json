@@ -1,0 +1,44 @@
+{
+  "schema": "pulsar.source-telemetry-bundle.v1",
+  "coherent": true,
+  "obs_sha256": "be089be088cb7a161cd3ae34152d2aeb4a6923e57b23b2dbf0988c47c7f22c21",
+  "required_exports": [
+    "obs_source_get_core_memory_usage",
+    "source_profiler_enable",
+    "source_profiler_fill_result",
+    "source_profiler_gpu_enable",
+    "source_profiler_request_telemetry"
+  ],
+  "binaries": [
+    {
+      "path": "bin\\64bit\\pulsar.exe",
+      "sha256": "67fec80bf8d3c8d976b5f7fcfb31f4cd07cb8c185445240a815efb5d3ee563bb",
+      "libobs_imports_checked": 177
+    },
+    {
+      "path": "obs-plugins\\64bit\\obs-websocket.dll",
+      "sha256": "408ba21e10c93e7893128255dfdf1b388d28eba3e98f71de9c944b7c423206b6",
+      "libobs_imports_checked": 296
+    },
+    {
+      "path": "obs-plugins\\64bit\\pulsar-browser.dll",
+      "sha256": "603665d8e65e0c73888f8cd7300a4a1f644e96faff3b3a4e1f8c101a101bfcd2",
+      "libobs_imports_checked": 100
+    },
+    {
+      "path": "obs-plugins\\64bit\\pulsar-camera-effects.dll",
+      "sha256": "a0d9249e25fa498ffec48ca33b4d7892a60ac777bf980259414e3b4ace4640de",
+      "libobs_imports_checked": 14
+    },
+    {
+      "path": "obs-plugins\\64bit\\pulsar-multi-stream.dll",
+      "sha256": "1c2163f1a6c640d5d47f20fcbf4081ab77bd138b6f2b10a0a0420c690b641b2c",
+      "libobs_imports_checked": 100
+    },
+    {
+      "path": "obs-plugins\\64bit\\pulsar-scene-source.dll",
+      "sha256": "c3c108dd57358a5bd1369e0546342798eafc1f9def482ea66f088768870dc058",
+      "libobs_imports_checked": 28
+    }
+  ]
+}

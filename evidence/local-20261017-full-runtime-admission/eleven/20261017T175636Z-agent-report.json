@@ -1,0 +1,102 @@
+{
+  "schema": "pulsar.full-runtime-admission/1",
+  "capturedUtc": "2026-10-17T17:56:36.104166+00:00",
+  "owner": "Eleven/root",
+  "worktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-full-runtime-admission",
+  "branch": "eleven/local-20261017-full-runtime-admission",
+  "sourceHeadBeforeCheckpoint": "0f4563c7e0fdba84f9f0ebfefd4e53da86b2e579",
+  "sourceFiles": {
+    "docs/ARCHITECTURE.md": "3d6fbf15dff5e7bc85e293ae681ff2d891debc20e516ade62f768bcb27bea9a0",
+    "docs/DEVELOPMENT.md": "81655bb254fe474b941a4b1a8e4b16a9ce657e58cb7a06fca740413aaf5a4fd2",
+    "plugins/pulsar-capture-effects/CMakeLists.txt": "57cf3218eec168018d3a99125240626ffa7472f541c86f64830ed7966d83e093",
+    "plugins/pulsar-capture-effects/README.md": "77b4160db209c0e0efc388192603907db4a0e8191d415b99207356d8479ede16",
+    "scripts/check-source-telemetry-bundle.py": "5eae94c67771c58c1ccef1a87317287de6664bb84bb3acc657db0c1d89c303db",
+    "scripts/ci-native-cache.py": "abe7d8b59e8ec7d06746e9df8cde8cd947c9daa6e69f5e9eb86b269baabbf40d",
+    "scripts/test_ci_native_cache.py": "9d12cf0ac87084ca1f4ceb87c49f05529a1ee8edd37f893cd91ce33f871f06cc"
+  },
+  "upstream": {
+    "pin": "25ed780b7f392a1690dfca929cd57679959cf3ad",
+    "patchedHead": "55abe4c484d845ee89252090ffc685f18488a56a",
+    "generatedGitlinkDifferenceNotCommitted": true,
+    "nestedBrowserPatchDifferenceExpected": true,
+    "freshRecursiveSubmodules": true
+  },
+  "build": {
+    "configureFull": "pass",
+    "upstreamRelWithDebInfoParallel2": "pass",
+    "pulsarRelWithDebInfoParallel2": "pass",
+    "officialStageBuildFullAndDependencyStaging": "pass",
+    "officialPackageFullSkipBuild": "pass",
+    "compileTimeTraceEnabled": false,
+    "logs": {
+      "configure": "20261017T175636Z-configure.txt",
+      "upstream-build": "20261017T175636Z-upstream-build.txt",
+      "pulsar-configure": "20261017T175636Z-pulsar-configure.txt",
+      "pulsar-build": "20261017T175636Z-pulsar-build.txt",
+      "capture-stage-build": "20261017T175636Z-capture-stage-build.txt",
+      "final-stage-build": "20261017T175636Z-final-stage-build.txt",
+      "package": "20261017T175636Z-package.txt",
+      "cache-before-tests": "20261017T175636Z-cache-before-tests.txt",
+      "cache-after-tests": "20261017T175636Z-cache-after-tests.txt",
+      "native-safety-tests": "20261017T175636Z-native-safety-tests.txt"
+    }
+  },
+  "fixedDefect": {
+    "cause": "MODULE target only configured RUNTIME output; Windows CMake library output stayed in intermediate build directory. The original package gate iterated existing Pulsar DLLs and accepted the missing mandatory module.",
+    "fix": "Set LIBRARY output directory as the other MODULE targets do; require capture-effects in package gate and exact CI cache seal/verify. Standalone plugin build unchanged.",
+    "beforeGate": "20261017T174854Z-before-missing-capture-gate.json",
+    "actualNegativeThenRestoredPositive": "20261017T175222Z-package-cohort.json",
+    "cacheTestsBefore": {
+      "total": 8,
+      "passed": 7,
+      "failed": 1
+    },
+    "cacheTestsAfter": {
+      "total": 8,
+      "passed": 8,
+      "failed": 0
+    },
+    "readOnlyPeerReview": "Sol max; no concrete defect in seven-file patch; no GPU or writes by reviewer"
+  },
+  "package": {
+    "manifest": "20261017T175636Z-package-manifest.json",
+    "manifestSha256": "dab040841c6e39e158c72fd7a4379783b2067a531a88f6a5b78bd34861e29e07",
+    "fileCount": 1256,
+    "allPluginDllImportChecks": 26,
+    "sourceCohortGate": "pass",
+    "postRuntimeFileCountAndModificationTimes": "unchanged"
+  },
+  "runtime": {
+    "telemetry": "20261017T175246Z-source-telemetry.json",
+    "telemetrySummary": "Color and animated CEF source CPU/GPU samples available while polled; profiler lease expires after idle; no Live or REC; clean exit0 without force.",
+    "capture": "20261017T175404Z-packaged-capture-runtime.json",
+    "pixelProof": {
+      "effects": 7,
+      "atomicAdmissions": 80,
+      "rotationAdmissions": 6,
+      "reset": true,
+      "zOrderPreserved": true,
+      "foreignCollisionPreserved": true
+    },
+    "shutdown": "graceful exit0; no Pulsar or CEF helper process remains"
+  },
+  "nativeSafetyTests": {
+    "total": 13,
+    "passed": 12,
+    "failed": 1,
+    "unqualified": "pulsar-dir-hardening-probe: two owner/substitution gestures not exercised because Windows token lacks SeRestorePrivilege; assertion kept failing. No privilege elevation or weakened check.",
+    "log": "20261017T175636Z-native-safety-tests.txt"
+  },
+  "scope": "Full native package coherence and isolated runtime proof. Not common Prism installation, actual camera/window content, LSDP full transport, all tests, CI or stream endurance. Transitions and switch duration untouched.",
+  "remaining": [
+    "Qualify/install this candidate in coordinated common dev after preserving current fallback.",
+    "Repeat actual Solar/CEF/native group chain against this fresh cohort.",
+    "Resolve existing broader-suite and privileged-runner validation separately."
+  ],
+  "retention": "Keep this owned worktree, initialized submodules, package and build cache for common-runtime qualification. Generated upstream gitlink remains unstaged.",
+  "evidenceFormatting": "Text transcripts normalized to LF with trailing whitespace removed; raw build and redacted host logs retained in owned cache.",
+  "workspaceGuard": {
+    "continue": true,
+    "result": "Zab workspace layout verified."
+  }
+}

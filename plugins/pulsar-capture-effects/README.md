@@ -40,7 +40,12 @@ object space. The host validates colors and bounds, the native entry clamps
 again. Limits: 32 ordered effects, 100 px blur, 512 px transparent margin.
 
 Standalone build accepts PULSAR_OBS_HEADERS and PULSAR_UPSTREAM_BUILD_DIR to use
-an existing compatible libobs build. Standard Pulsar build includes this plugin.
+an existing compatible libobs build. Standard Pulsar build includes this plugin
+and stages its module DLL into the upstream runtime's `obs-plugins/64bit/`.
+The CMake library output property is required for this `MODULE` target; a runtime
+output property alone leaves its DLL in the intermediate build directory.
+The existing native bundle gate refuses either distribution when this mandatory
+module is absent, before a version stamp or archive is produced.
 Native acceptance requires real source screenshots, alpha/paint readback,
 removal/reset, and coexistence with the native transition.
 
