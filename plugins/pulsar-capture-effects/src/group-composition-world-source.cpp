@@ -1,3 +1,4 @@
+#include "reset-trace.hpp"
 #include "group-composition-world-source.hpp"
 #include <graphics/matrix4.h>
 #include <obs-module.h>
@@ -7,12 +8,18 @@ namespace {
 constexpr const char *source_id = "pulsar_composition_world_affine";
 constexpr const char *dependency_source_id = "pulsar_composition_dependency";
 struct WorldSource {
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  uint64_t trace_id = 0;
+#endif
   obs_source_t *owner = nullptr;
   obs_source_t *base = nullptr;
   matrix4 affine{};
   uint32_t width = 0, height = 0;
 };
 struct DependencySource {
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  uint64_t trace_id = 0;
+#endif
   obs_source_t *owner = nullptr;
   obs_source_t *dependency = nullptr;
 };
@@ -22,17 +29,43 @@ void *create(obs_data_t *, obs_source_t *owner)
 {
   auto *state = new (std::nothrow) WorldSource;
   if (state) {
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    state->trace_id = pulsar_reset_trace::next_object_id();
+    const uint64_t trace_id = state->trace_id;
+#else
+    constexpr uint64_t trace_id = 0;
+#endif
     state->owner = owner;
     matrix4_identity(&state->affine);
+    pulsar_reset_trace::event("world-source", trace_id, "create",
+                              owner);
   }
   return state;
 }
 void destroy(void *data)
 {
   auto *state = static_cast<WorldSource *>(data);
-  if (state->base)
+  if (!state)
+    return;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  const uint64_t trace_id = state->trace_id;
+#else
+  constexpr uint64_t trace_id = 0;
+#endif
+  pulsar_reset_trace::event("world-source", trace_id, "destroy-enter",
+                            state->owner, state->base);
+  if (state->base) {
+    pulsar_reset_trace::event("world-source", trace_id,
+                              "base-release-begin", state->owner,
+                              state->base);
     obs_source_release(state->base);
+    pulsar_reset_trace::event("world-source", trace_id, "base-release-end",
+                              state->owner);
+  }
+  pulsar_reset_trace::event("world-source", trace_id, "delete-begin",
+                            state->owner);
   delete state;
+  pulsar_reset_trace::event("world-source", trace_id, "delete-end", nullptr);
 }
 uint32_t width(void *data) { return static_cast<WorldSource *>(data)->width; }
 uint32_t height(void *data) { return static_cast<WorldSource *>(data)->height; }
@@ -61,16 +94,44 @@ const char *dependency_name(void *)
 void *dependency_create(obs_data_t *, obs_source_t *owner)
 {
   auto *state = new (std::nothrow) DependencySource;
-  if (state)
+  if (state) {
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    state->trace_id = pulsar_reset_trace::next_object_id();
+    const uint64_t trace_id = state->trace_id;
+#else
+    constexpr uint64_t trace_id = 0;
+#endif
     state->owner = owner;
+    pulsar_reset_trace::event("mask-dependency", trace_id, "create",
+                              owner);
+  }
   return state;
 }
 void dependency_destroy(void *data)
 {
   auto *state = static_cast<DependencySource *>(data);
-  if (state->dependency)
+  if (!state)
+    return;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  const uint64_t trace_id = state->trace_id;
+#else
+  constexpr uint64_t trace_id = 0;
+#endif
+  pulsar_reset_trace::event("mask-dependency", trace_id, "destroy-enter",
+                            state->owner, state->dependency);
+  if (state->dependency) {
+    pulsar_reset_trace::event("mask-dependency", trace_id,
+                              "dependency-release-begin", state->owner,
+                              state->dependency);
     obs_source_release(state->dependency);
+    pulsar_reset_trace::event("mask-dependency", trace_id,
+                              "dependency-release-end", state->owner);
+  }
+  pulsar_reset_trace::event("mask-dependency", trace_id, "delete-begin",
+                            state->owner);
   delete state;
+  pulsar_reset_trace::event("mask-dependency", trace_id, "delete-end",
+                            nullptr);
 }
 uint32_t dependency_width(void *) { return 1; }
 uint32_t dependency_height(void *) { return 1; }

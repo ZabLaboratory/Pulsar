@@ -22,9 +22,11 @@ if __name__ == "__main__":
     effects = load("framing_effect_pixels", "probe-capture-effects.py")
     original = native.exercise
 
-    async def combined(config, output, runtime_id, scratch):
+    async def combined(config, output, runtime_id, scratch,
+                       expect_v2_rejection=False, prism_wire_emitter=None):
         paint = await effects.run(config, output)
-        result = await original(config, output, runtime_id, scratch)
+        result = await original(config, output, runtime_id, scratch,
+                                expect_v2_rejection, prism_wire_emitter)
         result["capturePaintAndFractionalFraming"] = paint
         return result
 

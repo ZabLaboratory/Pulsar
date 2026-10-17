@@ -1,0 +1,35 @@
+{
+  "operation": "Strip trailing whitespace and normalize line endings only; original log bytes retained in owned cache. No diagnostic text, ordering or report JSON changed.",
+  "files": [
+    {
+      "versionedPath": "evidence/local-20261017-native-reset-stability/eleven/20261017T164854Z-reset-exact-host-log.txt",
+      "originalSavedAt": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\raw-host-logs\\20261017T164854Z-reset-exact-host-log.txt",
+      "originalSha256": "9f316348c9ed4d402288d0768559d5ed36f052edcb63e8053af93256c01d1543",
+      "normalizedSha256": "b538af74cef1f8713c76a6896bcebb29c71bd67c088bd73a035dbe6061ca4e68"
+    },
+    {
+      "versionedPath": "evidence/local-20261017-native-reset-stability/eleven/20261017T165644Z-reset-exact-host-log.txt",
+      "originalSavedAt": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\raw-host-logs\\20261017T165644Z-reset-exact-host-log.txt",
+      "originalSha256": "934f78e3ce3da0061a98e2e425a9b6c98a115322e0e548a80050f1a62a0cad00",
+      "normalizedSha256": "789b9d1e2e2f343eaf21edbca6d5067961d34964c54852d3035ace1005622cb1"
+    },
+    {
+      "versionedPath": "evidence/local-20261017-native-reset-stability/eleven/20261017T170202Z-reset-exact-host-log.txt",
+      "originalSavedAt": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\raw-host-logs\\20261017T170202Z-reset-exact-host-log.txt",
+      "originalSha256": "a5206562eea1d11d17c7ff63cc7cff809fcba6bb608bd0f48843025847bc8345",
+      "normalizedSha256": "d90754ed5768dca793bf39ed133e59d2a8cb72cf78cd9b31960b3860e4aefff3"
+    },
+    {
+      "versionedPath": "evidence/local-20261017-native-reset-stability/eleven/20261017T170236Z-reset-exact-host-log.txt",
+      "originalSavedAt": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\raw-host-logs\\20261017T170236Z-reset-exact-host-log.txt",
+      "originalSha256": "f285760b82fe2fe6bb7bcc7406584df21fe645aace99984ab5dd48ee3cf1e328",
+      "normalizedSha256": "5acc29523dbee9e781e631fe7dc912ad3de826e070509dbce8ca0b88d7104f67"
+    },
+    {
+      "versionedPath": "evidence/local-20261017-native-reset-stability/eleven/20261017T170311Z-reset-exact-host-log.txt",
+      "originalSavedAt": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\raw-host-logs\\20261017T170311Z-reset-exact-host-log.txt",
+      "originalSha256": "b491756bb01cad6eba362c29480fbc2663062e9d010520a25dc923d964879692",
+      "normalizedSha256": "26be38ca9eef8048cf81c5de370cd7be8fedfbc7e51465b4ce49283404070761"
+    }
+  ]
+}

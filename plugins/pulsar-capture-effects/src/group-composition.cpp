@@ -1,4 +1,6 @@
+#include "reset-trace.hpp"
 #include "group-composition.hpp"
+#include "capture-effects.hpp"
 #include "group-composition-plan.hpp"
 #include "group-composition-source-validation.hpp"
 #include "group-composition-world-source.hpp"
@@ -12,6 +14,7 @@
 #include <obs.h>
 #include <callback/calldata.h>
 #include <callback/signal.h>
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <memory>
@@ -83,6 +86,25 @@ std::unordered_set<RemovedSourceEvent *> pending_source_removals;
 bool accepting_source_removals = false;
 std::size_t source_removals_in_flight = 0;
 uint64_t source_serial = 0;
+
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+std::atomic<uint64_t> reset_trace_sequence{0};
+uint64_t next_reset_trace_id()
+{
+  return reset_trace_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+void reset_trace(uint64_t trace_id, const char *phase)
+{
+  blog(LOG_INFO,
+       "PULSAR_GROUP_COMPOSITION_RESET trace=%llu tid=%llu phase=%s",
+       static_cast<unsigned long long>(trace_id),
+       static_cast<unsigned long long>(pulsar_reset_trace::current_thread_id()),
+       phase);
+}
+#else
+inline uint64_t next_reset_trace_id() { return 0; }
+inline void reset_trace(uint64_t, const char *) {}
+#endif
 
 static_assert(std::is_nothrow_swappable_v<ActiveComposition>);
 
@@ -263,6 +285,12 @@ bool add_composition_filter(obs_source_t *filtered_source,
   obs_data_release(settings);
   if (!filter) {
     set_error(response, "composition-filter-create-failed");
+    return false;
+  }
+  if (!capture_effects_bind_background_parent(
+          filter, obs_scene_get_source(parent_scene))) {
+    obs_source_release(filter);
+    set_error(response, "composition-filter-parent-bind-failed");
     return false;
   }
   obs_source_filter_add(filtered_source, filter);
@@ -663,21 +691,46 @@ void swap_visibility(void *data, obs_scene_t *scene)
   obs_sceneitem_set_visible(swap.new_root, swap.new_root_visible);
 }
 
-void remove_root(obs_sceneitem_t *root)
+void remove_root(obs_sceneitem_t *root, uint64_t generation)
 {
   if (!root)
     return;
+  pulsar_reset_trace::event("composition-retirement", generation,
+                            "sceneitem-remove-begin", nullptr, root);
   obs_sceneitem_remove(root);
+  pulsar_reset_trace::event("composition-retirement", generation,
+                            "sceneitem-remove-end", nullptr, root);
+  pulsar_reset_trace::event("composition-retirement", generation,
+                            "sceneitem-release-begin", nullptr, root);
   obs_sceneitem_release(root);
+  pulsar_reset_trace::event("composition-retirement", generation,
+                            "sceneitem-release-end", nullptr, root);
 }
 
 struct CandidateGuard {
   ActiveComposition state;
   ~CandidateGuard()
   {
+    pulsar_reset_trace::event("composition-retirement", state.generation,
+                              "candidate-guard-begin", nullptr, state.root,
+                              state.dependency_sources.size());
     if (state.root)
-      remove_root(state.root);
+      remove_root(state.root, state.generation);
+    pulsar_reset_trace::event("composition-retirement", state.generation,
+                              "original-item-release-begin", nullptr,
+                              state.root, state.originals.size());
     release_originals(state.originals);
+    pulsar_reset_trace::event("composition-retirement", state.generation,
+                              "original-item-release-end", nullptr,
+                              state.root);
+    pulsar_reset_trace::event("composition-retirement", state.generation,
+                              "dependency-release-begin", nullptr,
+                              state.root, state.dependency_sources.size());
+    state.dependency_sources.clear();
+    pulsar_reset_trace::event("composition-retirement", state.generation,
+                              "dependency-release-end", nullptr, state.root);
+    pulsar_reset_trace::event("composition-retirement", state.generation,
+                              "candidate-guard-end", nullptr, state.root);
   }
 };
 
@@ -866,6 +919,7 @@ bool copy_original_visibility(const Plan &plan, obs_scene_t *scene,
 struct Commit {
   obs_data_t *request = nullptr;
   obs_data_t *response = nullptr;
+  uint64_t reset_trace_id = 0;
 };
 
 void commit_graphics(void *data)
@@ -1022,49 +1076,69 @@ struct Reset {
 void reset_graphics(void *data)
 {
   auto &request = *static_cast<Commit *>(data);
+  reset_trace(request.reset_trace_id, "graphics_enter");
   std::string scene_name;
-  if (!read_string(request.request, "sceneName", scene_name, request.response, 512))
+  reset_trace(request.reset_trace_id, "scene_name_read_begin");
+  if (!read_string(request.request, "sceneName", scene_name, request.response, 512)) {
+    reset_trace(request.reset_trace_id, "scene_name_read_rejected");
     return;
+  }
+  reset_trace(request.reset_trace_id, "scene_name_read_end");
+  reset_trace(request.reset_trace_id, "scene_lookup_begin");
   SourceRef source_handle(obs_get_source_by_name(scene_name.c_str()));
   obs_source_t *source = source_handle.get();
   obs_scene_t *scene = source ? obs_scene_from_source(source) : nullptr;
   const char *scene_uuid_value = source ? obs_source_get_uuid(source) : nullptr;
+  reset_trace(request.reset_trace_id, "scene_lookup_end");
   if (!scene || !scene_uuid_value) {
     set_error(request.response, "scene-not-found", scene_name.c_str());
+    reset_trace(request.reset_trace_id, "scene_not_found");
     return;
   }
   const std::string scene_uuid(scene_uuid_value);
+  reset_trace(request.reset_trace_id, "active_map_lookup_begin");
   auto found = active_compositions.find(scene_uuid);
+  reset_trace(request.reset_trace_id, "active_map_lookup_end");
   if (found == active_compositions.end()) {
     obs_data_set_bool(request.response, "ok", true);
     obs_data_set_bool(request.response, "reset", false);
+    reset_trace(request.reset_trace_id, "no_active_composition");
     return;
   }
   int64_t generation = 0;
   if (!read_integer(request.request, "generation", generation, request.response) ||
       generation < 1) {
     set_error(request.response, "invalid-generation", "reset requires active generation");
+    reset_trace(request.reset_trace_id, "generation_rejected");
     return;
   }
   std::string runtime_instance_id;
   if (!read_string(request.request, "runtimeInstanceId", runtime_instance_id,
-                   request.response, 256))
+                   request.response, 256)) {
+    reset_trace(request.reset_trace_id, "runtime_instance_read_rejected");
     return;
+  }
   auto &state = found->second;
   const char *runtime_instance = std::getenv("PULSAR_RUNTIME_INSTANCE_ID");
   if (!runtime_instance || runtime_instance_id != runtime_instance ||
       runtime_instance_id != state.runtime_instance_id) {
     set_error(request.response, "runtime-instance-mismatch", scene_name.c_str());
+    reset_trace(request.reset_trace_id, "runtime_instance_rejected");
     return;
   }
+  reset_trace(request.reset_trace_id, "runtime_instance_valid");
   if (static_cast<uint64_t>(generation) != state.generation) {
     set_error(request.response, "stale-generation", scene_name.c_str());
+    reset_trace(request.reset_trace_id, "generation_mismatch");
     return;
   }
+  reset_trace(request.reset_trace_id, "generation_valid");
   if (obs_scene_find_sceneitem_by_id(scene, obs_sceneitem_get_id(state.root)) != state.root) {
     set_error(request.response, "active-root-replaced", scene_name.c_str());
+    reset_trace(request.reset_trace_id, "active_root_mismatch");
     return;
   }
+  reset_trace(request.reset_trace_id, "active_root_valid");
   struct ResetVisibility {
     ActiveComposition *state;
   } visibility{&state};
@@ -1077,19 +1151,32 @@ void reset_graphics(void *data)
       if (obs_scene_find_sceneitem_by_id(current_scene, original.id) == original.item)
         obs_sceneitem_set_visible(original.item, original.visible);
   };
+  reset_trace(request.reset_trace_id, "atomic_update_begin");
   obs_scene_atomic_update(scene, callback, &visibility);
+  reset_trace(request.reset_trace_id, "atomic_update_end");
+  reset_trace(request.reset_trace_id, "sceneitem_remove_begin");
   obs_sceneitem_remove(state.root);
+  reset_trace(request.reset_trace_id, "sceneitem_remove_end");
+  reset_trace(request.reset_trace_id, "release_state_begin");
   release_state(state);
+  reset_trace(request.reset_trace_id, "release_state_end");
+  reset_trace(request.reset_trace_id, "active_map_erase_begin");
   active_compositions.erase(found);
+  reset_trace(request.reset_trace_id, "active_map_erase_end");
   obs_data_set_bool(request.response, "ok", true);
   obs_data_set_bool(request.response, "reset", true);
   obs_data_set_int(request.response, "generation", generation);
+  reset_trace(request.reset_trace_id, "graphics_exit_success");
 }
 
 void reset_request(obs_data_t *request, obs_data_t *response, void *)
 {
   Commit commit{request, response};
+  commit.reset_trace_id = next_reset_trace_id();
+  reset_trace(commit.reset_trace_id, "request_enter");
+  reset_trace(commit.reset_trace_id, "queue_wait_begin");
   obs_queue_task(OBS_TASK_GRAPHICS, reset_graphics, &commit, true);
+  reset_trace(commit.reset_trace_id, "queue_wait_end");
 }
 
 void cleanup_composition(obs_scene_t *scene, ActiveComposition &state)
@@ -1220,7 +1307,11 @@ void reset_group_composition_request(obs_data_t *request, obs_data_t *response,
                                      void *)
 {
   Commit commit{request, response};
+  commit.reset_trace_id = next_reset_trace_id();
+  reset_trace(commit.reset_trace_id, "request_enter");
+  reset_trace(commit.reset_trace_id, "queue_wait_begin");
   obs_queue_task(OBS_TASK_GRAPHICS, reset_graphics, &commit, true);
+  reset_trace(commit.reset_trace_id, "queue_wait_end");
 }
 
 void group_composition_unload()

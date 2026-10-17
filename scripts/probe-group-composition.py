@@ -2818,6 +2818,15 @@ def main():
         report["ownedPid"] = process.proc.proc.pid
         process.wait_ready(60)
         time.sleep(2)
+        report["moduleLoadDiagnostics"] = [
+            process_protocol.redact_boot_line(line) for line in process._lines
+            if any(token in line.lower() for token in
+                   ("module", "loadlibrary", "failed to load", "os_dlopen"))]
+        helper_loaded = any(
+            "PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_load" in line
+            for line in process._lines)
+        if not helper_loaded:
+            raise RuntimeError("private graphics/removal helper did not load; inspect moduleLoadDiagnostics")
         initialized_audio_devices = [line for line in process._lines
                                      if "WASAPI:" in line and " initialized " in line]
         if initialized_audio_devices:

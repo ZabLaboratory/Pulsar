@@ -1,0 +1,6 @@
+TID=18964 pthread_caller_sp=0xa13f41f140
+  slot+0x78 addr=0xa13f41f1b8 value=0x7ff903a1c822
+  slot+0xb8 addr=0xa13f41f1f8 value=0x7ff90489ff26
+TID=8784 pthread_caller_sp=0xa13f91efe0
+  slot+0x78 addr=0xa13f91f058 value=0x7ff903a1c822
+  slot+0xb8 addr=0xa13f91f098 value=0x7ff8fe58edb1

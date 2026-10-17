@@ -1,3 +1,5 @@
+#include "reset-trace.hpp"
+#include "capture-effects.hpp"
 #include "effect-source.hpp"
 #include "group-composition.hpp"
 #include "obs-websocket-api.h"
@@ -31,11 +33,15 @@ struct Stage {
   vec4 tint{0, 0, 0, 1}, secondary{1, 1, 1, 1};
 };
 struct Effect {
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  uint64_t trace_id = 0;
+#endif
   obs_source_t *context = nullptr;
   gs_effect_t *shader = nullptr;
   gs_texrender_t *input = nullptr, *passes[2]{}, *background = nullptr,
                  *coverage = nullptr;
   obs_source_t *coverage_source = nullptr;
+  obs_weak_source_t *background_parent = nullptr;
   obs_scene_t *background_scene = nullptr;
   std::vector<obs_sceneitem_t *> background_items;
   std::vector<Stage> stages;
@@ -64,6 +70,17 @@ struct Effect {
   std::array<vec4, 32> ancestor_x{}, ancestor_y{}, ancestor_size{};
   float source_zoom = 1;
 };
+void effect_trace(const Effect *f, const char *phase,
+                  const void *resource = nullptr, uint64_t value = 0)
+{
+  uint64_t trace_id = 0;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  if (f)
+    trace_id = f->trace_id;
+#endif
+  pulsar_reset_trace::event("capture-effect", trace_id, phase,
+                            f ? f->context : nullptr, resource, value);
+}
 std::mutex registry_mutex;
 std::unordered_map<obs_source_t *, Effect *> registry;
 float number(obs_data_t *s, const char *key, float lo, float hi,
@@ -100,26 +117,27 @@ vec4 color(obs_data_t *s, const char *key, vec4 fallback) {
   obs_data_release(c);
   return value;
 }
-void update(void *data, obs_data_t *settings) {
-  auto *f = static_cast<Effect *>(data);
+obs_source_t *resolve_coverage(obs_data_t *settings) {
+  const char *name = obs_data_get_string(settings, "coverage_source_name");
+  return name && *name ? obs_get_source_by_name(name) : nullptr;
+}
+// The caller resolves and retains coverage before entering a scene transaction.
+// Applying a snapshot must not acquire the global source-name table.
+obs_source_t *apply_settings(Effect *f, obs_data_t *settings,
+                             obs_source_t *coverage) {
   std::lock_guard<std::mutex> lock(f->mutex);
   f->size = {positive_dimension(settings, "width", 1),
              positive_dimension(settings, "height", 1)};
   f->configuration_valid = true;
-  if (f->coverage_source) {
-    obs_source_release(f->coverage_source);
-    f->coverage_source = nullptr;
-  }
+  auto *previous_coverage = f->coverage_source;
+  f->coverage_source = nullptr;
   f->coverage_source_width = f->coverage_source_height = 0;
   f->coverage_crop_left = f->coverage_crop_top = 0;
   f->coverage_crop_right = f->coverage_crop_bottom = 0;
   f->coverage_rect_x = f->coverage_rect_y = 0;
   f->coverage_rect_width = f->coverage_rect_height = 0;
   if (obs_data_has_user_value(settings, "coverage_source_name")) {
-    const char *source_name = obs_data_get_string(settings, "coverage_source_name");
-    f->coverage_source = source_name && *source_name
-                             ? obs_get_source_by_name(source_name)
-                             : nullptr;
+    f->coverage_source = obs_source_get_ref(coverage);
     f->coverage_crop_left = int(obs_data_get_int(settings, "coverage_crop_left"));
     f->coverage_crop_top = int(obs_data_get_int(settings, "coverage_crop_top"));
     f->coverage_crop_right = int(obs_data_get_int(settings, "coverage_crop_right"));
@@ -192,7 +210,12 @@ void update(void *data, obs_data_t *settings) {
   f->raster_scale = {
       (f->size.x + f->padding * 2) / float(raster_width),
       (f->size.y + f->padding * 2) / float(raster_height)};
-  f->parent = obs_data_get_string(settings, "background_scene");
+  const std::string parent = obs_data_get_string(settings, "background_scene");
+  if (f->parent != parent) {
+    obs_weak_source_release(f->background_parent);
+    f->background_parent = nullptr;
+    f->parent = parent;
+  }
   f->stages.clear();
   f->needs_background = false;
   f->blend_mode = int(number(settings, "blend_mode", 0, 16));
@@ -229,33 +252,83 @@ void update(void *data, obs_data_t *settings) {
     f->stages.push_back(blend);
     f->needs_background = true;
   }
+  // Releasing the last reference can destroy a source and take global source
+  // locks. The caller releases this after its effect and scene locks are gone.
+  return previous_coverage;
+}
+void update(void *data, obs_data_t *settings) {
+  auto *coverage = resolve_coverage(settings);
+  auto *previous = apply_settings(static_cast<Effect *>(data), settings, coverage);
+  obs_source_release(previous);
+  obs_source_release(coverage);
 }
 const char *name(void *) { return "Pulsar Capture Effects"; }
 void destroy(void *data) {
   auto *f = static_cast<Effect *>(data);
   if (!f)
     return;
+  effect_trace(f, "destroy-enter");
+  effect_trace(f, "registry-lock-begin");
   {
     std::lock_guard<std::mutex> lock(registry_mutex);
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    effect_trace(f, "registry-lock-acquired");
+#endif
     registry.erase(f->context);
   }
-  if (f->background_scene)
+  effect_trace(f, "registry-lock-released");
+  obs_weak_source_release(f->background_parent);
+  if (f->background_scene) {
+    effect_trace(f, "background-scene-release-begin", f->background_scene);
     obs_scene_release(f->background_scene);
-  if (f->coverage_source)
+    effect_trace(f, "background-scene-release-end");
+  }
+  if (f->coverage_source) {
+    effect_trace(f, "coverage-source-release-begin", f->coverage_source);
     obs_source_release(f->coverage_source);
+    effect_trace(f, "coverage-source-release-end");
+  }
+  effect_trace(f, "graphics-enter-begin");
   obs_enter_graphics();
+  effect_trace(f, "graphics-enter-end");
+  effect_trace(f, "shader-destroy-begin", f->shader);
   gs_effect_destroy(f->shader);
+  effect_trace(f, "shader-destroy-end");
+  effect_trace(f, "input-texrender-destroy-begin", f->input);
   gs_texrender_destroy(f->input);
+  effect_trace(f, "input-texrender-destroy-end");
+  effect_trace(f, "background-texrender-destroy-begin", f->background);
   gs_texrender_destroy(f->background);
+  effect_trace(f, "background-texrender-destroy-end");
+  effect_trace(f, "coverage-texrender-destroy-begin", f->coverage);
   gs_texrender_destroy(f->coverage);
-  for (auto *pass : f->passes)
+  effect_trace(f, "coverage-texrender-destroy-end");
+  for (std::size_t index = 0; index < 2; ++index) {
+    effect_trace(f, "pass-texrender-destroy-begin", f->passes[index], index);
+    auto *pass = f->passes[index];
     gs_texrender_destroy(pass);
+    effect_trace(f, "pass-texrender-destroy-end", nullptr, index);
+  }
+  effect_trace(f, "graphics-leave-begin");
   obs_leave_graphics();
+  effect_trace(f, "graphics-leave-end");
+  effect_trace(f, "delete-begin");
+  const auto *source = f->context;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  const uint64_t trace_id = f->trace_id;
+#else
+  constexpr uint64_t trace_id = 0;
+#endif
   delete f;
+  pulsar_reset_trace::event("capture-effect", trace_id, "delete-end", source);
 }
 void *create(obs_data_t *settings, obs_source_t *source) {
   auto *f = new Effect;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  f->trace_id = pulsar_reset_trace::next_object_id();
+#endif
   f->context = source;
+  effect_trace(f, "create", source);
   char *error = nullptr;
   obs_enter_graphics();
   f->shader = gs_effect_create(capture_effect_source,
@@ -381,7 +454,11 @@ void render(void *data, gs_effect_t *) {
     }
   }
   if (f->needs_background) {
-    auto *parent = obs_get_source_by_name(f->parent.c_str());
+    auto *parent = obs_weak_source_get_source(f->background_parent);
+    if (parent && obs_source_removed(parent)) {
+      obs_source_release(parent);
+      parent = nullptr;
+    }
     auto *scene = parent ? obs_scene_from_source(parent) : nullptr;
     if (!scene && parent)
       scene = obs_group_from_source(parent);
@@ -544,8 +621,45 @@ void fit_content(Effect *effect, obs_sceneitem_t *inner) {
   obs_sceneitem_defer_update_end(inner);
   obs_sceneitem_force_update_transform(inner);
 }
+void refresh_background_parent(Effect *effect) {
+  std::string name;
+  obs_source_t *current = nullptr;
+  bool retained = false;
+  {
+    std::lock_guard<std::mutex> lock(effect->mutex);
+    if (!effect->needs_background)
+      return;
+    current = obs_weak_source_get_source(effect->background_parent);
+    retained = current && !obs_source_removed(current);
+    if (!retained) {
+      obs_weak_source_release(effect->background_parent);
+      effect->background_parent = nullptr;
+      name = effect->parent;
+    }
+  }
+  obs_source_release(current);
+  if (retained || name.empty())
+    return;
+  // Source ticks run before scene rendering, after the source-list lock is
+  // released. In particular, never do this lookup under a scene or Effect
+  // lock: group removal takes the canvas lock before the scene lock.
+  auto *source = obs_get_source_by_name(name.c_str());
+  auto *weak = source && !obs_source_removed(source)
+                   ? obs_source_get_weak_source(source)
+                   : nullptr;
+  obs_source_release(source);
+  {
+    std::lock_guard<std::mutex> lock(effect->mutex);
+    if (effect->parent == name && !effect->background_parent) {
+      effect->background_parent = weak;
+      weak = nullptr;
+    }
+  }
+  obs_weak_source_release(weak);
+}
 void tick(void *data, float) {
   auto *effect = static_cast<Effect *>(data);
+  refresh_background_parent(effect);
   if (effect->skip_content_fit)
     return;
   std::lock_guard<std::mutex> lock(effect->mutex);
@@ -555,8 +669,22 @@ void tick(void *data, float) {
     fit_content(static_cast<Effect *>(state), item); return false;
   }, effect);
 }
+struct PreparedAppearance {
+  obs_source_t *layer = nullptr, *filter = nullptr, *coverage = nullptr;
+  obs_source_t *previous_coverage = nullptr;
+  obs_data_t *settings = nullptr;
+  bool created_filter = false;
+  ~PreparedAppearance() {
+    obs_source_release(filter);
+    obs_source_release(previous_coverage);
+    obs_source_release(coverage);
+    obs_source_release(layer);
+    obs_data_release(settings);
+  }
+};
 struct Commit {
   obs_data_t *request, *response;
+  PreparedAppearance *appearance = nullptr;
 };
 void admit(void *data, obs_scene_t *scene) {
   auto &c = *static_cast<Commit *>(data);
@@ -572,6 +700,11 @@ void admit(void *data, obs_scene_t *scene) {
     return;
   }
   auto *layer = obs_sceneitem_get_source(outer);
+  auto &prepared = *c.appearance;
+  if (layer != prepared.layer) {
+    obs_data_set_string(c.response, "error", "Capture appearance layer replaced");
+    return;
+  }
   auto *inner_scene = obs_scene_from_source(layer);
   auto *inner = inner_scene ? obs_scene_find_sceneitem_by_id(
                                   inner_scene, obs_data_get_int(r, "innerId"))
@@ -582,21 +715,15 @@ void admit(void *data, obs_scene_t *scene) {
                         "Capture appearance source replaced");
     return;
   }
-  obs_data_t *settings = obs_data_get_obj(r, "settings");
-  if (!settings) {
-    obs_data_set_string(c.response, "error",
-                        "Capture appearance settings missing");
+  auto *current_filter = obs_source_get_filter_by_name(layer, "prism/capture-effects");
+  const bool unchanged = prepared.created_filter ? current_filter == nullptr
+                                                 : current_filter == prepared.filter;
+  obs_source_release(current_filter);
+  if (!unchanged) {
+    obs_data_set_string(c.response, "error", "Capture effects filter replaced");
     return;
   }
-  auto *filter = obs_source_get_filter_by_name(layer, "prism/capture-effects");
-  if (filter &&
-      std::string(obs_source_get_id(filter)) != "pulsar_capture_effects") {
-    obs_source_release(filter);
-    obs_data_release(settings);
-    obs_data_set_string(c.response, "error",
-                        "Capture effects filter name collision");
-    return;
-  }
+  auto *filter = prepared.filter;
   // Only the two retired internal filters can be replaced. Never remove an
   // operator filter or a colliding registration, even from an authored layer.
   const char *names[] = {"prism/color_filter", "prism/capture-rounded"};
@@ -607,24 +734,12 @@ void admit(void *data, obs_scene_t *scene) {
     if (retired[i] && std::string(obs_source_get_id(retired[i])) != ids[i]) {
       for (auto *f : retired)
         obs_source_release(f);
-      obs_source_release(filter);
-      obs_data_release(settings);
       obs_data_set_string(c.response, "error",
                           "Capture appearance filter name collision");
       return;
     }
   }
-  const bool created_filter = filter == nullptr;
-  obs_data_t *snapshot = obs_data_create();
-  // libobs retains a reference to creation settings; keep the caller's request
-  // data separate from the filter's stored mutable settings object.
-  obs_data_apply(snapshot, settings);
-  if (!filter) {
-    filter = obs_source_create("pulsar_capture_effects",
-                               "prism/capture-effects", snapshot, nullptr);
-    if (filter)
-      obs_source_filter_add(layer, filter);
-  }
+  auto *snapshot = prepared.settings;
   Effect *effect = nullptr;
   {
     std::lock_guard<std::mutex> lock(registry_mutex);
@@ -635,9 +750,6 @@ void admit(void *data, obs_scene_t *scene) {
   if (!effect) {
     for (auto *f : retired)
       obs_source_release(f);
-    obs_source_release(filter);
-    obs_data_release(snapshot);
-    obs_data_release(settings);
     obs_data_set_string(c.response, "error",
                         "Capture effects filter unavailable");
     return;
@@ -647,10 +759,12 @@ void admit(void *data, obs_scene_t *scene) {
   // optional geometry from a previous commit. Reset first to make omissions
   // return to defaults. A new filter already owns this snapshot; reset only an
   // existing filter.
-  if (!created_filter)
+  if (!prepared.created_filter)
     obs_source_reset_settings(filter, snapshot);
-  update(effect,
-         snapshot); // synchronous admission; next tick repeats the same state
+  prepared.previous_coverage = apply_settings(effect, snapshot, prepared.coverage);
+  capture_effects_bind_background_parent(filter, obs_scene_get_source(scene));
+  if (prepared.created_filter)
+    obs_source_filter_add(layer, filter);
   obs_source_set_enabled(filter, true);
   for (auto *f : retired) {
     if (f)
@@ -702,9 +816,39 @@ void admit(void *data, obs_scene_t *scene) {
   }
   obs_sceneitem_set_visible(outer, obs_data_get_bool(r, "visible"));
   obs_data_set_bool(c.response, "ok", true);
-  obs_source_release(filter);
-  obs_data_release(snapshot);
+}
+bool prepare_appearance(Commit &c, PreparedAppearance &prepared) {
+  prepared.layer = obs_get_source_by_name(obs_data_get_string(c.request, "layer"));
+  if (!prepared.layer) {
+    obs_data_set_string(c.response, "error", "Capture appearance layer missing");
+    return false;
+  }
+  auto *settings = obs_data_get_obj(c.request, "settings");
+  if (!settings) {
+    obs_data_set_string(c.response, "error", "Capture appearance settings missing");
+    return false;
+  }
+  // Creation retains settings; isolate them from the request and prepare all
+  // named-source lookups before obs_scene_atomic_update takes scene locks.
+  prepared.settings = obs_data_create();
+  obs_data_apply(prepared.settings, settings);
   obs_data_release(settings);
+  prepared.coverage = resolve_coverage(prepared.settings);
+  prepared.filter = obs_source_get_filter_by_name(prepared.layer, "prism/capture-effects");
+  if (prepared.filter &&
+      std::string(obs_source_get_id(prepared.filter)) != "pulsar_capture_effects") {
+    obs_data_set_string(c.response, "error", "Capture effects filter name collision");
+    return false;
+  }
+  prepared.created_filter = prepared.filter == nullptr;
+  if (prepared.created_filter)
+    prepared.filter = obs_source_create("pulsar_capture_effects",
+                                         "prism/capture-effects", prepared.settings, nullptr);
+  if (!prepared.filter) {
+    obs_data_set_string(c.response, "error", "Capture effects filter unavailable");
+    return false;
+  }
+  return true;
 }
 void commit_graphics(void *data) {
   auto &c = *static_cast<Commit *>(data);
@@ -719,9 +863,14 @@ void commit_graphics(void *data) {
   auto *source =
       obs_get_source_by_name(obs_data_get_string(c.request, "sceneName"));
   auto *scene = source ? obs_scene_from_source(source) : nullptr;
-  if (scene)
-    obs_scene_atomic_update(scene, admit, &c);
-  else
+  if (scene) {
+    PreparedAppearance prepared;
+    if (prepare_appearance(c, prepared)) {
+      c.appearance = &prepared;
+      obs_scene_atomic_update(scene, admit, &c);
+      c.appearance = nullptr;
+    }
+  } else
     obs_data_set_string(c.response, "error",
                         "Capture appearance scene missing");
   obs_source_release(source);
@@ -755,6 +904,21 @@ void blend_request(obs_data_t *request, obs_data_t *response, void *) {
   obs_queue_task(OBS_TASK_GRAPHICS, blend_graphics, &c, true);
 }
 } // namespace
+bool capture_effects_bind_background_parent(obs_source_t *filter,
+                                            obs_source_t *parent) {
+  if (!filter || !parent || obs_source_removed(parent))
+    return false;
+  std::lock_guard<std::mutex> registry_lock(registry_mutex);
+  const auto it = registry.find(filter);
+  if (it == registry.end())
+    return false;
+  auto *effect = it->second;
+  auto *weak = obs_source_get_weak_source(parent);
+  std::lock_guard<std::mutex> effect_lock(effect->mutex);
+  obs_weak_source_release(effect->background_parent);
+  effect->background_parent = weak;
+  return weak != nullptr;
+}
 bool obs_module_load(void) {
   if (!group_composition_load())
     return false;

@@ -1,0 +1,13 @@
+MODULE pulsar-capture-effects.dll base 0x7ff904890000 timestamp 0x6ad39664 checksum 0x0 path D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-reset-stability\.cache\native-reset-stability\private-runtime-exact-20261017T155459Z\runtime\obs-plugins\64bit\pulsar-capture-effects.dll
+PDB_ID ed27d42c-9807-4057-bdcb-5e8780441c16 3 vs ed27d42c-9807-4057-bdcb-5e8780441c16 3 EXACT True SHA256 a6a923935ea83bbdde33a677878f62dde59014535ac1f80c4cebbb546432b453
+MODULE obs-websocket.dll base 0x7ff8fe4b0000 timestamp 0x6ad16df2 checksum 0x0 path D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-reset-stability\.cache\native-reset-stability\private-runtime-exact-20261017T155459Z\runtime\obs-plugins\64bit\obs-websocket.dll
+PDB_ID 7e14253a-fbfe-4eee-a034-9cfcd9b2ca38 1 vs 7e14253a-fbfe-4eee-a034-9cfcd9b2ca38 1 EXACT True SHA256 9b315c67362d33932aba18d9bceda08c119535141d024c88f8fcd99732931e37
+SYM_INIT True D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-reset-stability\.cache\native-reset-stability\plugin-build\RelWithDebInfo;D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-reset-stability\.cache\native-reset-stability\private-runtime-exact-20261017T155459Z\runtime\bin\64bit;D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-reset-stability\.cache\native-reset-stability\private-runtime-exact-20261017T155459Z\runtime\obs-plugins\64bit
+LOAD obs.dll 0x7ff9039a0000 0
+LOAD w32-pthreads.dll 0x7ff970d60000 0
+LOAD obs-websocket.dll 0x7ff8fe4b0000 0
+LOAD pulsar-capture-effects.dll 0x7ff904890000 0
+PC 0x7ff903a1c822: get_context_by_name+0x32 X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\libobs\obs.c:2083+0x0
+PC 0x7ff90489ff26: `anonymous namespace'::render+0x1b6 D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-reset-stability\plugins\pulsar-capture-effects\src\capture-effects.cpp:439+0x16
+PC 0x7ff8fe58edb1: Request::AcquireSource+0x3b1 X:\.cache\native-group-composition\pulsar-private-source\plugins\pulsar-websocket\src\requesthandler\rpc\Request.cpp:251+0x22
+PC 0x7ff970d6383f: pthread_mutex_lock+0x12f X:\.cache\native-group-composition\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\deps\w32-pthreads\pthread_mutex_lock.c:127+0xf

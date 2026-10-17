@@ -10,6 +10,28 @@ parent scene recursively. Mirrors contain only visible items below the filter
 parent in the immediate scene stack, in the same order, and are released with
 the filter. No inactive authored scene cache is retained.
 
+Backdrop parents are retained weakly. Group composition and appearance admission
+bind the containing scene directly before painting; the render callback promotes
+that weak reference only for the current draw and never performs a source-name
+lookup. This avoids the canvas/source-list versus scene-lock inversion when
+retired groups are removed concurrently. Ordinary filter configuration records
+the requested parent name; the existing video tick resolves missing or removed
+parents outside the filter and scene locks. A valid binding survives a rename;
+an explicit different parent setting replaces it. Missing parents and replacement
+sources under the requested name recover on a later tick without another edit.
+Destruction releases the weak reference, so it cannot keep an inactive scene
+alive or form a scene/filter ownership cycle.
+
+`CommitAppearance` prepares its detached filter, immutable settings snapshot and
+coverage source before entering the atomic scene update. Admission rechecks the
+layer, input and filter identities, then applies settings and attaches the filter
+without global source-name lookups. Replaced coverage references are released
+after leaving both effect and scene locks, including when the removed mask's last
+owner was this filter. The generic video update also resolves coverage before its
+effect mutex and releases the old reference after that mutex. The parent/coverage
+lifetime regression is `scripts/probe-capture-parent-lifecycle.py`; it reuses the
+existing private native host and checks pixels without Live or recording.
+
 Entry: src/capture-effects.cpp. Shader: src/capture-effects.effect, embedded at
 build time. Public registration: pulsar_capture_effects. Consumer: Prism capture
 resolver. Texture/glass remain procedural approximations like the authoring

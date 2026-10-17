@@ -1,0 +1,204 @@
+{
+  "startedUtc": "2026-10-17T17:00:56.035559+00:00",
+  "passed": false,
+  "browserPreShutdownFixture": {
+    "enabled": true,
+    "mode": "private-test-helper-no-browser-source-fence",
+    "browserModulesInRuntime": [],
+    "helperCheck": "enumerates OBS sources when the host requests the browser fence and returns success only when no browser_source/browser_source_v2 exists",
+    "cefShutdownExercised": false
+  },
+  "hostExecutable": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\fractional-capture-box\\private-runtime-e051bd30c7e44077bcddf37b83827220\\runtime\\bin\\64bit\\pulsar.exe",
+    "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973",
+    "copiedFromPrivateBuild": false
+  },
+  "provenance": {
+    "runtimeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo",
+    "runtimeExeSha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973",
+    "runtimeObsSha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1",
+    "privateCapturePlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "privateCapturePluginSha256": "eef21ab61180332fb80db12b68b2a74c99f6812f3c91242b89345bddebd6ce28",
+    "privateWebsocketPlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+    "privateWebsocketPluginSha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b",
+    "privateGraphicsRemoveHelper": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\private-runtime-exact-20261017T155459Z\\runtime\\obs-plugins\\64bit\\z-group-composition-shutdown-test-helper.dll",
+    "privateGraphicsRemoveHelperSha256": "f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff",
+    "graphicsRemoveHelperPurpose": "test-only module calls obs_source_remove within an OBS graphics task and queues a second removal during module unload after stop_video",
+    "jsonBridgeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\plugins\\pulsar-websocket\\src\\utils\\Json.cpp",
+    "jsonBridgeSourceSha256": "e40f65258346441c4435928e46c929ba20b8e0eabcc9a8334f6edfa538fadc0f",
+    "jsonBridgeBinarySourceClaim": "not asserted by this runner; supplied obs-websocket.dll is identified by its private path and SHA-256 above"
+  },
+  "upstreamShutdownContract": {
+    "revision": "70a58302435308e609e0b1114efe3ef402f810b7",
+    "obsSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_shutdown:1477; stop_video:1512; module unload loop:1517",
+      "contract": "the graphics video thread is stopped and joined before module unload callbacks"
+    },
+    "graphicsTaskSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-video.c",
+      "sha256": "1fa1ede0abaa100b3362dd9fefee4fdfbb77a63afd3ef73989c17e993fd38512",
+      "locations": "execute_graphics_tasks:1024; task execution:1216; loop stop check:1248",
+      "contract": "graphics tasks are executed before the loop checks whether to exit; final-boundary races are handled by the plugin-owned pending-event set"
+    },
+    "queueSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_queue_task:3518-3544",
+      "contract": "same-task-thread callbacks execute inline; otherwise graphics tasks enter the queue, so module unload cannot wait on a stopped graphics worker"
+    },
+    "videoTaskReleaseSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_shutdown module unload loop:1516-1528; obs_free_video/deque_free(video.tasks):909-950, called at 1534",
+      "contract": "graphics tasks enqueued after stop_video cannot execute; after module unload the video task deque is freed without invoking the callbacks, so payload ownership must be discharged by the plugin before the queue storage is released"
+    },
+    "moduleListSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-module.c",
+      "sha256": "175abd54c06153b75c893162522ce95086e509dbf9f46864ac71c7f1b483e6ae",
+      "locations": "obs_open_module prepends at 181-198; free_module:777-817; obs_shutdown:1516-1528",
+      "contract": "the module list is prepended on successful load and unloaded from its head; the runtime probe records load and unload marker order instead of assuming file enumeration order"
+    },
+    "globalSourceRemoveSignal": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-internal.h",
+      "sha256": "bb79629027174c25ba262d17ca00956308346f7626f62ecd889ec27d5ab6057e",
+      "locations": "obs_source_dosignal:1100-1111",
+      "contract": "private sources intentionally omit global source_remove; the private helper removes its retained synthetic source then forwards the same source pointer through the global source_remove handler so the plugin's actual listener queues an event after stop_video without registering an input for frontend cleanup"
+    }
+  },
+  "ownedPid": 49388,
+  "syntheticOnlyBootstrap": {
+    "desktopAudioDeviceId": "pulsar-synthetic-test-no-device",
+    "microphoneConfigured": false,
+    "processAudioConfigured": false,
+    "initializedWasapiDevices": [],
+    "browserModulesInRuntime": [],
+    "browserPreShutdownFixture": "test-only no-browser source assertion",
+    "result": "no WASAPI endpoint initialized during private bootstrap"
+  },
+  "errorType": "TypeError",
+  "error": "combined() takes 4 positional arguments but 6 were given",
+  "redactedBootTail": "--- pulsar stdout/stderr (last 40 lines) ---\n  | 2026-10-17T17:00:58Z ERROR WX8-th-UCUyYjWeX libobs | Encoder ID 'ffmpeg_aac' not found\n  | 2026-10-17T17:00:58Z DEBUG WX8-th-UCUyYjWeX libobs | encoder 'PulsarAudioEnc' (ffmpeg_aac) created\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | aac track 1 configured: 160 kbps (mixer index 0)\n  | 2026-10-17T17:00:58Z WARN WX8-th-UCUyYjWeX libobs | Output 'PulsarRecord': Tried to use obs_output_set_audio_encoder on a raw output\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | record audio tracks: 1\n  | 2026-10-17T17:00:58Z WARN WX8-th-UCUyYjWeX libobs | Output 'PulsarStream': Tried to use obs_output_set_audio_encoder on a raw output\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | stream audio tracks: 1\n  | 2026-10-17T17:00:58Z WARN WX8-th-UCUyYjWeX libobs | Output 'PulsarReplay': Tried to use obs_output_set_audio_encoder on a raw output\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | replay audio tracks: 1\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | window_capture has no target (set PULSAR_CAPTURE_WINDOW); will produce black frames\n  | 2026-10-17T17:00:58Z ERROR WX8-th-UCUyYjWeX libobs | Source ID 'window_capture' not found\n  | 2026-10-17T17:00:58Z ERROR WX8-th-UCUyYjWeX libobs | Failed to create source 'PulsarCapture'!\n  | 2026-10-17T17:00:58Z DEBUG WX8-th-UCUyYjWeX libobs | source 'PulsarCapture' (window_capture) created\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-dual-lane | activation=enabled source=default rollback_after_takes=0 flag_resolved_at=setup\n  | 2026-10-17T17:00:58Z WARN WX8-th-UCUyYjWeX libobs | Attempted to add Scene without specifying a canvas! Using default canvas instead.\n  | 2026-10-17T17:00:58Z DEBUG WX8-th-UCUyYjWeX libobs | private source 'PulsarLaneA' (scene) created\n  | 2026-10-17T17:00:58Z WARN WX8-th-UCUyYjWeX libobs | Attempted to add Scene without specifying a canvas! Using default canvas instead.\n  | 2026-10-17T17:00:58Z DEBUG WX8-th-UCUyYjWeX libobs | private source 'PulsarLaneB' (scene) created\n  | 2026-10-17T17:00:58Z WARN WX8-th-UCUyYjWeX libobs | Attempted to add Scene without specifying a canvas! Using default canvas instead.\n  | 2026-10-17T17:00:58Z DEBUG WX8-th-UCUyYjWeX libobs | private source 'PulsarPreviewBootstrap' (scene) created\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX libobs | NV12 texture support enabled\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX libobs | P010 texture support not available\n  | 2026-10-17T17:00:58Z ERROR WX8-th-UCUyYjWeX pulsar-scene-switch | failed to start PreviewView producer: (null)\n  | 2026-10-17T17:00:58Z WARN WX8-th-UCUyYjWeX pulsar-frontend-stub | dual-lane setup unavailable; keeping legacy canvas path\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-dual-lane | encoder video_t bound once to ProgramView\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | desktop audio configured use_device_timing=false\n  | 2026-10-17T17:00:58Z ERROR WX8-th-UCUyYjWeX libobs | Source ID 'wasapi_output_capture' not found\n  | 2026-10-17T17:00:58Z ERROR WX8-th-UCUyYjWeX libobs | Failed to create source 'PulsarDesktopAudio'!\n  | 2026-10-17T17:00:58Z DEBUG WX8-th-UCUyYjWeX libobs | source 'PulsarDesktopAudio' (wasapi_output_capture) created\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | desktop audio bound to channel 1\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | mic skipped (PULSAR_MIC_DEVICE_ID unset)\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | PULSAR_PROCESS_AUDIO_NAME unset; process audio not wired\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | recordings will land under: D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\fractional-capture-box\\private-runtime-e051bd30c7e44077bcddf37b83827220\\state\\runtime\\recordings\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | recording container: mp4\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | replay buffer configured: dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\fractional-capture-box\\private-runtime-e051bd30c7e44077bcddf37b83827220\\state\\runtime\\recordings max_time_sec=30 max_size_mb=512\n  | 2026-10-17T17:00:58Z WARN WX8-th-UCUyYjWeX pulsar-runtime-telemetry | trace disabled: exact build, host/GPU, and producer topology metadata are required\n  | 2026-10-17T17:00:58Z INFO WX8-th-UCUyYjWeX pulsar-scene-switch | vendor registered name=pulsar-scene-switch\n  | PULSAR_SESSION WX8-th-UCUyYjWeX\n  | PULSAR_READY ws=ws://127.0.0.1:64522 password=<redacted>\n  | pulsar-headless: libobs 32.1.2-67-g70a583024-modified-pulsar ready, idling (Ctrl+C to exit)",
+  "shutdownWaitSeconds": 0.125,
+  "shutdownTimeoutSeconds": 30.0,
+  "ownedProcessExited": true,
+  "gracefulShutdownRequested": true,
+  "forcedTerminationUsed": false,
+  "redactedShutdownTail": [
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_detached phase=exit",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_begin scenes=1 sources=2",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | output 'PulsarStream' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | output 'PulsarRecord' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | output 'PulsarReplay' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | output 'PulsarVCam' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | output 'PulsarProgramReturn' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | output 'PulsarPreviewReturn' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | encoder 'PulsarVideoEnc' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | encoder 'PulsarAudioEnc' destroyed",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | private source 'PulsarLaneA' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | private source 'PulsarLaneB' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | private source 'Fade' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | private source 'PulsarPreviewBootstrap' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | source 'Default' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | source 'PulsarCapture' destroyed",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | source 'PulsarDesktopAudio' destroyed",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=0",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX pulsar-frontend-stub | callbacks uninstalled",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=0 pending_released=0",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | [obs_module_unload] Shutting down...",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | [WebSocketServer::Stop] Server stopped successfully",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | [obs_module_unload] Finished shutting down.",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX libobs | Freeing OBS context data",
+    "2026-10-17T17:01:00Z DEBUG WX8-th-UCUyYjWeX libobs | canvas 'Main' (6c69626f-6273-4c00-9d88-c5136d61696e) destroyed",
+    "PULSAR_LEGACY_ALIAS lease=released id=group-proof-e12d97c5e86c4591bd3b3391c50b49b6 path=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\fractional-capture-box\\private-runtime-e051bd30c7e44077bcddf37b83827220\\state\\leases\\directshow-program-preview.lock authority=Local\\Pulsar.DirectShowProgramPreview metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\9eab04979f2b22fc.lock",
+    "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=group-proof-e12d97c5e86c4591bd3b3391c50b49b6 dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\fractional-capture-box\\private-runtime-e051bd30c7e44077bcddf37b83827220\\state\\runtime authority=Local\\Pulsar.Authority.409c2abffa964eae metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\409c2abffa964eae.lock",
+    "PULSAR_RUNTIME_INSTANCE lease=released id=group-proof-e12d97c5e86c4591bd3b3391c50b49b6 dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\fractional-capture-box\\private-runtime-e051bd30c7e44077bcddf37b83827220\\state\\runtime authority=Local\\Pulsar.Runtime.group-proof-e12d97c5e86c4591bd3b3391c50b49b6 metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\fe9f0eb5e3dbeb39.lock"
+  ],
+  "shutdownMilestones": [
+    "PULSAR_SHUTDOWN_CONTROL event=ready id=group-proof-e12d97c5e86c4591bd3b3391c50b49b6 mechanism=inherited_event",
+    "2026-10-17T17:00:57Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_GROUP_COMPOSITION event=module_load",
+    "2026-10-17T17:00:57Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_load",
+    "2026-10-17T17:00:57Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=no_browser_pre_shutdown_fixture_registered scope=no_browser_sources_only cef_shutdown=not_exercised",
+    "PULSAR_SHUTDOWN_CONTROL event=signaled id=group-proof-e12d97c5e86c4591bd3b3391c50b49b6 mechanism=inherited_event",
+    "[pulsar-headless] shutting down",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | PULSAR_WEBSOCKET_QUIESCE event=ack active_handlers=0 sessions=0 no_handlers_after_ack=1",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=no_browser_pre_shutdown success=1 browser_sources=0",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=scripting_shutdown",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=started",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=complete",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=exit",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=duplicate_skipped",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_detached phase=exit",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_begin scenes=1 sources=2",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=0",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=0 pending_released=0",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | [obs_module_unload] Shutting down...",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached",
+    "2026-10-17T17:01:00Z INFO WX8-th-UCUyYjWeX obs-websocket | [obs_module_unload] Finished shutting down."
+  ],
+  "shutdownDiagnostics": {
+    "errorFree": true,
+    "errorCount": 0,
+    "errors": [],
+    "attribution": "No shutdown ERROR log was observed after the shutdown signal."
+  },
+  "gracefulShutdownEvidence": {
+    "eventAdopted": true,
+    "eventSignaled": true,
+    "hostShutdownReached": true,
+    "exitCode": 0
+  },
+  "frontendCallbackShutdownLifecycle": {
+    "scriptShutdownThenExitRunsCleanupOnce": true,
+    "exitCleanupMarkerCountsAreExact": true,
+    "exitCallbackDetachedBeforeTableUninstall": true,
+    "destructorSkippedDuplicateRemovalAfterUninstall": true,
+    "noMissingFrontendCallbackError": true,
+    "markerIndexes": {
+      "scriptingShutdownReceived": 196,
+      "exitReceived": 199,
+      "exitCleanupStarted": 197,
+      "exitCleanupComplete": 198,
+      "duplicateCleanupSkipped": 200,
+      "exitDetach": 201,
+      "callbacksUninstalled": 220,
+      "websocketUnloadStarted": 222,
+      "destructorSkip": 224,
+      "websocketUnloadFinished": 225
+    },
+    "passed": true
+  },
+  "compositionModuleUnloadCleanup": {
+    "markerObserved": true,
+    "activeCompositionsBeforeCleanup": 0,
+    "generationFencesBeforeCleanup": 0,
+    "pendingRemovalEventsBeforeCleanup": 0,
+    "pendingRemovalEventsReleased": 0
+  },
+  "pendingRemovalUnloadProof": {
+    "testHelperLoadedAfterCapturePlugin": true,
+    "testRemovalRanBeforeCapturePluginUnload": false,
+    "helperRemovalOnStoppedGraphicsThread": false,
+    "pendingEventObservedAtCaptureUnload": false,
+    "pendingEventReleasedAtCaptureUnload": false,
+    "markerIndexes": {
+      "captureModuleLoad": 97,
+      "testHelperModuleLoad": 101,
+      "testHelperUnloadRemoval": null,
+      "captureModuleUnloadCleanup": 221
+    },
+    "passed": false
+  },
+  "boundedExitWithoutForcedTermination": true,
+  "cleanShutdown": true,
+  "activeCompositionCleanlyUnloaded": false,
+  "activeCompositionDisposedBeforeModuleUnload": false,
+  "gracefulShutdownAfterActiveComposition": false,
+  "scratchRemoved": true,
+  "finishedUtc": "2026-10-17T17:01:00.218895+00:00",
+  "limits": "Private synthetic GPU readback only. Protocol /2 group and capture masks, all 16 admitted CSS blend modes, root appearance, dynamic atlas sampling, atomic refusal and reset are exercised; the /1 plugin is the negative control. The atlas is a synthetic image input, not a Solar CEF source or physical capture device. No public output or scene transition is exercised. The private no-browser shutdown fixture does not exercise CEF teardown."
+}
