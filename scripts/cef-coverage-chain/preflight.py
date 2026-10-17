@@ -30,15 +30,24 @@ PULSAR_CEF = Path(
 PULSAR_COVERAGE = Path(
     r"D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-reset-stability"
 )
+PULSAR_FULL = Path(
+    r"D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-full-runtime-admission"
+)
+FULL_PACKAGE = PULSAR_FULL / "dist/pulsar-windows-x64-full-v3.0.1"
+FULL_MANIFEST = PULSAR_FULL / "evidence/local-20261017-full-runtime-admission/eleven/20261017T175636Z-package-manifest.json"
+COHORTS = ("legacy-overlay", "full-package")
 
 PINS = {
     "solarCommit": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
     "prismCommit": "8933556f85272b077553444a7ffd891438432175",
+    "prismFullCommit": "42ee22caa8a32fab03d3f045bd0cdb42f53a0195",
     "prismProductBaselineCommit": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
     "visionCommit": "044ddb62df050eee9869150a69a1b88fd26f2962",
     "baselinePresenterCommit": "85c49664a029744369b063ddffaa92415a59c8a8",
     "nativeSourceCommit": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
     "cefSourceCommit": "47cb08c56e010c5da45923a5eee147f294216756",
+    "fullSignedSourceCommit": "d174d93ab1b0ce67ce3145296d1b127357f1777d",
+    "fullIntegratedCommit": "15b73ff2d7f9059269a2a77e2896ce6bb55d8081",
 }
 
 ASSETS = {
@@ -56,6 +65,16 @@ PULSAR_ARTIFACTS = {
     "cefBrowser": (".cache/cef-runtime/upstream-build/rundir/RelWithDebInfo/obs-plugins/64bit/pulsar-browser.dll", "0602fdc46559109ad24a57fc769580480fe8b2794930cc591bf5a450129df8e6"),
     "cefHelper": (".cache/cef-runtime/upstream-build/rundir/RelWithDebInfo/obs-plugins/64bit/pulsar-browser-page.exe", "9148fb2f5e1cc8867b19ab1cfd033eaea4e647e05ff0ac313f883cf281ab65e6"),
     "cefLib": (".cache/cef-runtime/upstream-build/rundir/RelWithDebInfo/obs-plugins/64bit/libcef.dll", "551bea07c46c9a330eff7861105321f3c7d47e3c0412ced4b0ff35aa130f2536"),
+}
+
+FULL_ARTIFACTS = {
+    "nativeHost": "bin/64bit/pulsar.exe",
+    "nativeObs": "bin/64bit/obs.dll",
+    "nativeWebsocket": "obs-plugins/64bit/obs-websocket.dll",
+    "capturePlugin": "obs-plugins/64bit/pulsar-capture-effects.dll",
+    "cefBrowser": "obs-plugins/64bit/pulsar-browser.dll",
+    "cefHelper": "obs-plugins/64bit/pulsar-browser-page.exe",
+    "cefLib": "obs-plugins/64bit/libcef.dll",
 }
 
 CEF_REPORTED_WEBSOCKET = "3130c2cf8485bfbf80b67b4ee09126f21a38a90229457aabdb03126526374f3a"
@@ -185,7 +204,35 @@ def file_record(path: Path, expected_size: int | None = None, expected_hash: str
     return record
 
 
-def run(profile_name: str = "320x180@30") -> dict:
+def verify_full_package_tree(package: Path, manifest: dict) -> dict:
+    if manifest.get("schema") != "pulsar.local-full-package-manifest/1":
+        raise ValueError("unexpected full-package manifest schema")
+    expected = manifest.get("files")
+    if (not isinstance(expected, dict) or manifest.get("fileCount") != 1256
+            or len(expected) != 1256 or manifest.get("bytes") != 397714390):
+        raise ValueError("full-package manifest cohort changed")
+    actual = {}
+    for path in package.rglob("*"):
+        if path.is_symlink():
+            raise ValueError(f"full-package symlink is not a sealed file: {path}")
+        if not path.is_file():
+            continue
+        relative = path.relative_to(package).as_posix()
+        if relative not in expected:
+            raise ValueError(f"unlisted full-package file: {relative}")
+        entry = expected[relative]
+        actual[relative] = file_record(path, entry["bytes"], entry["sha256"])
+    if (len(actual) != manifest["fileCount"] or set(actual) != set(expected)
+            or sum(item["bytes"] for item in actual.values()) != manifest["bytes"]):
+        raise ValueError("full-package inventory differs from the sealed manifest")
+    return {"fileCount": len(actual), "bytes": manifest["bytes"], "critical": {
+        key: actual[relative] for key, relative in FULL_ARTIFACTS.items()
+    }}
+
+
+def run(profile_name: str = "320x180@30", cohort: str = "legacy-overlay") -> dict:
+    if cohort not in COHORTS:
+        raise ValueError(f"unsupported CEF coverage-chain runtime cohort: {cohort}")
     selected_profile = profile_plan(profile_name)
     pulsar_root = Path(git(ROOT, "rev-parse", "--show-toplevel"))
     if pulsar_root != ROOT:
@@ -214,11 +261,15 @@ def run(profile_name: str = "320x180@30") -> dict:
     prism_head = git(PRISM, "rev-parse", "HEAD")
     if solar_head != PINS["solarCommit"]:
         raise ValueError(f"Solar pin moved: {solar_head}")
-    if prism_head != PINS["prismCommit"]:
+    expected_prism = PINS["prismFullCommit"] if cohort == "full-package" else PINS["prismCommit"]
+    if prism_head != expected_prism:
         raise ValueError(f"Prism pin moved: {prism_head}")
 
     prism_consumer_path = "src/main/broadcast/engine/capture/native-composition-consumer.ts"
     prism_consumer_at_head = git(PRISM, "rev-parse", f"HEAD:{prism_consumer_path}")
+    prism_consumer_worktree_blob = git(PRISM, "hash-object", prism_consumer_path)
+    if prism_consumer_worktree_blob != prism_consumer_at_head:
+        raise ValueError("Prism native-composition consumer worktree bytes differ from pinned HEAD")
     prism_consumer_at_product_baseline = git(
         PRISM,
         "rev-parse",
@@ -226,6 +277,9 @@ def run(profile_name: str = "320x180@30") -> dict:
     )
     if prism_consumer_at_head != prism_consumer_at_product_baseline:
         raise ValueError("Prism native-composition consumer changed after the adopted product pin")
+    prism_consumer_at_prior_admission = git(PRISM, "rev-parse", f"{PINS['prismCommit']}:{prism_consumer_path}")
+    if prism_consumer_at_head != prism_consumer_at_prior_admission:
+        raise ValueError("Prism native-composition consumer changed after the prior chain admission")
     for root, label in ((SOLAR, "Solar"), (PRISM, "Prism")):
         vite_entry = root / "node_modules/vite/dist/node/index.js"
         if not vite_entry.is_file():
@@ -245,27 +299,55 @@ def run(profile_name: str = "320x180@30") -> dict:
     if git(VISION, "rev-parse", "HEAD") != PINS["visionCommit"]:
         raise ValueError("Vision fixture source worktree moved from its pinned presenter proof commit")
 
-    runtime_files = {}
-    for key, (relative, expected_hash) in PULSAR_ARTIFACTS.items():
-        owner = PULSAR_NATIVE if key.startswith("native") else PULSAR_COVERAGE if key == "capturePlugin" else PULSAR_CEF
-        runtime_files[key] = file_record(owner / relative, expected_hash=expected_hash)
-
-    native_websocket = Path(runtime_files["nativeWebsocket"]["path"])
-    cef_runtime_websocket = (
-        PULSAR_CEF
-        / ".cache/cef-runtime/upstream-build/rundir/RelWithDebInfo/obs-plugins/64bit/obs-websocket.dll"
-    )
-    if cef_runtime_websocket.exists():
-        raise ValueError("CEF overlay unexpectedly contains obs-websocket.dll; do not overwrite native pin")
+    full_manifest = None
+    full_manifest_record = None
+    if cohort == "full-package":
+        if git(PULSAR_FULL, "rev-parse", "HEAD") != PINS["fullSignedSourceCommit"]:
+            raise ValueError("full-package signed source pin moved")
+        subprocess.check_call(["git", "-C", str(ROOT), "verify-commit", PINS["fullSignedSourceCommit"]], stdout=subprocess.DEVNULL)
+        subprocess.check_call(["git", "-C", str(ROOT), "merge-base", "--is-ancestor", PINS["fullSignedSourceCommit"], PINS["fullIntegratedCommit"]])
+        full_manifest_record = file_record(FULL_MANIFEST)
+        full_manifest = json.loads(FULL_MANIFEST.read_text(encoding="utf-8"))
+        if Path(full_manifest.get("bundle", "")).resolve() != FULL_PACKAGE.resolve():
+            raise ValueError("full-package manifest names a different bundle")
+        package_inventory = verify_full_package_tree(FULL_PACKAGE, full_manifest)
+        runtime_files = package_inventory["critical"]
+        websocket_provenance = {
+            "selectedDll": runtime_files["nativeWebsocket"],
+            "selectionForPrivateStage": "copy and verify the complete sealed full package; no legacy native/capture/CEF DLL overlay",
+            "mixedBinaryOverlay": False,
+        }
+    else:
+        runtime_files = {}
+        for key, (relative, expected_hash) in PULSAR_ARTIFACTS.items():
+            owner = PULSAR_NATIVE if key.startswith("native") else PULSAR_COVERAGE if key == "capturePlugin" else PULSAR_CEF
+            runtime_files[key] = file_record(owner / relative, expected_hash=expected_hash)
+        cef_runtime_websocket = (
+            PULSAR_CEF
+            / ".cache/cef-runtime/upstream-build/rundir/RelWithDebInfo/obs-plugins/64bit/obs-websocket.dll"
+        )
+        if cef_runtime_websocket.exists():
+            raise ValueError("CEF overlay unexpectedly contains obs-websocket.dll; do not overwrite native pin")
+        websocket_provenance = {
+            "nativeDll": runtime_files["nativeWebsocket"],
+            "cefReportedDllSha256": CEF_REPORTED_WEBSOCKET,
+            "cefReportedDllRetainedAtOverlayPath": False,
+            "sameObsDllSha256": runtime_files["nativeObs"]["sha256"] == "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1",
+            "selectionForPrivateStage": "preserve native d3ecaf55 DLL and overlay CEF browser files only; pixel proofs exist for both profiles, while this offline preflight makes no runtime or frame-pacing claim",
+        }
 
     websocket_source = "plugins/pulsar-websocket/src/obs-websocket.cpp"
     websocket_api = "plugins/pulsar-websocket/lib/obs-websocket-api.h"
     source_blobs = {}
-    for label, commit in (
+    source_refs = [
         ("assigned", git(ROOT, "rev-parse", "HEAD")),
         ("native", PINS["nativeSourceCommit"]),
         ("cef", PINS["cefSourceCommit"]),
-    ):
+    ]
+    if cohort == "full-package":
+        source_refs.extend((("fullSigned", PINS["fullSignedSourceCommit"]),
+                            ("fullIntegrated", PINS["fullIntegratedCommit"])))
+    for label, commit in source_refs:
         source_blobs[label] = {
             "commit": commit,
             "websocketSourceBlob": git(ROOT, "rev-parse", f"{commit}:{websocket_source}"),
@@ -276,16 +358,18 @@ def run(profile_name: str = "320x180@30") -> dict:
     if len({entry["websocketApiBlob"] for entry in source_blobs.values()}) != 1:
         raise ValueError("obs-websocket API header differs between native/CEF/assigned sources")
 
-    native_checkpoint = json.loads(
-        (PULSAR_CEF / "evidence/local-20261017-cef-runtime-qualification/eleven/20261017T121331Z-agent-checkpoint.json").read_text(encoding="utf-8")
-    )
-    cef_checkpoint_websocket = native_checkpoint["build"]["artifacts"]["obs-plugins\\64bit\\obs-websocket.dll"]
-    if cef_checkpoint_websocket != CEF_REPORTED_WEBSOCKET:
-        raise ValueError("CEF websocket report pin differs from the user-provided pin")
+    if cohort == "legacy-overlay":
+        native_checkpoint = json.loads(
+            (PULSAR_CEF / "evidence/local-20261017-cef-runtime-qualification/eleven/20261017T121331Z-agent-checkpoint.json").read_text(encoding="utf-8")
+        )
+        cef_checkpoint_websocket = native_checkpoint["build"]["artifacts"]["obs-plugins\\64bit\\obs-websocket.dll"]
+        if cef_checkpoint_websocket != CEF_REPORTED_WEBSOCKET:
+            raise ValueError("CEF websocket report pin differs from the user-provided pin")
 
     websocket_header = (ROOT / "plugins/pulsar-websocket/lib/obs-websocket-api.h").read_text(encoding="utf-8")
     websocket_source_text = (ROOT / "plugins/pulsar-websocket/src/obs-websocket.cpp").read_text(encoding="utf-8")
-    capture_source_text = (ROOT / "plugins/pulsar-capture-effects/src/capture-effects.cpp").read_text(encoding="utf-8")
+    capture_source_path = "plugins/pulsar-capture-effects/src/capture-effects.cpp"
+    capture_source_text = (ROOT / capture_source_path).read_text(encoding="utf-8") if cohort == "legacy-overlay" else git(ROOT, "show", f"{PINS['fullSignedSourceCommit']}:{capture_source_path}")
     if '#define OBS_WEBSOCKET_API_VERSION 3' not in websocket_header:
         raise ValueError("obs-websocket vendor API version changed")
     if 'proc_handler_call(_ph, "vendor_register"' not in websocket_header:
@@ -295,6 +379,22 @@ def run(profile_name: str = "320x180@30") -> dict:
     if "obs-websocket.dll" in capture_source_text or "LoadLibrary" in capture_source_text:
         raise ValueError("capture-effects now links/loads the websocket binary directly")
 
+    websocket_provenance.update({
+        "apiVersion": 3,
+        "vendorRegistration": "obs_module_post_load → inline proc_handler API calls",
+        "directImportFromCaptureEffects": False,
+        "staticEvidence": {
+            "headerPath": str(ROOT / "plugins/pulsar-websocket/lib/obs-websocket-api.h"),
+            "headerSha256": sha256(ROOT / "plugins/pulsar-websocket/lib/obs-websocket-api.h"),
+            "sourcePath": str(ROOT / "plugins/pulsar-websocket/src/obs-websocket.cpp"),
+            "sourceSha256": sha256(ROOT / "plugins/pulsar-websocket/src/obs-websocket.cpp"),
+            "captureEffectsSourceCommit": PINS["fullSignedSourceCommit"] if cohort == "full-package" else git(ROOT, "rev-parse", "HEAD"),
+            "captureEffectsSourceBlob": git(ROOT, "rev-parse", f"{PINS['fullSignedSourceCommit'] if cohort == 'full-package' else 'HEAD'}:{capture_source_path}"),
+            **({"captureEffectsPath": str(ROOT / capture_source_path),
+                "captureEffectsSha256": sha256(ROOT / capture_source_path)}
+               if cohort == "legacy-overlay" else {}),
+        },
+    })
     return {
         "schema": "pulsar.vision-solar-cef-coverage-chain-preflight/1",
         "checkedUtc": datetime.now(timezone.utc).isoformat(),
@@ -302,6 +402,7 @@ def run(profile_name: str = "320x180@30") -> dict:
         "buildStarted": False,
         "gpuUsed": False,
         "runtimeProfile": selected_profile,
+        "runtimeCohort": cohort,
         "worktree": git_state,
         "sourcePins": {
             **PINS,
@@ -312,7 +413,9 @@ def run(profile_name: str = "320x180@30") -> dict:
             "prismConsumer": {
                 "path": prism_consumer_path,
                 "headBlob": prism_consumer_at_head,
+                "worktreeBlob": prism_consumer_worktree_blob,
                 "productBaselineBlob": prism_consumer_at_product_baseline,
+                "priorAdmissionBlob": prism_consumer_at_prior_admission,
                 "byteIdentical": True,
             },
             "visionFixtureHead": git(VISION, "rev-parse", "HEAD"),
@@ -321,24 +424,12 @@ def run(profile_name: str = "320x180@30") -> dict:
         "solarVisionAssets": asset_files,
         "visionFixture": vision_fixture,
         "nativeAndCefRuntime": runtime_files,
-        "websocketProvenance": {
-            "nativeDll": runtime_files["nativeWebsocket"],
-            "cefReportedDllSha256": CEF_REPORTED_WEBSOCKET,
-            "cefReportedDllRetainedAtOverlayPath": False,
-            "sameObsDllSha256": runtime_files["nativeObs"]["sha256"] == "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1",
-            "apiVersion": 3,
-            "vendorRegistration": "obs_module_post_load → inline proc_handler API calls",
-            "directImportFromCaptureEffects": False,
-            "staticEvidence": {
-                "headerPath": str(ROOT / "plugins/pulsar-websocket/lib/obs-websocket-api.h"),
-                "headerSha256": sha256(ROOT / "plugins/pulsar-websocket/lib/obs-websocket-api.h"),
-                "sourcePath": str(ROOT / "plugins/pulsar-websocket/src/obs-websocket.cpp"),
-                "sourceSha256": sha256(ROOT / "plugins/pulsar-websocket/src/obs-websocket.cpp"),
-                "captureEffectsPath": str(ROOT / "plugins/pulsar-capture-effects/src/capture-effects.cpp"),
-                "captureEffectsSha256": sha256(ROOT / "plugins/pulsar-capture-effects/src/capture-effects.cpp"),
-            },
-            "selectionForPrivateStage": "preserve native d3ecaf55 DLL and overlay CEF browser files only; pixel proofs exist for both profiles, while this offline preflight makes no runtime or frame-pacing claim",
+        "fullPackage": None if cohort == "legacy-overlay" else {
+            "path": str(FULL_PACKAGE), "manifest": full_manifest_record,
+            "inventory": package_inventory, "signedSourceCommit": PINS["fullSignedSourceCommit"],
+            "integratedCommit": PINS["fullIntegratedCommit"],
         },
+        "websocketProvenance": websocket_provenance,
         "harness": {
             "page": str(ROOT / "scripts/cef-coverage-chain/index.html"),
             "pageModule": str(ROOT / "scripts/cef-coverage-chain/page.mjs"),
@@ -353,7 +444,9 @@ def run(profile_name: str = "320x180@30") -> dict:
             "No CEF/browser/GPU/native process was started by this preflight.",
             "No build or test was run.",
             "The LSML capture node uses the proof fixture's synthetic source binding; no physical camera is involved.",
-            "The exact d3ecaf55 native WebSocket binary is selected for this private stage because it is retained and already exercised with the matching host/obs.dll; the CEF report's 3130c2cf binary is absent from the retained overlay and is not substituted.",
+            ("The exact d3ecaf55 native WebSocket binary is selected for this private stage because it is retained and already exercised with the matching host/obs.dll; the CEF report's 3130c2cf binary is absent from the retained overlay and is not substituted."
+             if cohort == "legacy-overlay" else
+             "The complete signed-source full package is selected as one coherent binary cohort without overlay; this probe still uses a fixture receipt rather than a live Orion/LSDP transaction."),
         ],
     }
 
@@ -373,13 +466,15 @@ def main() -> int:
         default="320x180@30",
         help="offline sizing/FPS plan to record; this command never starts runtime or GPU",
     )
+    parser.add_argument("--cohort", choices=COHORTS, default="legacy-overlay",
+                        help="explicitly select the sealed full package or retain the historical overlay cohort")
     args = parser.parse_args()
     output = args.output.resolve()
     if output.parent != EVIDENCE.resolve() or output.exists():
         raise ValueError(f"output must be a new direct child of {EVIDENCE}")
     EVIDENCE.mkdir(parents=True, exist_ok=True)
-    result = run(args.profile)
-    output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    result = run(args.profile, args.cohort)
+    output.write_bytes((json.dumps(result, indent=2) + "\n").encode("utf-8"))
     print(json.dumps({"passed": True, "report": str(output), "runtimeStarted": False, "gpuUsed": False}))
     return 0
 

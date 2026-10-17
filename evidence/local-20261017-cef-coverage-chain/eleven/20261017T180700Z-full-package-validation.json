@@ -1,0 +1,53 @@
+{
+  "schema": "pulsar.vision-solar-cef-full-package-validation/1",
+  "checkedUtc": "2026-10-17T18:09:06.420256+00:00",
+  "passed": true,
+  "report": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T180406Z-cef-coverage-chain.json",
+    "sha256": "2f867e425044a8b0b8ef8a3673d25367e255479ea0ed40be478575a03ca83f27"
+  },
+  "baseline": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-cef-coverage-chain.json",
+    "sha256": "f6c36261ba880d3e05043681c92f76ebe9ca5c226136b203cb60bca23d1be556"
+  },
+  "packageManifest": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-full-runtime-admission\\evidence\\local-20261017-full-runtime-admission\\eleven\\20261017T175636Z-package-manifest.json",
+    "bytes": 207004,
+    "sha256": "dab040841c6e39e158c72fd7a4379783b2067a531a88f6a5b78bd34861e29e07"
+  },
+  "sourceCommits": {
+    "pulsarSigned": "d174d93ab1b0ce67ce3145296d1b127357f1777d",
+    "pulsarIntegrated": "15b73ff2d7f9059269a2a77e2896ce6bb55d8081",
+    "solar": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+    "prism": "42ee22caa8a32fab03d3f045bd0cdb42f53a0195",
+    "vision": "044ddb62df050eee9869150a69a1b88fd26f2962"
+  },
+  "prismConsumerBlob": "016a579264550a4377d932ed447259da55e69ea0",
+  "packageFilesVerifiedInSourceAndPrivateStage": 1256,
+  "packageBytesVerifiedInSourceAndPrivateStage": 397714390,
+  "binaryOverlayApplied": false,
+  "matchingHistoricalPngHashes": {
+    "backdropSource": "f53b98bda379fcf4b2936ccf9d574f825d0c509675438a7d8ee42aabab24d28c",
+    "cefAtlasInitial": "159d807d0a5a58a64ec56e0bbff8f39dfb15855b2f73ded8467cf3f6645207d4",
+    "sceneMask050": "d113ec706ccfaa027476f3927b4bb94f8d0c84025a03029ed2a896df05257235",
+    "cefAtlasUpdated": "48fde67524f4664891595f50fdc5ebf2547d7fee6bc8bad01945488f945319e5",
+    "sceneMask100": "17d372717ec143af412a4cede1212d63498f4a21372c93d6760b0b0bb42ac599"
+  },
+  "verifiedArtifactCount": 9,
+  "phaseTimingMs": {
+    "preflight": 3030.521,
+    "stageCopy": 2047.201,
+    "stageVerify": 7690.62,
+    "pageStart": 1.226,
+    "hostReady": 1751.513,
+    "exercise": 70300.496,
+    "shutdown": 386.464,
+    "total": 85729.929
+  },
+  "shutdown": {
+    "hostExitCode": 0,
+    "forcedTerminationUsed": false,
+    "browserDrained": true
+  },
+  "scope": "one private fixture receipt, real CEF atlas readback and native render; not an Orion/LSDP transaction or sustained 60-fps measurement"
+}
