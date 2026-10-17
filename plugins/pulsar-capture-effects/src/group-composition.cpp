@@ -5,6 +5,7 @@
 #include "group-composition-source-validation.hpp"
 #include "group-composition-world-source.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -89,6 +90,38 @@ uint64_t source_serial = 0;
 
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
 std::atomic<uint64_t> reset_trace_sequence{0};
+using CommitClock = std::chrono::steady_clock;
+using CommitTick = CommitClock::time_point;
+double elapsed_ms(CommitTick start, CommitTick end)
+{
+  return std::chrono::duration<double, std::milli>(end - start).count();
+}
+struct CommitTiming {
+  CommitTick handler_started{};
+  CommitTick queue_started{};
+  CommitTick graphics_started{};
+  CommitTick graphics_finished{};
+  double parse_ms = 0;
+  double resolve_ms = 0;
+  double build_ms = 0;
+  double atomic_swap_ms = 0;
+  double retirement_ms = 0;
+  uint32_t filter_sources_created = 0;
+  CaptureShaderCreationTiming shader_creation;
+};
+thread_local uint32_t *active_filter_creation_count = nullptr;
+struct CountFilterCreations {
+  uint32_t *previous = nullptr;
+  CaptureShaderCreationTiming *previous_shader = nullptr;
+  explicit CountFilterCreations(uint32_t *count,
+                                CaptureShaderCreationTiming *shader)
+      : previous(std::exchange(active_filter_creation_count, count)),
+        previous_shader(capture_effects_exchange_shader_creation_timing(shader)) {}
+  ~CountFilterCreations() {
+    capture_effects_exchange_shader_creation_timing(previous_shader);
+    active_filter_creation_count = previous;
+  }
+};
 uint64_t next_reset_trace_id()
 {
   return reset_trace_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -218,6 +251,10 @@ bool add_opacity_filter(obs_sceneitem_t *group, const Rect &bounds,
     set_error(response, "group-opacity-filter-create-failed");
     return false;
   }
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  if (active_filter_creation_count)
+    ++*active_filter_creation_count;
+#endif
   obs_source_filter_add(group_source, filter);
   obs_source_set_enabled(filter, true);
   obs_source_release(filter);
@@ -287,6 +324,10 @@ bool add_composition_filter(obs_source_t *filtered_source,
     set_error(response, "composition-filter-create-failed");
     return false;
   }
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  if (active_filter_creation_count)
+    ++*active_filter_creation_count;
+#endif
   if (!capture_effects_bind_background_parent(
           filter, obs_scene_get_source(parent_scene))) {
     obs_source_release(filter);
@@ -709,8 +750,14 @@ void remove_root(obs_sceneitem_t *root, uint64_t generation)
 
 struct CandidateGuard {
   ActiveComposition state;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  CommitTiming *timing = nullptr;
+#endif
   ~CandidateGuard()
   {
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    const auto retirement_started = CommitClock::now();
+#endif
     pulsar_reset_trace::event("composition-retirement", state.generation,
                               "candidate-guard-begin", nullptr, state.root,
                               state.dependency_sources.size());
@@ -731,6 +778,10 @@ struct CandidateGuard {
                               "dependency-release-end", nullptr, state.root);
     pulsar_reset_trace::event("composition-retirement", state.generation,
                               "candidate-guard-end", nullptr, state.root);
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    if (timing)
+      timing->retirement_ms = elapsed_ms(retirement_started, CommitClock::now());
+#endif
   }
 };
 
@@ -920,14 +971,31 @@ struct Commit {
   obs_data_t *request = nullptr;
   obs_data_t *response = nullptr;
   uint64_t reset_trace_id = 0;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  CommitTiming timing;
+#endif
 };
 
 void commit_graphics(void *data)
 {
   auto &commit = *static_cast<Commit *>(data);
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  commit.timing.graphics_started = CommitClock::now();
+  struct FinishTiming {
+    CommitTiming &timing;
+    ~FinishTiming() { timing.graphics_finished = CommitClock::now(); }
+  } finish_timing{commit.timing};
+#endif
   try {
     Plan plan;
-    if (!parse_plan(commit.request, plan, commit.response))
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    auto phase_started = CommitClock::now();
+#endif
+    const bool parsed = parse_plan(commit.request, plan, commit.response);
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    commit.timing.parse_ms = elapsed_ms(phase_started, CommitClock::now());
+#endif
+    if (!parsed)
       return;
     SourceRef source_handle(obs_get_source_by_name(plan.scene_name.c_str()));
     auto *source = source_handle.get();
@@ -987,6 +1055,9 @@ void commit_graphics(void *data)
     }
 
     CandidateGuard candidate;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    candidate.timing = &commit.timing;
+#endif
     candidate.state.protocol_version = plan.protocol_version;
     candidate.state.coordinate_space = plan.coordinate_space;
     candidate.state.scene_uuid = scene_uuid;
@@ -995,17 +1066,38 @@ void commit_graphics(void *data)
     candidate.state.plan_hash = plan.plan_hash;
     candidate.state.replaced_scene_item_ids = plan.replaced_scene_item_ids;
     std::unordered_map<int64_t, ResolvedCapture> captures;
-    if (!resolve_captures(plan, scene, source, previous,
-                          candidate.state.dependency_sources, captures,
-                          commit.response)) {
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    phase_started = CommitClock::now();
+#endif
+    const bool resolved = resolve_captures(plan, scene, source, previous,
+                                           candidate.state.dependency_sources,
+                                           captures, commit.response);
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    commit.timing.resolve_ms = elapsed_ms(phase_started, CommitClock::now());
+#endif
+    if (!resolved) {
       return;
     }
     if (!copy_original_visibility(plan, scene, previous, candidate.state,
                                   captures, commit.response))
       return;
     const Group &root = plan.groups[plan.by_id.at(root_id)];
-    if (!build_group(plan, root, scene, captures, &candidate.state.root,
-                     commit.response) || !candidate.state.root) {
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    phase_started = CommitClock::now();
+#endif
+    bool built = false;
+    {
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+      CountFilterCreations count_filters(&commit.timing.filter_sources_created,
+                                         &commit.timing.shader_creation);
+#endif
+      built = build_group(plan, root, scene, captures, &candidate.state.root,
+                          commit.response);
+    }
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    commit.timing.build_ms = elapsed_ms(phase_started, CommitClock::now());
+#endif
+    if (!built || !candidate.state.root) {
       if (!obs_data_has_user_value(commit.response, "error"))
         set_error(commit.response, "candidate-build-failed");
       return;
@@ -1046,7 +1138,13 @@ void commit_graphics(void *data)
                         plan.groups[plan.by_id.at(root_id)].visible,
                         previous ? &previous->originals : nullptr,
                         &candidate.state.originals};
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    phase_started = CommitClock::now();
+#endif
     obs_scene_atomic_update(scene, swap_visibility, &swap);
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    commit.timing.atomic_swap_ms = elapsed_ms(phase_started, CommitClock::now());
+#endif
     std::swap(*slot, candidate.state);
     fence_it->second.generation = plan.generation;
     slot_reservation.committed = true;
@@ -1300,7 +1398,36 @@ void group_composition_request(obs_data_t *request, obs_data_t *response,
                                void *)
 {
   Commit commit{request, response};
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  commit.reset_trace_id = next_reset_trace_id();
+  commit.timing.handler_started = CommitClock::now();
+  commit.timing.queue_started = CommitClock::now();
+#endif
   obs_queue_task(OBS_TASK_GRAPHICS, commit_graphics, &commit, true);
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  const auto handler_finished = CommitClock::now();
+  auto *timing = obs_data_create();
+  obs_data_set_int(timing, "traceId", static_cast<long long>(commit.reset_trace_id));
+  obs_data_set_double(timing, "queueWaitMs", elapsed_ms(
+      commit.timing.queue_started, commit.timing.graphics_started));
+  obs_data_set_double(timing, "graphicsCallbackMs", elapsed_ms(
+      commit.timing.graphics_started, commit.timing.graphics_finished));
+  obs_data_set_double(timing, "parseMs", commit.timing.parse_ms);
+  obs_data_set_double(timing, "resolveCapturesMs", commit.timing.resolve_ms);
+  obs_data_set_double(timing, "buildGroupMs", commit.timing.build_ms);
+  obs_data_set_double(timing, "atomicSwapMs", commit.timing.atomic_swap_ms);
+  obs_data_set_double(timing, "retirePreviousMs", commit.timing.retirement_ms);
+  obs_data_set_double(timing, "handlerTotalMs", elapsed_ms(
+      commit.timing.handler_started, handler_finished));
+  obs_data_set_int(timing, "filterSourcesCreated",
+                   commit.timing.filter_sources_created);
+  obs_data_set_double(timing, "shaderCreateMs",
+                      commit.timing.shader_creation.milliseconds);
+  obs_data_set_int(timing, "shaderCreateCalls",
+                   commit.timing.shader_creation.calls);
+  obs_data_set_obj(response, "debugCommitTiming", timing);
+  obs_data_release(timing);
+#endif
 }
 
 void reset_group_composition_request(obs_data_t *request, obs_data_t *response,

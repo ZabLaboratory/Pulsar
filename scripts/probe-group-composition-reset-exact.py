@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import math
 import os
 import pathlib
 import shutil
@@ -551,20 +552,55 @@ async def run_scenario(args, process, runtime_id: str, port: int,
         generation_two = make_plan(2)
         if generation_one.get("planHash") != generation_two.get("planHash"):
             raise RuntimeError("generation-2 recommit changed the canonical graph hash")
+        commit_two_started = time.perf_counter()
         commit_two = await request(protocol, primary_inbox, primary, "CallVendorRequest", {
             "vendorName": "pulsar-capture-effects",
             "requestType": "CommitGroupComposition",
             "requestData": generation_two,
         })
+        commit_two_round_trip_ms = round(
+            (time.perf_counter() - commit_two_started) * 1000.0, 3)
         commit_two_result = commit_two.get("responseData", {})
         if not commit_two_result.get("ok"):
             raise RuntimeError(f"generation-2 replacement commit failed: {commit_two}")
+        commit_timing = commit_two_result.get("debugCommitTiming")
+        timing_fields = (
+            "queueWaitMs", "graphicsCallbackMs", "parseMs",
+            "resolveCapturesMs", "buildGroupMs", "atomicSwapMs",
+            "retirePreviousMs", "handlerTotalMs", "shaderCreateMs")
+        if not isinstance(commit_timing, dict) or any(
+                not isinstance(commit_timing.get(key), (int, float)) or
+                not math.isfinite(commit_timing[key]) or
+                commit_timing[key] < 0 for key in timing_fields):
+            raise RuntimeError("generation-2 debug commit timing missing or invalid")
+        if commit_timing.get("filterSourcesCreated") != 12:
+            raise RuntimeError(
+                "generation-2 filter creation count differs from the 12-filter fixture")
+        if commit_timing.get("shaderCreateCalls") != 12:
+            raise RuntimeError(
+                "generation-2 shader creation count differs from the 12-filter fixture")
+        if commit_timing["shaderCreateMs"] > commit_timing["buildGroupMs"]:
+            raise RuntimeError("shader creation time exceeds group build time")
+        # Sample immediately after the synchronous commit, before either the
+        # settling delay or PNG readback can contribute to the skip delta.
+        post_recommit_stats = await request(protocol, stats_inbox, stats_ws,
+                                            "GetStats", timeout=3)
+        recommit_skipped_frames_delta = int(
+            post_recommit_stats["renderSkippedFrames"] -
+            pre_recommit_stats["renderSkippedFrames"])
+        recommit_rendered_frames_delta = int(
+            post_recommit_stats["renderTotalFrames"] -
+            pre_recommit_stats["renderTotalFrames"])
+        if recommit_skipped_frames_delta < 0 or recommit_rendered_frames_delta < 0:
+            raise RuntimeError("GetStats counters regressed across recommit")
         freeze_dump = FreezeDumpCapture(
             args.capture_freeze_dump, process.proc.proc.pid,
             CACHE / f"{stamp}-gen2-freeze.dmp",
             EVIDENCE / f"{stamp}-mutex-owner-live.json",
             initial_frame_count=pre_recommit_stats.get("renderTotalFrames"))
         await asyncio.sleep(0.5)
+        after_recommit_settle_before_png_stats = await request(
+            protocol, stats_inbox, stats_ws, "GetStats", timeout=3)
         pre_reset_screenshot = None
         pre_reset_screenshot_error = None
         pre_reset_screenshot_stats = []
@@ -644,6 +680,15 @@ async def run_scenario(args, process, runtime_id: str, port: int,
             "independentGetStatsDuringScreenshot": during_screenshot,
             "independentGetStatsErrorsDuringScreenshot": screenshot_errors,
             "preRecommitStats": pre_recommit_stats,
+            "generation2CommitRoundTripMs": commit_two_round_trip_ms,
+            "generation2DebugCommitTiming": commit_timing,
+            "postRecommitStatsBeforeSleepOrPng": post_recommit_stats,
+            "recommitSkippedFramesDeltaBeforeSleepOrPng": (
+                recommit_skipped_frames_delta),
+            "recommitRenderedFramesDeltaBeforeSleepOrPng": (
+                recommit_rendered_frames_delta),
+            "afterRecommitSettleBeforePngStats": (
+                after_recommit_settle_before_png_stats),
             "preResetScreenshot": pre_reset_screenshot,
             "preResetStats": pre_reset_stats,
             "generation1Plan": generation_one,
