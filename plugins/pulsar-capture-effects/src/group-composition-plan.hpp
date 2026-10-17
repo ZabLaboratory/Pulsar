@@ -21,6 +21,12 @@ struct Rect {
 struct Crop {
   int left = 0, top = 0, right = 0, bottom = 0;
 };
+struct Mask {
+  int64_t scene_item_id = 0;
+  Crop crop;
+  Rect rect;
+  bool is_null = true;
+};
 enum class ChildKind { Capture, Group, SolarBand };
 enum class CoordinateSpace { OwnerLocal, GlobalSceneTexels };
 struct Child {
@@ -32,6 +38,9 @@ struct Child {
   Crop crop;
   Rect rect;
   double local_opacity = 1;
+  std::string blend_mode = "normal";
+  int blend_mode_id = 0;
+  Mask mask;
   bool has_visible = false;
   bool visible = true;
 };
@@ -43,12 +52,15 @@ struct Group {
   double opacity = 1;
   bool visible = true;
   std::string blend_mode;
+  int blend_mode_id = 0;
   Rect bounds;
   Affine affine;
   bool mask_is_null = false;
+  Mask mask;
   std::vector<Child> children;
 };
 struct Plan {
+  int protocol_version = 1;
   CoordinateSpace coordinate_space = CoordinateSpace::OwnerLocal;
   std::string scene_name;
   std::string plan_hash;

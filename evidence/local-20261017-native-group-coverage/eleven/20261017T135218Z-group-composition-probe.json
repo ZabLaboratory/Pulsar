@@ -1,0 +1,1711 @@
+{
+  "startedUtc": "2026-10-17T13:52:18.413881+00:00",
+  "passed": true,
+  "browserPreShutdownFixture": {
+    "enabled": true,
+    "mode": "private-test-helper-no-browser-source-fence",
+    "browserModulesInRuntime": [],
+    "helperCheck": "enumerates OBS sources when the host requests the browser fence and returns success only when no browser_source/browser_source_v2 exists",
+    "cefShutdownExercised": false
+  },
+  "hostExecutable": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\private-runtime-c711708ba5e64d6bbbb506fb174947d9\\runtime\\bin\\64bit\\pulsar.exe",
+    "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973",
+    "copiedFromPrivateBuild": false
+  },
+  "provenance": {
+    "runtimeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo",
+    "runtimeExeSha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973",
+    "runtimeObsSha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1",
+    "privateCapturePlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "privateCapturePluginSha256": "9b17835e8db5ed452fd59e0fbe31d07f12e022df888540db6986e3a73918d093",
+    "privateWebsocketPlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+    "privateWebsocketPluginSha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b",
+    "privateGraphicsRemoveHelper": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\pulsar-private-build\\plugins\\pulsar-capture-effects\\RelWithDebInfo\\z-group-composition-shutdown-test-helper.dll",
+    "privateGraphicsRemoveHelperSha256": "f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff",
+    "graphicsRemoveHelperPurpose": "test-only module calls obs_source_remove within an OBS graphics task and queues a second removal during module unload after stop_video",
+    "jsonBridgeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\plugins\\pulsar-websocket\\src\\utils\\Json.cpp",
+    "jsonBridgeSourceSha256": "e40f65258346441c4435928e46c929ba20b8e0eabcc9a8334f6edfa538fadc0f",
+    "jsonBridgeBinarySourceClaim": "not asserted by this runner; supplied obs-websocket.dll is identified by its private path and SHA-256 above"
+  },
+  "upstreamShutdownContract": {
+    "revision": "70a58302435308e609e0b1114efe3ef402f810b7",
+    "obsSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_shutdown:1477; stop_video:1512; module unload loop:1517",
+      "contract": "the graphics video thread is stopped and joined before module unload callbacks"
+    },
+    "graphicsTaskSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-video.c",
+      "sha256": "1fa1ede0abaa100b3362dd9fefee4fdfbb77a63afd3ef73989c17e993fd38512",
+      "locations": "execute_graphics_tasks:1024; task execution:1216; loop stop check:1248",
+      "contract": "graphics tasks are executed before the loop checks whether to exit; final-boundary races are handled by the plugin-owned pending-event set"
+    },
+    "queueSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_queue_task:3518-3544",
+      "contract": "same-task-thread callbacks execute inline; otherwise graphics tasks enter the queue, so module unload cannot wait on a stopped graphics worker"
+    },
+    "videoTaskReleaseSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_shutdown module unload loop:1516-1528; obs_free_video/deque_free(video.tasks):909-950, called at 1534",
+      "contract": "graphics tasks enqueued after stop_video cannot execute; after module unload the video task deque is freed without invoking the callbacks, so payload ownership must be discharged by the plugin before the queue storage is released"
+    },
+    "moduleListSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-module.c",
+      "sha256": "175abd54c06153b75c893162522ce95086e509dbf9f46864ac71c7f1b483e6ae",
+      "locations": "obs_open_module prepends at 181-198; free_module:777-817; obs_shutdown:1516-1528",
+      "contract": "the module list is prepended on successful load and unloaded from its head; the runtime probe records load and unload marker order instead of assuming file enumeration order"
+    },
+    "globalSourceRemoveSignal": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-internal.h",
+      "sha256": "bb79629027174c25ba262d17ca00956308346f7626f62ecd889ec27d5ab6057e",
+      "locations": "obs_source_dosignal:1100-1111",
+      "contract": "private sources intentionally omit global source_remove; the private helper removes its retained synthetic source then forwards the same source pointer through the global source_remove handler so the plugin's actual listener queues an event after stop_video without registering an input for frontend cleanup"
+    }
+  },
+  "ownedPid": 24764,
+  "syntheticOnlyBootstrap": {
+    "desktopAudioDeviceId": "pulsar-synthetic-test-no-device",
+    "microphoneConfigured": false,
+    "processAudioConfigured": false,
+    "initializedWasapiDevices": [],
+    "browserModulesInRuntime": [],
+    "browserPreShutdownFixture": "test-only no-browser source assertion",
+    "result": "no WASAPI endpoint initialized during private bootstrap"
+  },
+  "probe": {
+    "scene": "native-group-proof-e5b1192730",
+    "runtimeInstanceId": "group-proof-a01fcebc212841138d7cfff8059c6bd3",
+    "generation": 2,
+    "planHash": "a03d4761780d4ea112521132a8c122d873e760f362a7a01dadcf000ac96b0fcc",
+    "sceneItemIds": {
+      "red": 1,
+      "blue": 2
+    },
+    "appearanceWrapper": {
+      "sceneName": "native-appearance-e5b1192730",
+      "sourceIsNestedScene": true,
+      "stagingSceneItemEnabled": false,
+      "authoredCaptureVisible": true
+    },
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "overlapPixel": [
+      127,
+      0,
+      0,
+      127
+    ],
+    "expectedGroupOpacityAlpha": 128,
+    "colorSourceV3Convention": {
+      "redInputReportedRgb": [
+        0,
+        0,
+        255
+      ],
+      "blueInputReportedRgb": [
+        255,
+        0,
+        0
+      ]
+    },
+    "sourcePixels": {
+      "red": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "blue": [
+        255,
+        0,
+        0,
+        255
+      ]
+    },
+    "malformedNumericArray": {
+      "response": {
+        "error": "invalid-affine: expected named affine object",
+        "ok": false
+      },
+      "pixelsUnchanged": true,
+      "reason": "The actual obs-websocket bridge preserves only object entries inside arrays."
+    },
+    "unsafeJsonIntegers": {
+      "generationResponse": {
+        "error": "invalid-generation: generation must be a positive integer",
+        "ok": false
+      },
+      "generationPixelsUnchanged": true,
+      "sceneItemIdResponse": {
+        "error": "invalid-capture: sceneItemId must be positive",
+        "ok": false
+      },
+      "sceneItemIdPixelsUnchanged": true,
+      "maximumSafeInteger": 9007199254740991
+    },
+    "successiveCommit": {
+      "generation": 2,
+      "planHash": "03ed33347649d1e8bc8f36097a95213dc6525a39d4e4493f83dd3b4392adadb7",
+      "overlapPixel": [
+        0,
+        0,
+        191,
+        191
+      ],
+      "expectedGroupOpacityAlpha": 191
+    },
+    "reset": {
+      "generation": 2,
+      "ok": true,
+      "reset": true
+    },
+    "restoredPixel": [
+      0,
+      0,
+      255,
+      255
+    ],
+    "translatedLocalOpacity": {
+      "sourceDimensions": [
+        64,
+        64
+      ],
+      "translationX": 256,
+      "opacity": 0.5,
+      "sampleAt": [
+        288,
+        32
+      ],
+      "pixel": [
+        0,
+        0,
+        127,
+        127
+      ],
+      "sourcePixel": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "reset": {
+        "generation": 1,
+        "ok": true,
+        "reset": true
+      },
+      "stagingVisibilityRestored": false
+    },
+    "solarBand": {
+      "scene": "native-solar-band-e5b1192730",
+      "sceneItemId": 2,
+      "sourceInput": "image_source",
+      "sourceDimensions": [
+        1920,
+        1080
+      ],
+      "sourceSceneItemEnabledBefore": false,
+      "sourceSceneItemEnabledAfterReset": false,
+      "legacyVisibleItemId": 1,
+      "legacyVisibleBefore": true,
+      "legacyVisibleAfterCommit": false,
+      "legacyVisibleAfterReset": true,
+      "legacyPixelBefore": [
+        208,
+        32,
+        90,
+        255
+      ],
+      "legacyPixelAfterReset": [
+        208,
+        32,
+        90,
+        255
+      ],
+      "bands": [
+        17,
+        18
+      ],
+      "sameSceneItemReused": true,
+      "cropPixels": [
+        {
+          "left": 700,
+          "top": 350,
+          "right": 1160,
+          "bottom": 670
+        },
+        {
+          "left": 900,
+          "top": 350,
+          "right": 960,
+          "bottom": 670
+        }
+      ],
+      "ownerLocalRects": [
+        {
+          "x": 30,
+          "y": 20,
+          "width": 60,
+          "height": 60
+        },
+        {
+          "x": 130,
+          "y": 20,
+          "width": 60,
+          "height": 60
+        }
+      ],
+      "ownerAffine": {
+        "m00": 1,
+        "m01": 0,
+        "tx": 200,
+        "m10": 0,
+        "m11": 1,
+        "ty": 100
+      },
+      "sampleSceneCoordinates": [
+        [
+          260,
+          150
+        ],
+        [
+          360,
+          150
+        ]
+      ],
+      "sourcePixels": {
+        "red": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "green": [
+          0,
+          255,
+          0,
+          255
+        ]
+      },
+      "compositedPixels": {
+        "red": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "green": [
+          0,
+          255,
+          0,
+          255
+        ]
+      },
+      "invalidCrop": {
+        "error": "invalid-crop: crop removes source or dimensions are unknown",
+        "ok": false
+      },
+      "invalidCropPixelsUnchanged": true,
+      "invalidRect": {
+        "error": "invalid-mask-rect: mask crop and global rect must have exact one-to-one dimensions",
+        "ok": false
+      },
+      "invalidRectPixelsUnchanged": true,
+      "duplicateBand": {
+        "error": "duplicate-solar-band: 17",
+        "ok": false
+      },
+      "duplicateBandPixelsUnchanged": true,
+      "replacementSetMismatchSameHash": {
+        "error": "stale-generation: native-solar-band-e5b1192730",
+        "ok": false
+      },
+      "replacementSetMismatchPixelsUnchanged": true,
+      "replacementSetMismatchChangedHash": {
+        "error": "stale-generation: native-solar-band-e5b1192730",
+        "ok": false
+      },
+      "replacementSetMismatchChangedHashPixelsUnchanged": true,
+      "unsupportedMask": {
+        "error": "unsupported-mask: coverage masks require pulsar.group-composition/2",
+        "ok": false
+      },
+      "unsupportedMaskPixelsUnchanged": true,
+      "reset": {
+        "generation": 1,
+        "ok": true,
+        "reset": true
+      },
+      "resetRestoresLegacyPixels": true,
+      "staleAfterReset": {
+        "error": "stale-generation: native-solar-band-e5b1192730",
+        "ok": false
+      },
+      "staleReplayPreservesLegacyPixels": true
+    },
+    "mixedComposition": {
+      "scene": "native-mixed-composition-e5b1192730",
+      "childrenInPaintOrder": [
+        "solarBand:31",
+        "capture:green",
+        "solarBand:32",
+        "capture:green@0.25",
+        "capture:green@0.75",
+        "group:rotated"
+      ],
+      "sameCaptureSceneItemReused": true,
+      "captureAndBandOverlap": {
+        "scenePoint": [
+          260,
+          150
+        ],
+        "pixel": [
+          0,
+          127,
+          0,
+          127
+        ],
+        "expectedAlphaAfterGroupOpacity": [
+          127,
+          128
+        ],
+        "groupOpacity": 0.5,
+        "captureAuthoredVisibleWhileSourceSceneItemDisabled": true
+      },
+      "repeatedCaptureOccurrences": [
+        {
+          "localOpacity": 0.25,
+          "pixel": [
+            0,
+            32,
+            0,
+            32
+          ],
+          "expectedAlphaAfterGroupOpacity": [
+            31,
+            32
+          ],
+          "scenePoint": [
+            532,
+            282
+          ]
+        },
+        {
+          "localOpacity": 0.75,
+          "pixel": [
+            0,
+            95,
+            0,
+            95
+          ],
+          "expectedAlphaAfterGroupOpacity": [
+            95,
+            96
+          ],
+          "scenePoint": [
+            632,
+            282
+          ]
+        }
+      ],
+      "nestedGroup": {
+        "affine": {
+          "m00": 0,
+          "m01": -1,
+          "tx": 600,
+          "m10": 1,
+          "m11": 0,
+          "ty": 250
+        },
+        "parentTranslation": {
+          "m00": 1,
+          "m01": 0,
+          "tx": 200,
+          "m10": 0,
+          "m11": 1,
+          "ty": 100
+        },
+        "sourcePixel": [
+          0,
+          128,
+          255,
+          255
+        ],
+        "sourcePixelAfterGroupOpacity": [
+          0,
+          64,
+          128,
+          127
+        ],
+        "expectedScenePixelBounds": [
+          764,
+          370,
+          780,
+          386
+        ],
+        "observedScenePixelBounds": [
+          764,
+          370,
+          780,
+          386
+        ]
+      },
+      "replacementItems": [
+        1,
+        3,
+        4
+      ],
+      "resetRestoresLegacyAndStagingVisibility": true,
+      "reset": {
+        "generation": 1,
+        "ok": true,
+        "reset": true
+      }
+    },
+    "groupCompositionV2": {
+      "negativeControl": false,
+      "protocol": "pulsar.group-composition/2",
+      "coordinateSpace": "global-scene-texels",
+      "viewport": [
+        1920,
+        1080
+      ],
+      "canonicalPlanHashExcludesProtocolVersion": true,
+      "coverageSource": {
+        "sceneItemId": 8,
+        "originalSceneItemDisabled": true,
+        "dimensions": [
+          28,
+          10
+        ],
+        "crop": {
+          "left": 2,
+          "top": 1,
+          "right": 2,
+          "bottom": 1
+        },
+        "groupRect": {
+          "x": 100,
+          "y": 100,
+          "width": 24,
+          "height": 8
+        },
+        "captureRect": {
+          "x": 300,
+          "y": 100,
+          "width": 24,
+          "height": 8
+        },
+        "initialAlphaSamples": {
+          "transparent": 0,
+          "partial": 128,
+          "opaque": 255
+        },
+        "updatedAlphaSamples": {
+          "opaque": 255,
+          "partial": 64,
+          "transparent": 0
+        }
+      },
+      "groupMaskAndOpacity": {
+        "opacity": 0.5,
+        "twoOverlappingOpaqueChildren": [
+          4,
+          5
+        ],
+        "initialMaskPixels": {
+          "zero": {
+            "point": [
+              103,
+              104
+            ],
+            "actual": [
+              80,
+              64,
+              48,
+              255
+            ],
+            "expected": [
+              80,
+              64,
+              48,
+              255
+            ],
+            "coverage": 0.0
+          },
+          "half": {
+            "point": [
+              112,
+              104
+            ],
+            "actual": [
+              84,
+              104,
+              44,
+              255
+            ],
+            "expected": [
+              84,
+              104,
+              44,
+              255
+            ],
+            "coverage": 0.5019607843137255
+          },
+          "full": {
+            "point": [
+              120,
+              104
+            ],
+            "actual": [
+              88,
+              144,
+              40,
+              255
+            ],
+            "expected": [
+              88,
+              144,
+              40,
+              255
+            ],
+            "coverage": 1.0
+          },
+          "outside": {
+            "point": [
+              130,
+              104
+            ],
+            "actual": [
+              80,
+              64,
+              48,
+              255
+            ],
+            "expected": [
+              80,
+              64,
+              48,
+              255
+            ],
+            "coverage": 0
+          }
+        },
+        "dynamicUpdatedMaskPixels": {
+          "opaque": {
+            "point": [
+              103,
+              104
+            ],
+            "actual": [
+              88,
+              144,
+              40,
+              255
+            ],
+            "expected": [
+              88,
+              144,
+              40,
+              255
+            ],
+            "coverage": 1.0
+          },
+          "partial": {
+            "point": [
+              112,
+              104
+            ],
+            "actual": [
+              82,
+              84,
+              46,
+              255
+            ],
+            "expected": [
+              82,
+              84,
+              46,
+              255
+            ],
+            "coverage": 0.25098039215686274
+          },
+          "transparent": {
+            "point": [
+              120,
+              104
+            ],
+            "actual": [
+              80,
+              64,
+              48,
+              255
+            ],
+            "expected": [
+              80,
+              64,
+              48,
+              255
+            ],
+            "coverage": 0.0
+          },
+          "outside": {
+            "point": [
+              130,
+              104
+            ],
+            "actual": [
+              80,
+              64,
+              48,
+              255
+            ],
+            "expected": [
+              80,
+              64,
+              48,
+              255
+            ],
+            "coverage": 0.0
+          }
+        },
+        "dynamicPixelsChangedAfterCompositionCommit": true,
+        "pixelTolerance": 4
+      },
+      "maskedCapture": {
+        "blendMode": "multiply",
+        "localOpacity": 0.5,
+        "initialPoint": [
+          312,
+          104
+        ],
+        "initialActual": [
+          71,
+          50,
+          47,
+          255
+        ],
+        "initialExpected": [
+          71,
+          50,
+          47,
+          255
+        ],
+        "updatedPoint": [
+          312,
+          104
+        ],
+        "updatedActual": [
+          76,
+          57,
+          47,
+          255
+        ],
+        "updatedExpected": [
+          76,
+          57,
+          47,
+          255
+        ],
+        "pixelTolerance": 5
+      },
+      "rootAppearance": {
+        "opacity": 0.5,
+        "visible": true,
+        "blendMode": "multiply",
+        "mask": {
+          "sceneItemId": 8,
+          "crop": {
+            "left": 2,
+            "top": 1,
+            "right": 2,
+            "bottom": 1
+          },
+          "rect": {
+            "x": 100,
+            "y": 100,
+            "width": 24,
+            "height": 8
+          }
+        },
+        "backdropSource": "native-coverage-backdrop-e5b1192730",
+        "pixels": {
+          "opaqueCoverage": {
+            "point": [
+              103,
+              104
+            ],
+            "actual": [
+              30,
+              19,
+              9,
+              255
+            ],
+            "expected": [
+              30,
+              19,
+              9,
+              255
+            ],
+            "effectiveOpacity": 0.5
+          },
+          "partialCoverage": {
+            "point": [
+              112,
+              104
+            ],
+            "actual": [
+              43,
+              29,
+              14,
+              255
+            ],
+            "expected": [
+              43,
+              29,
+              14,
+              255
+            ],
+            "effectiveOpacity": 0.12549019607843137
+          },
+          "transparentCoverage": {
+            "point": [
+              120,
+              104
+            ],
+            "actual": [
+              48,
+              32,
+              16,
+              255
+            ],
+            "expected": [
+              48,
+              32,
+              16,
+              255
+            ],
+            "effectiveOpacity": 0.0
+          },
+          "outsideMaskRect": {
+            "point": [
+              130,
+              104
+            ],
+            "actual": [
+              48,
+              32,
+              16,
+              255
+            ],
+            "expected": [
+              48,
+              32,
+              16,
+              255
+            ],
+            "effectiveOpacity": 0.0
+          }
+        },
+        "pixelTolerance": 6
+      },
+      "rootVisibilityFalse": {
+        "response": {
+          "requestType": "CommitGroupComposition",
+          "responseData": {
+            "generation": 3,
+            "ok": true,
+            "planHash": "a4569de5e09a6a334f22c1fc7d175f9fcd0fa5ef9d6a9befdef529142dcf3132"
+          },
+          "vendorName": "pulsar-capture-effects"
+        },
+        "pixel": [
+          48,
+          32,
+          16,
+          255
+        ],
+        "backdrop": [
+          48,
+          32,
+          16,
+          255
+        ]
+      },
+      "groupCssBlendModes": {
+        "tested": [
+          {
+            "name": "normal",
+            "id": 0,
+            "point": [
+              604,
+              204
+            ],
+            "actual": [
+              224,
+              192,
+              64,
+              255
+            ],
+            "expected": [
+              224,
+              192,
+              64,
+              255
+            ]
+          },
+          {
+            "name": "multiply",
+            "id": 1,
+            "point": [
+              616,
+              204
+            ],
+            "actual": [
+              70,
+              48,
+              12,
+              255
+            ],
+            "expected": [
+              70,
+              48,
+              12,
+              255
+            ]
+          },
+          {
+            "name": "screen",
+            "id": 2,
+            "point": [
+              628,
+              204
+            ],
+            "actual": [
+              234,
+              208,
+              100,
+              255
+            ],
+            "expected": [
+              234,
+              208,
+              100,
+              255
+            ]
+          },
+          {
+            "name": "hard-light",
+            "id": 3,
+            "point": [
+              640,
+              204
+            ],
+            "actual": [
+              212,
+              161,
+              24,
+              255
+            ],
+            "expected": [
+              212,
+              161,
+              24,
+              255
+            ]
+          },
+          {
+            "name": "soft-light",
+            "id": 4,
+            "point": [
+              652,
+              204
+            ],
+            "actual": [
+              127,
+              96,
+              29,
+              255
+            ],
+            "expected": [
+              128,
+              96,
+              29,
+              255
+            ]
+          },
+          {
+            "name": "overlay",
+            "id": 5,
+            "point": [
+              664,
+              204
+            ],
+            "actual": [
+              141,
+              96,
+              24,
+              255
+            ],
+            "expected": [
+              141,
+              96,
+              24,
+              255
+            ]
+          },
+          {
+            "name": "darken",
+            "id": 6,
+            "point": [
+              676,
+              204
+            ],
+            "actual": [
+              80,
+              64,
+              48,
+              255
+            ],
+            "expected": [
+              80,
+              64,
+              48,
+              255
+            ]
+          },
+          {
+            "name": "lighten",
+            "id": 7,
+            "point": [
+              688,
+              204
+            ],
+            "actual": [
+              224,
+              192,
+              64,
+              255
+            ],
+            "expected": [
+              224,
+              192,
+              64,
+              255
+            ]
+          },
+          {
+            "name": "difference",
+            "id": 8,
+            "point": [
+              700,
+              204
+            ],
+            "actual": [
+              144,
+              128,
+              16,
+              255
+            ],
+            "expected": [
+              144,
+              128,
+              16,
+              255
+            ]
+          },
+          {
+            "name": "exclusion",
+            "id": 9,
+            "point": [
+              712,
+              204
+            ],
+            "actual": [
+              163,
+              160,
+              88,
+              255
+            ],
+            "expected": [
+              163,
+              160,
+              88,
+              255
+            ]
+          },
+          {
+            "name": "color-dodge",
+            "id": 11,
+            "point": [
+              724,
+              204
+            ],
+            "actual": [
+              255,
+              255,
+              64,
+              255
+            ],
+            "expected": [
+              255,
+              255,
+              64,
+              255
+            ]
+          },
+          {
+            "name": "color-burn",
+            "id": 12,
+            "point": [
+              736,
+              204
+            ],
+            "actual": [
+              56,
+              1,
+              0,
+              255
+            ],
+            "expected": [
+              56,
+              1,
+              0,
+              255
+            ]
+          },
+          {
+            "name": "hue",
+            "id": 13,
+            "point": [
+              748,
+              204
+            ],
+            "actual": [
+              74,
+              68,
+              42,
+              255
+            ],
+            "expected": [
+              74,
+              68,
+              42,
+              255
+            ]
+          },
+          {
+            "name": "saturation",
+            "id": 14,
+            "point": [
+              760,
+              204
+            ],
+            "actual": [
+              113,
+              56,
+              0,
+              255
+            ],
+            "expected": [
+              113,
+              56,
+              0,
+              255
+            ]
+          },
+          {
+            "name": "color",
+            "id": 15,
+            "point": [
+              772,
+              204
+            ],
+            "actual": [
+              87,
+              69,
+              0,
+              255
+            ],
+            "expected": [
+              87,
+              69,
+              0,
+              255
+            ]
+          },
+          {
+            "name": "luminosity",
+            "id": 16,
+            "point": [
+              784,
+              204
+            ],
+            "actual": [
+              200,
+              184,
+              168,
+              255
+            ],
+            "expected": [
+              200,
+              184,
+              168,
+              255
+            ]
+          }
+        ],
+        "plusLighterId10Excluded": true,
+        "pixelTolerance": 5
+      },
+      "idempotentReplay": {
+        "requestType": "CommitGroupComposition",
+        "responseData": {
+          "generation": 1,
+          "idempotent": true,
+          "ok": true
+        },
+        "vendorName": "pulsar-capture-effects"
+      },
+      "staleGeneration": {
+        "requestType": "CommitGroupComposition",
+        "responseData": {
+          "error": "stale-generation: native-group-coverage-e5b1192730",
+          "ok": false
+        },
+        "vendorName": "pulsar-capture-effects"
+      },
+      "staleGenerationPixelsUnchanged": true,
+      "invalidRootMaskReference": {
+        "requestType": "CommitGroupComposition",
+        "responseData": {
+          "error": "capture-item-not-direct: 9007199254740991",
+          "ok": false
+        },
+        "vendorName": "pulsar-capture-effects"
+      },
+      "invalidRootMaskReferencePixelsUnchanged": true,
+      "invalidRootMaskRect": {
+        "requestType": "CommitGroupComposition",
+        "responseData": {
+          "error": "invalid-mask-rect: mask crop and global rect must have exact one-to-one dimensions",
+          "ok": false
+        },
+        "vendorName": "pulsar-capture-effects"
+      },
+      "invalidRootMaskRectPixelsUnchanged": true,
+      "invalidReplacementWhileRootHidden": {
+        "requestType": "CommitGroupComposition",
+        "responseData": {
+          "error": "capture-item-not-direct: 9007199254740991",
+          "ok": false
+        },
+        "vendorName": "pulsar-capture-effects"
+      },
+      "invalidReplacementWhileRootHiddenPixelsUnchanged": true,
+      "dependencyProxy": {
+        "purpose": "retain the same atlas in OBS active-source traversal",
+        "duplicatesPixels": false,
+        "noReferenceCycleByConstruction": true,
+        "resetRestoresOriginalSceneItemIds": true,
+        "sceneItemIdsBeforeReset": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ],
+        "sceneItemIdsAfterReset": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ],
+        "atlasOriginalVisibilityRestored": true
+      },
+      "reset": {
+        "requestType": "ResetGroupComposition",
+        "responseData": {
+          "generation": 3,
+          "ok": true,
+          "reset": true
+        },
+        "vendorName": "pulsar-capture-effects"
+      },
+      "resetRestoresPixels": true,
+      "syntheticImageAtlas": true,
+      "doesNotExerciseCefOrPhysicalCapture": true
+    },
+    "sourceRemovalLifecycle": {
+      "removeInput": {
+        "removedInput": "native-remove-input-e5b1192730",
+        "response": {},
+        "compositedPixel": [
+          0,
+          255,
+          0,
+          255
+        ],
+        "restored": {
+          "attempts": 2,
+          "pixel": [
+            208,
+            90,
+            42,
+            255
+          ],
+          "remainingSceneItemIds": [
+            1
+          ],
+          "legacyVisible": true
+        }
+      },
+      "graphicsTaskSourceRemove": {
+        "sourceName": "native-graphics-remove-input-e5b1192730",
+        "response": {
+          "executedOnGraphicsTask": true,
+          "ok": true,
+          "removedSourceUuid": "45d0f0b6-2a93-4077-a7ff-51cc9e42710d"
+        },
+        "restored": {
+          "attempts": 1,
+          "pixel": [
+            208,
+            90,
+            42,
+            255
+          ],
+          "remainingSceneItemIds": [
+            1
+          ],
+          "legacyVisible": true
+        },
+        "executedOnGraphicsTask": true
+      },
+      "sameNameSceneRecreation": {
+        "oldSceneUuid": "ad60adf0-3881-446a-a606-832ed3f8a167",
+        "newSceneUuid": "8334896d-1b1d-4525-b59d-3308910cce5f",
+        "differentUuid": true,
+        "newSceneGenerationOneCommit": {
+          "generation": 1,
+          "ok": true,
+          "planHash": "bd633a08ef23ee9d184de54b41e1f8c20990501d26ad44be86a8a50c0ad50b18"
+        },
+        "readbackPixel": [
+          0,
+          255,
+          0,
+          255
+        ],
+        "reset": {
+          "generation": 1,
+          "ok": true,
+          "reset": true
+        }
+      },
+      "activeCompositionAtModuleUnload": {
+        "scene": "native-unload-active-e5b1192730",
+        "generation": 1,
+        "leftActiveForShutdown": true
+      },
+      "sourceRemovalArmedForModuleUnload": {
+        "ok": true,
+        "sourceName": "native-pending-unload-e5b1192730",
+        "sourceUuid": "879e6ba7-97c3-4a35-95b5-8f156272d81d"
+      }
+    },
+    "readbackImages": [
+      {
+        "phase": "source-red",
+        "path": "20261017T135222Z-e5b1192730-group-source-red.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "source-blue",
+        "path": "20261017T135222Z-e5b1192730-group-source-blue.png",
+        "sha256": "69efafc1b75b4424c1a82bfc668afcac6e4b1e22139b38ac269d48783b2e1225"
+      },
+      {
+        "phase": "before-reset",
+        "path": "20261017T135222Z-e5b1192730-group-before-reset.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-refusal",
+        "path": "20261017T135222Z-e5b1192730-group-after-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-unsafe-generation-refusal",
+        "path": "20261017T135222Z-e5b1192730-group-after-unsafe-generation-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-unsafe-scene-item-refusal",
+        "path": "20261017T135222Z-e5b1192730-group-after-unsafe-scene-item-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-update",
+        "path": "20261017T135222Z-e5b1192730-group-after-update.png",
+        "sha256": "e9854a935f10b25f3a7ac7c39df0a783c57c5c9473e5e05af28d162699140ca4"
+      },
+      {
+        "phase": "after-reset",
+        "path": "20261017T135222Z-e5b1192730-group-after-reset.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "offset-source",
+        "path": "20261017T135222Z-e5b1192730-group-offset-source.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "translated-local-opacity",
+        "path": "20261017T135222Z-e5b1192730-group-translated-local-opacity.png",
+        "sha256": "6a60fa863cfea733ebee0ee3c3c4766676748c9f87069423009ab52c8298e2f6"
+      },
+      {
+        "phase": "solar-legacy-before-commit",
+        "path": "20261017T135222Z-e5b1192730-group-solar-legacy-before-commit.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4"
+      },
+      {
+        "phase": "solar-atlas-source",
+        "path": "20261017T135222Z-e5b1192730-group-solar-atlas-source.png",
+        "sha256": "264e290a7fcaac040762569f76ddb40dd4ff397b878e97df608e7d8e4de00f3a"
+      },
+      {
+        "phase": "solar-band-committed",
+        "path": "20261017T135222Z-e5b1192730-group-solar-band-committed.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-replacement-set-mismatch",
+        "path": "20261017T135222Z-e5b1192730-group-solar-band-after-replacement-set-mismatch.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-plan-hash-mismatch",
+        "path": "20261017T135222Z-e5b1192730-group-solar-band-after-plan-hash-mismatch.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-invalid-crop",
+        "path": "20261017T135222Z-e5b1192730-group-solar-band-after-invalid-crop.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-invalid-rect",
+        "path": "20261017T135222Z-e5b1192730-group-solar-band-after-invalid-rect.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-duplicate-band",
+        "path": "20261017T135222Z-e5b1192730-group-solar-band-after-duplicate-band.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-unsupported-mask",
+        "path": "20261017T135222Z-e5b1192730-group-solar-band-after-unsupported-mask.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-reset",
+        "path": "20261017T135222Z-e5b1192730-group-solar-band-after-reset.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4"
+      },
+      {
+        "phase": "solar-band-after-stale-generation",
+        "path": "20261017T135222Z-e5b1192730-group-solar-band-after-stale-generation.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4"
+      },
+      {
+        "phase": "mixed-legacy-before",
+        "path": "20261017T135222Z-e5b1192730-group-mixed-legacy-before.png",
+        "sha256": "c20168750e3e69439053b03f9329c44ea533047798aab131f749153297d193cc"
+      },
+      {
+        "phase": "mixed-atlas-source",
+        "path": "20261017T135222Z-e5b1192730-group-mixed-atlas-source.png",
+        "sha256": "264e290a7fcaac040762569f76ddb40dd4ff397b878e97df608e7d8e4de00f3a"
+      },
+      {
+        "phase": "mixed-capture-source",
+        "path": "20261017T135222Z-e5b1192730-group-mixed-capture-source.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      },
+      {
+        "phase": "nested-capture-source",
+        "path": "20261017T135222Z-e5b1192730-group-nested-capture-source.png",
+        "sha256": "d31d93e6390169e3f4573963b8077e1b6e69afd20ab3a0160b4aa52fd0864ee5"
+      },
+      {
+        "phase": "mixed-composition-committed",
+        "path": "20261017T135222Z-e5b1192730-group-mixed-composition-committed.png",
+        "sha256": "b7b48351530013b950797c0ebb47cbef9be81e71ed55f6e323b38bd88ab40b45"
+      },
+      {
+        "phase": "mixed-composition-after-reset",
+        "path": "20261017T135222Z-e5b1192730-group-mixed-composition-after-reset.png",
+        "sha256": "c20168750e3e69439053b03f9329c44ea533047798aab131f749153297d193cc"
+      },
+      {
+        "phase": "coverage-external-backdrop-source",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-external-backdrop-source.png",
+        "sha256": "2be634a1918bd6b47aa84c39b5dc48cbf1b722fd4779f38718a5519c1e6f2429"
+      },
+      {
+        "phase": "coverage-background-before",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-background-before.png",
+        "sha256": "f53b98bda379fcf4b2936ccf9d574f825d0c509675438a7d8ee42aabab24d28c"
+      },
+      {
+        "phase": "coverage-owner-background-source",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-owner-background-source.png",
+        "sha256": "c673edbf0ca67e607b5cccbfc29495284da1fdee8ce364e83c97053db0d94c1a"
+      },
+      {
+        "phase": "coverage-content-source",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-content-source.png",
+        "sha256": "b988afead028f3ed5cdee4418425d120e37daf21838eed6ec939b66b1b0021e5"
+      },
+      {
+        "phase": "coverage-green-source",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-green-source.png",
+        "sha256": "7e9f6ca47f0f75c62c674e0218be9093dfcdfa7360d96cf89ef6932d501d4728"
+      },
+      {
+        "phase": "coverage-capture-source",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-capture-source.png",
+        "sha256": "4f9562ba9c5b136348cb6bc2b2a19b3c0749e906f94d2a49c08774c926105b47"
+      },
+      {
+        "phase": "coverage-blend-source",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-blend-source.png",
+        "sha256": "32d36c862898d0efcb8b9748127498d5657b700325af0a38dfefc03e9773dca0"
+      },
+      {
+        "phase": "coverage-alpha-atlas-source",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-alpha-atlas-source.png",
+        "sha256": "9d4c389f8deb7a86946ddde478f86d2567292accaebee9f69ca62eed20552048"
+      },
+      {
+        "phase": "coverage-v2-composition-committed",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-v2-composition-committed.png",
+        "sha256": "b196005ea073d76bb3034f32a78b368e75e534f761d16a4b1493600fe825af5c"
+      },
+      {
+        "phase": "coverage-v2-after-stale-replacement",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-v2-after-stale-replacement.png",
+        "sha256": "b196005ea073d76bb3034f32a78b368e75e534f761d16a4b1493600fe825af5c"
+      },
+      {
+        "phase": "coverage-alpha-atlas-updated-source",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-alpha-atlas-updated-source.png",
+        "sha256": "053ad18f4cb12e9f6ec97637cdeb1c9cb4bfd60438d8edacadeac25d7ea9726c"
+      },
+      {
+        "phase": "coverage-v2-after-dynamic-atlas-update",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-v2-after-dynamic-atlas-update.png",
+        "sha256": "f085fb2c15506e4225f151b5730160f5b96697f3ed57dbfd27fb35ddb03a06d1"
+      },
+      {
+        "phase": "coverage-v2-root-appearance",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-v2-root-appearance.png",
+        "sha256": "75f40a7f416e707821dd559cd7f20d4be00ea673ab9ef5d6d8c7fd4c4252c36d"
+      },
+      {
+        "phase": "coverage-v2-after-invalid-root-reference",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-v2-after-invalid-root-reference.png",
+        "sha256": "75f40a7f416e707821dd559cd7f20d4be00ea673ab9ef5d6d8c7fd4c4252c36d"
+      },
+      {
+        "phase": "coverage-v2-after-invalid-root-rect",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-v2-after-invalid-root-rect.png",
+        "sha256": "75f40a7f416e707821dd559cd7f20d4be00ea673ab9ef5d6d8c7fd4c4252c36d"
+      },
+      {
+        "phase": "coverage-v2-hidden-root",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-v2-hidden-root.png",
+        "sha256": "eb8446527fd9146fce988fba8b445ddb5c8d8409cc4ba54ea10f9254f1d2c5a8"
+      },
+      {
+        "phase": "coverage-v2-after-invalid-hidden-root",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-v2-after-invalid-hidden-root.png",
+        "sha256": "eb8446527fd9146fce988fba8b445ddb5c8d8409cc4ba54ea10f9254f1d2c5a8"
+      },
+      {
+        "phase": "coverage-v2-after-reset",
+        "path": "20261017T135222Z-e5b1192730-group-coverage-v2-after-reset.png",
+        "sha256": "f53b98bda379fcf4b2936ccf9d574f825d0c509675438a7d8ee42aabab24d28c"
+      },
+      {
+        "phase": "remove-dependency-legacy-before",
+        "path": "20261017T135222Z-e5b1192730-group-remove-dependency-legacy-before.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301"
+      },
+      {
+        "phase": "remove-dependency-before-removal",
+        "path": "20261017T135222Z-e5b1192730-group-remove-dependency-before-removal.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      },
+      {
+        "phase": "remove-dependency-restored-1",
+        "path": "20261017T135222Z-e5b1192730-group-remove-dependency-restored-1.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      },
+      {
+        "phase": "remove-dependency-restored-2",
+        "path": "20261017T135222Z-e5b1192730-group-remove-dependency-restored-2.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301"
+      },
+      {
+        "phase": "graphics-source-remove-restored-1",
+        "path": "20261017T135222Z-e5b1192730-group-graphics-source-remove-restored-1.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301"
+      },
+      {
+        "phase": "same-name-new-uuid-generation-1",
+        "path": "20261017T135222Z-e5b1192730-group-same-name-new-uuid-generation-1.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      }
+    ]
+  },
+  "shutdownWaitSeconds": 0.187,
+  "shutdownTimeoutSeconds": 30.0,
+  "ownedProcessExited": true,
+  "gracefulShutdownRequested": true,
+  "forcedTerminationUsed": false,
+  "redactedShutdownTail": [
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'Default' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'native-mixed-composition-e5b1192730' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'native-unload-active-e5b1192730' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'Pulsar composition group 161 prism.native-composition.root.v1' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'PulsarCapture' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'PulsarDesktopAudio' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'native-mixed-legacy-e5b1192730' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'native-mixed-atlas-e5b1192730' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'native-mixed-capture-e5b1192730' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'native-nested-capture-e5b1192730' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'native-unload-legacy-e5b1192730' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | private source 'PulsarPreviewBootstrap' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'Pulsar composition bounds 162' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'Pulsar composition group 163 mixed-owner' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'Pulsar composition bounds 164' destroyed",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | source 'native-unload-input-e5b1192730' destroyed",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=0",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR pulsar-frontend-stub | callbacks uninstalled",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_unload_removed_source uuid=879e6ba7-97c3-4a35-95b5-8f156272d81d on_graphics_task=0 removed=1 global_signal_forwarded=1",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=1 pending_released=1",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | private source 'native-pending-unload-e5b1192730' destroyed",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | [obs_module_unload] Shutting down...",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | [WebSocketServer::Stop] Server stopped successfully",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | [obs_module_unload] Finished shutting down.",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR libobs | Freeing OBS context data",
+    "2026-10-17T13:52:30Z DEBUG CQemwfR138uiuHGR libobs | canvas 'Main' (6c69626f-6273-4c00-9d88-c5136d61696e) destroyed",
+    "PULSAR_LEGACY_ALIAS lease=released id=group-proof-a01fcebc212841138d7cfff8059c6bd3 path=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\private-runtime-c711708ba5e64d6bbbb506fb174947d9\\state\\leases\\directshow-program-preview.lock authority=Local\\Pulsar.DirectShowProgramPreview metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\9eab04979f2b22fc.lock",
+    "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=group-proof-a01fcebc212841138d7cfff8059c6bd3 dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\private-runtime-c711708ba5e64d6bbbb506fb174947d9\\state\\runtime authority=Local\\Pulsar.Authority.a722be3d43d15cab metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\a722be3d43d15cab.lock",
+    "PULSAR_RUNTIME_INSTANCE lease=released id=group-proof-a01fcebc212841138d7cfff8059c6bd3 dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\private-runtime-c711708ba5e64d6bbbb506fb174947d9\\state\\runtime authority=Local\\Pulsar.Runtime.group-proof-a01fcebc212841138d7cfff8059c6bd3 metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\5fdffa7fc807f6b3.lock"
+  ],
+  "shutdownMilestones": [
+    "PULSAR_SHUTDOWN_CONTROL event=ready id=group-proof-a01fcebc212841138d7cfff8059c6bd3 mechanism=inherited_event",
+    "2026-10-17T13:52:20Z INFO CQemwfR138uiuHGR libobs | PULSAR_GROUP_COMPOSITION event=module_load",
+    "2026-10-17T13:52:20Z INFO CQemwfR138uiuHGR libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_load",
+    "2026-10-17T13:52:20Z INFO CQemwfR138uiuHGR libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=no_browser_pre_shutdown_fixture_registered scope=no_browser_sources_only cef_shutdown=not_exercised",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=pending_unload_source_armed",
+    "PULSAR_SHUTDOWN_CONTROL event=signaled id=group-proof-a01fcebc212841138d7cfff8059c6bd3 mechanism=inherited_event",
+    "[pulsar-headless] shutting down",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | PULSAR_WEBSOCKET_QUIESCE event=ack active_handlers=0 sessions=0 no_handlers_after_ack=1",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=no_browser_pre_shutdown success=1 browser_sources=0",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=scripting_shutdown",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=started",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=complete",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=exit",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=duplicate_skipped",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_detached phase=exit",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_begin scenes=5 sources=12",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=0",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_unload_removed_source uuid=879e6ba7-97c3-4a35-95b5-8f156272d81d on_graphics_task=0 removed=1 global_signal_forwarded=1",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=1 pending_released=1",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | [obs_module_unload] Shutting down...",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached",
+    "2026-10-17T13:52:30Z INFO CQemwfR138uiuHGR obs-websocket | [obs_module_unload] Finished shutting down."
+  ],
+  "shutdownDiagnostics": {
+    "errorFree": true,
+    "errorCount": 0,
+    "errors": [],
+    "attribution": "No shutdown ERROR log was observed after the shutdown signal."
+  },
+  "gracefulShutdownEvidence": {
+    "eventAdopted": true,
+    "eventSignaled": true,
+    "hostShutdownReached": true,
+    "exitCode": 0
+  },
+  "frontendCallbackShutdownLifecycle": {
+    "scriptShutdownThenExitRunsCleanupOnce": true,
+    "exitCleanupMarkerCountsAreExact": true,
+    "exitCallbackDetachedBeforeTableUninstall": true,
+    "destructorSkippedDuplicateRemovalAfterUninstall": true,
+    "noMissingFrontendCallbackError": true,
+    "markerIndexes": {
+      "scriptingShutdownReceived": 726,
+      "exitReceived": 731,
+      "exitCleanupStarted": 727,
+      "exitCleanupComplete": 729,
+      "duplicateCleanupSkipped": 732,
+      "exitDetach": 734,
+      "callbacksUninstalled": 771,
+      "websocketUnloadStarted": 775,
+      "destructorSkip": 777,
+      "websocketUnloadFinished": 778
+    },
+    "passed": true
+  },
+  "compositionModuleUnloadCleanup": {
+    "markerObserved": true,
+    "activeCompositionsBeforeCleanup": 0,
+    "generationFencesBeforeCleanup": 0,
+    "pendingRemovalEventsBeforeCleanup": 1,
+    "pendingRemovalEventsReleased": 1
+  },
+  "pendingRemovalUnloadProof": {
+    "testHelperLoadedAfterCapturePlugin": true,
+    "testRemovalRanBeforeCapturePluginUnload": true,
+    "helperRemovalOnStoppedGraphicsThread": true,
+    "pendingEventObservedAtCaptureUnload": true,
+    "pendingEventReleasedAtCaptureUnload": true,
+    "markerIndexes": {
+      "captureModuleLoad": 97,
+      "testHelperModuleLoad": 101,
+      "testHelperUnloadRemoval": 772,
+      "captureModuleUnloadCleanup": 773
+    },
+    "passed": true
+  },
+  "boundedExitWithoutForcedTermination": true,
+  "cleanShutdown": true,
+  "activeCompositionCleanlyUnloaded": false,
+  "activeCompositionDisposedBeforeModuleUnload": true,
+  "gracefulShutdownAfterActiveComposition": true,
+  "scratchRemoved": true,
+  "finishedUtc": "2026-10-17T13:52:30.721936+00:00",
+  "limits": "Private synthetic GPU readback only; SolarBand source crops and owner-local placement are covered, masks remain explicitly unsupported, and no physical capture, public output, transition or switch is exercised. The private no-browser shutdown fixture does not exercise CEF teardown."
+}

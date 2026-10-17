@@ -1,0 +1,278 @@
+{
+  "provenance": {
+    "prismProductCommit": "fad4ed65bdcf1e0e3360b7dc29bf21f5578b3600",
+    "solarProductCommit": "ebe3e6bb9b049667932a6b5a6e094107718debfa",
+    "fixtureSha256": "79ced30ef6c235773c3784aa1ffca8ad71f32671ff01fc4730d20f8703dff276",
+    "limitation": "Actual Prism code over a Solar-emitted fixture derived from a synthetic Vision receipt. No GPU or transport proof by this emitter alone."
+  },
+  "projection": {
+    "protocol": "pulsar.group-composition/2",
+    "coordinateSpace": "global-scene-texels",
+    "sourcePlanHash": "sha256:2178f9d06c2366fcb3cb8357405075252a6bf0c114b56edf84cd1630ade8a71c",
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "groups": [
+      {
+        "id": "prism.native-composition.root.v1",
+        "parentId": null,
+        "order": 0,
+        "opacity": 0.5,
+        "visible": true,
+        "blendMode": "multiply",
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1920,
+          "height": 1080
+        },
+        "affine": {
+          "m00": 1,
+          "m01": 0,
+          "tx": 0,
+          "m10": 0,
+          "m11": 1,
+          "ty": 0
+        },
+        "children": [
+          {
+            "kind": "solarBand",
+            "band": 0,
+            "sceneItemId": 9,
+            "crop": {
+              "left": 1,
+              "top": 1,
+              "right": 1,
+              "bottom": 2165
+            },
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 1920,
+              "height": 1080
+            },
+            "affine": {
+              "m00": 1,
+              "m01": 0,
+              "tx": 0,
+              "m10": 0,
+              "m11": 1,
+              "ty": 0
+            }
+          },
+          {
+            "kind": "capture",
+            "sceneItemId": 6,
+            "affine": {
+              "m00": 2,
+              "m01": 0,
+              "tx": 20,
+              "m10": 0,
+              "m11": 2,
+              "ty": 40
+            },
+            "crop": {
+              "left": 0,
+              "top": 0,
+              "right": 0,
+              "bottom": 0
+            },
+            "localOpacity": 0.75,
+            "visible": true,
+            "blendMode": "screen",
+            "mask": {
+              "sceneItemId": 9,
+              "crop": {
+                "left": 1,
+                "top": 2165,
+                "right": 1,
+                "bottom": 1
+              },
+              "rect": {
+                "x": 0,
+                "y": 0,
+                "width": 1920,
+                "height": 1080
+              }
+            }
+          }
+        ],
+        "mask": {
+          "sceneItemId": 9,
+          "crop": {
+            "left": 1,
+            "top": 1083,
+            "right": 1,
+            "bottom": 1083
+          },
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 1920,
+            "height": 1080
+          }
+        }
+      }
+    ],
+    "replacedSceneItems": [
+      {
+        "sceneItemId": 7
+      },
+      {
+        "sceneItemId": 9
+      }
+    ],
+    "captureIds": [
+      "vision.capture.2"
+    ],
+    "surfaces": [
+      {
+        "band": 0,
+        "ownerId": "prism.native-composition.root.v1",
+        "ownerPath": [
+          "prism.native-composition.root.v1"
+        ],
+        "coordinateSpace": "global-scene-texels",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1920,
+          "height": 1080
+        },
+        "atlasRect": {
+          "x": 1,
+          "y": 1,
+          "width": 1920,
+          "height": 1080
+        },
+        "affine": {
+          "m00": 1,
+          "m01": 0,
+          "tx": 0,
+          "m10": 0,
+          "m11": 1,
+          "ty": 0
+        }
+      }
+    ]
+  },
+  "wire": {
+    "protocol": "pulsar.group-composition/2",
+    "coordinateSpace": "global-scene-texels",
+    "sceneName": "native-group-coverage-5a958fa18c",
+    "runtimeInstanceId": "group-proof-7852ce4cecf94f2fbbc2b032ddf18fdc",
+    "generation": 4,
+    "planHash": "sha256:f5afdb7d87ec52928d7e9a65a9a0f0059334dbd1c1cbb155cd0e83e41abd8b26",
+    "groups": [
+      {
+        "id": "prism.native-composition.root.v1",
+        "parentId": null,
+        "order": 0,
+        "opacity": 0.5,
+        "visible": true,
+        "blendMode": "multiply",
+        "bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1920,
+          "height": 1080
+        },
+        "affine": {
+          "m00": 1,
+          "m01": 0,
+          "tx": 0,
+          "m10": 0,
+          "m11": 1,
+          "ty": 0
+        },
+        "children": [
+          {
+            "kind": "solarBand",
+            "band": 0,
+            "sceneItemId": 9,
+            "crop": {
+              "left": 1,
+              "top": 1,
+              "right": 1,
+              "bottom": 2165
+            },
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 1920,
+              "height": 1080
+            },
+            "affine": {
+              "m00": 1,
+              "m01": 0,
+              "tx": 0,
+              "m10": 0,
+              "m11": 1,
+              "ty": 0
+            }
+          },
+          {
+            "kind": "capture",
+            "sceneItemId": 6,
+            "affine": {
+              "m00": 2,
+              "m01": 0,
+              "tx": 20,
+              "m10": 0,
+              "m11": 2,
+              "ty": 40
+            },
+            "crop": {
+              "left": 0,
+              "top": 0,
+              "right": 0,
+              "bottom": 0
+            },
+            "localOpacity": 0.75,
+            "visible": true,
+            "blendMode": "screen",
+            "mask": {
+              "sceneItemId": 9,
+              "crop": {
+                "left": 1,
+                "top": 2165,
+                "right": 1,
+                "bottom": 1
+              },
+              "rect": {
+                "x": 0,
+                "y": 0,
+                "width": 1920,
+                "height": 1080
+              }
+            }
+          }
+        ],
+        "mask": {
+          "sceneItemId": 9,
+          "crop": {
+            "left": 1,
+            "top": 1083,
+            "right": 1,
+            "bottom": 1083
+          },
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 1920,
+            "height": 1080
+          }
+        }
+      }
+    ],
+    "replacedSceneItems": [
+      {
+        "sceneItemId": 7
+      },
+      {
+        "sceneItemId": 9
+      }
+    ]
+  }
+}

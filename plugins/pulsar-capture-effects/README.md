@@ -6,8 +6,9 @@ transition. One filter per active authored capture accepts a bounded ordered
 array of shadows, blurs, noise, texture and glass stages. Alpha is premultiplied.
 The filter adds bounded transparent padding for external paint, and samples a
 private mirror of lower scene items for backdrop/glass; it never renders the
-parent scene recursively. Mirrors contain only preceding visible items and are
-released with the filter. No inactive authored scene cache is retained.
+parent scene recursively. Mirrors contain only visible items below the filter
+parent in the immediate scene stack, in the same order, and are released with
+the filter. No inactive authored scene cache is retained.
 
 Entry: src/capture-effects.cpp. Shader: src/capture-effects.effect, embedded at
 build time. Public registration: pulsar_capture_effects. Consumer: Prism capture
@@ -243,9 +244,10 @@ Build inputs/outputs and the three run results are cross-referenced in
 the targeted structural test output is
 [`20261016T003604Z-browser-failclosed-tests.raw.txt`](../../evidence/local-20261015-native-group-composition/eleven/20261016T003604Z-browser-failclosed-tests.raw.txt).
 These runs do not establish installed-runtime admission or graceful CEF teardown.
-Group coverage masks and non-normal group blend modes remain explicitly
-unsupported and are refused before replacing the active graph. Owner-local
-affine shear remains unsupported; the explicit global grid path below supports it.
+Group coverage masks and non-normal group blend modes are available only in
+`pulsar.group-composition/2`; `/1` retains its original refusal behavior.
+Owner-local affine shear remains unsupported; the explicit global grid path
+below supports it.
 
 
 ## Global scene texel composition
@@ -276,11 +278,70 @@ construction and the existing atomic swap/lifetime fences. Coordinate space is
 part of the idempotent-replay check. Non-finite/native-float-overflow affines,
 invalid atlas placement and unknown spaces cannot replace an active graph.
 
+`pulsar.group-composition/2` is restricted to `global-scene-texels`; `/1` is
+unchanged. A group or capture may carry `mask: null` or a mask reference
+`{sceneItemId, crop, rect}`. The referenced direct scene item is a live source in
+Solar's admitted CEF atlas. `crop` uses physical source pixels and `rect` uses
+global integer viewport texels. Cropped source dimensions must exactly equal
+the rect dimensions; stale, missing, unready, out-of-bounds or resampled masks
+are refused before the active graph changes. The mask samples source alpha only.
+
+Each group and capture in `/2` also carries its CSS `blendMode`; the supported
+IDs are normal (0), multiply (1), screen (2), hard-light (3), soft-light (4),
+overlay (5), darken (6), lighten (7), difference (8), exclusion (9),
+color-dodge (11), color-burn (12), hue (13), saturation (14), color (15) and
+luminosity (16). `plus-lighter` (10) remains excluded. Mask coverage and local
+opacity multiply once on the isolated contribution, followed by the requested
+blend against the exact preceding visible items in the immediate parent scene.
+The synthetic root keeps a null parent, order zero, identity affine and the full
+viewport bounds; `/2` additionally honors its visibility, opacity, blend mode
+and mask. Those root appearance fields remain at their `/1` defaults.
+
+An invisible private dependency source participates in OBS' active-source walk
+so the filter can sample the same atlas input after the authored atlas item is
+hidden by admission. It stores one reference to that input, emits no pixels,
+and is owned by the candidate root; the atlas does not reference the proxy, so
+the dependency edge is one-way. Reset removes the generated group and proxy and
+restores original item visibility. Invalid replacements leave the prior graph
+and pixels intact.
+
+`scripts/probe-group-composition.py` exercises `/2` on a disposable private
+Pulsar host. Pixel readback covers all 16 supported group blend modes, two
+overlapping opaque children under one masked group with half opacity, a masked
+multiply capture with half local opacity, root mask/opacity/multiply/visibility,
+stale generation, invalid replacement, an atlas file update while the
+composition is committed, and reset of generated scene items. Its atlas is a
+synthetic image input; this verifies live shader sampling and dependency
+retention, not a physical CEF installation or capture device. Use
+`--expect-v2-rejection` with the prior `/1` plugin to verify the versioned
+negative control.
+
+For wire-level interoperability, pass `--prism-wire-emitter <path>` with the
+SSR emitter from Prism commit `fad4ed65bdcf1e0e3360b7dc29bf21f5578b3600`.
+It loads Prism's projection and canonical hash code unchanged against Solar's
+coverage fixture from `ebe3e6bb9b049667932a6b5a6e094107718debfa`. The probe
+uses private OBS scene item IDs and forwards the emitted JSON wire object
+unchanged to the native request; the Vite cache stays under this Pulsar
+worktree's `.cache`. The resulting GPU proof checks the Solar crop and global
+mask rectangles, a transformed `screen` capture with local opacity, partial
+and zero coverage, a live atlas-file update, reset, and the old `/1` DLL's
+refusal of the same Prism `planHash`. Reports are under
+`evidence/local-20261017-native-group-coverage/eleven/`.
+
+The Prism/Solar projection and hashing code are real, but the Solar fixture is
+derived from a synthetic Vision receipt and the GPU scene is synthetic: a
+`1922x3246` image source stands in for Solar's CEF atlas, and a solid
+`color_source_v3` stands in for a camera contribution. The probe sends the
+emitted object through Pulsar's private WebSocket request; it does not exercise
+Prism's running transport, live CEF pixels, a physical camera, or capture
+effects beyond this composition path.
+
 `scripts/probe-global-texel-composition.py` reuses the disposable native runner
 and the unchanged owner-local regression suite. It adds exact 1px checkerboard
 readback, interleaved capture/bands, shear, vertical source crop, nested opacity,
 rotation, refusal pixel preservation and coordinate-space replay checks at
 1920x1080. Use the same private build/runtime arguments as
-`probe-group-composition.py`. The probe never starts Live or REC. These synthetic
-GPU readbacks do not certify physical capture availability, CEF teardown,
-installed-runtime admission, group masks, non-normal group blends or effects.
+`probe-group-composition.py`. The probe never starts Live or REC. Synthetic GPU
+readbacks cover the admitted group masks and blends but do not certify physical
+capture availability, CEF teardown, installed-runtime admission, or other
+capture effects.

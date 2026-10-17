@@ -11,7 +11,8 @@
 
 namespace group_composition {
 namespace {
-constexpr const char *protocol_name = "pulsar.group-composition/1";
+constexpr const char *protocol_v1 = "pulsar.group-composition/1";
+constexpr const char *protocol_v2 = "pulsar.group-composition/2";
 constexpr size_t max_groups = 256;
 constexpr size_t max_children = 2048;
 constexpr size_t max_replaced_scene_items = 2048;
@@ -262,24 +263,87 @@ bool read_crop(obs_data_t *data, Crop &crop, obs_data_t *response)
   return true;
 }
 
-bool read_mask_null(obs_data_t *data, bool &is_null, obs_data_t *response)
+bool parse_blend_mode(const std::string &name, int &id)
 {
-  obs_data_t *unused = nullptr;
-  if (!read_object(data, "mask", &unused, response, true, &is_null))
+  static const std::pair<const char *, int> modes[] = {
+      {"normal", 0}, {"multiply", 1}, {"screen", 2},
+      {"hard-light", 3}, {"soft-light", 4}, {"overlay", 5},
+      {"darken", 6}, {"lighten", 7}, {"difference", 8},
+      {"exclusion", 9}, {"color-dodge", 11}, {"color-burn", 12},
+      {"hue", 13}, {"saturation", 14}, {"color", 15},
+      {"luminosity", 16},
+  };
+  for (const auto &[candidate, candidate_id] : modes) {
+    if (name == candidate) {
+      id = candidate_id;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool read_global_mask_rect(obs_data_t *data, Rect &out, obs_data_t *response)
+{
+  obs_data_t *object = nullptr;
+  if (!read_object(data, "rect", &object, response))
     return false;
-  if (unused)
-    obs_data_release(unused);
-  if (!is_null) {
-    set_error(response, "unsupported-mask",
-              "coverage must be materialized before group mutation");
+  int64_t x = 0, y = 0, width = 0, height = 0;
+  const bool valid = read_integer(object, "x", x, response) &&
+                     read_integer(object, "y", y, response) &&
+                     read_integer(object, "width", width, response) &&
+                     read_integer(object, "height", height, response);
+  obs_data_release(object);
+  if (!valid || x < 0 || y < 0 || width <= 0 || height <= 0 ||
+      x > max_dimension || y > max_dimension || width > max_dimension ||
+      height > max_dimension) {
+    set_error(response, "invalid-mask-rect",
+              "global integer rect with positive bounded extent required");
     return false;
   }
+  out = {double(x), double(y), double(width), double(height)};
+  return true;
+}
+
+bool read_mask(obs_data_t *data, Mask &mask, obs_data_t *response,
+               bool version_two, bool &is_null)
+{
+  auto *item = obs_data_item_byname(data, "mask");
+  if (!item || obs_data_item_gettype(item) != OBS_DATA_OBJECT) {
+    if (item)
+      obs_data_item_release(&item);
+    set_error(response, "invalid-plan", "mask");
+    return false;
+  }
+  auto *object = obs_data_item_get_obj(item);
+  obs_data_item_release(&item);
+  is_null = object == nullptr;
+  mask.is_null = is_null;
+  if (is_null)
+    return true;
+  if (!version_two) {
+    obs_data_release(object);
+    set_error(response, "unsupported-mask",
+              "coverage masks require pulsar.group-composition/2");
+    return false;
+  }
+  int64_t scene_item_id = 0;
+  const bool valid = read_integer(object, "sceneItemId", scene_item_id, response) &&
+                     scene_item_id > 0 && read_crop(object, mask.crop, response) &&
+                     read_global_mask_rect(object, mask.rect, response);
+  obs_data_release(object);
+  if (!valid || scene_item_id <= 0) {
+    set_error(response, "invalid-mask", "positive sceneItemId, crop and rect required");
+    return false;
+  }
+  mask.scene_item_id = scene_item_id;
+  mask.is_null = false;
   return true;
 }
 
 bool identity(const Affine &a);
 
-bool read_child(obs_data_t *data, Child &child, obs_data_t *response)
+bool read_child(obs_data_t *data, Child &child, obs_data_t *response,
+                bool version_two)
 {
   std::string kind;
   if (!read_string(data, "kind", kind, response, 32))
@@ -302,6 +366,16 @@ bool read_child(obs_data_t *data, Child &child, obs_data_t *response)
         set_error(response, "invalid-capture", "localOpacity outside 0..1");
         return false;
       }
+    }
+    if (version_two) {
+      if (!read_string(data, "blendMode", child.blend_mode, response, 32) ||
+          !parse_blend_mode(child.blend_mode, child.blend_mode_id)) {
+        set_error(response, "unsupported-blend-mode", child.blend_mode.c_str());
+        return false;
+      }
+      bool mask_is_null = true;
+      if (!read_mask(data, child.mask, response, true, mask_is_null))
+        return false;
     }
     return true;
   }
@@ -337,7 +411,8 @@ bool read_child(obs_data_t *data, Child &child, obs_data_t *response)
   return false;
 }
 
-bool parse_group(obs_data_t *data, Group &group, obs_data_t *response)
+bool parse_group(obs_data_t *data, Group &group, obs_data_t *response,
+                 bool version_two)
 {
   bool visible_present = false;
   if (!read_string(data, "id", group.id, response, 256) ||
@@ -347,11 +422,15 @@ bool parse_group(obs_data_t *data, Group &group, obs_data_t *response)
       group.opacity < 0 || group.opacity > 1 ||
       !read_optional_boolean(data, "visible", group.visible,
                              visible_present, response) ||
-      !read_string(data, "blendMode", group.blend_mode, response, 32) ||
-      group.blend_mode != "normal" || !read_rect(data, group.bounds, response) ||
+       !read_string(data, "blendMode", group.blend_mode, response, 32) ||
+       (version_two ? !parse_blend_mode(group.blend_mode, group.blend_mode_id)
+                    : group.blend_mode != "normal") ||
+       !read_rect(data, group.bounds, response) ||
       !read_affine(data, group.affine, response) ||
-      !read_mask_null(data, group.mask_is_null, response)) {
-    if (group.blend_mode != "normal")
+       !read_mask(data, group.mask, response, version_two, group.mask_is_null)) {
+    if (!version_two && group.blend_mode != "normal")
+      set_error(response, "unsupported-blend-mode", group.blend_mode.c_str());
+    else if (version_two && group.blend_mode_id == 0 && group.blend_mode != "normal")
       set_error(response, "unsupported-blend-mode", group.blend_mode.c_str());
     return false;
   }
@@ -377,7 +456,7 @@ bool parse_group(obs_data_t *data, Group &group, obs_data_t *response)
       return false;
     }
     Child child;
-    const bool valid = read_child(child_data, child, response);
+    const bool valid = read_child(child_data, child, response, version_two);
     obs_data_release(child_data);
     if (!valid) {
       obs_data_array_release(children);
@@ -393,6 +472,17 @@ bool validate_graph(Plan &plan, obs_data_t *response);
 
 bool parse_plan(obs_data_t *request, Plan &plan, obs_data_t *response)
 {
+  std::string protocol;
+  if (!read_string(request, "protocol", protocol, response, 64))
+    return false;
+  if (protocol == protocol_v1)
+    plan.protocol_version = 1;
+  else if (protocol == protocol_v2)
+    plan.protocol_version = 2;
+  else {
+    set_error(response, "unsupported-protocol", protocol.c_str());
+    return false;
+  }
   if (obs_data_has_user_value(request, "coordinateSpace")) {
     std::string space;
     if (!read_string(request, "coordinateSpace", space, response, 64))
@@ -404,10 +494,10 @@ bool parse_plan(obs_data_t *request, Plan &plan, obs_data_t *response)
       return false;
     }
   }
-  std::string protocol;
-  if (!read_string(request, "protocol", protocol, response, 64) ||
-      protocol != protocol_name) {
-    set_error(response, "unsupported-protocol", protocol.c_str());
+  if (plan.protocol_version == 2 &&
+      plan.coordinate_space != CoordinateSpace::GlobalSceneTexels) {
+    set_error(response, "unsupported-coordinate-space",
+              "pulsar.group-composition/2 requires global-scene-texels");
     return false;
   }
   if (!read_string(request, "sceneName", plan.scene_name, response, 512) ||
@@ -501,7 +591,8 @@ bool parse_plan(obs_data_t *request, Plan &plan, obs_data_t *response)
       return false;
     }
     Group group;
-    const bool valid = parse_group(group_data, group, response);
+    const bool valid = parse_group(group_data, group, response,
+                                   plan.protocol_version == 2);
     obs_data_release(group_data);
     if (!valid) {
       obs_data_array_release(groups);
@@ -577,9 +668,11 @@ bool validate_graph(Plan &plan, obs_data_t *response)
     return false;
   }
   if (!root.parent_is_null || root.order != 0 || !identity(root.affine) ||
-      std::abs(root.opacity - 1) > 1e-9 || root.blend_mode != "normal" ||
-      !root.visible || !root.mask_is_null) {
-    set_error(response, "invalid-root", "reserved root must be null-parent identity");
+      (plan.protocol_version == 1 &&
+       (std::abs(root.opacity - 1) > 1e-9 || root.blend_mode != "normal" ||
+        !root.visible || !root.mask_is_null))) {
+    set_error(response, "invalid-root",
+              "reserved root must keep its null-parent identity transform");
     return false;
   }
   std::unordered_set<int64_t> seen_solar_bands;
@@ -603,12 +696,27 @@ bool validate_graph(Plan &plan, obs_data_t *response)
     std::unordered_set<std::string> seen_children;
     const auto &band_bounds = plan.coordinate_space == CoordinateSpace::GlobalSceneTexels
                                   ? root.bounds : group.bounds;
+    if (plan.protocol_version == 2 && !group.mask_is_null &&
+        (group.mask.rect.x + group.mask.rect.width > root.bounds.width ||
+         group.mask.rect.y + group.mask.rect.height > root.bounds.height)) {
+      set_error(response, "invalid-mask-rect",
+                "group mask must fit the global viewport");
+      return false;
+    }
     for (size_t i = 0; i < group.children.size(); ++i) {
       const auto &child = group.children[i];
       if (child.kind == ChildKind::SolarBand &&
           !seen_solar_bands.insert(child.band).second) {
         set_error(response, "duplicate-solar-band",
                   std::to_string(child.band).c_str());
+        return false;
+      }
+      if (plan.protocol_version == 2 && !child.mask.is_null &&
+          (child.kind != ChildKind::Capture ||
+           child.mask.rect.x + child.mask.rect.width > root.bounds.width ||
+           child.mask.rect.y + child.mask.rect.height > root.bounds.height)) {
+        set_error(response, "invalid-mask-rect",
+                  "only capture masks within the global viewport are supported");
         return false;
       }
       if (child.kind == ChildKind::SolarBand &&

@@ -1,9 +1,13 @@
 uniform float4x4 ViewProj;
 uniform texture2d image;
 uniform texture2d backdrop;
+uniform texture2d coverage_image;
 uniform float2 dimensions;
 uniform float2 raster_scale;
 uniform float2 source_dimensions;
+uniform float2 coverage_dimensions;
+uniform float2 coverage_crop_origin;
+uniform float4 coverage_rect;
 uniform float2 capture_size;
 uniform float2 capture_position;
 uniform float2 canvas_size;
@@ -11,6 +15,7 @@ uniform float padding;
 uniform float corner_radius;
 uniform int kind;
 uniform int blend_mode;
+uniform int coverage_enabled;
 uniform float radius;
 uniform float spread;
 uniform float2 offset;
@@ -38,6 +43,18 @@ VertData VSDefault(VertData v) { v.pos = mul(float4(v.pos.xyz, 1.0), ViewProj); 
 float4 sample_image(float2 p) {
   if (p.x < 0.0 || p.y < 0.0 || p.x >= source_dimensions.x || p.y >= source_dimensions.y) return float4(0.0,0.0,0.0,0.0);
   return image.Sample(linear_sampler, p / source_dimensions);
+}
+float sample_coverage(float2 p) {
+  if (coverage_enabled == 0) return 1.0;
+  if (p.x < coverage_rect.x || p.y < coverage_rect.y ||
+      p.x >= coverage_rect.x + coverage_rect.z ||
+      p.y >= coverage_rect.y + coverage_rect.w) return 0.0;
+  float2 source_position = coverage_crop_origin + p - coverage_rect.xy;
+  if (source_position.x < 0.0 || source_position.y < 0.0 ||
+      source_position.x >= coverage_dimensions.x ||
+      source_position.y >= coverage_dimensions.y) return 0.0;
+  return coverage_image.Sample(linear_sampler,
+                               source_position / coverage_dimensions).a;
 }
 float4 blur_image(float2 p, float r) {
   float4 c = sample_image(p) * 0.25;
@@ -96,7 +113,7 @@ float3 blend_color(float3 b,float3 s){
 float4 Paint(VertData v) {
   float2 raster=v.uv*dimensions;
   float2 local=raster*raster_scale-float2(padding,padding);
-  if(kind==0) return sample_image(local)*shape_alpha(local,0.0,0.5)*capture_opacity;
+  if(kind==0) return sample_image(local)*shape_alpha(local,0.0,0.5)*capture_opacity*sample_coverage(raster);
   if(kind==9) return sample_image(raster)*shape_alpha(local,0.0,0.5);
   float4 c=sample_image(raster);
   if(kind==8){

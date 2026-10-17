@@ -1,0 +1,204 @@
+{
+  "startedUtc": "2026-10-17T13:50:42.330043+00:00",
+  "passed": false,
+  "browserPreShutdownFixture": {
+    "enabled": true,
+    "mode": "private-test-helper-no-browser-source-fence",
+    "browserModulesInRuntime": [],
+    "helperCheck": "enumerates OBS sources when the host requests the browser fence and returns success only when no browser_source/browser_source_v2 exists",
+    "cefShutdownExercised": false
+  },
+  "hostExecutable": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\private-runtime-981136a2508f4669a515e75a301c52d3\\runtime\\bin\\64bit\\pulsar.exe",
+    "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973",
+    "copiedFromPrivateBuild": false
+  },
+  "provenance": {
+    "runtimeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo",
+    "runtimeExeSha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973",
+    "runtimeObsSha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1",
+    "privateCapturePlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "privateCapturePluginSha256": "021fe3ff56514604548f30118e877681854df9e15b0b1512bd0235b5e4a0a4b0",
+    "privateWebsocketPlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+    "privateWebsocketPluginSha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b",
+    "privateGraphicsRemoveHelper": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\pulsar-private-build\\plugins\\pulsar-capture-effects\\RelWithDebInfo\\z-group-composition-shutdown-test-helper.dll",
+    "privateGraphicsRemoveHelperSha256": "f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff",
+    "graphicsRemoveHelperPurpose": "test-only module calls obs_source_remove within an OBS graphics task and queues a second removal during module unload after stop_video",
+    "jsonBridgeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\plugins\\pulsar-websocket\\src\\utils\\Json.cpp",
+    "jsonBridgeSourceSha256": "e40f65258346441c4435928e46c929ba20b8e0eabcc9a8334f6edfa538fadc0f",
+    "jsonBridgeBinarySourceClaim": "not asserted by this runner; supplied obs-websocket.dll is identified by its private path and SHA-256 above"
+  },
+  "upstreamShutdownContract": {
+    "revision": "70a58302435308e609e0b1114efe3ef402f810b7",
+    "obsSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_shutdown:1477; stop_video:1512; module unload loop:1517",
+      "contract": "the graphics video thread is stopped and joined before module unload callbacks"
+    },
+    "graphicsTaskSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-video.c",
+      "sha256": "1fa1ede0abaa100b3362dd9fefee4fdfbb77a63afd3ef73989c17e993fd38512",
+      "locations": "execute_graphics_tasks:1024; task execution:1216; loop stop check:1248",
+      "contract": "graphics tasks are executed before the loop checks whether to exit; final-boundary races are handled by the plugin-owned pending-event set"
+    },
+    "queueSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_queue_task:3518-3544",
+      "contract": "same-task-thread callbacks execute inline; otherwise graphics tasks enter the queue, so module unload cannot wait on a stopped graphics worker"
+    },
+    "videoTaskReleaseSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_shutdown module unload loop:1516-1528; obs_free_video/deque_free(video.tasks):909-950, called at 1534",
+      "contract": "graphics tasks enqueued after stop_video cannot execute; after module unload the video task deque is freed without invoking the callbacks, so payload ownership must be discharged by the plugin before the queue storage is released"
+    },
+    "moduleListSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-module.c",
+      "sha256": "175abd54c06153b75c893162522ce95086e509dbf9f46864ac71c7f1b483e6ae",
+      "locations": "obs_open_module prepends at 181-198; free_module:777-817; obs_shutdown:1516-1528",
+      "contract": "the module list is prepended on successful load and unloaded from its head; the runtime probe records load and unload marker order instead of assuming file enumeration order"
+    },
+    "globalSourceRemoveSignal": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-internal.h",
+      "sha256": "bb79629027174c25ba262d17ca00956308346f7626f62ecd889ec27d5ab6057e",
+      "locations": "obs_source_dosignal:1100-1111",
+      "contract": "private sources intentionally omit global source_remove; the private helper removes its retained synthetic source then forwards the same source pointer through the global source_remove handler so the plugin's actual listener queues an event after stop_video without registering an input for frontend cleanup"
+    }
+  },
+  "ownedPid": 28736,
+  "syntheticOnlyBootstrap": {
+    "desktopAudioDeviceId": "pulsar-synthetic-test-no-device",
+    "microphoneConfigured": false,
+    "processAudioConfigured": false,
+    "initializedWasapiDevices": [],
+    "browserModulesInRuntime": [],
+    "browserPreShutdownFixture": "test-only no-browser source assertion",
+    "result": "no WASAPI endpoint initialized during private bootstrap"
+  },
+  "errorType": "AssertionError",
+  "error": "{'label': 'masked capture multiply with local opacity', 'actual': (96, 56, 92, 255), 'expected': (71, 50, 47, 255), 'tolerance': 5}",
+  "redactedBootTail": "--- pulsar stdout/stderr (last 40 lines) ---\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition crop-scene 126' (scene) created\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition world-capture 127' (pulsar_composition_world_affine) created\n  | 2026-10-17T13:50:50Z WARN zP7QSPKqLDsnoOQa libobs | Attempted to add Scene without specifying a canvas! Using default canvas instead.\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar capture backdrop' (scene) created\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition composition-filter 128' (pulsar_capture_effects) created\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | - filter 'Pulsar composition composition-filter 128' (pulsar_capture_effects) added to source 'Pulsar composition group 124 coverage-blend-color'\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'Pulsar composition group 129 coverage-blend-luminosity' (group) created\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'Pulsar composition bounds 130' (color_source) created\n  | 2026-10-17T13:50:50Z WARN zP7QSPKqLDsnoOQa libobs | Attempted to add Scene without specifying a canvas! Using default canvas instead.\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition crop-scene 131' (scene) created\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition world-capture 132' (pulsar_composition_world_affine) created\n  | 2026-10-17T13:50:50Z WARN zP7QSPKqLDsnoOQa libobs | Attempted to add Scene without specifying a canvas! Using default canvas instead.\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar capture backdrop' (scene) created\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition composition-filter 133' (pulsar_capture_effects) created\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | - filter 'Pulsar composition composition-filter 133' (pulsar_capture_effects) added to source 'Pulsar composition group 129 coverage-blend-luminosity'\n  | 2026-10-17T13:50:50Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition mask-dependency 134 8' (pulsar_composition_dependency) created\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 39 coverage-owner found=1 scene=1 target=1 prefix=0\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=15\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=14\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=13\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=12\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=11\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=10\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=9\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=8\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=7\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=6\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=5\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=4\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=3\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=2\n  | 2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa capture-effects-debug | parent=Pulsar composition group 35 prism.native-composition.root.v1 found=1 scene=1 target=1 prefix=1\n  | 2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | - filter 'Pulsar composition composition-filter 63' (pulsar_capture_effects) removed from source 'Pulsar composition group 59 coverage-blend-multiply'\n  | 2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'Pulsar composition group 35 prism.native-composition.root.v1' destroyed\n  | 2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'Pulsar composition bounds 36' destroyed\n  | 2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition world-capture 38' destroyed\n  | 2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | - filter 'Pulsar composition composition-filter 49' (pulsar_capture_effects) removed from source 'Pulsar composition group 43 coverage-mask-group'\n  | 2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | - filter 'Pulsar composition composition-filter 54' (pulsar_capture_effects) removed from source 'Pulsar composition capture-composition 52'\n  | 2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'Pulsar composition group 39 coverage-owner' destroyed\n  | 2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'Pulsar composition group 55 coverage-blend-normal' destroyed",
+  "shutdownWaitSeconds": 0.375,
+  "shutdownTimeoutSeconds": 30.0,
+  "ownedProcessExited": true,
+  "gracefulShutdownRequested": true,
+  "forcedTerminationUsed": false,
+  "redactedShutdownTail": [
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition world-capture 122' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition composition-filter 128' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'Pulsar composition group 124 coverage-blend-color' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition crop-scene 121' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | - filter 'Pulsar composition composition-filter 133' (pulsar_capture_effects) removed from source 'Pulsar composition group 129 coverage-blend-luminosity'",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar capture backdrop' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'Pulsar composition bounds 125' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition world-capture 127' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition composition-filter 133' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'Pulsar composition group 129 coverage-blend-luminosity' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition crop-scene 126' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar capture backdrop' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'Pulsar composition bounds 130' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition world-capture 132' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition mask-dependency 134 8' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | private source 'Pulsar composition crop-scene 131' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'native-coverage-atlas-954e752957' destroyed",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | source 'native-coverage-blend-source-954e752957' destroyed",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=1",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa pulsar-frontend-stub | callbacks uninstalled",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=0 pending_released=0",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | [obs_module_unload] Shutting down...",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | [WebSocketServer::Stop] Server stopped successfully",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | [obs_module_unload] Finished shutting down.",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa libobs | Freeing OBS context data",
+    "2026-10-17T13:50:51Z DEBUG zP7QSPKqLDsnoOQa libobs | canvas 'Main' (6c69626f-6273-4c00-9d88-c5136d61696e) destroyed",
+    "PULSAR_LEGACY_ALIAS lease=released id=group-proof-8c37a012264248379c1436c7c74b2dce path=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\private-runtime-981136a2508f4669a515e75a301c52d3\\state\\leases\\directshow-program-preview.lock authority=Local\\Pulsar.DirectShowProgramPreview metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\9eab04979f2b22fc.lock",
+    "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=group-proof-8c37a012264248379c1436c7c74b2dce dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\private-runtime-981136a2508f4669a515e75a301c52d3\\state\\runtime authority=Local\\Pulsar.Authority.aa74a9d5968b779f metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\aa74a9d5968b779f.lock",
+    "PULSAR_RUNTIME_INSTANCE lease=released id=group-proof-8c37a012264248379c1436c7c74b2dce dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\private-runtime-981136a2508f4669a515e75a301c52d3\\state\\runtime authority=Local\\Pulsar.Runtime.group-proof-8c37a012264248379c1436c7c74b2dce metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\9623b19ad98220f1.lock"
+  ],
+  "shutdownMilestones": [
+    "PULSAR_SHUTDOWN_CONTROL event=ready id=group-proof-8c37a012264248379c1436c7c74b2dce mechanism=inherited_event",
+    "2026-10-17T13:50:44Z INFO zP7QSPKqLDsnoOQa libobs | PULSAR_GROUP_COMPOSITION event=module_load",
+    "2026-10-17T13:50:44Z INFO zP7QSPKqLDsnoOQa libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_load",
+    "2026-10-17T13:50:44Z INFO zP7QSPKqLDsnoOQa libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=no_browser_pre_shutdown_fixture_registered scope=no_browser_sources_only cef_shutdown=not_exercised",
+    "PULSAR_SHUTDOWN_CONTROL event=signaled id=group-proof-8c37a012264248379c1436c7c74b2dce mechanism=inherited_event",
+    "[pulsar-headless] shutting down",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | PULSAR_WEBSOCKET_QUIESCE event=ack active_handlers=0 sessions=0 no_handlers_after_ack=1",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=no_browser_pre_shutdown success=1 browser_sources=0",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=scripting_shutdown",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=started",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=complete",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=exit",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=duplicate_skipped",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_detached phase=exit",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_begin scenes=16 sources=47",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=1",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=0 pending_released=0",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | [obs_module_unload] Shutting down...",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached",
+    "2026-10-17T13:50:51Z INFO zP7QSPKqLDsnoOQa obs-websocket | [obs_module_unload] Finished shutting down."
+  ],
+  "shutdownDiagnostics": {
+    "errorFree": true,
+    "errorCount": 0,
+    "errors": [],
+    "attribution": "No shutdown ERROR log was observed after the shutdown signal."
+  },
+  "gracefulShutdownEvidence": {
+    "eventAdopted": true,
+    "eventSignaled": true,
+    "hostShutdownReached": true,
+    "exitCode": 0
+  },
+  "frontendCallbackShutdownLifecycle": {
+    "scriptShutdownThenExitRunsCleanupOnce": true,
+    "exitCleanupMarkerCountsAreExact": true,
+    "exitCallbackDetachedBeforeTableUninstall": true,
+    "destructorSkippedDuplicateRemovalAfterUninstall": true,
+    "noMissingFrontendCallbackError": true,
+    "markerIndexes": {
+      "scriptingShutdownReceived": 522,
+      "exitReceived": 528,
+      "exitCleanupStarted": 524,
+      "exitCleanupComplete": 526,
+      "duplicateCleanupSkipped": 530,
+      "exitDetach": 532,
+      "callbacksUninstalled": 691,
+      "websocketUnloadStarted": 693,
+      "destructorSkip": 695,
+      "websocketUnloadFinished": 696
+    },
+    "passed": true
+  },
+  "compositionModuleUnloadCleanup": {
+    "markerObserved": true,
+    "activeCompositionsBeforeCleanup": 0,
+    "generationFencesBeforeCleanup": 0,
+    "pendingRemovalEventsBeforeCleanup": 0,
+    "pendingRemovalEventsReleased": 0
+  },
+  "pendingRemovalUnloadProof": {
+    "testHelperLoadedAfterCapturePlugin": true,
+    "testRemovalRanBeforeCapturePluginUnload": false,
+    "helperRemovalOnStoppedGraphicsThread": false,
+    "pendingEventObservedAtCaptureUnload": false,
+    "pendingEventReleasedAtCaptureUnload": false,
+    "markerIndexes": {
+      "captureModuleLoad": 97,
+      "testHelperModuleLoad": 101,
+      "testHelperUnloadRemoval": null,
+      "captureModuleUnloadCleanup": 692
+    },
+    "passed": false
+  },
+  "boundedExitWithoutForcedTermination": true,
+  "cleanShutdown": true,
+  "activeCompositionCleanlyUnloaded": false,
+  "activeCompositionDisposedBeforeModuleUnload": false,
+  "gracefulShutdownAfterActiveComposition": false,
+  "scratchRemoved": true,
+  "finishedUtc": "2026-10-17T13:50:52.039528+00:00",
+  "limits": "Private synthetic GPU readback only; SolarBand source crops and owner-local placement are covered, masks remain explicitly unsupported, and no physical capture, public output, transition or switch is exercised. The private no-browser shutdown fixture does not exercise CEF teardown."
+}

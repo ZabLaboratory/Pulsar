@@ -34,6 +34,7 @@ struct OriginalItem {
   bool visible = false;
 };
 struct ActiveComposition {
+  int protocol_version = 1;
   CoordinateSpace coordinate_space = CoordinateSpace::OwnerLocal;
   obs_sceneitem_t *root = nullptr;
   std::string scene_uuid;
@@ -201,6 +202,75 @@ bool add_opacity_filter(obs_sceneitem_t *group, const Rect &bounds,
   return true;
 }
 
+bool add_composition_filter(obs_source_t *filtered_source,
+                            obs_scene_t *parent_scene, const Rect &viewport,
+                            double opacity, int blend_mode, const Mask &mask,
+                            const ResolvedCapture *mask_source,
+                            obs_data_t *response)
+{
+  if (mask.is_null && opacity >= 1 && blend_mode == 0)
+    return true;
+  if (!filtered_source || !parent_scene) {
+    set_error(response, "composition-filter-parent-missing");
+    return false;
+  }
+  const char *background_scene_name =
+      obs_source_get_name(obs_scene_get_source(parent_scene));
+  if (!background_scene_name || !*background_scene_name) {
+    set_error(response, "composition-backdrop-scene-missing");
+    return false;
+  }
+  if (!mask.is_null && (!mask_source || !mask_source->source)) {
+    set_error(response, "composition-mask-source-missing",
+              std::to_string(mask.scene_item_id).c_str());
+    return false;
+  }
+
+  obs_data_t *settings = obs_data_create();
+  obs_data_set_double(settings, "width", viewport.width);
+  obs_data_set_double(settings, "height", viewport.height);
+  obs_data_set_double(settings, "opacity", opacity);
+  obs_data_set_int(settings, "padding", 0);
+  obs_data_set_int(settings, "corner_radius", 0);
+  obs_data_set_int(settings, "blend_mode", blend_mode);
+  obs_data_set_bool(settings, "skip_content_fit", true);
+  obs_data_set_string(settings, "background_scene", background_scene_name);
+  auto *effects = obs_data_array_create();
+  obs_data_set_array(settings, "effects", effects);
+  obs_data_array_release(effects);
+  if (!mask.is_null) {
+    obs_data_set_string(settings, "coverage_source_name",
+                        obs_source_get_name(mask_source->source));
+    obs_data_set_int(settings, "coverage_scene_item_id",
+                     static_cast<long long>(mask.scene_item_id));
+    obs_data_set_int(settings, "coverage_crop_left", mask.crop.left);
+    obs_data_set_int(settings, "coverage_crop_top", mask.crop.top);
+    obs_data_set_int(settings, "coverage_crop_right", mask.crop.right);
+    obs_data_set_int(settings, "coverage_crop_bottom", mask.crop.bottom);
+    obs_data_set_int(settings, "coverage_rect_x",
+                     static_cast<long long>(mask.rect.x));
+    obs_data_set_int(settings, "coverage_rect_y",
+                     static_cast<long long>(mask.rect.y));
+    obs_data_set_int(settings, "coverage_rect_width",
+                     static_cast<long long>(mask.rect.width));
+    obs_data_set_int(settings, "coverage_rect_height",
+                     static_cast<long long>(mask.rect.height));
+  }
+  const std::string filter_name = unique_name("composition-filter");
+  obs_source_t *filter = obs_source_create("pulsar_capture_effects",
+                                           filter_name.c_str(), settings,
+                                           nullptr);
+  obs_data_release(settings);
+  if (!filter) {
+    set_error(response, "composition-filter-create-failed");
+    return false;
+  }
+  obs_source_filter_add(filtered_source, filter);
+  obs_source_set_enabled(filter, true);
+  obs_source_release(filter);
+  return true;
+}
+
 bool apply_crop(obs_sceneitem_t *item, const Crop &crop,
                 const ResolvedCapture &resolved, obs_data_t *response)
 {
@@ -278,9 +348,107 @@ bool add_capture(obs_scene_t *scene, const Child &child,
   return true;
 }
 
+bool add_global_capture_contribution(obs_scene_t *scene, obs_source_t *source,
+                                    const Child &child,
+                                    const ResolvedCapture &resolved,
+                                    const Rect &viewport,
+                                    const ResolvedCapture *mask_source,
+                                    obs_data_t *response)
+{
+  const bool visible = child.has_visible ? child.visible : resolved.visible;
+  const bool needs_filter = child.local_opacity < 1 ||
+                            child.blend_mode_id != 0 || !child.mask.is_null;
+  obs_scene_t *target_scene = scene;
+  obs_sceneitem_t *outer = nullptr;
+  if (needs_filter) {
+    outer = obs_scene_add_group(scene, unique_name("capture-composition").c_str());
+    if (!outer) {
+      set_error(response, "capture-composition-wrapper-create-failed");
+      return false;
+    }
+    obs_sceneitem_set_visible(outer, false);
+    target_scene = obs_sceneitem_group_get_scene(outer);
+    if (!target_scene || !add_bounds_anchor(target_scene, viewport, response))
+      return false;
+  }
+  obs_sceneitem_t *item = obs_scene_add(target_scene, source);
+  if (!item) {
+    set_error(response, "capture-clone-failed");
+    return false;
+  }
+  Transform identity_transform;
+  apply_transform(item, identity_transform);
+  obs_sceneitem_set_visible(item, needs_filter ? true : visible);
+  // V2 blendMode is explicit and applies to this occurrence. Never inherit the
+  // physical scene item's blend a second time after the isolated CSS pass.
+  obs_sceneitem_set_blending_mode(item, OBS_BLEND_NORMAL);
+  obs_sceneitem_set_blending_method(item, OBS_BLEND_METHOD_SRGB_OFF);
+  obs_sceneitem_set_scale_filter(item, obs_sceneitem_get_scale_filter(resolved.item));
+  if (!needs_filter)
+    return true;
+
+  auto *wrapper_source = obs_sceneitem_get_source(outer);
+  if (!add_composition_filter(wrapper_source, scene, viewport,
+                              child.local_opacity, child.blend_mode_id,
+                              child.mask, mask_source, response))
+    return false;
+  obs_sceneitem_set_blending_method(outer, OBS_BLEND_METHOD_SRGB_OFF);
+  obs_sceneitem_set_blending_mode(outer, OBS_BLEND_NORMAL);
+  Transform identity_wrapper;
+  apply_transform(outer, identity_wrapper);
+  obs_sceneitem_set_visible(outer, visible);
+  return true;
+}
+
+bool add_mask_dependencies(
+    const Plan &plan, obs_scene_t *root_scene,
+    const std::unordered_map<int64_t, ResolvedCapture> &captures,
+    obs_data_t *response)
+{
+  std::unordered_set<int64_t> mask_scene_items;
+  for (const auto &group : plan.groups) {
+    if (!group.mask_is_null)
+      mask_scene_items.insert(group.mask.scene_item_id);
+    for (const auto &child : group.children)
+      if (!child.mask.is_null)
+        mask_scene_items.insert(child.mask.scene_item_id);
+  }
+  std::vector<int64_t> ordered_mask_scene_items(mask_scene_items.begin(),
+                                                mask_scene_items.end());
+  std::sort(ordered_mask_scene_items.begin(), ordered_mask_scene_items.end());
+  for (const int64_t scene_item_id : ordered_mask_scene_items) {
+    const auto it = captures.find(scene_item_id);
+    if (it == captures.end() || !it->second.source) {
+      set_error(response, "composition-mask-source-missing",
+                std::to_string(scene_item_id).c_str());
+      return false;
+    }
+    SourceRef dependency(create_group_dependency_source(
+        unique_name("mask-dependency", std::to_string(scene_item_id)).c_str(),
+        it->second.source));
+    if (!dependency) {
+      set_error(response, "composition-mask-dependency-create-failed",
+                std::to_string(scene_item_id).c_str());
+      return false;
+    }
+    obs_sceneitem_t *item = obs_scene_add(root_scene, dependency.get());
+    if (!item) {
+      set_error(response, "composition-mask-dependency-add-failed",
+                std::to_string(scene_item_id).c_str());
+      return false;
+    }
+    // This private custom-draw source emits no pixels. Keeping its item visible
+    // lets the root scene's native active-source walk retain the atlas even
+    // though the original authored scene item is hidden by the composition.
+    obs_sceneitem_set_visible(item, true);
+  }
+  return true;
+}
+
 bool add_world_capture(obs_scene_t *scene, const Child &child,
-                        const ResolvedCapture &resolved, const Rect &viewport,
-                        obs_data_t *response)
+                       const ResolvedCapture &resolved, const Rect &viewport,
+                       const ResolvedCapture *mask_source,
+                       bool version_two, obs_data_t *response)
 {
   // Crop in source space before the full source-to-scene affine. A private
   // scene reuses libobs' crop/filter/scale-filter path, without mutating the
@@ -321,6 +489,10 @@ bool add_world_capture(obs_scene_t *scene, const Child &child,
   Child world_child = child;
   world_child.affine = {};
   world_child.crop = {};
+  if (version_two)
+    return add_global_capture_contribution(scene, world.get(), world_child,
+                                           contribution, viewport, mask_source,
+                                           response);
   return add_capture(scene, world_child, contribution, response, true);
 }
 
@@ -351,8 +523,15 @@ bool build_group(Plan &plan, const Group &group, obs_scene_t *parent_scene,
   for (const auto &child : group.children) {
     if (child.kind == ChildKind::Capture) {
       const auto it = captures.find(child.scene_item_id);
+      const auto mask_it = child.mask.is_null
+                               ? captures.end()
+                               : captures.find(child.mask.scene_item_id);
       if (it == captures.end() ||
-          !(world ? add_world_capture(inner, child, it->second, bounds, response)
+          (plan.protocol_version == 2 && !child.mask.is_null &&
+           mask_it == captures.end()) ||
+          !(world ? add_world_capture(inner, child, it->second, bounds,
+                                      mask_it == captures.end() ? nullptr : &mask_it->second,
+                                      plan.protocol_version == 2, response)
                   : add_capture(inner, child, it->second, response)))
         return false;
     } else if (child.kind == ChildKind::Group) {
@@ -402,9 +581,28 @@ bool build_group(Plan &plan, const Group &group, obs_scene_t *parent_scene,
         return false;
     }
   }
-  if (group.id != root_id &&
-      !add_opacity_filter(item, bounds, group.opacity, response))
+  if (group.id == root_id && plan.protocol_version == 2 &&
+      !add_mask_dependencies(plan, inner, captures, response))
     return false;
+  if (plan.protocol_version == 2) {
+    const auto mask_it = group.mask_is_null
+                             ? captures.end()
+                             : captures.find(group.mask.scene_item_id);
+    if (!group.mask_is_null && mask_it == captures.end()) {
+      set_error(response, "composition-mask-source-missing",
+                std::to_string(group.mask.scene_item_id).c_str());
+      return false;
+    }
+    if (!add_composition_filter(obs_sceneitem_get_source(item), parent_scene,
+                                bounds, group.opacity, group.blend_mode_id,
+                                group.mask,
+                                mask_it == captures.end() ? nullptr : &mask_it->second,
+                                response))
+      return false;
+  } else if (group.id != root_id &&
+             !add_opacity_filter(item, bounds, group.opacity, response)) {
+    return false;
+  }
   obs_sceneitem_set_blending_mode(item, OBS_BLEND_NORMAL);
   obs_sceneitem_set_blending_method(item, OBS_BLEND_METHOD_SRGB_OFF);
   apply_transform(item, transform);
@@ -433,6 +631,7 @@ void release_state(ActiveComposition &state)
 struct SwapVisibility {
   obs_sceneitem_t *new_root = nullptr;
   obs_sceneitem_t *old_root = nullptr;
+  bool new_root_visible = true;
   std::vector<OriginalItem> *old_originals = nullptr;
   std::vector<OriginalItem> *new_originals = nullptr;
 };
@@ -461,7 +660,7 @@ void swap_visibility(void *data, obs_scene_t *scene)
       obs_sceneitem_set_visible(original.item, false);
   if (swap.old_root)
     obs_sceneitem_set_visible(swap.old_root, false);
-  obs_sceneitem_set_visible(swap.new_root, true);
+  obs_sceneitem_set_visible(swap.new_root, swap.new_root_visible);
 }
 
 void remove_root(obs_sceneitem_t *root)
@@ -512,47 +711,51 @@ bool resolve_captures(Plan &plan, obs_scene_t *scene,
                       obs_data_t *response)
 {
   std::unordered_set<obs_source_t *> dependency_set;
+  std::unordered_set<int64_t> referenced_scene_items;
   for (const auto &group : plan.groups) {
+    if (!group.mask_is_null)
+      referenced_scene_items.insert(group.mask.scene_item_id);
     for (const auto &child : group.children) {
-      if ((child.kind != ChildKind::Capture && child.kind != ChildKind::SolarBand) ||
-          captures.count(child.scene_item_id))
-        continue;
-      obs_sceneitem_t *item = obs_scene_find_sceneitem_by_id(scene, child.scene_item_id);
-      if (!item || obs_sceneitem_get_scene(item) != scene ||
-          obs_sceneitem_is_group(item)) {
-        set_error(response, "capture-item-not-direct", std::to_string(child.scene_item_id).c_str());
-        return false;
-      }
-      obs_source_t *source = obs_sceneitem_get_source(item);
-      if (!validate_capture_source(source, target_source, dependency_set,
-                                   dependencies, response)) {
-        if (!obs_data_has_user_value(response, "error"))
-          set_error(response, "capture-source-invalid", std::to_string(child.scene_item_id).c_str());
-        return false;
-      }
-      ResolvedCapture resolved;
-      resolved.item = item;
-      resolved.source = source;
-      resolved.width = obs_source_get_width(source);
-      resolved.height = obs_source_get_height(source);
-      if (child.kind == ChildKind::SolarBand &&
-          (!resolved.width || !resolved.height)) {
-        set_error(response, "solar-band-source-unready",
-                  std::to_string(child.band).c_str());
-        return false;
-      }
-      resolved.visible = obs_sceneitem_visible(item);
-      if (previous) {
-        auto old = std::find_if(previous->originals.begin(), previous->originals.end(),
-                                [=](const OriginalItem &original) {
-                                  return original.id == child.scene_item_id &&
-                                         original.item == item;
-                                });
-        if (old != previous->originals.end())
-          resolved.visible = old->visible;
-      }
-      captures.emplace(child.scene_item_id, resolved);
+      if (child.kind == ChildKind::Capture || child.kind == ChildKind::SolarBand)
+        referenced_scene_items.insert(child.scene_item_id);
+      if (plan.protocol_version == 2 && !child.mask.is_null)
+        referenced_scene_items.insert(child.mask.scene_item_id);
     }
+  }
+  for (const int64_t scene_item_id : referenced_scene_items) {
+    if (captures.count(scene_item_id))
+      continue;
+    obs_sceneitem_t *item = obs_scene_find_sceneitem_by_id(scene, scene_item_id);
+    if (!item || obs_sceneitem_get_scene(item) != scene ||
+        obs_sceneitem_is_group(item)) {
+      set_error(response, "capture-item-not-direct",
+                std::to_string(scene_item_id).c_str());
+      return false;
+    }
+    obs_source_t *source = obs_sceneitem_get_source(item);
+    if (!validate_capture_source(source, target_source, dependency_set,
+                                 dependencies, response)) {
+      if (!obs_data_has_user_value(response, "error"))
+        set_error(response, "capture-source-invalid",
+                  std::to_string(scene_item_id).c_str());
+      return false;
+    }
+    ResolvedCapture resolved;
+    resolved.item = item;
+    resolved.source = source;
+    resolved.width = obs_source_get_width(source);
+    resolved.height = obs_source_get_height(source);
+    resolved.visible = obs_sceneitem_visible(item);
+    if (previous) {
+      auto old = std::find_if(previous->originals.begin(), previous->originals.end(),
+                              [=](const OriginalItem &original) {
+                                return original.id == scene_item_id &&
+                                       original.item == item;
+                              });
+      if (old != previous->originals.end())
+        resolved.visible = old->visible;
+    }
+    captures.emplace(scene_item_id, resolved);
   }
   for (const int64_t scene_item_id : plan.replaced_scene_item_ids) {
     if (captures.count(scene_item_id))
@@ -595,6 +798,40 @@ bool resolve_captures(Plan &plan, obs_scene_t *scene,
                 ? validate_world_affine(child.affine, response)
                 : to_transform(child.affine, transform, response)))
         return false;
+    }
+  }
+  auto validate_mask = [&](const Mask &mask) {
+    if (mask.is_null)
+      return true;
+    const auto it = captures.find(mask.scene_item_id);
+    if (it == captures.end() || !it->second.width || !it->second.height) {
+      set_error(response, "mask-source-unready",
+                std::to_string(mask.scene_item_id).c_str());
+      return false;
+    }
+    const auto &source = it->second;
+    if (uint64_t(mask.crop.left) + mask.crop.right >= source.width ||
+        uint64_t(mask.crop.top) + mask.crop.bottom >= source.height) {
+      set_error(response, "invalid-mask-crop",
+                std::to_string(mask.scene_item_id).c_str());
+      return false;
+    }
+    const uint32_t cropped_width = source.width - mask.crop.left - mask.crop.right;
+    const uint32_t cropped_height = source.height - mask.crop.top - mask.crop.bottom;
+    if (mask.rect.width != cropped_width || mask.rect.height != cropped_height) {
+      set_error(response, "invalid-mask-rect",
+                "mask crop and global rect must have exact one-to-one dimensions");
+      return false;
+    }
+    return true;
+  };
+  if (plan.protocol_version == 2) {
+    for (const auto &group : plan.groups) {
+      if (!group.mask_is_null && !validate_mask(group.mask))
+        return false;
+      for (const auto &child : group.children)
+        if (!child.mask.is_null && !validate_mask(child.mask))
+          return false;
     }
   }
   return true;
@@ -672,6 +909,7 @@ void commit_graphics(void *data)
           plan.plan_hash == previous->plan_hash &&
           plan.replaced_scene_item_ids == previous->replaced_scene_item_ids &&
           plan.coordinate_space == previous->coordinate_space &&
+          plan.protocol_version == previous->protocol_version &&
           plan.runtime_instance_id == previous->runtime_instance_id) {
         obs_data_set_bool(commit.response, "ok", true);
         obs_data_set_bool(commit.response, "idempotent", true);
@@ -695,6 +933,7 @@ void commit_graphics(void *data)
     }
 
     CandidateGuard candidate;
+    candidate.state.protocol_version = plan.protocol_version;
     candidate.state.coordinate_space = plan.coordinate_space;
     candidate.state.scene_uuid = scene_uuid;
     candidate.state.runtime_instance_id = plan.runtime_instance_id;
@@ -750,6 +989,7 @@ void commit_graphics(void *data)
     }
 
     SwapVisibility swap{candidate.state.root, previous ? previous->root : nullptr,
+                        plan.groups[plan.by_id.at(root_id)].visible,
                         previous ? &previous->originals : nullptr,
                         &candidate.state.originals};
     obs_scene_atomic_update(scene, swap_visibility, &swap);
