@@ -1,0 +1,275 @@
+{
+  "timestampUtc": "20261017T125011Z",
+  "positive": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124838Z-group-composition-probe.json",
+    "sha256": "dc803d6ba0594846094060f308bce474413700990966f4bae5dba4bc58170dc6",
+    "passed": true
+  },
+  "negative": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124904Z-group-composition-probe.json",
+    "sha256": "75959fa8bb07c1a120bead8973ee9baf028ea6af9a1161fb32ee1713097e5e19",
+    "dllSha256": "0833269b79a1be4c62b4c7f2e5a3013096134337e6ecf3d27c34b43ca57db721",
+    "error": "('fractional-outer-transformed', {'alignment': 5, 'boundsAlignment': 0, 'boundsHeight': 0.0, 'boundsType': 'OBS_BOUNDS_NONE', 'boundsWidth': 0.0, 'cropBottom': 0, 'cropLeft': 0, 'cropRight': 0, 'cropToBounds': False, 'cropTop': 0, 'height': 8.0, 'positionX': 500.0, 'positionY': 300.0, 'rotation': 0.0, 'scaleX': 1.0, 'scaleY': 1.0, 'sourceHeight': 8.0, 'sourceWidth': 10.0, 'width': 10.0}, (11, 9))"
+  },
+  "currentDllSha256": "1e128beb9da67798745c8d240217336564c867929def600c7abd6d25153107f3",
+  "sourceHashes": {
+    "plugins/pulsar-capture-effects/src/capture-effects.cpp": "e5572fb42d3a86d03b134b14678aa9537b1e30be80900f6575c7a67490edb2ca",
+    "plugins/pulsar-capture-effects/src/capture-effects.effect": "4bfc3dafa91c0d21922c02a33c7f70cbdeef8743c0ab0116605a6b64c536deb2",
+    "scripts/probe-capture-effects.py": "dcbd67a35a2f30ee8396fba14c9503fa90b4c50951271f344eb60b55b66cf14f",
+    "scripts/probe-capture-framing.py": "3851bebad13627799690345b07814f4ad3d3d7acf0645b3f642c28de2fdace5f",
+    "scripts/probe-group-composition.py": "dd4dc44c6433905988499f31e57c45b0b9218806abb3bfe50d789e68a1e1a3bc"
+  },
+  "pixels": [
+    {
+      "case": "fractional-outer-transformed",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124842Z-4d63a04259-fractional-outer-transformed.png",
+      "sha256": "8818d0c7383c7b5d379d9dd6c1cf15c327122c0ffdf5401764dd966b36926e52",
+      "decodedSize": [
+        1920,
+        1080
+      ],
+      "outsideAlphaZero": [
+        {
+          "xy": [
+            521,
+            308
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "xy": [
+            510,
+            318
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "xy": [
+            499,
+            308
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "xy": [
+            510,
+            299
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "opaqueInterior": {
+        "coordinate": [
+          510,
+          308
+        ],
+        "rgba": [
+          149,
+          154,
+          234,
+          255
+        ],
+        "alphaRequired": 255
+      }
+    },
+    {
+      "case": "fractional-padded-transformed",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124842Z-4d63a04259-fractional-padded-transformed.png",
+      "sha256": "b2e23599948a52c3e53b82a26935b52122717ffd677653b26fa81e280caef055",
+      "decodedSize": [
+        1920,
+        1080
+      ],
+      "outsideAlphaZero": [
+        {
+          "xy": [
+            546,
+            317
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "xy": [
+            595,
+            317
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "xy": [
+            560,
+            296
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "xy": [
+            560,
+            338
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "opaqueInterior": {
+        "coordinate": [
+          560,
+          317
+        ],
+        "rgba": [
+          191,
+          196,
+          245,
+          255
+        ],
+        "alphaRequired": 255
+      }
+    },
+    {
+      "case": "subpixel-outer-transformed",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124842Z-4d63a04259-subpixel-outer-transformed.png",
+      "sha256": "c16064404f1e19040d4d80f84fb2cef422373e2ac636f0d5fc4ea40f60e6d8e7",
+      "decodedSize": [
+        1920,
+        1080
+      ],
+      "outsideAlphaZero": [
+        {
+          "xy": [
+            699,
+            327
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "xy": [
+            701,
+            327
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "xy": [
+            700,
+            299
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "xy": [
+            700,
+            355
+          ],
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "opaqueInterior": null
+    }
+  ],
+  "optionalGeometryReset": {
+    "sameExistingFilterName": "prism/capture-effects",
+    "filterCountBefore": 1,
+    "filterCountAfter": 1,
+    "precedingCommitOptionalGeometry": {
+      "content_box_x": 0,
+      "content_box_y": 50,
+      "content_box_width": 32,
+      "content_box_height": -2
+    },
+    "precedingCommitObservedInnerBounds": [
+      320.0,
+      10.0
+    ],
+    "replacementCommitOmittedOptionalKeys": [
+      "content_box_x",
+      "content_box_y",
+      "content_box_width",
+      "content_box_height"
+    ],
+    "expectedDefaultContentBoxOrigin": [
+      0,
+      0
+    ],
+    "expectedDefaultContentBoxSize": [
+      10.5,
+      8.75
+    ],
+    "observedInnerBounds": [
+      105.0,
+      87.5
+    ],
+    "observedInnerPosition": [
+      -47.0,
+      -39.5
+    ],
+    "sourceZoom": 10.0,
+    "transformToleranceSceneUnits": 0.0001,
+    "innerPositionToleranceSceneUnits": 0.51
+  },
+  "atomicAdmissions": 80,
+  "rotations": 6,
+  "sharedRuntimeUpdated": false,
+  "transitionChanged": false,
+  "switchDurationChanged": false,
+  "earlierReview": "An attempted comparison against earlier124646 correctly rejected stale861 binary hash after owner rebuild. Final124838 binds actual1e128beb binary; negative control uses distinct0833269b artifact. No mismatched proof admitted.",
+  "limits": "Independent decoding/hashes of worker native runs; not a fresh root host execution, installed runtime or physical capture proof. Integration pending."
+}
