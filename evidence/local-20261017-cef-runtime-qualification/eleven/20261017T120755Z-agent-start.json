@@ -1,0 +1,16 @@
+{
+  "exclusions": [
+    "shared installed runtime",
+    "transition behavior",
+    "scene switch duration"
+  ],
+  "output": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime",
+  "base": "e0461049702f69125878b240ddd6c4095807551e",
+  "owner": "eleven",
+  "unit": "local-20261017-cef-runtime-qualification",
+  "scope": "Rebuild actual Pulsar browser plugin and helper against same private OBS ABI; qualify actual CEF pixels and graceful shutdown",
+  "sharedReadOnly": [
+    "D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261015-native-group-composition/.cache/native-group-composition/upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout",
+    "D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261015-native-group-composition/.cache/native-group-composition/upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad"
+  ]
+}

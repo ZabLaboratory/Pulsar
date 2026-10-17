@@ -1,0 +1,53 @@
+{
+  "unit": "local-20261017-cef-runtime-qualification",
+  "base": "e0461049702f69125878b240ddd6c4095807551e",
+  "scope": "Actual private product CEF source build, decoded native libobs pixels, active browser/audio callback drain and graceful shutdown",
+  "productSourceChanged": false,
+  "probeSourceSha256": "274005d3f8b7a21423168733b003d54a3fdc3e6f74da7a55894bf55f8a0783c0",
+  "evidence": {
+    "20261017T120930Z-cef-shutdown.json": "cb78d6c4c1e53d3bdd1c6a3e28ca92e72c7fc1fab99cbc4c83bcfa88803dcf6f",
+    "20261017T121056Z-cef-audio-shutdown.json": "700925ff7a99933877398c3dd8796d50f29108a94340a049db840d7688f1fb8d",
+    "20261017T121228Z-cef-audio-final.json": "e119f29b77679278f8b1903ed0f09be5b22f97286b0629de22d8de4b7bad9e1a"
+  },
+  "authoritativeFinal": "20261017T121228Z-cef-audio-final.json",
+  "build": {
+    "generator": "Visual Studio 17 2022 x64",
+    "configuration": "RelWithDebInfo",
+    "targets": [
+      "pulsar-browser",
+      "pulsar-browser-page"
+    ],
+    "actualScaffold": ".cache/cef-runtime/scaffold/CMakeLists.txt",
+    "actualScaffoldSha256": "e3f497e857800a69f4aeb63e9c639fdfead9294458cc6df6bb8522a7bc20aa7a",
+    "trackedEquivalent": "tests/pulsar-headless-shutdown/private-browser-build/CMakeLists.txt",
+    "configureLogSha256": "caab627d12b5796cc9a6cc3b801011d2e5b29933956f94a8c5cb2db43a144a96",
+    "buildLogSha256": "fc6702a245684cee8ef9c463454f2ec0de890a822649a9ec60af0f799ef59439",
+    "upstreamRevision": "25ed780b7f392a1690dfca929cd57679959cf3ad",
+    "artifacts": {
+      "bin\\64bit\\pulsar.exe": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973",
+      "bin\\64bit\\obs.dll": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1",
+      "obs-plugins\\64bit\\pulsar-browser.dll": "0602fdc46559109ad24a57fc769580480fe8b2794930cc591bf5a450129df8e6",
+      "obs-plugins\\64bit\\pulsar-browser-page.exe": "9148fb2f5e1cc8867b19ab1cfd033eaea4e647e05ff0ac313f883cf281ab65e6",
+      "obs-plugins\\64bit\\libcef.dll": "551bea07c46c9a330eff7861105321f3c7d47e3c0412ced4b0ff35aa130f2536",
+      "obs-plugins\\64bit\\obs-websocket.dll": "3130c2cf8485bfbf80b67b4ee09126f21a38a90229457aabdb03126526374f3a"
+    }
+  },
+  "validation": {
+    "existingShutdownUnitSuite": "13 passed in 0.28s",
+    "decodedImage": "1280x720; M3 positive manually viewed; audio fixture positive pixel oracle",
+    "scriptCompile": "pass",
+    "diffCheck": "pass",
+    "ownedProcessesRemaining": 0
+  },
+  "cleanup": {
+    "scratchRuntimeRemoved": true,
+    "buildAndQualifiedArtifactsRetained": true,
+    "upstreamJunction": "Retained: removing the owned read-only source junction was rejected by automatic policy; no retry or bypass. It points to existing private upstream checkout and causes an unstaged gitlink difference. Never stage this difference."
+  },
+  "scopeLimits": "Private synthetic local page, actual CEF/libobs pixels and shutdown; no installed runtime, Solar/LSDP integration, physical capture, network Meet or stream qualification.",
+  "exclusionsPreserved": [
+    "transition behavior",
+    "scene switch duration",
+    "shared installed runtime"
+  ]
+}

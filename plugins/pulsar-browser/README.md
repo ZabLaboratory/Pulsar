@@ -94,6 +94,37 @@ Do not overwrite the fork with a blind recursive copy. Review the upstream
 diff, apply changes in an isolated worktree, rebuild and requalify both
 callback-level and real rendered-output paths.
 
+### Private CEF qualification without a stream
+
+`scripts/probe-cef-shutdown.py` complements the full two-browser/recording
+integration test in `tests/pulsar-headless-shutdown/test_graceful_shutdown.py`.
+It reuses M3's HTTP page, WebSocket protocol and decoded-pixel oracle, and the
+group-composition probe's inherited shutdown-event process owner. The optional
+`--with-audio` case reuses the full shutdown suite's synthetic looped WAV page.
+It does not open physical audio devices or start an output.
+
+Build the actual product browser targets with
+`tests/pulsar-headless-shutdown/private-browser-build/CMakeLists.txt`, setting
+`PULSAR_SOURCE_ROOT` to this worktree and `PULSAR_UPSTREAM_BUILD_DIR` to an isolated
+build overlay. Its read-only `libobs`, `config` and `frontend` dependencies must
+come from the same ABI as the supplied runtime and host. The product CMake writes
+the module, helper and complete CEF resources into that overlay's `rundir`;
+never point this output at an installed or shared runtime.
+
+Run the probe with explicit `--runtime` (the known no-browser ABI base), `--host`,
+`--browser-runtime` (the freshly built `obs-plugins/64bit` directory), and a new
+canonical `--output` JSON path under the qualification unit's evidence directory.
+The private copy must contain only `pulsar-browser.dll`, never the upstream
+`obs-browser.dll` beside it. The source remains active through shutdown. Required
+evidence includes real page pixels, one browser entering close, the drained
+barrier, ordered CEF shutdown, exit zero and no forced termination. The audio
+case also requires stream start/stop and quiescence before CEF teardown.
+
+The report records native binary and browser-source hashes; logs redact the
+private WebSocket password. Scratch runtime/state is removed after the owned
+child exits. This proves a private CEF lifecycle, not installed Prism, Solar/LSDP
+integration, physical captures, performance parity or streaming endurance.
+
 License and upstream notices: see [LICENSE](../../LICENSE) and this source
 tree's notices. The headless runtime distribution follows
 [LICENSE-INVARIANTS.md](../../LICENSE-INVARIANTS.md).
