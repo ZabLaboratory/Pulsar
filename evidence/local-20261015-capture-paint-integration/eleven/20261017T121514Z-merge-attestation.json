@@ -1,0 +1,19 @@
+{
+  "candidate": "47cb08c56e010c5da45923a5eee147f294216756",
+  "base": "e0461049702f69125878b240ddd6c4095807551e",
+  "validation": [
+    "Actual product CEF plugin/helper compiled against private OBS ABI",
+    "Real decoded page pixels",
+    "Active synthetic CEF audio drained before shutdown",
+    "Exit 0 and no forced kill; scratch removed",
+    "Existing shutdown suite 13 passed"
+  ],
+  "upstreamGitlink": "Candidate index leaves upstream unchanged; unstaged source junction preserved in qualification WT after automatic cleanup refusal",
+  "scope": "Private real CEF lifecycle qualification, reusable test harness and owner documentation only",
+  "excluded": [
+    "transition behavior",
+    "switch duration",
+    "installed common runtime"
+  ],
+  "proof": "evidence/local-20261017-cef-runtime-qualification/eleven/20261017T121228Z-cef-audio-final.json"
+}
