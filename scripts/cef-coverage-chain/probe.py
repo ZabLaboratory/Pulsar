@@ -608,7 +608,10 @@ async def run_probe(args) -> dict:
                     "requestData": negative_wire,
                 })
                 negative_outcome = negative_native.get("responseData", {})
-                if negative_outcome.get("ok") or not str(negative_outcome.get("error", "")).startswith("invalid-mask"):
+                expected_negative_generation = initial_wire["generation"] + 1
+                if (negative_wire.get("generation") != expected_negative_generation
+                        or negative_outcome.get("ok")
+                        or negative_outcome.get("error") != "invalid-mask-rect"):
                     raise AssertionError({"maskDimensionNegativeWasNotDiscriminating": negative_native})
                 after_negative_png, after_negative = await screenshot(
                     call, browser, scene_name, SCENE_SIZE,
@@ -619,6 +622,8 @@ async def run_probe(args) -> dict:
                 report["negativeControl"] = {
                     "wirePlanHashRecomputed": True,
                     "changedMaskCropLeftBy": 1,
+                    "rejectedCandidateGeneration": negative_wire["generation"],
+                    "expectedError": "invalid-mask-rect",
                     "nativeResponse": negative_native,
                     "pixelsExactlyUnchanged": True,
                     "evidence": after_negative["artifact"],
@@ -638,6 +643,11 @@ async def run_probe(args) -> dict:
                 updated_chain = await emit(updated, 2, "updated")
                 report["evidence"]["updatedChain"] = updated_chain["artifact"]
                 updated_wire = updated_chain["record"]["wire"]
+                if updated_wire["generation"] != negative_wire["generation"]:
+                    raise AssertionError({"rejectedMaskCandidateAdvancedGenerationFence": {
+                        "rejected": negative_wire["generation"],
+                        "updated": updated_wire["generation"],
+                    }})
                 updated_root_background = root_background_witness(
                     browser, updated["document"], updated_chain["record"]["solarProjection"],
                     updated_wire, updated_atlas_png,
@@ -678,6 +688,8 @@ async def run_probe(args) -> dict:
                     "pixelRevisionAfter": updated_receipt.get("pixelRevision"),
                     "wireGenerationBefore": initial_wire["generation"],
                     "wireGenerationAfter": updated_wire["generation"],
+                    "rejectedMaskGeneration": negative_wire["generation"],
+                    "rejectedCandidateDidNotAdvanceFence": True,
                     "browserSceneItemIdStable": scene_item_ids["cefAtlas"],
                     "initialNativeSamples": {key: value for key, value in initial_pixels.items()},
                     "updatedNativeSamples": {key: value for key, value in updated_pixels.items()},

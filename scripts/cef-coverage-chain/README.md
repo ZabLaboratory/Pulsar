@@ -25,6 +25,12 @@ CEF screenshot and verifies its paint order before comparing native overflow
 pixels; the separate OBS backdrop source is not the expected pixel in these
 opaque-root areas.
 
+The negative mask wire uses the next candidate generation after the initial
+commit. Native validation checks the generation fence before resolving mask
+dimensions, so reusing an already committed generation would only prove stale
+generation rejection. A rejected malformed candidate must leave that fence
+unchanged, allowing the valid opacity update to reuse the candidate generation.
+
 `probe.py` defaults to an offline pin/provenance preflight. `--execute` is an
 explicit private runtime action and also requires `--gpu-slot-released`; do not
 pass it until the parent has released the GPU slot. It reuses the owned-process

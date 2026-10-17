@@ -1,0 +1,38 @@
+{
+  "schema": "pulsar.native-coverage-negative-generation-diagnostic/1",
+  "createdUtc": "2026-10-17T16:06:26Z",
+  "failedRuntimeRun": {
+    "path": "evidence/local-20261017-cef-coverage-chain/eleven/20261017T160407Z-cef-coverage-chain.json",
+    "sha256": "d88546a713084e93ddbc528c8cc5d932c17bb7afe10f49817f35aa535185e828",
+    "passed": false,
+    "failureStage": "negative mask dimension rejection after the real initial native pixel capture",
+    "nativeInitialCommit": {"ok": true, "generation": 1},
+    "negativeResponse": {"ok": false, "error": "stale-generation"},
+    "shutdown": {"exitCode": 0, "forcedTerminationUsed": false, "runtimeStopped": true, "httpServerStopped": true}
+  },
+  "actualInitialPixels": {
+    "atlasPath": "evidence/local-20261017-cef-coverage-chain/eleven/20261017T160407Z-479a4377-cef-atlas-initial.png",
+    "atlasSha256": "798ab5b72be0fcc49885b5be1d301538c6ccdf234a51b3acfb08611b8db0e80c",
+    "nativeScenePath": "evidence/local-20261017-cef-coverage-chain/eleven/20261017T160407Z-479a4377-scene-mask-050.png",
+    "nativeSceneSha256": "8951b4883a4b8694baf40e73d92e14cf3904a0154bb4ef980513ac5dfc8c2ef9",
+    "rootBand0AndNativeOverflowRgba": [12, 17, 25, 255],
+    "rootBand0BeforeMaskedOwner": true
+  },
+  "diagnosis": {
+    "nativeContractSource": "plugins/pulsar-capture-effects/src/group-composition.cpp",
+    "generationFenceCheckLine": 907,
+    "maskSourceDimensionValidationLine": 815,
+    "ordering": "CommitGroupComposition rejects plan.generation <= the scene fence before resolve_captures validates mask crop and rect dimensions.",
+    "harnessCause": "The crop-mutated negative reused generation 1 after the initial generation-1 commit, so the stale-generation guard correctly won before the intended invalid-mask-rect validation.",
+    "productChangeMade": false
+  },
+  "nextProbeCorrection": {
+    "negativeCandidateGeneration": 2,
+    "initialCommittedGeneration": 1,
+    "expectedNativeRejection": "invalid-mask-rect",
+    "whyGenerationTwoCanBeReused": "A malformed candidate is rejected before commit and must not advance the fence; the valid opacity update then uses generation 2.",
+    "maskCropLeftDelta": 1,
+    "planHash": "recomputed by Prism from the exact crop-mutated projection"
+  },
+  "limit": "The failed run did not reach same-source opacity update, reset verification, or the legacy presenter negative. Its exact report, atlas, native screenshot, source screenshot, emitter output, and host log are retained unchanged."
+}

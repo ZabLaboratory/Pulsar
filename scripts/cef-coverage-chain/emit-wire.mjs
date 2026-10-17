@@ -176,14 +176,19 @@ try {
     throw new Error("Prism did not produce the required native /2 wire");
 
   // A structural mask-negative is prepared from the same product projection.
+  // Use the next candidate generation: the active graph already committed
+  // this frame's generation, and the native generation fence rejects stale
+  // candidates before mask source dimensions can be validated. A rejected
+  // candidate does not advance the fence, so the next valid frame may reuse it.
   // Changing the crop and recomputing Prism's hash makes this a real plugin
-  // mask-dimension refusal rather than a stale-hash refusal.
+  // mask-dimension refusal rather than a stale-generation or stale-hash refusal.
   const negativeProjection = structuredClone(composed);
   const maskedGroup = negativeProjection.groups.find((group) => group.mask);
   if (!maskedGroup) throw new Error("Prism projection omitted the masked group");
   maskedGroup.mask.crop.left += 1;
   const negativeWire = {
     ...wire,
+    generation: generation + 1,
     planHash: prismConsumer.nativeCompositionWireHash(negativeProjection),
     groups: negativeProjection.groups,
   };
