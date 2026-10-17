@@ -1,0 +1,136 @@
+{
+  "schema": "pulsar.cef-native-lock-fix-1080-independent/1",
+  "passed": true,
+  "runtimeReport": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-cef-coverage-chain.json",
+    "bytes": 78128,
+    "sha256": "f6c36261ba880d3e05043681c92f76ebe9ca5c226136b203cb60bca23d1be556"
+  },
+  "images": [
+    {
+      "kind": "cefAtlasInitial",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-cef-atlas-initial.png",
+      "bytes": 30562,
+      "sha256": "159d807d0a5a58a64ec56e0bbff8f39dfb15855b2f73ded8467cf3f6645207d4",
+      "dimensions": [
+        1922,
+        3246
+      ],
+      "byteIdenticalToPreviouslyIndependentlyVerified": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T165509Z-087ae2de-cef-atlas-initial.png",
+        "bytes": 30562,
+        "sha256": "159d807d0a5a58a64ec56e0bbff8f39dfb15855b2f73ded8467cf3f6645207d4"
+      }
+    },
+    {
+      "kind": "cefAtlasUpdated",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-cef-atlas-updated.png",
+      "bytes": 30561,
+      "sha256": "48fde67524f4664891595f50fdc5ebf2547d7fee6bc8bad01945488f945319e5",
+      "dimensions": [
+        1922,
+        3246
+      ],
+      "byteIdenticalToPreviouslyIndependentlyVerified": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T165509Z-087ae2de-cef-atlas-updated.png",
+        "bytes": 30561,
+        "sha256": "48fde67524f4664891595f50fdc5ebf2547d7fee6bc8bad01945488f945319e5"
+      }
+    },
+    {
+      "kind": "sceneMask050",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-scene-mask-050.png",
+      "bytes": 10715,
+      "sha256": "d113ec706ccfaa027476f3927b4bb94f8d0c84025a03029ed2a896df05257235",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "byteIdenticalToPreviouslyIndependentlyVerified": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T165509Z-087ae2de-scene-mask-050.png",
+        "bytes": 10715,
+        "sha256": "d113ec706ccfaa027476f3927b4bb94f8d0c84025a03029ed2a896df05257235"
+      }
+    },
+    {
+      "kind": "sceneMask100",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-scene-mask-100.png",
+      "bytes": 10715,
+      "sha256": "17d372717ec143af412a4cede1212d63498f4a21372c93d6760b0b0bb42ac599",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "byteIdenticalToPreviouslyIndependentlyVerified": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T165509Z-087ae2de-scene-mask-100.png",
+        "bytes": 10715,
+        "sha256": "17d372717ec143af412a4cede1212d63498f4a21372c93d6760b0b0bb42ac599"
+      }
+    }
+  ],
+  "negativePixelsUnchanged": 2073600,
+  "negativeReadback": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-scene-after-negative.png",
+    "bytes": 10715,
+    "sha256": "d113ec706ccfaa027476f3927b4bb94f8d0c84025a03029ed2a896df05257235"
+  },
+  "priorIndependentPixelProof": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T165800Z-independent-1080-pixels.json",
+    "bytes": 6047,
+    "sha256": "7e915f6fceba783bb925ea2253f80ff0c01f49e89fff2d83b4aea18fc3cfebb3"
+  },
+  "provenance": {
+    "schema": "pulsar.cef-1080-runtime-provenance/1",
+    "checkedUtc": "2026-10-17T17:12:29.560414+00:00",
+    "runtimeReport": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-cef-coverage-chain.json",
+      "bytes": 78128,
+      "sha256": "f6c36261ba880d3e05043681c92f76ebe9ca5c226136b203cb60bca23d1be556"
+    },
+    "passed": true,
+    "cleanRepositoryReference": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+    "referenceScope": "6328ff is the repository/ABI reference, not the checkout that built the tested obs.dll",
+    "testedStagedObs": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a3a40c2bc4fc4009ae8e8d841cfacc27\\runtime\\bin\\64bit\\obs.dll",
+      "bytes": 1491968,
+      "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+    },
+    "nativeCMakeCache": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\CMakeCache.txt",
+      "bytes": 43067,
+      "sha256": "b14c6230b8265cbfbd5f549525b16910ad406d869611d6240f33305efbd3ddfa"
+    },
+    "cmakeHomeDirectory": "X:/.cache/native-group-composition/upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout",
+    "accessibleBuildSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout",
+    "buildSourceHead": "70a58302435308e609e0b1114efe3ef402f810b7",
+    "buildSourceWorkingTree": [
+      "M plugins/obs-browser",
+      "?? plugins/pulsar-nv-secure-load/"
+    ],
+    "redactedHostLog": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171300Z-combined-host-redacted.log",
+      "bytes": 59274,
+      "sha256": "65281c1f8f790547e01b48b8b9a850ad96f0190deb0d9306fffc165ed7c325e0"
+    },
+    "limits": [
+      "No clean reproducible full runtime build is claimed; the captured OBS binary and dirty build source lineage are identified separately.",
+      "This is a full-resolution same-scene mask state-patch proof, not sustained 60-fps or the complete Orion/LSDP transport."
+    ],
+    "nativeCaptureFixSourceCommit": "5b28fe10ba999ee804e29ec8c64b82a47597d422",
+    "nativeCapturePlugin": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+      "bytes": 581632,
+      "sha256": "1deaa45c64f30d877f93aa9133c6b562a306cacb72931a376f293e8c52403375"
+    }
+  },
+  "shutdown": {
+    "ownedPid": 64136,
+    "exitCode": 0,
+    "forcedTerminationUsed": false,
+    "cefDrained": true
+  },
+  "limits": [
+    "Exact pixels and bounded lifecycle, not sustained 60-fps pacing or all thread interleavings.",
+    "Synthetic local CEF/native scene, not physical devices, full Orion/LSDP, two lanes, installed or public Live."
+  ]
+}

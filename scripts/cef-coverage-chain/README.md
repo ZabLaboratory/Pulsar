@@ -122,3 +122,11 @@ distinguishes the clean repository reference from the retained OBS binary's
 actual CMake source checkout and records the redacted host log. The separate
 native reset/deadlock correction is not part of this run; neither sustained
 60 fps nor installed-runtime behavior is certified by it.
+
+The subsequent `20261017T171046Z-cef-coverage-chain.json` run also passes with
+the native lock correction (`5b28fe10`, plugin `1deaa45c`) and Prism admission
+`8933556f`. Its four full atlas/native PNGs are byte-identical to the independently
+verified 1080p baseline; all 2,073,600 pixels remain unchanged across malformed
+mask rejection. `20261017T171300Z-combined-independent-validation.json` binds
+those comparisons to the source/binary provenance and host 64136's clean CEF
+shutdown. The same frame-pacing, transport and installed-runtime limits apply.
