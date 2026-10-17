@@ -27,6 +27,9 @@ EVIDENCE = ROOT / "evidence" / "local-20261017-native-reset-stability" / "eleven
 CACHE = ROOT / ".cache" / "native-reset-stability"
 EXPECTED_HELPER_SHA256 = "f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff"
 EXPECTED_UPSTREAM_HEAD = "6328ff8b3c29f10f29b7e1fad75f170efc41e198"
+EXPECTED_BUILD_SOURCE_HEAD = "70a58302435308e609e0b1114efe3ef402f810b7"
+EXPECTED_OBS_LIB_SHA256 = "b11eee9ea91c6bcff2d9fe62cfe6edba2fbcff57036c8cfb9d8f3f1b5a0729e4"
+MUTEX_OWNER_PROBE = EVIDENCE / "20261017T163849Z-mutex-owner-stack-probe.py"
 WINDOW_SECONDS = 20
 VIEWPORT = (1920, 1080)
 
@@ -121,11 +124,13 @@ class FreezeDumpCapture:
     """Capture one private host dump after a bounded render-counter stall."""
 
     def __init__(self, enabled: bool, process_id: int,
-                 output_path: pathlib.Path, initial_frame_count=None,
+                 output_path: pathlib.Path, owner_output_path: pathlib.Path,
+                 initial_frame_count=None,
                  stall_seconds: float = 2.0):
         self.enabled = enabled
         self.process_id = process_id
         self.output_path = output_path
+        self.owner_output_path = owner_output_path
         self.last_frame_count = initial_frame_count
         self.last_progress_at = time.monotonic()
         self.stall_seconds = stall_seconds
@@ -218,6 +223,48 @@ class FreezeDumpCapture:
                 "withinSizeBudget": within_budget,
                 **dump,
             })
+            if not within_budget:
+                self.result["liveMutexOwnerProbe"] = {
+                    "status": "skipped-dump-over-64-mib-budget",
+                    "outputPath": str(self.owner_output_path.resolve()),
+                }
+                return
+            probe_started = time.monotonic()
+            probe = await asyncio.create_subprocess_exec(
+                sys.executable, str(MUTEX_OWNER_PROBE),
+                "--minidump", str(self.output_path),
+                "--discover-waiters", "--pid", str(self.process_id),
+                "--output", str(self.owner_output_path),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            try:
+                probe_stdout, probe_stderr = await asyncio.wait_for(
+                    probe.communicate(), timeout=6.0)
+            except asyncio.TimeoutError:
+                probe.kill()
+                try:
+                    await asyncio.wait_for(probe.communicate(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    pass
+                self.result["liveMutexOwnerProbe"] = {
+                    "status": "probe-timeout",
+                    "pid": self.process_id,
+                    "helperPid": probe.pid,
+                    "timeoutSeconds": 6.0,
+                }
+                return
+            probe_result = {
+                "status": "captured" if probe.returncode == 0 else "probe-error",
+                "pid": self.process_id,
+                "helperPid": probe.pid,
+                "returnCode": probe.returncode,
+                "outputPath": str(self.owner_output_path.resolve()),
+                "probeDurationSeconds": round(time.monotonic() - probe_started, 3),
+                "stdout": probe_stdout.decode("utf-8", errors="replace")[:4000],
+                "stderr": probe_stderr.decode("utf-8", errors="replace")[:4000],
+            }
+            if self.owner_output_path.is_file():
+                probe_result["outputSha256"] = sha256(self.owner_output_path)
+            self.result["liveMutexOwnerProbe"] = probe_result
         except Exception as error:
             self.result.update({
                 "captured": False,
@@ -515,6 +562,7 @@ async def run_scenario(args, process, runtime_id: str, port: int,
         freeze_dump = FreezeDumpCapture(
             args.capture_freeze_dump, process.proc.proc.pid,
             CACHE / f"{stamp}-gen2-freeze.dmp",
+            EVIDENCE / f"{stamp}-mutex-owner-live.json",
             initial_frame_count=pre_recommit_stats.get("renderTotalFrames"))
         await asyncio.sleep(0.5)
         pre_reset_screenshot = None
@@ -723,7 +771,7 @@ def main() -> int:
     parser.add_argument("--output", type=pathlib.Path, default=EVIDENCE)
     parser.add_argument("--reset-timeout", type=float, default=20.0)
     parser.add_argument("--capture-freeze-dump", action="store_true",
-                        help="write one private Windows minidump after a 2s render-frame stall")
+                        help="write one private Windows minidump after a 2s render-frame stall and read the exact live mutex fields")
     args = parser.parse_args()
     if not 5 <= args.reset_timeout <= 60:
         raise ValueError("reset timeout must be bounded between 5 and 60 seconds")
@@ -739,7 +787,8 @@ def main() -> int:
         raise ValueError(f"output must be canonical: {EVIDENCE}")
     if runtime_source != (upstream_build / "rundir" / "RelWithDebInfo").resolve():
         raise ValueError("runtime must belong to the supplied qualified ABI cache")
-    if not runtime_source.is_dir() or not plugin_source.is_file() or not helper_source.is_file():
+    if (not runtime_source.is_dir() or not plugin_source.is_file() or
+            not helper_source.is_file() or not MUTEX_OWNER_PROBE.is_file()):
         raise FileNotFoundError("qualified runtime or private plugin/helper is missing")
     if not reference_report_path.is_file():
         raise FileNotFoundError(reference_report_path)
@@ -757,9 +806,43 @@ def main() -> int:
     if upstream_git != EXPECTED_UPSTREAM_HEAD or upstream_status:
         raise RuntimeError(
             f"qualified upstream changed: HEAD={upstream_git} status={upstream_status!r}")
+    cmake_cache = upstream_build / "CMakeCache.txt"
+    if not cmake_cache.is_file():
+        raise FileNotFoundError(cmake_cache)
+    cmake_home_line = next((line for line in cmake_cache.read_text(
+        encoding="utf-8", errors="replace").splitlines()
+        if line.startswith("CMAKE_HOME_DIRECTORY:INTERNAL=")), None)
+    if not cmake_home_line:
+        raise RuntimeError("qualified upstream build CMakeCache has no CMAKE_HOME_DIRECTORY")
+    cmake_home_value = cmake_home_line.split("=", 1)[1]
+    cmake_home_leaf = pathlib.PureWindowsPath(cmake_home_value.replace("/", "\\")).name
+    expected_build_home_leaf = upstream_source.name + "-windows-checkout"
+    if cmake_home_leaf != expected_build_home_leaf:
+        raise RuntimeError(
+            f"qualified upstream build source leaf changed: {cmake_home_leaf!r}")
+    build_source = upstream_source.with_name(cmake_home_leaf).resolve()
+    if not build_source.is_dir():
+        raise FileNotFoundError(build_source)
+    build_source_git = subprocess.run(
+        ["git", "-C", str(build_source), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True).stdout.strip()
+    build_source_status = subprocess.run(
+        ["git", "-C", str(build_source), "status", "--short"],
+        check=True, capture_output=True, text=True).stdout.strip()
+    build_libobs_status = subprocess.run(
+        ["git", "-C", str(build_source), "status", "--short", "--", "libobs"],
+        check=True, capture_output=True, text=True).stdout.strip()
+    if build_source_git != EXPECTED_BUILD_SOURCE_HEAD or build_libobs_status:
+        raise RuntimeError(
+            "qualified build source mismatch: "
+            f"HEAD={build_source_git} libobsStatus={build_libobs_status!r}")
     obs_lib = upstream_build / "libobs" / "RelWithDebInfo" / "obs.lib"
     if not obs_lib.is_file():
         raise FileNotFoundError(obs_lib)
+    obs_lib_hash = sha256(obs_lib)
+    if obs_lib_hash != EXPECTED_OBS_LIB_SHA256:
+        raise RuntimeError(
+            f"qualified obs.lib hash changed: expected {EXPECTED_OBS_LIB_SHA256}, got {obs_lib_hash}")
 
     browser_modules = sorted(
         path.name for path in (runtime_source / "obs-plugins" / "64bit").glob("*.dll")
@@ -820,14 +903,22 @@ def main() -> int:
             "originalWindowSeconds": 20.016,
         },
         "qualifiedObsProvenance": {
-            "upstreamSource": str(upstream_source), "upstreamRevision": upstream_git,
-            "upstreamWorkingTreeStatus": upstream_status,
+            "upstreamSource": str(build_source), "upstreamRevision": build_source_git,
+            "upstreamWorkingTreeStatus": build_source_status,
+            "buildCMakeHomeDirectory": cmake_home_value,
+            "buildCMakeCacheSha256": sha256(cmake_cache),
+            "buildSourceRelevantLibobsStatus": build_libobs_status,
+            "preflightSourceCheckout": {
+                "path": str(upstream_source), "revision": upstream_git,
+                "workingTreeStatus": upstream_status,
+                "role": "clean ABI/source review checkout; not the CMake build source",
+            },
             "upstreamBuildPath": str(upstream_build),
-            "obsLibPath": str(obs_lib), "obsLibSha256": sha256(obs_lib),
+            "obsLibPath": str(obs_lib), "obsLibSha256": obs_lib_hash,
             "cachePathSuffixIsNotGitRevision": True,
-            "actualSourceHeadDiffersFromCacheSuffix": upstream_git != "25ed780b7f392a1690dfca929cd57679959cf3ad",
+            "actualSourceHeadDiffersFromCacheSuffix": build_source_git != "25ed780b7f392a1690dfca929cd57679959cf3ad",
             "libobsSourceHashes": {
-                name: sha256(upstream_source / "libobs" / name)
+                name: sha256(build_source / "libobs" / name)
                 for name in ("obs.c", "obs-video.c", "obs-scene.c", "obs-source.c")
             },
         },
@@ -858,8 +949,11 @@ def main() -> int:
                     "probe": "scripts/probe-group-composition-reset-exact.py",
                 }.items()
             },
+            "mutexOwnerProbe": str(MUTEX_OWNER_PROBE),
+            "mutexOwnerProbeSha256": sha256(MUTEX_OWNER_PROBE),
             "compileDefinition": "PULSAR_GROUP_COMPOSITION_RESET_TRACE",
-            "buildCache": str(plugin_source.parent.parent),
+            "buildCache": "not-rebuilt; reused retained qualified private-runtime artifact",
+            "pluginInputPath": str(plugin_source),
             "pluginSha256": sha256(plugin_source),
             "buildFlags": "/DPULSAR_GROUP_COMPOSITION_RESET_TRACE /EHsc",
         },
