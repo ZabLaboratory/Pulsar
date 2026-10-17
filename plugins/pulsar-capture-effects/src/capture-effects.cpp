@@ -1,3 +1,4 @@
+#include "reset-trace.hpp"
 #include "effect-source.hpp"
 #include "group-composition.hpp"
 #include "obs-websocket-api.h"
@@ -31,6 +32,9 @@ struct Stage {
   vec4 tint{0, 0, 0, 1}, secondary{1, 1, 1, 1};
 };
 struct Effect {
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  uint64_t trace_id = 0;
+#endif
   obs_source_t *context = nullptr;
   gs_effect_t *shader = nullptr;
   gs_texrender_t *input = nullptr, *passes[2]{}, *background = nullptr,
@@ -64,6 +68,17 @@ struct Effect {
   std::array<vec4, 32> ancestor_x{}, ancestor_y{}, ancestor_size{};
   float source_zoom = 1;
 };
+void effect_trace(const Effect *f, const char *phase,
+                  const void *resource = nullptr, uint64_t value = 0)
+{
+  uint64_t trace_id = 0;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  if (f)
+    trace_id = f->trace_id;
+#endif
+  pulsar_reset_trace::event("capture-effect", trace_id, phase,
+                            f ? f->context : nullptr, resource, value);
+}
 std::mutex registry_mutex;
 std::unordered_map<obs_source_t *, Effect *> registry;
 float number(obs_data_t *s, const char *key, float lo, float hi,
@@ -235,27 +250,67 @@ void destroy(void *data) {
   auto *f = static_cast<Effect *>(data);
   if (!f)
     return;
+  effect_trace(f, "destroy-enter");
+  effect_trace(f, "registry-lock-begin");
   {
     std::lock_guard<std::mutex> lock(registry_mutex);
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    effect_trace(f, "registry-lock-acquired");
+#endif
     registry.erase(f->context);
   }
-  if (f->background_scene)
+  effect_trace(f, "registry-lock-released");
+  if (f->background_scene) {
+    effect_trace(f, "background-scene-release-begin", f->background_scene);
     obs_scene_release(f->background_scene);
-  if (f->coverage_source)
+    effect_trace(f, "background-scene-release-end");
+  }
+  if (f->coverage_source) {
+    effect_trace(f, "coverage-source-release-begin", f->coverage_source);
     obs_source_release(f->coverage_source);
+    effect_trace(f, "coverage-source-release-end");
+  }
+  effect_trace(f, "graphics-enter-begin");
   obs_enter_graphics();
+  effect_trace(f, "graphics-enter-end");
+  effect_trace(f, "shader-destroy-begin", f->shader);
   gs_effect_destroy(f->shader);
+  effect_trace(f, "shader-destroy-end");
+  effect_trace(f, "input-texrender-destroy-begin", f->input);
   gs_texrender_destroy(f->input);
+  effect_trace(f, "input-texrender-destroy-end");
+  effect_trace(f, "background-texrender-destroy-begin", f->background);
   gs_texrender_destroy(f->background);
+  effect_trace(f, "background-texrender-destroy-end");
+  effect_trace(f, "coverage-texrender-destroy-begin", f->coverage);
   gs_texrender_destroy(f->coverage);
-  for (auto *pass : f->passes)
+  effect_trace(f, "coverage-texrender-destroy-end");
+  for (std::size_t index = 0; index < 2; ++index) {
+    effect_trace(f, "pass-texrender-destroy-begin", f->passes[index], index);
+    auto *pass = f->passes[index];
     gs_texrender_destroy(pass);
+    effect_trace(f, "pass-texrender-destroy-end", nullptr, index);
+  }
+  effect_trace(f, "graphics-leave-begin");
   obs_leave_graphics();
+  effect_trace(f, "graphics-leave-end");
+  effect_trace(f, "delete-begin");
+  const auto *source = f->context;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  const uint64_t trace_id = f->trace_id;
+#else
+  constexpr uint64_t trace_id = 0;
+#endif
   delete f;
+  pulsar_reset_trace::event("capture-effect", trace_id, "delete-end", source);
 }
 void *create(obs_data_t *settings, obs_source_t *source) {
   auto *f = new Effect;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  f->trace_id = pulsar_reset_trace::next_object_id();
+#endif
   f->context = source;
+  effect_trace(f, "create", source);
   char *error = nullptr;
   obs_enter_graphics();
   f->shader = gs_effect_create(capture_effect_source,
