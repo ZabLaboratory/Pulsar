@@ -766,6 +766,8 @@ def main() -> int:
     parser.add_argument("--upstream-source", type=pathlib.Path, required=True)
     parser.add_argument("--upstream-build", type=pathlib.Path, required=True)
     parser.add_argument("--plugin", type=pathlib.Path, required=True)
+    parser.add_argument("--plugin-build-cache", type=pathlib.Path,
+                        help="CMake cache of a freshly built candidate; omit for a retained binary")
     parser.add_argument("--shutdown-helper", type=pathlib.Path, required=True)
     parser.add_argument("--reference-report", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path, default=EVIDENCE)
@@ -952,7 +954,10 @@ def main() -> int:
             "mutexOwnerProbe": str(MUTEX_OWNER_PROBE),
             "mutexOwnerProbeSha256": sha256(MUTEX_OWNER_PROBE),
             "compileDefinition": "PULSAR_GROUP_COMPOSITION_RESET_TRACE",
-            "buildCache": "not-rebuilt; reused retained qualified private-runtime artifact",
+            "buildCache": ({"path": str(args.plugin_build_cache.resolve()),
+                            "sha256": sha256(args.plugin_build_cache.resolve())}
+                           if args.plugin_build_cache else
+                           "not-rebuilt; reused retained qualified private-runtime artifact"),
             "pluginInputPath": str(plugin_source),
             "pluginSha256": sha256(plugin_source),
             "buildFlags": "/DPULSAR_GROUP_COMPOSITION_RESET_TRACE /EHsc",

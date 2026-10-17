@@ -1,5 +1,6 @@
 #include "reset-trace.hpp"
 #include "group-composition.hpp"
+#include "capture-effects.hpp"
 #include "group-composition-plan.hpp"
 #include "group-composition-source-validation.hpp"
 #include "group-composition-world-source.hpp"
@@ -284,6 +285,12 @@ bool add_composition_filter(obs_source_t *filtered_source,
   obs_data_release(settings);
   if (!filter) {
     set_error(response, "composition-filter-create-failed");
+    return false;
+  }
+  if (!capture_effects_bind_background_parent(
+          filter, obs_scene_get_source(parent_scene))) {
+    obs_source_release(filter);
+    set_error(response, "composition-filter-parent-bind-failed");
     return false;
   }
   obs_source_filter_add(filtered_source, filter);

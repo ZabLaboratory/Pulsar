@@ -1,0 +1,484 @@
+{
+  "passed": true,
+  "scope": "synthetic private-host GPU pixels; no Live, REC, CEF or physical capture",
+  "weakParent": {
+    "initiallyAbsent": true,
+    "createdWithoutFilterMutation": true,
+    "renameKeepsSameWeakParent": true,
+    "oldNameCompetitorDoesNotStealBinding": true,
+    "removedParentSwitchesToNewSource": true,
+    "absenceAndRecreationRecover": true,
+    "redReference": [
+      0,
+      0,
+      255,
+      255
+    ],
+    "blueReference": [
+      255,
+      0,
+      0,
+      255
+    ],
+    "greenReference": [
+      0,
+      255,
+      0,
+      255
+    ]
+  },
+  "coverage": {
+    "firstCommit": {
+      "ok": true
+    },
+    "replacementCommit": {
+      "ok": true
+    },
+    "firstMaskRemovedBeforeReplacement": true,
+    "retiredFilterCollision": {
+      "error": "Capture appearance filter name collision"
+    },
+    "canonicalFilterCollision": {
+      "error": "Capture effects filter name collision"
+    }
+  },
+  "captures": [
+    {
+      "phase": "weak-parent-initially-absent",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-weak-parent-initially-absent.png",
+      "sha256": "aa67cfce4050fff9b1bf4da486cd0a48df73a8c0837c6570659a0881ce6efab3",
+      "left": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "center": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "right": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "phase": "reference-parent-red-d3e3bec95f",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-reference-parent-red-d3e3bec95f.png",
+      "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790",
+      "left": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "center": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "right": [
+        0,
+        0,
+        255,
+        255
+      ]
+    },
+    {
+      "phase": "weak-parent-created-red",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-weak-parent-created-red.png",
+      "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790",
+      "left": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "center": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "right": [
+        0,
+        0,
+        255,
+        255
+      ]
+    },
+    {
+      "phase": "weak-parent-renamed-still-red",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-weak-parent-renamed-still-red.png",
+      "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790",
+      "left": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "center": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "right": [
+        0,
+        0,
+        255,
+        255
+      ]
+    },
+    {
+      "phase": "reference-parent-blue-d3e3bec95f",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-reference-parent-blue-d3e3bec95f.png",
+      "sha256": "69efafc1b75b4424c1a82bfc668afcac6e4b1e22139b38ac269d48783b2e1225",
+      "left": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "center": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "right": [
+        255,
+        0,
+        0,
+        255
+      ]
+    },
+    {
+      "phase": "weak-parent-new-name-competitor-still-red",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-weak-parent-new-name-competitor-still-red.png",
+      "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790",
+      "left": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "center": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "right": [
+        0,
+        0,
+        255,
+        255
+      ]
+    },
+    {
+      "phase": "weak-parent-removed-switches-blue",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-weak-parent-removed-switches-blue.png",
+      "sha256": "69efafc1b75b4424c1a82bfc668afcac6e4b1e22139b38ac269d48783b2e1225",
+      "left": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "center": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "right": [
+        255,
+        0,
+        0,
+        255
+      ]
+    },
+    {
+      "phase": "weak-parent-removed-again-empty",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-weak-parent-removed-again-empty.png",
+      "sha256": "aa67cfce4050fff9b1bf4da486cd0a48df73a8c0837c6570659a0881ce6efab3",
+      "left": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "center": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "right": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "phase": "reference-parent-green-d3e3bec95f",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-reference-parent-green-d3e3bec95f.png",
+      "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33",
+      "left": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "center": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "right": [
+        0,
+        255,
+        0,
+        255
+      ]
+    },
+    {
+      "phase": "weak-parent-recreated-green",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-weak-parent-recreated-green.png",
+      "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33",
+      "left": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "center": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "right": [
+        0,
+        255,
+        0,
+        255
+      ]
+    },
+    {
+      "phase": "reference-coverage-left-d3e3bec95f",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-reference-coverage-left-d3e3bec95f.png",
+      "sha256": "595391d3faf211c375ed5c288db9f6d46d0dfdbb581b7c63bc20fbd1e97284f3",
+      "left": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "center": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "right": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "phase": "reference-coverage-right-d3e3bec95f",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-reference-coverage-right-d3e3bec95f.png",
+      "sha256": "5a5570ab2dae6802b02643a5f5ae3120d848772f5ff03e234f808190a34ea86e",
+      "left": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "center": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "right": [
+        255,
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "phase": "reference-coverage-foreground",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-reference-coverage-foreground.png",
+      "sha256": "f1b9bae59c1b1da409796054e30cb4a6364c78e4684da75c4e3ef39fae895ef6",
+      "left": [
+        85,
+        204,
+        51,
+        255
+      ],
+      "center": [
+        85,
+        204,
+        51,
+        255
+      ],
+      "right": [
+        85,
+        204,
+        51,
+        255
+      ]
+    },
+    {
+      "phase": "coverage-first-left",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-coverage-first-left.png",
+      "sha256": "9f10d9ee1a3ece30161a38757274f53253519f2c59459f43aac04d7edc3ee262",
+      "left": [
+        85,
+        204,
+        51,
+        255
+      ],
+      "center": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "right": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "phase": "coverage-replaced-right",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-coverage-replaced-right.png",
+      "sha256": "4c7289528c5e56b61a7eb36740f52a8f26ccb4c9f398eabe9bc8c01c08e6f620",
+      "left": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "center": [
+        85,
+        204,
+        51,
+        255
+      ],
+      "right": [
+        85,
+        204,
+        51,
+        255
+      ]
+    },
+    {
+      "phase": "coverage-before-retired-collision",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-coverage-before-retired-collision.png",
+      "sha256": "4c7289528c5e56b61a7eb36740f52a8f26ccb4c9f398eabe9bc8c01c08e6f620",
+      "left": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "center": [
+        85,
+        204,
+        51,
+        255
+      ],
+      "right": [
+        85,
+        204,
+        51,
+        255
+      ]
+    },
+    {
+      "phase": "coverage-after-retired-collision",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-coverage-after-retired-collision.png",
+      "sha256": "4c7289528c5e56b61a7eb36740f52a8f26ccb4c9f398eabe9bc8c01c08e6f620",
+      "left": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "center": [
+        85,
+        204,
+        51,
+        255
+      ],
+      "right": [
+        85,
+        204,
+        51,
+        255
+      ]
+    },
+    {
+      "phase": "coverage-before-canonical-collision",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-coverage-before-canonical-collision.png",
+      "sha256": "7b55dea9a55b5ca0f0529277874aa62c2427268f606b894f9280fc2d3233feb9",
+      "left": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "center": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "right": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "phase": "coverage-after-canonical-collision",
+      "file": "20261017T170859Z-d3e3bec95f-capture-parent-coverage-after-canonical-collision.png",
+      "sha256": "7b55dea9a55b5ca0f0529277874aa62c2427268f606b894f9280fc2d3233feb9",
+      "left": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "center": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "right": [
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ]
+}
