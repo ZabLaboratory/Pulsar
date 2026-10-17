@@ -1,0 +1,2695 @@
+{
+  "schema": "pulsar.vision-solar-prism-cef-native-coverage-chain/1",
+  "passed": true,
+  "startedUtc": "2026-10-17T17:10:46.334469+00:00",
+  "runtimeStarted": true,
+  "buildStarted": false,
+  "gpuUsed": true,
+  "gpuSlotReleasedByParent": true,
+  "preflight": {
+    "schema": "pulsar.vision-solar-cef-coverage-chain-preflight/1",
+    "checkedUtc": "2026-10-17T17:10:46.038382+00:00",
+    "runtimeStarted": false,
+    "buildStarted": false,
+    "gpuUsed": false,
+    "runtimeProfile": {
+      "name": "1920x1080@60",
+      "geometryScale": 6,
+      "fps": 60,
+      "baseSceneGeometry": [
+        320,
+        180
+      ],
+      "sceneSize": [
+        1920,
+        1080
+      ],
+      "authoredLayoutGeometry": {
+        "rootAndOwnerSceneRect": [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        "stencilFrameRect": [
+          0,
+          0,
+          720,
+          744
+        ],
+        "clippedOpacityFrameRect": [
+          48,
+          96,
+          312,
+          552
+        ],
+        "clippedChildrenRelativeRects": [
+          [
+            0,
+            0,
+            216,
+            552
+          ],
+          [
+            144,
+            0,
+            264,
+            552
+          ]
+        ],
+        "unclippedOpacityFrameRect": [
+          480,
+          96,
+          120,
+          552
+        ],
+        "unclippedChildRelativeRect": [
+          0,
+          0,
+          384,
+          552
+        ],
+        "captureRect": [
+          1500,
+          120,
+          192,
+          192
+        ]
+      },
+      "browserSourceSize": [
+        1922,
+        3246
+      ],
+      "atlasSize": [
+        1922,
+        3246
+      ],
+      "atlasPacking": {
+        "surfaceCount": 3,
+        "gutterPixels": 1,
+        "bandRects": [
+          [
+            1,
+            1,
+            1920,
+            1080
+          ],
+          [
+            1,
+            1083,
+            1920,
+            1080
+          ],
+          [
+            1,
+            2165,
+            1920,
+            1080
+          ]
+        ],
+        "expectedCoverageSceneRect": [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        "expectedCoverageAtlasRect": [
+          1,
+          2165,
+          1920,
+          1080
+        ],
+        "sourceTestMaxDimension": 8192,
+        "sourceTest": "crates/vision-gpu/src/renderer/contribution/packing.rs::canonical_global_texel_shelves_fit_the_1080p_three_band_fixture",
+        "getSourceScreenshotDocumentedMaxDimension": 4096,
+        "getSourceScreenshotContract": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Sources.cpp:218-220"
+      },
+      "samplePoints": {
+        "partial": [
+          96,
+          240
+        ],
+        "overlap": [
+          216,
+          240
+        ],
+        "clippedOverflow": [
+          372,
+          240
+        ],
+        "unclippedChild": [
+          660,
+          240
+        ],
+        "stencilFrameOverflow": [
+          744,
+          240
+        ]
+      },
+      "samplePointRationale": {
+        "partial": "inside only the first clipped child",
+        "overlap": "inside both clipped children; group opacity must apply once",
+        "clippedOverflow": "x=62 is beyond the clipped frame's base x=60 edge",
+        "unclippedChild": "x=110 is past the unclipped frame's base x=100 edge but inside the stencil's x=120 edge",
+        "stencilFrameOverflow": "x=124 is outside the stencil frame's base x=120 edge"
+      },
+      "expectedCoverageAlpha": {
+        "initialHalfOpacity": 128,
+        "patchedFullOpacity": 255,
+        "clippedOverflow": 0,
+        "stencilFrameOverflow": 0
+      },
+      "readbackMemoryEstimate": {
+        "atlasRgbaBytes": 24955248,
+        "nativeSceneRgbaBytes": 8294400,
+        "oneAtlasPlusOneNativeSceneRgbaBytes": 33249648,
+        "websocketMaxMessageBytes": 37748736,
+        "estimateScope": "decoded pixel buffers only; excludes PNG/base64 copies, GPU/CEF surfaces and allocator overhead"
+      },
+      "qualificationLimits": [
+        "The 8192 value is the max-dimension argument in Vision's packer unit test, not a measurement of the active GPU.",
+        "The actual WebGL MAX_TEXTURE_SIZE and CEF screenshot dimensions must be recorded by the private run.",
+        "A single 60-fps-configured capture is not evidence of sustained 60-fps presentation or frame pacing."
+      ]
+    },
+    "worktree": {
+      "worktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain",
+      "branch": "eleven/local-20261017-cef-coverage-chain",
+      "head": "0a6e4bc9b44dd69845c0d42d4e6513ee44cbca0d",
+      "status": " M scripts/cef-coverage-chain/preflight.py",
+      "commonDir": "D:/Documents/Zab/Pulsar/.git"
+    },
+    "sourcePins": {
+      "solarCommit": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+      "prismCommit": "8933556f85272b077553444a7ffd891438432175",
+      "prismProductBaselineCommit": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
+      "visionCommit": "044ddb62df050eee9869150a69a1b88fd26f2962",
+      "baselinePresenterCommit": "85c49664a029744369b063ddffaa92415a59c8a8",
+      "nativeSourceCommit": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+      "cefSourceCommit": "47cb08c56e010c5da45923a5eee147f294216756",
+      "nativeSourceCommitScope": "clean repository reference used for the websocket ABI comparison; not the source checkout that built obs.dll",
+      "solarHead": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+      "prismHead": "8933556f85272b077553444a7ffd891438432175",
+      "prismConsumer": {
+        "path": "src/main/broadcast/engine/capture/native-composition-consumer.ts",
+        "headBlob": "016a579264550a4377d932ed447259da55e69ea0",
+        "productBaselineBlob": "016a579264550a4377d932ed447259da55e69ea0",
+        "byteIdentical": true
+      },
+      "visionFixtureHead": "044ddb62df050eee9869150a69a1b88fd26f2962",
+      "sourceBlobs": {
+        "assigned": {
+          "commit": "0a6e4bc9b44dd69845c0d42d4e6513ee44cbca0d",
+          "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+          "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+        },
+        "native": {
+          "commit": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+          "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+          "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+        },
+        "cef": {
+          "commit": "47cb08c56e010c5da45923a5eee147f294216756",
+          "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+          "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+        }
+      }
+    },
+    "solarVisionAssets": {
+      "ui/mainpresenter.mjs": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\ui\\mainpresenter.mjs",
+          "bytes": 43272,
+          "sha256": "1046dafdf9d1544dd15e17d24b57dcf8e32fdf74a140285b5f200ca544ccf508"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\ui\\mainpresenter.mjs",
+          "bytes": 43272,
+          "sha256": "1046dafdf9d1544dd15e17d24b57dcf8e32fdf74a140285b5f200ca544ccf508"
+        },
+        "byteIdentical": true
+      },
+      "ui/fonts.mjs": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\ui\\fonts.mjs",
+          "bytes": 1977,
+          "sha256": "d49ed45181a8aa714f675aaa24f5439e9547b274d6eba6cd2bb995c981765c5f"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\ui\\fonts.mjs",
+          "bytes": 1977,
+          "sha256": "d49ed45181a8aa714f675aaa24f5439e9547b274d6eba6cd2bb995c981765c5f"
+        },
+        "byteIdentical": true
+      },
+      "pkg/lumencast_vision_web.js": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\pkg\\lumencast_vision_web.js",
+          "bytes": 157228,
+          "sha256": "2661fc24146f703adcfa1b94769d9c789b707abf0027792b6f4287fb40bc04e6"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\pkg\\lumencast_vision_web.js",
+          "bytes": 157228,
+          "sha256": "2661fc24146f703adcfa1b94769d9c789b707abf0027792b6f4287fb40bc04e6"
+        },
+        "byteIdentical": true
+      },
+      "pkg/lumencast_vision_web_bg.wasm": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\pkg\\lumencast_vision_web_bg.wasm",
+          "bytes": 10618773,
+          "sha256": "39c64876a92c0d8d5a104fa8366dc437520140be92e8376db59ed127420ab4a9"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\pkg\\lumencast_vision_web_bg.wasm",
+          "bytes": 10618773,
+          "sha256": "39c64876a92c0d8d5a104fa8366dc437520140be92e8376db59ed127420ab4a9"
+        },
+        "byteIdentical": true
+      }
+    },
+    "visionFixture": {
+      "path": "D:\\Documents\\Lumencast\\lumencast-vision\\.worktrees\\eleven-local-20261017-native-mask-coverage\\crates\\vision-web\\tests\\contribution-webgl2-proof\\contribution-scene.lsml",
+      "bytes": 1739,
+      "sha256": "103930a1a01c9de4cab71feb6ed31cc9bafdd0411dcbaf2e0914a91c3b47b064"
+    },
+    "nativeAndCefRuntime": {
+      "nativeHost": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\pulsar.exe",
+        "bytes": 1677824,
+        "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973"
+      },
+      "nativeObs": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\obs.dll",
+        "bytes": 1491968,
+        "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+      },
+      "nativeWebsocket": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+        "bytes": 2855936,
+        "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+      },
+      "capturePlugin": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+        "bytes": 581632,
+        "sha256": "1deaa45c64f30d877f93aa9133c6b562a306cacb72931a376f293e8c52403375"
+      },
+      "cefBrowser": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\pulsar-browser.dll",
+        "bytes": 2571264,
+        "sha256": "0602fdc46559109ad24a57fc769580480fe8b2794930cc591bf5a450129df8e6"
+      },
+      "cefHelper": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\pulsar-browser-page.exe",
+        "bytes": 2216960,
+        "sha256": "9148fb2f5e1cc8867b19ab1cfd033eaea4e647e05ff0ac313f883cf281ab65e6"
+      },
+      "cefLib": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\libcef.dll",
+        "bytes": 213993472,
+        "sha256": "551bea07c46c9a330eff7861105321f3c7d47e3c0412ced4b0ff35aa130f2536"
+      }
+    },
+    "websocketProvenance": {
+      "nativeDll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+        "bytes": 2855936,
+        "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+      },
+      "cefReportedDllSha256": "3130c2cf8485bfbf80b67b4ee09126f21a38a90229457aabdb03126526374f3a",
+      "cefReportedDllRetainedAtOverlayPath": false,
+      "sameObsDllSha256": true,
+      "apiVersion": 3,
+      "vendorRegistration": "obs_module_post_load → inline proc_handler API calls",
+      "directImportFromCaptureEffects": false,
+      "staticEvidence": {
+        "headerPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-websocket\\lib\\obs-websocket-api.h",
+        "headerSha256": "c29e8e38ee66c36db79cae86217ab0f270aad39f97e82090809d087c281b7948",
+        "sourcePath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-websocket\\src\\obs-websocket.cpp",
+        "sourceSha256": "a7218ae8699ad65214ab2d77726afa73cebabd6ec85f1dceb9a0700a5e67382b",
+        "captureEffectsPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-capture-effects\\src\\capture-effects.cpp",
+        "captureEffectsSha256": "1f625a897b2a86604a6b0d5ba619152b4f88eb5c0a043ea45ccbfe9dcf284e71"
+      },
+      "selectionForPrivateStage": "preserve native d3ecaf55 DLL and overlay CEF browser files only; pixel proofs exist for both profiles, while this offline preflight makes no runtime or frame-pacing claim"
+    },
+    "harness": {
+      "page": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\index.html",
+      "pageModule": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\page.mjs",
+      "solarPrismEmitter": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\emit-wire.mjs",
+      "privateRunner": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\probe.py",
+      "offlinePreflight": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\preflight.py",
+      "executionGate": "the private runner requires both --execute and --gpu-slot-released",
+      "realAtlasRequirement": "use GetSourceScreenshot from this exact CEF browser_source; no generated PNG/image atlas may stand in for it",
+      "selectedProfile": "1920x1080@60"
+    },
+    "limitations": [
+      "No CEF/browser/GPU/native process was started by this preflight.",
+      "No build or test was run.",
+      "The LSML capture node uses the proof fixture's synthetic source binding; no physical camera is involved.",
+      "The exact d3ecaf55 native WebSocket binary is selected for this private stage because it is retained and already exercised with the matching host/obs.dll; the CEF report's 3130c2cf binary is absent from the retained overlay and is not substituted."
+    ]
+  },
+  "runtimeProfile": {
+    "name": "1920x1080@60",
+    "geometryScale": 6,
+    "fps": 60,
+    "baseSceneGeometry": [
+      320,
+      180
+    ],
+    "sceneSize": [
+      1920,
+      1080
+    ],
+    "authoredLayoutGeometry": {
+      "rootAndOwnerSceneRect": [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      "stencilFrameRect": [
+        0,
+        0,
+        720,
+        744
+      ],
+      "clippedOpacityFrameRect": [
+        48,
+        96,
+        312,
+        552
+      ],
+      "clippedChildrenRelativeRects": [
+        [
+          0,
+          0,
+          216,
+          552
+        ],
+        [
+          144,
+          0,
+          264,
+          552
+        ]
+      ],
+      "unclippedOpacityFrameRect": [
+        480,
+        96,
+        120,
+        552
+      ],
+      "unclippedChildRelativeRect": [
+        0,
+        0,
+        384,
+        552
+      ],
+      "captureRect": [
+        1500,
+        120,
+        192,
+        192
+      ]
+    },
+    "browserSourceSize": [
+      1922,
+      3246
+    ],
+    "atlasSize": [
+      1922,
+      3246
+    ],
+    "atlasPacking": {
+      "surfaceCount": 3,
+      "gutterPixels": 1,
+      "bandRects": [
+        [
+          1,
+          1,
+          1920,
+          1080
+        ],
+        [
+          1,
+          1083,
+          1920,
+          1080
+        ],
+        [
+          1,
+          2165,
+          1920,
+          1080
+        ]
+      ],
+      "expectedCoverageSceneRect": [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      "expectedCoverageAtlasRect": [
+        1,
+        2165,
+        1920,
+        1080
+      ],
+      "sourceTestMaxDimension": 8192,
+      "sourceTest": "crates/vision-gpu/src/renderer/contribution/packing.rs::canonical_global_texel_shelves_fit_the_1080p_three_band_fixture",
+      "getSourceScreenshotDocumentedMaxDimension": 4096,
+      "getSourceScreenshotContract": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Sources.cpp:218-220"
+    },
+    "samplePoints": {
+      "partial": [
+        96,
+        240
+      ],
+      "overlap": [
+        216,
+        240
+      ],
+      "clippedOverflow": [
+        372,
+        240
+      ],
+      "unclippedChild": [
+        660,
+        240
+      ],
+      "stencilFrameOverflow": [
+        744,
+        240
+      ]
+    },
+    "samplePointRationale": {
+      "partial": "inside only the first clipped child",
+      "overlap": "inside both clipped children; group opacity must apply once",
+      "clippedOverflow": "x=62 is beyond the clipped frame's base x=60 edge",
+      "unclippedChild": "x=110 is past the unclipped frame's base x=100 edge but inside the stencil's x=120 edge",
+      "stencilFrameOverflow": "x=124 is outside the stencil frame's base x=120 edge"
+    },
+    "expectedCoverageAlpha": {
+      "initialHalfOpacity": 128,
+      "patchedFullOpacity": 255,
+      "clippedOverflow": 0,
+      "stencilFrameOverflow": 0
+    },
+    "readbackMemoryEstimate": {
+      "atlasRgbaBytes": 24955248,
+      "nativeSceneRgbaBytes": 8294400,
+      "oneAtlasPlusOneNativeSceneRgbaBytes": 33249648,
+      "websocketMaxMessageBytes": 37748736,
+      "estimateScope": "decoded pixel buffers only; excludes PNG/base64 copies, GPU/CEF surfaces and allocator overhead"
+    },
+    "qualificationLimits": [
+      "The 8192 value is the max-dimension argument in Vision's packer unit test, not a measurement of the active GPU.",
+      "The actual WebGL MAX_TEXTURE_SIZE and CEF screenshot dimensions must be recorded by the private run.",
+      "A single 60-fps-configured capture is not evidence of sustained 60-fps presentation or frame pacing."
+    ]
+  },
+  "scratch": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a3a40c2bc4fc4009ae8e8d841cfacc27",
+  "reportPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-cef-coverage-chain.json",
+  "sourcePins": {
+    "solar": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+    "prismRuntimeHead": "8933556f85272b077553444a7ffd891438432175",
+    "prismProductBaseline": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
+    "vision": "044ddb62df050eee9869150a69a1b88fd26f2962",
+    "visionBaselinePresenter": "85c49664a029744369b063ddffaa92415a59c8a8",
+    "pulsarNativeSource": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+    "pulsarCefSource": "47cb08c56e010c5da45923a5eee147f294216756"
+  },
+  "selectedWebsocket": "retained native d3ecaf55; CEF-reported 3130c2cf is not present in overlay and is not copied",
+  "evidence": {
+    "backdropSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-backdrop-source.png",
+      "bytes": 10605,
+      "sha256": "f53b98bda379fcf4b2936ccf9d574f825d0c509675438a7d8ee42aabab24d28c"
+    },
+    "cefAtlasInitial": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-cef-atlas-initial.png",
+      "bytes": 30562,
+      "sha256": "159d807d0a5a58a64ec56e0bbff8f39dfb15855b2f73ded8467cf3f6645207d4"
+    },
+    "initialChain": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-initial-chain.json",
+      "bytes": 31178,
+      "sha256": "c782caa280285d2486f4f6d805abb64222b828749845c6befe3304cce49e1b66"
+    },
+    "sceneMask050": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-scene-mask-050.png",
+      "bytes": 10715,
+      "sha256": "d113ec706ccfaa027476f3927b4bb94f8d0c84025a03029ed2a896df05257235"
+    },
+    "cefAtlasUpdated": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-cef-atlas-updated.png",
+      "bytes": 30561,
+      "sha256": "48fde67524f4664891595f50fdc5ebf2547d7fee6bc8bad01945488f945319e5"
+    },
+    "updatedChain": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-updated-chain.json",
+      "bytes": 31178,
+      "sha256": "f87bf4478ad6ffec6f649b0c11b303a55e9248626121476bf2b672767db71221"
+    },
+    "sceneMask100": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-scene-mask-100.png",
+      "bytes": 10715,
+      "sha256": "17d372717ec143af412a4cede1212d63498f4a21372c93d6760b0b0bb42ac599"
+    },
+    "hostLog": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-host.log",
+      "bytes": 59289,
+      "sha256": "5792a936c5f5a6076d14471cf7f37e4597377114699f0401fcaa713d48bbaca7"
+    }
+  },
+  "stagedRuntime": {
+    "sourceRuntime": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo",
+    "cefOverlay": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit",
+    "capturePluginSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "artifactPins": {
+      "pulsar.exe": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a3a40c2bc4fc4009ae8e8d841cfacc27\\runtime\\bin\\64bit\\pulsar.exe",
+        "bytes": 1677824,
+        "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973"
+      },
+      "obs.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a3a40c2bc4fc4009ae8e8d841cfacc27\\runtime\\bin\\64bit\\obs.dll",
+        "bytes": 1491968,
+        "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+      },
+      "obs-websocket.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a3a40c2bc4fc4009ae8e8d841cfacc27\\runtime\\obs-plugins\\64bit\\obs-websocket.dll",
+        "bytes": 2855936,
+        "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+      },
+      "pulsar-capture-effects.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a3a40c2bc4fc4009ae8e8d841cfacc27\\runtime\\obs-plugins\\64bit\\pulsar-capture-effects.dll",
+        "bytes": 581632,
+        "sha256": "1deaa45c64f30d877f93aa9133c6b562a306cacb72931a376f293e8c52403375"
+      },
+      "pulsar-browser.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a3a40c2bc4fc4009ae8e8d841cfacc27\\runtime\\obs-plugins\\64bit\\pulsar-browser.dll",
+        "bytes": 2571264,
+        "sha256": "0602fdc46559109ad24a57fc769580480fe8b2794930cc591bf5a450129df8e6"
+      },
+      "pulsar-browser-page.exe": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a3a40c2bc4fc4009ae8e8d841cfacc27\\runtime\\obs-plugins\\64bit\\pulsar-browser-page.exe",
+        "bytes": 2216960,
+        "sha256": "9148fb2f5e1cc8867b19ab1cfd033eaea4e647e05ff0ac313f883cf281ab65e6"
+      },
+      "libcef.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a3a40c2bc4fc4009ae8e8d841cfacc27\\runtime\\obs-plugins\\64bit\\libcef.dll",
+        "bytes": 213993472,
+        "sha256": "551bea07c46c9a330eff7861105321f3c7d47e3c0412ced4b0ff35aa130f2536"
+      }
+    },
+    "cefOverlayFileCount": 68,
+    "cefReportedWebsocketDllCopied": false
+  },
+  "ownedPid": 64136,
+  "websocketPort": 49924,
+  "hostReady": true,
+  "videoSettings": {
+    "bootEnvironment": {
+      "PULSAR_RESOLUTION": "1920x1080",
+      "PULSAR_FPS": "60"
+    },
+    "expectedFps": [
+      60,
+      1
+    ],
+    "after": {
+      "baseHeight": 1080,
+      "baseWidth": 1920,
+      "fpsDenominator": 1,
+      "fpsNumerator": 60,
+      "outputHeight": 1080,
+      "outputWidth": 1920
+    }
+  },
+  "scene": {
+    "sceneName": "cef-coverage-a3a40c2bc4fc",
+    "sceneSize": [
+      1920,
+      1080
+    ],
+    "profile": "1920x1080@60",
+    "browserSourceUrl": "http://127.0.0.1:49920/?profile=1920x1080@60",
+    "browserSourceSettings": {
+      "width": 1922,
+      "height": 3246,
+      "fps": 60
+    },
+    "sceneItemIds": {
+      "backdrop": 1,
+      "captureBinding": 2,
+      "captureContribution": 3,
+      "cefAtlas": 4
+    },
+    "captureInputKind": "synthetic color_source_v3; no camera/device opened",
+    "activation": {
+      "request": "SetCurrentProgramScene",
+      "response": {},
+      "readback": {
+        "currentProgramSceneName": "cef-coverage-a3a40c2bc4fc",
+        "currentProgramSceneUuid": "64668f44-f2da-4514-98be-878f52edd0d0",
+        "sceneName": "cef-coverage-a3a40c2bc4fc",
+        "sceneUuid": "64668f44-f2da-4514-98be-878f52edd0d0"
+      },
+      "browserLifecycle": "active private fixture scene to drive actual CEF browser_source"
+    }
+  },
+  "presenter": {
+    "initialReceiptSchema": "vision.native-composition-frame/2",
+    "initialReceiptIdentity": {
+      "sceneId": "vision-frame-mask-browser-proof",
+      "sceneVersion": "sha256:ad4944c581220c227a7fe03af314e143b42634f52dd1c72cdf8ff81e4cd2a363",
+      "pixelRevision": "0"
+    },
+    "canvasSize": [
+      1922,
+      3246
+    ],
+    "legacyPresenterNegative": {
+      "baselineCommit": "85c49664a029744369b063ddffaa92415a59c8a8",
+      "exactReceiptSupplied": true,
+      "emittedFrameSubmitted": false,
+      "errorPhase": "render",
+      "errorMessage": "The Rust engine returned an invalid native composition frame receipt."
+    }
+  },
+  "cefAtlasInitialSamples": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-cef-atlas-initial.png",
+    "sha256": "159d807d0a5a58a64ec56e0bbff8f39dfb15855b2f73ded8467cf3f6645207d4",
+    "dimensions": [
+      1922,
+      3246
+    ],
+    "channels": 4,
+    "coverageSurface": {
+      "targetNodeId": 1,
+      "coordinateSpace": "global-scene-texels",
+      "sceneRect": [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      "atlasRect": [
+        1,
+        2165,
+        1920,
+        1080
+      ]
+    },
+    "samples": {
+      "partial": {
+        "scenePoint": [
+          96,
+          240
+        ],
+        "atlasPoint": [
+          97,
+          2405
+        ],
+        "rgba": [
+          127,
+          127,
+          127,
+          127
+        ],
+        "expectedAlpha": 128
+      },
+      "overlap": {
+        "scenePoint": [
+          216,
+          240
+        ],
+        "atlasPoint": [
+          217,
+          2405
+        ],
+        "rgba": [
+          127,
+          127,
+          127,
+          127
+        ],
+        "expectedAlpha": 128
+      },
+      "clippedOverflow": {
+        "scenePoint": [
+          372,
+          240
+        ],
+        "atlasPoint": [
+          373,
+          2405
+        ],
+        "rgba": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expectedAlpha": 0
+      },
+      "unclippedChild": {
+        "scenePoint": [
+          660,
+          240
+        ],
+        "atlasPoint": [
+          661,
+          2405
+        ],
+        "rgba": [
+          127,
+          127,
+          127,
+          127
+        ],
+        "expectedAlpha": 128
+      },
+      "stencilFrameOverflow": {
+        "scenePoint": [
+          744,
+          240
+        ],
+        "atlasPoint": [
+          745,
+          2405
+        ],
+        "rgba": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expectedAlpha": 0
+      }
+    }
+  },
+  "initialProjection": {
+    "solarPlanSchema": "solar.native-composition.plan/2",
+    "nativeProtocol": "pulsar.group-composition/2",
+    "nativePlanHash": "sha256:41ac96cbd4164197a8071ad475724a270471fe9eb6e0453cdfbe042dd7971014",
+    "atlasSize": {
+      "width": 1922,
+      "height": 3246
+    },
+    "coverageSurfaces": [
+      {
+        "targetId": "vision.owner.1",
+        "coordinateSpace": "global-scene-texels",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 1920,
+          "height": 1080
+        },
+        "atlasRect": {
+          "x": 1,
+          "y": 2165,
+          "width": 1920,
+          "height": 1080
+        }
+      }
+    ],
+    "wireGroups": 2
+  },
+  "rootBackgroundWitness": {
+    "contract": "opaque LSML root band paints before the masked owner; zero coverage reveals that band, not the OBS scene backdrop",
+    "rootLayoutBackground": "#0c1119",
+    "rootGroupId": "prism.native-composition.root.v1",
+    "rootBand": {
+      "band": 0,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 1080
+      },
+      "crop": {
+        "left": 1,
+        "top": 1,
+        "right": 1,
+        "bottom": 2165
+      },
+      "paintOrderIndex": 0
+    },
+    "coverageOwnerOrder": [
+      {
+        "ownerId": "vision.owner.1",
+        "rootBandIndex": 0,
+        "ownerRefIndex": 1,
+        "rootBandPrecedesOwner": true
+      }
+    ],
+    "atlasSamples": {
+      "partial": {
+        "scenePoint": [
+          96,
+          240
+        ],
+        "atlasPoint": [
+          97,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "overlap": {
+        "scenePoint": [
+          216,
+          240
+        ],
+        "atlasPoint": [
+          217,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "clippedOverflow": {
+        "scenePoint": [
+          372,
+          240
+        ],
+        "atlasPoint": [
+          373,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "unclippedChild": {
+        "scenePoint": [
+          660,
+          240
+        ],
+        "atlasPoint": [
+          661,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "stencilFrameOverflow": {
+        "scenePoint": [
+          744,
+          240
+        ],
+        "atlasPoint": [
+          745,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      }
+    },
+    "obsBackdropSourceSampleAtPartial": [
+      64,
+      48,
+      32,
+      255
+    ],
+    "initialAtlasSha256": "159d807d0a5a58a64ec56e0bbff8f39dfb15855b2f73ded8467cf3f6645207d4",
+    "initialNativeSamples": {
+      "clippedOverflow": [
+        12,
+        17,
+        25,
+        255
+      ],
+      "stencilFrameOverflow": [
+        12,
+        17,
+        25,
+        255
+      ]
+    },
+    "updatedAtlasSamples": {
+      "partial": {
+        "scenePoint": [
+          96,
+          240
+        ],
+        "atlasPoint": [
+          97,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "overlap": {
+        "scenePoint": [
+          216,
+          240
+        ],
+        "atlasPoint": [
+          217,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "clippedOverflow": {
+        "scenePoint": [
+          372,
+          240
+        ],
+        "atlasPoint": [
+          373,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "unclippedChild": {
+        "scenePoint": [
+          660,
+          240
+        ],
+        "atlasPoint": [
+          661,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "stencilFrameOverflow": {
+        "scenePoint": [
+          744,
+          240
+        ],
+        "atlasPoint": [
+          745,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      }
+    },
+    "updatedNativeSamples": {
+      "clippedOverflow": [
+        12,
+        17,
+        25,
+        255
+      ],
+      "stencilFrameOverflow": [
+        12,
+        17,
+        25,
+        255
+      ]
+    }
+  },
+  "nativeInitialCommit": {
+    "requestType": "CommitGroupComposition",
+    "responseData": {
+      "generation": 1,
+      "ok": true,
+      "planHash": "sha256:41ac96cbd4164197a8071ad475724a270471fe9eb6e0453cdfbe042dd7971014"
+    },
+    "vendorName": "pulsar-capture-effects"
+  },
+  "nativeInitialPixels": {
+    "opaqueLsmlRootBandSamples": {
+      "partial": {
+        "scenePoint": [
+          96,
+          240
+        ],
+        "atlasPoint": [
+          97,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "overlap": {
+        "scenePoint": [
+          216,
+          240
+        ],
+        "atlasPoint": [
+          217,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "clippedOverflow": {
+        "scenePoint": [
+          372,
+          240
+        ],
+        "atlasPoint": [
+          373,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "unclippedChild": {
+        "scenePoint": [
+          660,
+          240
+        ],
+        "atlasPoint": [
+          661,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "stencilFrameOverflow": {
+        "scenePoint": [
+          744,
+          240
+        ],
+        "atlasPoint": [
+          745,
+          241
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      }
+    },
+    "obsBackdropSourceSample": [
+      64,
+      48,
+      32,
+      255
+    ],
+    "samples": {
+      "partial": {
+        "scenePoint": [
+          96,
+          240
+        ],
+        "rgba": [
+          133,
+          136,
+          140,
+          255
+        ]
+      },
+      "overlap": {
+        "scenePoint": [
+          216,
+          240
+        ],
+        "rgba": [
+          133,
+          136,
+          140,
+          255
+        ]
+      },
+      "clippedOverflow": {
+        "scenePoint": [
+          372,
+          240
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      },
+      "unclippedChild": {
+        "scenePoint": [
+          660,
+          240
+        ],
+        "rgba": [
+          133,
+          136,
+          140,
+          255
+        ]
+      },
+      "stencilFrameOverflow": {
+        "scenePoint": [
+          744,
+          240
+        ],
+        "rgba": [
+          12,
+          17,
+          25,
+          255
+        ]
+      }
+    },
+    "assertions": [
+      "partial mask visible",
+      "overlapping children do not double-apply frame opacity",
+      "nested clips suppress overflow",
+      "unclipped child remains inside stencil-frame clip"
+    ]
+  },
+  "negativeControl": {
+    "wirePlanHashRecomputed": true,
+    "changedMaskCropLeftBy": 1,
+    "rejectedCandidateGeneration": 2,
+    "expectedError": "invalid-mask-rect: mask crop and global rect must have exact one-to-one dimensions",
+    "comparison": "decoded screenshot pixel buffers (channel count and every pixel), not PNG encoding bytes",
+    "nativeResponse": {
+      "requestType": "CommitGroupComposition",
+      "responseData": {
+        "error": "invalid-mask-rect: mask crop and global rect must have exact one-to-one dimensions",
+        "ok": false
+      },
+      "vendorName": "pulsar-capture-effects"
+    },
+    "pixelsExactlyUnchanged": true,
+    "evidence": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-scene-after-negative.png",
+      "bytes": 10715,
+      "sha256": "d113ec706ccfaa027476f3927b4bb94f8d0c84025a03029ed2a896df05257235"
+    }
+  },
+  "cefAtlasUpdatedSamples": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T171046Z-a3a40c2b-cef-atlas-updated.png",
+    "sha256": "48fde67524f4664891595f50fdc5ebf2547d7fee6bc8bad01945488f945319e5",
+    "dimensions": [
+      1922,
+      3246
+    ],
+    "channels": 4,
+    "coverageSurface": {
+      "targetNodeId": 1,
+      "coordinateSpace": "global-scene-texels",
+      "sceneRect": [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      "atlasRect": [
+        1,
+        2165,
+        1920,
+        1080
+      ]
+    },
+    "samples": {
+      "partial": {
+        "scenePoint": [
+          96,
+          240
+        ],
+        "atlasPoint": [
+          97,
+          2405
+        ],
+        "rgba": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "expectedAlpha": 255
+      },
+      "overlap": {
+        "scenePoint": [
+          216,
+          240
+        ],
+        "atlasPoint": [
+          217,
+          2405
+        ],
+        "rgba": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "expectedAlpha": 255
+      },
+      "clippedOverflow": {
+        "scenePoint": [
+          372,
+          240
+        ],
+        "atlasPoint": [
+          373,
+          2405
+        ],
+        "rgba": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expectedAlpha": 0
+      },
+      "unclippedChild": {
+        "scenePoint": [
+          660,
+          240
+        ],
+        "atlasPoint": [
+          661,
+          2405
+        ],
+        "rgba": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "expectedAlpha": 255
+      },
+      "stencilFrameOverflow": {
+        "scenePoint": [
+          744,
+          240
+        ],
+        "atlasPoint": [
+          745,
+          2405
+        ],
+        "rgba": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expectedAlpha": 0
+      }
+    }
+  },
+  "nativeUpdatedCommit": {
+    "requestType": "CommitGroupComposition",
+    "responseData": {
+      "generation": 2,
+      "ok": true,
+      "planHash": "sha256:41ac96cbd4164197a8071ad475724a270471fe9eb6e0453cdfbe042dd7971014"
+    },
+    "vendorName": "pulsar-capture-effects"
+  },
+  "sameSceneMaskUpdate": {
+    "sceneId": "vision-frame-mask-browser-proof",
+    "sceneVersionBefore": "sha256:ad4944c581220c227a7fe03af314e143b42634f52dd1c72cdf8ff81e4cd2a363",
+    "sceneVersionAfter": "sha256:ad4944c581220c227a7fe03af314e143b42634f52dd1c72cdf8ff81e4cd2a363",
+    "pixelRevisionBefore": "0",
+    "pixelRevisionAfter": "1",
+    "layoutProjectionRevisionBefore": "0",
+    "layoutProjectionRevisionAfter": "0",
+    "statePatch": {
+      "type": "patch",
+      "path": "mask.opacity",
+      "value": 1,
+      "seq": 3,
+      "changedNodes": [
+        1,
+        5,
+        8
+      ]
+    },
+    "wireGenerationBefore": 1,
+    "wireGenerationAfter": 2,
+    "rejectedMaskGeneration": 2,
+    "rejectedCandidateDidNotAdvanceFence": true,
+    "browserSceneItemIdStable": 4,
+    "initialNativeSamples": {
+      "partial": [
+        133,
+        136,
+        140,
+        255
+      ],
+      "overlap": [
+        133,
+        136,
+        140,
+        255
+      ],
+      "clippedOverflow": [
+        12,
+        17,
+        25,
+        255
+      ],
+      "unclippedChild": [
+        133,
+        136,
+        140,
+        255
+      ],
+      "stencilFrameOverflow": [
+        12,
+        17,
+        25,
+        255
+      ]
+    },
+    "updatedNativeSamples": {
+      "partial": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "overlap": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "clippedOverflow": [
+        12,
+        17,
+        25,
+        255
+      ],
+      "unclippedChild": [
+        255,
+        255,
+        255,
+        255
+      ],
+      "stencilFrameOverflow": [
+        12,
+        17,
+        25,
+        255
+      ]
+    },
+    "assertions": [
+      "same browser source and scene identity",
+      "coverage 0.5→1.0 changes real native pixels",
+      "overlap remains single-alpha",
+      "clips remain enforced after update"
+    ]
+  },
+  "reset": {
+    "requestType": "ResetGroupComposition",
+    "responseData": {
+      "generation": 2,
+      "ok": true,
+      "reset": true
+    },
+    "vendorName": "pulsar-capture-effects"
+  },
+  "resetVisibilityRestored": true,
+  "shutdown": {
+    "exitCode": 0,
+    "gracefulEventRequested": true,
+    "forcedTerminationUsed": false,
+    "orderedMarkerNames": [
+      "pre_obs_shutdown_begin",
+      "cef_shutdown_begin",
+      "cef_shutdown_complete",
+      "pre_obs_shutdown_complete"
+    ],
+    "orderedMarkerPositions": [
+      376,
+      393,
+      394,
+      395
+    ],
+    "markers": [
+      "2026-10-17T17:10:49Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=manager_started",
+      "2026-10-17T17:10:49Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=cef_ready",
+      "2026-10-17T17:10:49Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=source_created generation=1",
+      "2026-10-17T17:10:49Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=browser_created browser_id=1 generation=1 browser_count=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=begin phase=Closing browser_count=1 pending_source_tasks=0 active_source_tasks=0 already_started=0",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=close_requested browser_count=1 source_count=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=browser_close_call browser_id=1 reason=shutdown_started",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=browser_ref_released_before_close browser_id=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=browser_on_before_close_entry browser_id=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=client_keepalive_acquired browser_id=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=browser_detached browser_id=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=browser_close_observed browser_id=1 browser_count=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=browser_finalization_intent browser_id=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=browser_finalization_scheduled browser_id=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=browser_on_before_close_exit browser_id=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=browser_close_return browser_id=1 requested=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=audio_quiescent browser_id=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=browser_closed browser_id=1 browser_count=0",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=client_keepalive_released browser_id=1",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=barrier_released phase=Drained browser_count=0",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=cef_shutdown_begin browser_count=0",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=cef_shutdown_complete browser_count=0",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete",
+      "2026-10-17T17:11:42Z INFO vMSQIL3nitw_pvy4 libobs | PULSAR_CEF_SHUTDOWN event=source_destroyed generation=1"
+    ]
+  },
+  "processExitCode": 0,
+  "pageServer": {
+    "url": "http://127.0.0.1:49920/?profile=1920x1080@60",
+    "threadAliveBeforeClose": true,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/",
+        "utc": "2026-10-17T17:10:49.623158+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/page.mjs",
+        "utc": "2026-10-17T17:10:49.885600+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/pkg/lumencast_vision_web.js",
+        "utc": "2026-10-17T17:10:49.892627+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/ui/mainpresenter.mjs",
+        "utc": "2026-10-17T17:10:49.892627+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/ui/fonts.mjs",
+        "utc": "2026-10-17T17:10:49.897131+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/profile.json",
+        "utc": "2026-10-17T17:10:49.901137+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision-fixture/contribution-scene.lsml",
+        "utc": "2026-10-17T17:10:49.904138+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/pkg/lumencast_vision_web_bg.wasm",
+        "utc": "2026-10-17T17:10:49.924181+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:51.859469+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:52.109448+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:52.362045+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:52.597914+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:52.834194+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:53.102144+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:53.353250+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:53.604992+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:53.857024+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:54.106770+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:54.356988+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:54.611957+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:54.861968+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:55.099038+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:55.351206+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:55.589018+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:55.854352+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:56.107737+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:56.360805+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:56.596923+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:56.849955+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:57.101042+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:57.352815+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:57.604765+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:57.857046+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:58.101084+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:58.342004+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:58.591713+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:58.840169+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:59.089687+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:59.342101+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:59.591010+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:10:59.843902+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:00.082748+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:00.333157+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:00.586839+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:00.836790+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:01.087359+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:01.339798+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:01.590607+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:01.843642+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:02.094792+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:02.332912+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:02.586351+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:02.837330+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:03.088949+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:03.338717+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:03.590989+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:03.841850+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:04.092046+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:04.340412+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:04.591927+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:04.840393+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:05.091215+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:05.341832+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:05.590971+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:05.841663+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:06.091992+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:06.346955+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:06.582726+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:06.835398+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:07.089078+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:07.336918+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:07.589278+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:07.840586+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:08.092881+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:08.345308+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:08.596189+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:08.832560+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:09.082679+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:09.334157+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:09.584244+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:09.834324+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:10.084594+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:10.337744+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:10.602584+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:10.852067+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:11.104197+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:11.355961+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:11.606238+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:11.860212+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:12.097331+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:12.346989+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:12.600124+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:12.836970+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:13.102123+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:13.355943+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:13.608388+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:13.848979+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:14.100011+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:14.352133+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:14.605986+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:14.855823+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:15.090034+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:15.344915+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:15.598198+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:15.851865+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:16.102321+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:16.354234+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:16.607292+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:16.855697+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:17.107276+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:17.357772+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:17.611175+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:17.860769+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:18.097915+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:18.350787+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:18.604156+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:18.854035+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:19.105659+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:19.359194+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:19.607050+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:19.856882+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:20.109774+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:20.356701+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:20.588861+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:20.838684+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:21.089712+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:21.339750+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:21.605545+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:21.856429+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:22.107545+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:22.359918+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:22.597485+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:22.847486+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:23.099842+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:23.353644+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:23.605322+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:23.858586+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:24.106685+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:24.357423+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:24.609678+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:24.847453+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:25.099718+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:25.351507+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:25.604512+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:25.855171+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:26.106263+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:26.354527+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:26.605194+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:26.841911+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:27.094505+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:27.334455+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:27.585262+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:27.835208+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:28.083545+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:28.333611+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:28.586839+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:28.837572+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:29.088219+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:29.336903+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:29.587537+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:29.837278+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:30.086108+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:30.339432+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:30.592226+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:30.845332+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:31.083079+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:31.333069+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:31.584052+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:31.835960+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:32.089481+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:32.341439+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:32.590430+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:32.839021+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:33.090009+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:33.338670+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:33.591010+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:33.840355+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:34.091054+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:34.342500+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:34.591369+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:34.840069+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:35.088341+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:35.340001+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:35.589936+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:35.840158+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:36.088842+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:36.340085+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:36.588423+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:36.841249+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:37.092747+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:37.343240+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:37.592110+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:37.842189+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:38.092812+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:38.343938+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:38.594872+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:38.857682+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:39.105347+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:39.356955+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:39.609036+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:39.861928+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:40.098654+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:40.349000+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:40.597900+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:40.848975+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:41.101022+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:41.339004+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:41.606274+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:41.858994+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:42.112602+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:42.344557+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T17:11:42.596746+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/baseline/mainpresenter.mjs",
+        "utc": "2026-10-17T17:11:42.598753+00:00"
+      }
+    ],
+    "events": [
+      {
+        "baselineCommit": "85c49664a029744369b063ddffaa92415a59c8a8",
+        "exactReceiptSupplied": true,
+        "emittedFrameSubmitted": false,
+        "errorPhase": "render",
+        "errorMessage": "The Rust engine returned an invalid native composition frame receipt."
+      }
+    ],
+    "submittedFrames": {
+      "initial": {
+        "profileName": "1920x1080@60",
+        "sceneId": "vision-frame-mask-browser-proof",
+        "sceneVersion": "sha256:ad4944c581220c227a7fe03af314e143b42634f52dd1c72cdf8ff81e4cd2a363",
+        "messageType": "frame-submitted",
+        "schema": "vision.native-composition-frame/2",
+        "pixelRevision": "0",
+        "canvasSize": [
+          1922,
+          3246
+        ],
+        "maxTextureSize": 16384,
+        "mutation": null,
+        "coverageSurfaceCount": 1,
+        "coverageSurfaces": [
+          {
+            "targetNodeId": 1,
+            "coordinateSpace": "global-scene-texels",
+            "sceneRect": [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            "atlasRect": [
+              1,
+              2165,
+              1920,
+              1080
+            ]
+          }
+        ],
+        "owners": [
+          {
+            "targetNodeId": null,
+            "maskPresent": false,
+            "maskSurfaceIndex": null
+          },
+          {
+            "targetNodeId": null,
+            "maskPresent": true,
+            "maskSurfaceIndex": 0
+          }
+        ]
+      },
+      "updated": {
+        "profileName": "1920x1080@60",
+        "sceneId": "vision-frame-mask-browser-proof",
+        "sceneVersion": "sha256:ad4944c581220c227a7fe03af314e143b42634f52dd1c72cdf8ff81e4cd2a363",
+        "messageType": "frame-submitted",
+        "schema": "vision.native-composition-frame/2",
+        "pixelRevision": "1",
+        "canvasSize": [
+          1922,
+          3246
+        ],
+        "maxTextureSize": 16384,
+        "mutation": {
+          "type": "patch",
+          "path": "mask.opacity",
+          "value": 1,
+          "seq": 3,
+          "changedNodes": [
+            1,
+            5,
+            8
+          ]
+        },
+        "coverageSurfaceCount": 1,
+        "coverageSurfaces": [
+          {
+            "targetNodeId": 1,
+            "coordinateSpace": "global-scene-texels",
+            "sceneRect": [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            "atlasRect": [
+              1,
+              2165,
+              1920,
+              1080
+            ]
+          }
+        ],
+        "owners": [
+          {
+            "targetNodeId": null,
+            "maskPresent": false,
+            "maskSurfaceIndex": null
+          },
+          {
+            "targetNodeId": null,
+            "maskPresent": true,
+            "maskSurfaceIndex": 0
+          }
+        ]
+      }
+    }
+  },
+  "runtimeStopped": true,
+  "httpServerStopped": true,
+  "finishedUtc": "2026-10-17T17:11:43.110907+00:00"
+}

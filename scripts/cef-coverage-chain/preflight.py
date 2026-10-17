@@ -28,12 +28,12 @@ PULSAR_CEF = Path(
     r"D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-runtime-qualification"
 )
 PULSAR_COVERAGE = Path(
-    r"D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-group-coverage"
+    r"D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-reset-stability"
 )
 
 PINS = {
     "solarCommit": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
-    "prismCommit": "328f347bcab1b956f58e1fcdcffcda2a92dfe825",
+    "prismCommit": "8933556f85272b077553444a7ffd891438432175",
     "prismProductBaselineCommit": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
     "visionCommit": "044ddb62df050eee9869150a69a1b88fd26f2962",
     "baselinePresenterCommit": "85c49664a029744369b063ddffaa92415a59c8a8",
@@ -52,7 +52,7 @@ PULSAR_ARTIFACTS = {
     "nativeHost": (".cache/native-group-composition/upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad/rundir/RelWithDebInfo/bin/64bit/pulsar.exe", "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973"),
     "nativeObs": (".cache/native-group-composition/upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad/rundir/RelWithDebInfo/bin/64bit/obs.dll", "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"),
     "nativeWebsocket": (".cache/native-group-composition/upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad/rundir/RelWithDebInfo/obs-plugins/64bit/obs-websocket.dll", "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"),
-    "capturePlugin": (".cache/native-group-coverage/plugin-build/RelWithDebInfo/pulsar-capture-effects.dll", "9b17835e8db5ed452fd59e0fbe31d07f12e022df888540db6986e3a73918d093"),
+    "capturePlugin": (".cache/native-reset-stability/plugin-build/RelWithDebInfo/pulsar-capture-effects.dll", "1deaa45c64f30d877f93aa9133c6b562a306cacb72931a376f293e8c52403375"),
     "cefBrowser": (".cache/cef-runtime/upstream-build/rundir/RelWithDebInfo/obs-plugins/64bit/pulsar-browser.dll", "0602fdc46559109ad24a57fc769580480fe8b2794930cc591bf5a450129df8e6"),
     "cefHelper": (".cache/cef-runtime/upstream-build/rundir/RelWithDebInfo/obs-plugins/64bit/pulsar-browser-page.exe", "9148fb2f5e1cc8867b19ab1cfd033eaea4e647e05ff0ac313f883cf281ab65e6"),
     "cefLib": (".cache/cef-runtime/upstream-build/rundir/RelWithDebInfo/obs-plugins/64bit/libcef.dll", "551bea07c46c9a330eff7861105321f3c7d47e3c0412ced4b0ff35aa130f2536"),
