@@ -224,7 +224,9 @@ async def run_probe(args) -> dict:
     CANVAS_SIZE = tuple(profile["atlasSize"])
     SAMPLE_POINTS = {label: tuple(point) for label, point in profile["samplePoints"].items()}
     fps = int(profile["fps"])
-    preflight_report = preflight.run(args.profile)
+    started = time.perf_counter()
+    preflight_report = preflight.run(args.profile, args.cohort)
+    preflight_done = time.perf_counter()
     browser = load("coverage_chain_browser", ROOT / "scripts/probe-browser-m3.py")
     process_helpers = load("coverage_chain_group", ROOT / "scripts/probe-group-composition.py")
     process_protocol = load("coverage_chain_process", ROOT / "scripts/probe-websocket.py")
@@ -232,12 +234,12 @@ async def run_probe(args) -> dict:
     page_module = load("coverage_chain_page", ROOT / "scripts/cef-coverage-chain/http-page.py")
     websockets = __import__("websockets")
 
-    native_host_source = preflight.PULSAR_NATIVE / preflight.PULSAR_ARTIFACTS["nativeHost"][0]
-    native_runtime = native_host_source.parent.parent.parent
-    native_plugin_dir = native_runtime / "obs-plugins/64bit"
-    capture_source = preflight.PULSAR_COVERAGE / preflight.PULSAR_ARTIFACTS["capturePlugin"][0]
-    cef_browser_source = preflight.PULSAR_CEF / preflight.PULSAR_ARTIFACTS["cefBrowser"][0]
-    cef_overlay = cef_browser_source.parent
+    if args.cohort == "legacy-overlay":
+        native_host_source = preflight.PULSAR_NATIVE / preflight.PULSAR_ARTIFACTS["nativeHost"][0]
+        native_runtime = native_host_source.parent.parent.parent
+        capture_source = preflight.PULSAR_COVERAGE / preflight.PULSAR_ARTIFACTS["capturePlugin"][0]
+        cef_browser_source = preflight.PULSAR_CEF / preflight.PULSAR_ARTIFACTS["cefBrowser"][0]
+        cef_overlay = cef_browser_source.parent
     stamp = utc_stamp()
     token = uuid.uuid4().hex
     scratch = (CACHE / f"run-{token}").resolve()
@@ -259,20 +261,30 @@ async def run_probe(args) -> dict:
         "gpuSlotReleasedByParent": True,
         "preflight": preflight_report,
         "runtimeProfile": profile,
+        "runtimeCohort": args.cohort,
+        "phaseTimingMs": {"preflight": round((preflight_done - started) * 1000, 3)},
         "scratch": str(scratch),
         "reportPath": str(report_path),
         "sourcePins": {
             "solar": preflight.PINS["solarCommit"],
-            "prismRuntimeHead": preflight.PINS["prismCommit"],
+            "prismRuntimeHead": preflight.PINS["prismFullCommit"] if args.cohort == "full-package" else preflight.PINS["prismCommit"],
             "prismProductBaseline": preflight.PINS["prismProductBaselineCommit"],
             "vision": preflight.PINS["visionCommit"],
             "visionBaselinePresenter": preflight.PINS["baselinePresenterCommit"],
             "pulsarNativeSource": preflight.PINS["nativeSourceCommit"],
             "pulsarCefSource": preflight.PINS["cefSourceCommit"],
+            "fullSignedSource": preflight.PINS["fullSignedSourceCommit"] if args.cohort == "full-package" else None,
+            "fullIntegratedSource": preflight.PINS["fullIntegratedCommit"] if args.cohort == "full-package" else None,
         },
-        "selectedWebsocket": "retained native d3ecaf55; CEF-reported 3130c2cf is not present in overlay and is not copied",
+        "selectedWebsocket": ("sealed full-package obs-websocket.dll " + preflight_report["nativeAndCefRuntime"]["nativeWebsocket"]["sha256"]
+                              if args.cohort == "full-package" else
+                              "retained native d3ecaf55; CEF-reported 3130c2cf is not present in overlay and is not copied"),
         "evidence": {},
     }
+    def phase(name: str, since: float) -> float:
+        now = time.perf_counter()
+        report["phaseTimingMs"][name] = round((now - since) * 1000, 3)
+        return now
     process = None
     page = page_module.ChainPageServer(
         ROOT / "scripts/cef-coverage-chain", SOLAR, preflight.VISION, profile
@@ -289,23 +301,32 @@ async def run_probe(args) -> dict:
     }
     try:
         runtime = scratch / "runtime"
-        for directory in ("bin", "data", "obs-plugins"):
-            shutil.copytree(native_runtime / directory, runtime / directory)
+        stage_started = time.perf_counter()
+        if args.cohort == "full-package":
+            shutil.copytree(preflight.FULL_PACKAGE, runtime)
+        else:
+            for directory in ("bin", "data", "obs-plugins"):
+                shutil.copytree(native_runtime / directory, runtime / directory)
         plugin_dir = runtime / "obs-plugins/64bit"
         if not plugin_dir.is_dir():
             raise FileNotFoundError(plugin_dir)
-        if any("browser" in path.name.casefold() for path in plugin_dir.glob("*.dll")):
-            raise RuntimeError("native base already contains a browser module; refusing mixed CEF owners")
-        staged_websocket = plugin_dir / "obs-websocket.dll"
-        if sha256_file(staged_websocket) != preflight.PULSAR_ARTIFACTS["nativeWebsocket"][1]:
-            raise RuntimeError("native d3ecaf55 obs-websocket binary was not present in the private base")
-        if (cef_overlay / "obs-websocket.dll").exists():
-            raise RuntimeError("CEF overlay contains obs-websocket.dll; refusing ABI substitution")
-        shutil.copyfile(capture_source, plugin_dir / "pulsar-capture-effects.dll")
-        shutil.copytree(cef_overlay, plugin_dir, dirs_exist_ok=True)
-        staged_websocket = plugin_dir / "obs-websocket.dll"
-        if sha256_file(staged_websocket) != preflight.PULSAR_ARTIFACTS["nativeWebsocket"][1]:
-            raise RuntimeError("CEF overlay changed the selected native websocket binary")
+        if args.cohort == "legacy-overlay":
+            if any("browser" in path.name.casefold() for path in plugin_dir.glob("*.dll")):
+                raise RuntimeError("native base already contains a browser module; refusing mixed CEF owners")
+            staged_websocket = plugin_dir / "obs-websocket.dll"
+            if sha256_file(staged_websocket) != preflight.PULSAR_ARTIFACTS["nativeWebsocket"][1]:
+                raise RuntimeError("native d3ecaf55 obs-websocket binary was not present in the private base")
+            if (cef_overlay / "obs-websocket.dll").exists():
+                raise RuntimeError("CEF overlay contains obs-websocket.dll; refusing ABI substitution")
+            shutil.copyfile(capture_source, plugin_dir / "pulsar-capture-effects.dll")
+            shutil.copytree(cef_overlay, plugin_dir, dirs_exist_ok=True)
+            staged_websocket = plugin_dir / "obs-websocket.dll"
+            if sha256_file(staged_websocket) != preflight.PULSAR_ARTIFACTS["nativeWebsocket"][1]:
+                raise RuntimeError("CEF overlay changed the selected native websocket binary")
+        else:
+            staged_websocket = plugin_dir / "obs-websocket.dll"
+        phase("stageCopy", stage_started)
+        verify_started = time.perf_counter()
         executable = runtime / "bin/64bit/pulsar.exe"
         stage_assets = {
             "pulsar.exe": file_record(executable),
@@ -316,28 +337,49 @@ async def run_probe(args) -> dict:
             "pulsar-browser-page.exe": file_record(plugin_dir / "pulsar-browser-page.exe"),
             "libcef.dll": file_record(plugin_dir / "libcef.dll"),
         }
-        if stage_assets["pulsar.exe"]["sha256"] != preflight.PULSAR_ARTIFACTS["nativeHost"][1]:
-            raise RuntimeError("private stage host hash mismatch")
-        if stage_assets["obs.dll"]["sha256"] != preflight.PULSAR_ARTIFACTS["nativeObs"][1]:
-            raise RuntimeError("private stage obs.dll hash mismatch")
-        if stage_assets["pulsar-capture-effects.dll"]["sha256"] != preflight.PULSAR_ARTIFACTS["capturePlugin"][1]:
-            raise RuntimeError("private stage capture plugin hash mismatch")
-        for key, artifact_key in (("pulsar-browser.dll", "cefBrowser"),
-                                  ("pulsar-browser-page.exe", "cefHelper"),
-                                  ("libcef.dll", "cefLib")):
-            if stage_assets[key]["sha256"] != preflight.PULSAR_ARTIFACTS[artifact_key][1]:
-                raise RuntimeError(f"private stage CEF hash mismatch for {key}")
-        report["stagedRuntime"] = {
-            "sourceRuntime": str(native_runtime),
-            "cefOverlay": str(cef_overlay),
-            "capturePluginSource": str(capture_source),
-            "artifactPins": stage_assets,
-            "cefOverlayFileCount": sum(1 for path in cef_overlay.rglob("*") if path.is_file()),
-            "cefReportedWebsocketDllCopied": False,
-        }
+        if args.cohort == "full-package":
+            manifest = json.loads(preflight.FULL_MANIFEST.read_text(encoding="utf-8"))
+            staged_inventory = preflight.verify_full_package_tree(runtime, manifest)
+            for key, artifact_key in (("pulsar.exe", "nativeHost"), ("obs.dll", "nativeObs"),
+                                      ("obs-websocket.dll", "nativeWebsocket"),
+                                      ("pulsar-capture-effects.dll", "capturePlugin"),
+                                      ("pulsar-browser.dll", "cefBrowser"),
+                                      ("pulsar-browser-page.exe", "cefHelper"), ("libcef.dll", "cefLib")):
+                if stage_assets[key]["sha256"] != preflight_report["nativeAndCefRuntime"][artifact_key]["sha256"]:
+                    raise RuntimeError(f"private full-package stage hash mismatch for {key}")
+            report["stagedRuntime"] = {
+                "sourceRuntime": str(preflight.FULL_PACKAGE),
+                "manifest": preflight_report["fullPackage"]["manifest"],
+                "inventory": staged_inventory,
+                "artifactPins": stage_assets,
+                "overlayApplied": False,
+            }
+        else:
+            if stage_assets["pulsar.exe"]["sha256"] != preflight.PULSAR_ARTIFACTS["nativeHost"][1]:
+                raise RuntimeError("private stage host hash mismatch")
+            if stage_assets["obs.dll"]["sha256"] != preflight.PULSAR_ARTIFACTS["nativeObs"][1]:
+                raise RuntimeError("private stage obs.dll hash mismatch")
+            if stage_assets["pulsar-capture-effects.dll"]["sha256"] != preflight.PULSAR_ARTIFACTS["capturePlugin"][1]:
+                raise RuntimeError("private stage capture plugin hash mismatch")
+            for key, artifact_key in (("pulsar-browser.dll", "cefBrowser"),
+                                      ("pulsar-browser-page.exe", "cefHelper"),
+                                      ("libcef.dll", "cefLib")):
+                if stage_assets[key]["sha256"] != preflight.PULSAR_ARTIFACTS[artifact_key][1]:
+                    raise RuntimeError(f"private stage CEF hash mismatch for {key}")
+            report["stagedRuntime"] = {
+                "sourceRuntime": str(native_runtime),
+                "cefOverlay": str(cef_overlay),
+                "capturePluginSource": str(capture_source),
+                "artifactPins": stage_assets,
+                "cefOverlayFileCount": sum(1 for path in cef_overlay.rglob("*") if path.is_file()),
+                "cefReportedWebsocketDllCopied": False,
+            }
+        phase("stageVerify", verify_started)
 
+        page_started_at = time.perf_counter()
         page.start()
         page_started = True
+        phase("pageStart", page_started_at)
         for key in list(os.environ):
             if key.startswith("PULSAR_"):
                 del os.environ[key]
@@ -352,12 +394,14 @@ async def run_probe(args) -> dict:
         process = process_helpers.GracefulPrivatePulsarProcess(
             process_protocol, executable, process_protocol.pick_free_port(), password
         )
+        host_started_at = time.perf_counter()
         process.spawn()
         report["runtimeStarted"] = True
         report["gpuUsed"] = True
         report["ownedPid"] = process.proc.proc.pid
         report["websocketPort"] = process.proc.port
         process.wait_ready(60)
+        phase("hostReady", host_started_at)
         report["hostReady"] = True
 
         async def exercise() -> None:
@@ -784,8 +828,12 @@ async def run_probe(args) -> dict:
                 )
                 report["presenter"]["legacyPresenterNegative"] = legacy_negative
 
+        exercise_started_at = time.perf_counter()
         await asyncio.wait_for(exercise(), timeout=480)
+        phase("exercise", exercise_started_at)
+        shutdown_started_at = time.perf_counter()
         process.shutdown(grace=35)
+        phase("shutdown", shutdown_started_at)
         report["shutdown"] = shutdown_report(process)
         assert_shutdown(report["shutdown"])
         report["passed"] = True
@@ -805,7 +853,7 @@ async def run_probe(args) -> dict:
             import re
             log_text = re.sub(r"password=\S+", "password=[redacted]", log_text)
             log_path = EVIDENCE / f"{stamp}-{token[:8]}-host.log"
-            log_path.write_text(log_text + "\n", encoding="utf-8")
+            log_path.write_bytes((log_text + "\n").encode("utf-8"))
             report["evidence"]["hostLog"] = file_record(log_path)
             report["shutdown"] = shutdown_report(process)
         try:
@@ -850,7 +898,8 @@ async def run_probe(args) -> dict:
         report["runtimeStopped"] = bool(process is None or (child is not None and child.poll() is not None))
         report["httpServerStopped"] = page.thread is None
         report["finishedUtc"] = datetime.now(timezone.utc).isoformat()
-        report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        report["phaseTimingMs"]["total"] = round((time.perf_counter() - started) * 1000, 3)
+        report_path.write_bytes((json.dumps(report, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
     return report
 
 
@@ -914,6 +963,8 @@ def main() -> int:
         help="author the requested LSML scene size/FPS profile before Vision renders its atlas",
     )
     parser.add_argument("--output", type=Path, help="new canonical evidence JSON path")
+    parser.add_argument("--cohort", choices=("legacy-overlay", "full-package"), default="legacy-overlay",
+                        help="sealed complete package, or the historical native/CEF overlay cohort")
     args = parser.parse_args()
     try:
         report = asyncio.run(run_probe(args))

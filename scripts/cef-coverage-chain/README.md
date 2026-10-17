@@ -41,16 +41,25 @@ The negative asserts the full native `invalid-mask-rect` code and detail, then
 compares decoded scene pixel buffers across the rejection; PNG encoding bytes
 are not used as a proxy for pixel equality.
 
-`probe.py` defaults to an offline pin/provenance preflight. `--execute` is an
+`preflight.py` is the offline pin/provenance check. `probe.py --execute` is an
 explicit private runtime action and also requires `--gpu-slot-released`; do not
 pass it until the parent has released the GPU slot. It reuses the owned-process
 shutdown helper from `probe-group-composition.py`, process startup from
 `probe-websocket.py`, the obs-websocket RPC helpers from `probe-source-kinds.py`,
-the PNG decoder from `probe-browser-m3.py`,
-and the CEF module overlay qualified by `probe-cef-shutdown.py`. Staging keeps
-the proven native `obs-websocket.dll` and overlays only the CEF browser files;
-the different CEF-report websocket hash is recorded, never copied over the
-selected native DLL.
+and the PNG decoder from `probe-browser-m3.py`.
+
+The default `--cohort legacy-overlay` preserves the earlier native runtime and
+CEF-module staging: it keeps the proven native `obs-websocket.dll` and overlays
+only the CEF browser files. The different CEF-report websocket hash is recorded,
+never copied over the selected native DLL. The explicit `--cohort full-package`
+uses the complete `pulsar-windows-x64-full-v3.0.1` bundle from the
+`eleven-local-20261017-full-runtime-admission` worktree. Preflight checks its
+signed source commit `d174d93a`, the `15b73ff2` integration ancestry, its
+1,256-file manifest, every file hash and size, and the unchanged Prism consumer
+blob at `42ee22ca` against the earlier product/admission pins. The private
+stage copies and rechecks that entire bundle; it applies no binary overlay.
+Both cohorts use the same scene, receipts, identity checks, native/CEF pixels,
+invalid-mask rejection, reset assertions, and historical-presenter negative.
 
 The runtime proof is bounded to a private headless scene and localhost page. It
 activates that fixture with the ordinary `SetCurrentProgramScene` browser-source
@@ -106,11 +115,15 @@ The profile can be inspected without starting a host or using the GPU:
 
 ```powershell
 python -B scripts/cef-coverage-chain/preflight.py --profile 1920x1080@60
+python -B scripts/cef-coverage-chain/preflight.py --cohort full-package --profile 1920x1080@60
 ```
 
-The eventual private runtime invocation remains separately gated by both
-`--execute` and `--gpu-slot-released`; do not run it until the parent releases
-the GPU slot.
+The private full-package run uses `python -B scripts/cef-coverage-chain/probe.py
+--cohort full-package --profile 1920x1080@60 --execute
+--gpu-slot-released` once the parent releases the GPU slot. The report records
+phase durations for preflight, stage copy/verification, page startup, host
+readiness, exercise, shutdown, and total run. These are fixture timings, not
+steady-state frame-pacing or switching measurements.
 
 The 2026-10-17 run `20261017T165509Z-cef-coverage-chain.json` passed at
 1920×1080 with a 1922×3246 CEF atlas. Independent readback in
@@ -130,3 +143,15 @@ verified 1080p baseline; all 2,073,600 pixels remain unchanged across malformed
 mask rejection. `20261017T171300Z-combined-independent-validation.json` binds
 those comparisons to the source/binary provenance and host 64136's clean CEF
 shutdown. The same frame-pacing, transport and installed-runtime limits apply.
+
+The full-package run `20261017T180406Z-cef-coverage-chain.json` passed with
+the complete `d174d93a`-source package and Prism `42ee22ca`. The private stage
+matched all 1,256 manifest entries (397,714,390 bytes) and applied no overlay.
+`verify-full-package-report.py` independently rehashes the saved artifacts,
+checks the package/consumer provenance, identity, malformed-mask, reset and
+historical-presenter results, and compares five PNG hashes to the prior 1080p
+run. Its result is `20261017T180700Z-full-package-validation.json`: all five
+PNG files match, the host exited 0 without force and CEF drained its browser.
+The measured phase durations are in both reports. This remains a private
+fixture-receipt chain, not a normal Orion/LSDP transaction or a claim of
+sustained 60-fps output.

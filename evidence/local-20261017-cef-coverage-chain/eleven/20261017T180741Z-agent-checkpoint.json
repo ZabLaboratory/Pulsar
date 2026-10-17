@@ -1,0 +1,61 @@
+{
+  "schema": "zab.agent-checkpoint/1",
+  "capturedUtc": "2026-10-17T18:07:55.519999+00:00",
+  "unit": "local-20261017-cef-coverage-chain",
+  "role": "eleven",
+  "worktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain",
+  "branch": "eleven/local-20261017-cef-coverage-chain",
+  "baseHead": "8597849d38d30bbdf4792aba542efcd5d68fb859",
+  "scope": "CEF coverage chain harness and canonical evidence only; no product, transition or switch-duration code changed",
+  "cohorts": {
+    "legacy": "legacy-overlay remains the default and retains its historical overlay pins",
+    "qualified": "full-package copies and verifies the complete sealed package without overlay"
+  },
+  "source": {
+    "fullSignedCommit": "d174d93ab1b0ce67ce3145296d1b127357f1777d",
+    "integratedCommit": "15b73ff2d7f9059269a2a77e2896ce6bb55d8081",
+    "prismCommit": "42ee22caa8a32fab03d3f045bd0cdb42f53a0195",
+    "prismConsumerBlob": "016a579264550a4377d932ed447259da55e69ea0",
+    "visionCommit": "044ddb62df050eee9869150a69a1b88fd26f2962",
+    "solarCommit": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+    "manifestSha256": "dab040841c6e39e158c72fd7a4379783b2067a531a88f6a5b78bd34861e29e07"
+  },
+  "validation": {
+    "offlinePreflight": "PASS: signed commit, integration ancestry, Prism consumer pin, 1256 hashes and bytes",
+    "negativeManifestHash": "PASS: altered .version-stamp hash rejected",
+    "negativeOverlayReport": "PASS: forged overlayApplied=true report rejected",
+    "pythonAst": "PASS for preflight.py, probe.py, verify-full-package-report.py",
+    "privateRun": "PASS: 1920x1080@60, private host PID 32516, one fixture receipt chain",
+    "independentReport": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T180700Z-full-package-validation.json",
+    "historicalPixels": "five full PNG artifact hashes match the prior 1080p run",
+    "shutdown": "exit 0, graceful CEF drain, no forced termination, no residual Pulsar/Solar/Prism/browser process",
+    "diffCheck": "PASS"
+  },
+  "runtimeReport": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T180406Z-cef-coverage-chain.json",
+  "phaseTimingMs": {
+    "preflight": 3030.521,
+    "stageCopy": 2047.201,
+    "stageVerify": 7690.62,
+    "pageStart": 1.226,
+    "hostReady": 1751.513,
+    "exercise": 70300.496,
+    "shutdown": 386.464,
+    "total": 85729.929
+  },
+  "limits": [
+    "Fixture state patch and real /2 receipt, not normal Orion/LSDP transaction",
+    "One 60-fps-configured 1080p run does not measure sustained frame pacing",
+    "No Live, REC, common dev, transition or switch-duration qualification"
+  ],
+  "lineEndingCanonicalization": {
+    "reason": "Git enforces LF for text evidence; canonicalize Windows-generated CRLF and recompute only the host-log record and derived validation report",
+    "rawSha256BeforeCanonicalization": {
+      "20261017T180325Z-chain-preflight.json": "ab957ce249a2940984661e84de0b0f9f557827729de1b5f84e6420f129c9bcc5",
+      "20261017T180406Z-cef-coverage-chain.json": "e23852365f65814213830dff3296515be50e2dd4454ad94a1ac2045dc70bc91e",
+      "20261017T180406Z-138c4625-host.log": "bc15b0a18fd460324ffedf8b643b6dea1a27a3367d52bf407638d2fc8c4dc98e",
+      "20261017T180700Z-full-package-validation.json": "35dbae96aaf827945ca28ef29f725e973c2c39d69695524a9036bb2dc4eebf0c",
+      "20261017T180741Z-agent-checkpoint.json": "27ce47ff36bfe60852842e16bb095c048bfc93d615085efca7de9e6ddd7c2f4c"
+    },
+    "assertionFieldsChanged": false
+  }
+}
