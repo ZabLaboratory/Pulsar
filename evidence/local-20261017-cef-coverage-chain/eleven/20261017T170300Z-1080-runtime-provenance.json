@@ -1,0 +1,39 @@
+{
+  "schema": "pulsar.cef-1080-runtime-provenance/1",
+  "checkedUtc": "2026-10-17T17:03:01.669106+00:00",
+  "runtimeReport": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T165509Z-cef-coverage-chain.json",
+    "bytes": 80320,
+    "sha256": "c67ade01107fab74b36b4f57b26d3502f809673f604df0ef0463002b6a16ffe0"
+  },
+  "passed": true,
+  "cleanRepositoryReference": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+  "referenceScope": "6328ff is the repository/ABI reference, not the checkout that built the tested obs.dll",
+  "testedStagedObs": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-087ae2de8b9b4a969610856d75e35244\\runtime\\bin\\64bit\\obs.dll",
+    "bytes": 1491968,
+    "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+  },
+  "nativeCMakeCache": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\CMakeCache.txt",
+    "bytes": 43067,
+    "sha256": "b14c6230b8265cbfbd5f549525b16910ad406d869611d6240f33305efbd3ddfa"
+  },
+  "cmakeHomeDirectory": "X:/.cache/native-group-composition/upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout",
+  "accessibleBuildSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout",
+  "buildSourceHead": "70a58302435308e609e0b1114efe3ef402f810b7",
+  "buildSourceWorkingTree": [
+    "M plugins/obs-browser",
+    "?? plugins/pulsar-nv-secure-load/"
+  ],
+  "redactedHostLog": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T170300Z-1080-host-redacted.log",
+    "bytes": 35848,
+    "sha256": "a370a616390111727def3aded2c68c1f5d96b56fa0a2cd00bbd64459ec9d36bf"
+  },
+  "limits": [
+    "No clean reproducible full runtime build is claimed; the captured OBS binary and dirty build source lineage are identified separately.",
+    "The native deadlock fix was not included in this CEF run.",
+    "This is a full-resolution same-scene mask state-patch proof, not sustained 60-fps or the complete Orion/LSDP transport."
+  ]
+}

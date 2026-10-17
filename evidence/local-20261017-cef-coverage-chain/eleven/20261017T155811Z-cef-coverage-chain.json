@@ -1,0 +1,1809 @@
+{
+  "schema": "pulsar.vision-solar-prism-cef-native-coverage-chain/1",
+  "passed": false,
+  "startedUtc": "2026-10-17T15:58:11.508710+00:00",
+  "runtimeStarted": true,
+  "buildStarted": false,
+  "gpuUsed": true,
+  "gpuSlotReleasedByParent": true,
+  "preflight": {
+    "schema": "pulsar.vision-solar-cef-coverage-chain-preflight/1",
+    "checkedUtc": "2026-10-17T15:58:11.290870+00:00",
+    "runtimeStarted": false,
+    "buildStarted": false,
+    "gpuUsed": false,
+    "worktree": {
+      "worktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain",
+      "branch": "eleven/local-20261017-cef-coverage-chain",
+      "head": "1b58a0a7c63a39cec1a91231cf2fab4a29a1aaa6",
+      "status": "",
+      "commonDir": "D:/Documents/Zab/Pulsar/.git"
+    },
+    "sourcePins": {
+      "solarCommit": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+      "prismCommit": "321db8b2dbe6b5a429fc372306ac363b48e8900d",
+      "prismProductBaselineCommit": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
+      "visionCommit": "044ddb62df050eee9869150a69a1b88fd26f2962",
+      "baselinePresenterCommit": "85c49664a029744369b063ddffaa92415a59c8a8",
+      "nativeSourceCommit": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+      "cefSourceCommit": "47cb08c56e010c5da45923a5eee147f294216756",
+      "solarHead": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+      "prismHead": "321db8b2dbe6b5a429fc372306ac363b48e8900d",
+      "prismConsumer": {
+        "path": "src/main/broadcast/engine/capture/native-composition-consumer.ts",
+        "headBlob": "016a579264550a4377d932ed447259da55e69ea0",
+        "productBaselineBlob": "016a579264550a4377d932ed447259da55e69ea0",
+        "byteIdentical": true
+      },
+      "visionFixtureHead": "044ddb62df050eee9869150a69a1b88fd26f2962",
+      "sourceBlobs": {
+        "assigned": {
+          "commit": "1b58a0a7c63a39cec1a91231cf2fab4a29a1aaa6",
+          "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+          "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+        },
+        "native": {
+          "commit": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+          "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+          "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+        },
+        "cef": {
+          "commit": "47cb08c56e010c5da45923a5eee147f294216756",
+          "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+          "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+        }
+      }
+    },
+    "solarVisionAssets": {
+      "ui/mainpresenter.mjs": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\ui\\mainpresenter.mjs",
+          "bytes": 43272,
+          "sha256": "1046dafdf9d1544dd15e17d24b57dcf8e32fdf74a140285b5f200ca544ccf508"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\ui\\mainpresenter.mjs",
+          "bytes": 43272,
+          "sha256": "1046dafdf9d1544dd15e17d24b57dcf8e32fdf74a140285b5f200ca544ccf508"
+        },
+        "byteIdentical": true
+      },
+      "ui/fonts.mjs": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\ui\\fonts.mjs",
+          "bytes": 1977,
+          "sha256": "d49ed45181a8aa714f675aaa24f5439e9547b274d6eba6cd2bb995c981765c5f"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\ui\\fonts.mjs",
+          "bytes": 1977,
+          "sha256": "d49ed45181a8aa714f675aaa24f5439e9547b274d6eba6cd2bb995c981765c5f"
+        },
+        "byteIdentical": true
+      },
+      "pkg/lumencast_vision_web.js": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\pkg\\lumencast_vision_web.js",
+          "bytes": 157228,
+          "sha256": "2661fc24146f703adcfa1b94769d9c789b707abf0027792b6f4287fb40bc04e6"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\pkg\\lumencast_vision_web.js",
+          "bytes": 157228,
+          "sha256": "2661fc24146f703adcfa1b94769d9c789b707abf0027792b6f4287fb40bc04e6"
+        },
+        "byteIdentical": true
+      },
+      "pkg/lumencast_vision_web_bg.wasm": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\pkg\\lumencast_vision_web_bg.wasm",
+          "bytes": 10618773,
+          "sha256": "39c64876a92c0d8d5a104fa8366dc437520140be92e8376db59ed127420ab4a9"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\pkg\\lumencast_vision_web_bg.wasm",
+          "bytes": 10618773,
+          "sha256": "39c64876a92c0d8d5a104fa8366dc437520140be92e8376db59ed127420ab4a9"
+        },
+        "byteIdentical": true
+      }
+    },
+    "visionFixture": {
+      "path": "D:\\Documents\\Lumencast\\lumencast-vision\\.worktrees\\eleven-local-20261017-native-mask-coverage\\crates\\vision-web\\tests\\contribution-webgl2-proof\\contribution-scene.lsml",
+      "bytes": 1739,
+      "sha256": "103930a1a01c9de4cab71feb6ed31cc9bafdd0411dcbaf2e0914a91c3b47b064"
+    },
+    "nativeAndCefRuntime": {
+      "nativeHost": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\pulsar.exe",
+        "bytes": 1677824,
+        "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973"
+      },
+      "nativeObs": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\obs.dll",
+        "bytes": 1491968,
+        "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+      },
+      "nativeWebsocket": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+        "bytes": 2855936,
+        "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+      },
+      "capturePlugin": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+        "bytes": 573440,
+        "sha256": "9b17835e8db5ed452fd59e0fbe31d07f12e022df888540db6986e3a73918d093"
+      },
+      "cefBrowser": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\pulsar-browser.dll",
+        "bytes": 2571264,
+        "sha256": "0602fdc46559109ad24a57fc769580480fe8b2794930cc591bf5a450129df8e6"
+      },
+      "cefHelper": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\pulsar-browser-page.exe",
+        "bytes": 2216960,
+        "sha256": "9148fb2f5e1cc8867b19ab1cfd033eaea4e647e05ff0ac313f883cf281ab65e6"
+      },
+      "cefLib": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\libcef.dll",
+        "bytes": 213993472,
+        "sha256": "551bea07c46c9a330eff7861105321f3c7d47e3c0412ced4b0ff35aa130f2536"
+      }
+    },
+    "websocketProvenance": {
+      "nativeDll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+        "bytes": 2855936,
+        "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+      },
+      "cefReportedDllSha256": "3130c2cf8485bfbf80b67b4ee09126f21a38a90229457aabdb03126526374f3a",
+      "cefReportedDllRetainedAtOverlayPath": false,
+      "sameObsDllSha256": true,
+      "apiVersion": 3,
+      "vendorRegistration": "obs_module_post_load → inline proc_handler API calls",
+      "directImportFromCaptureEffects": false,
+      "staticEvidence": {
+        "headerPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-websocket\\lib\\obs-websocket-api.h",
+        "headerSha256": "c29e8e38ee66c36db79cae86217ab0f270aad39f97e82090809d087c281b7948",
+        "sourcePath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-websocket\\src\\obs-websocket.cpp",
+        "sourceSha256": "a7218ae8699ad65214ab2d77726afa73cebabd6ec85f1dceb9a0700a5e67382b",
+        "captureEffectsPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-capture-effects\\src\\capture-effects.cpp",
+        "captureEffectsSha256": "1f625a897b2a86604a6b0d5ba619152b4f88eb5c0a043ea45ccbfe9dcf284e71"
+      },
+      "selectionForPrivateStage": "preserve native d3ecaf55 DLL and overlay CEF browser files only; runtime compatibility remains unproved until the private integrated run"
+    },
+    "harness": {
+      "page": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\index.html",
+      "pageModule": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\page.mjs",
+      "solarPrismEmitter": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\emit-wire.mjs",
+      "privateRunner": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\probe.py",
+      "offlinePreflight": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\preflight.py",
+      "executionGate": "the private runner requires both --execute and --gpu-slot-released",
+      "realAtlasRequirement": "use GetSourceScreenshot from this exact CEF browser_source; no generated PNG/image atlas may stand in for it"
+    },
+    "limitations": [
+      "No CEF/browser/GPU/native process was started by this preflight.",
+      "No build or test was run.",
+      "The LSML capture node uses the proof fixture's synthetic source binding; no physical camera is involved.",
+      "The exact d3ecaf55 native WebSocket binary is selected for this private stage because it is retained and already exercised with the matching host/obs.dll; the CEF report's 3130c2cf binary is absent from the retained overlay and is not substituted."
+    ]
+  },
+  "scratch": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a7855b77f1b84986bdacf5c46fbb80b7",
+  "reportPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T155811Z-cef-coverage-chain.json",
+  "sourcePins": {
+    "solar": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+    "prismRuntimeHead": "321db8b2dbe6b5a429fc372306ac363b48e8900d",
+    "prismProductBaseline": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
+    "vision": "044ddb62df050eee9869150a69a1b88fd26f2962",
+    "visionBaselinePresenter": "85c49664a029744369b063ddffaa92415a59c8a8",
+    "pulsarNativeSource": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+    "pulsarCefSource": "47cb08c56e010c5da45923a5eee147f294216756"
+  },
+  "selectedWebsocket": "retained native d3ecaf55; CEF-reported 3130c2cf is not present in overlay and is not copied",
+  "evidence": {
+    "backdropSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T155811Z-a7855b77-backdrop-source.png",
+      "bytes": 697,
+      "sha256": "14f66420e3fa9965c27f7890a5ed155a711836af83ed10d4a508e982fc9e43f5"
+    },
+    "cefAtlasInitial": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T155811Z-a7855b77-cef-atlas-initial.png",
+      "bytes": 1748,
+      "sha256": "798ab5b72be0fcc49885b5be1d301538c6ccdf234a51b3acfb08611b8db0e80c"
+    },
+    "initialChain": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T155811Z-a7855b77-initial-chain.json",
+      "bytes": 30878,
+      "sha256": "a7304aba489e315bfd57afccb5346f41733e11a5f2aa3cc12ff7d82033107c03"
+    },
+    "hostLog": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T155811Z-a7855b77-host.log",
+      "bytes": 32986,
+      "sha256": "604b50539e47c1ab9bf30bdc42bc2d6b530eac0b05f61028474edba99f8b8e39"
+    }
+  },
+  "stagedRuntime": {
+    "sourceRuntime": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo",
+    "cefOverlay": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit",
+    "capturePluginSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "artifactPins": {
+      "pulsar.exe": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a7855b77f1b84986bdacf5c46fbb80b7\\runtime\\bin\\64bit\\pulsar.exe",
+        "bytes": 1677824,
+        "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973"
+      },
+      "obs.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a7855b77f1b84986bdacf5c46fbb80b7\\runtime\\bin\\64bit\\obs.dll",
+        "bytes": 1491968,
+        "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+      },
+      "obs-websocket.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a7855b77f1b84986bdacf5c46fbb80b7\\runtime\\obs-plugins\\64bit\\obs-websocket.dll",
+        "bytes": 2855936,
+        "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+      },
+      "pulsar-capture-effects.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a7855b77f1b84986bdacf5c46fbb80b7\\runtime\\obs-plugins\\64bit\\pulsar-capture-effects.dll",
+        "bytes": 573440,
+        "sha256": "9b17835e8db5ed452fd59e0fbe31d07f12e022df888540db6986e3a73918d093"
+      },
+      "pulsar-browser.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a7855b77f1b84986bdacf5c46fbb80b7\\runtime\\obs-plugins\\64bit\\pulsar-browser.dll",
+        "bytes": 2571264,
+        "sha256": "0602fdc46559109ad24a57fc769580480fe8b2794930cc591bf5a450129df8e6"
+      },
+      "pulsar-browser-page.exe": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a7855b77f1b84986bdacf5c46fbb80b7\\runtime\\obs-plugins\\64bit\\pulsar-browser-page.exe",
+        "bytes": 2216960,
+        "sha256": "9148fb2f5e1cc8867b19ab1cfd033eaea4e647e05ff0ac313f883cf281ab65e6"
+      },
+      "libcef.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-a7855b77f1b84986bdacf5c46fbb80b7\\runtime\\obs-plugins\\64bit\\libcef.dll",
+        "bytes": 213993472,
+        "sha256": "551bea07c46c9a330eff7861105321f3c7d47e3c0412ced4b0ff35aa130f2536"
+      }
+    },
+    "cefOverlayFileCount": 68,
+    "cefReportedWebsocketDllCopied": false
+  },
+  "ownedPid": 29936,
+  "websocketPort": 57601,
+  "hostReady": true,
+  "videoSettings": {
+    "bootEnvironment": {
+      "PULSAR_RESOLUTION": "320x180",
+      "PULSAR_FPS": "30"
+    },
+    "after": {
+      "baseHeight": 180,
+      "baseWidth": 320,
+      "fpsDenominator": 1,
+      "fpsNumerator": 30,
+      "outputHeight": 180,
+      "outputWidth": 320
+    }
+  },
+  "scene": {
+    "sceneName": "cef-coverage-a7855b77f1b8",
+    "sceneSize": [
+      320,
+      180
+    ],
+    "browserSourceUrl": "http://127.0.0.1:57596/",
+    "browserSourceSettings": {
+      "width": 322,
+      "height": 546,
+      "fps": 30
+    },
+    "sceneItemIds": {
+      "backdrop": 1,
+      "captureBinding": 2,
+      "captureContribution": 3,
+      "cefAtlas": 4
+    },
+    "captureInputKind": "synthetic color_source_v3; no camera/device opened",
+    "activation": {
+      "request": "SetCurrentProgramScene",
+      "response": {},
+      "readback": {
+        "currentProgramSceneName": "cef-coverage-a7855b77f1b8",
+        "currentProgramSceneUuid": "ce429982-154a-4e53-ac70-d8c7374c7c6d",
+        "sceneName": "cef-coverage-a7855b77f1b8",
+        "sceneUuid": "ce429982-154a-4e53-ac70-d8c7374c7c6d"
+      },
+      "browserLifecycle": "active private fixture scene to drive actual CEF browser_source"
+    }
+  },
+  "presenter": {
+    "initialReceiptSchema": "vision.native-composition-frame/2",
+    "initialReceiptIdentity": {
+      "sceneId": "vision-frame-mask-browser-proof",
+      "sceneVersion": "sha256:9c8038d08bebe7bb3e847e90b40d1c93dbb78cbc7831f83a176a8e26488edfeb",
+      "pixelRevision": "0"
+    },
+    "canvasSize": [
+      322,
+      546
+    ],
+    "legacyPresenterNegative": "pending until initial and updated native pixels are captured"
+  },
+  "cefAtlasInitialSamples": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T155811Z-a7855b77-cef-atlas-initial.png",
+    "sha256": "798ab5b72be0fcc49885b5be1d301538c6ccdf234a51b3acfb08611b8db0e80c",
+    "dimensions": [
+      322,
+      546
+    ],
+    "channels": 4,
+    "coverageSurface": {
+      "targetNodeId": 1,
+      "coordinateSpace": "global-scene-texels",
+      "sceneRect": [
+        0,
+        0,
+        320,
+        180
+      ],
+      "atlasRect": [
+        1,
+        365,
+        320,
+        180
+      ]
+    },
+    "samples": {
+      "partial": {
+        "scenePoint": [
+          16,
+          40
+        ],
+        "atlasPoint": [
+          17,
+          405
+        ],
+        "rgba": [
+          127,
+          127,
+          127,
+          127
+        ],
+        "expectedAlpha": 128
+      },
+      "overlap": {
+        "scenePoint": [
+          36,
+          40
+        ],
+        "atlasPoint": [
+          37,
+          405
+        ],
+        "rgba": [
+          127,
+          127,
+          127,
+          127
+        ],
+        "expectedAlpha": 128
+      },
+      "clippedOverflow": {
+        "scenePoint": [
+          62,
+          40
+        ],
+        "atlasPoint": [
+          63,
+          405
+        ],
+        "rgba": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expectedAlpha": 0
+      },
+      "unclippedChild": {
+        "scenePoint": [
+          110,
+          40
+        ],
+        "atlasPoint": [
+          111,
+          405
+        ],
+        "rgba": [
+          127,
+          127,
+          127,
+          127
+        ],
+        "expectedAlpha": 128
+      },
+      "stencilFrameOverflow": {
+        "scenePoint": [
+          124,
+          40
+        ],
+        "atlasPoint": [
+          125,
+          405
+        ],
+        "rgba": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expectedAlpha": 0
+      }
+    }
+  },
+  "initialProjection": {
+    "solarPlanSchema": "solar.native-composition.plan/2",
+    "nativeProtocol": "pulsar.group-composition/2",
+    "nativePlanHash": "sha256:b71995b9c15e7df22445815b99d99462cb4ce5d52d5e4c316859eebbe5e0d381",
+    "atlasSize": {
+      "width": 322,
+      "height": 546
+    },
+    "coverageSurfaces": [
+      {
+        "targetId": "vision.owner.1",
+        "coordinateSpace": "global-scene-texels",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 320,
+          "height": 180
+        },
+        "atlasRect": {
+          "x": 1,
+          "y": 365,
+          "width": 320,
+          "height": 180
+        }
+      }
+    ],
+    "wireGroups": 2
+  },
+  "nativeInitialCommit": {
+    "requestType": "CommitGroupComposition",
+    "responseData": {
+      "generation": 1,
+      "ok": true,
+      "planHash": "sha256:b71995b9c15e7df22445815b99d99462cb4ce5d52d5e4c316859eebbe5e0d381"
+    },
+    "vendorName": "pulsar-capture-effects"
+  },
+  "error": {
+    "type": "TimeoutError",
+    "message": "native scene did not reach expected mask 128: {'label': 'coverage clippedOverflow remains backdrop', 'actual': [12, 17, 25, 255], 'expected': [64, 48, 32, 255], 'tolerance': 4}"
+  },
+  "processExitCode": 0,
+  "shutdown": {
+    "exitCode": 0,
+    "gracefulEventRequested": true,
+    "forcedTerminationUsed": false,
+    "orderedMarkerNames": [
+      "pre_obs_shutdown_begin",
+      "cef_shutdown_begin",
+      "cef_shutdown_complete",
+      "pre_obs_shutdown_complete"
+    ],
+    "orderedMarkerPositions": [
+      222,
+      239,
+      240,
+      241
+    ],
+    "markers": [
+      "2026-10-17T15:58:14Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=manager_started",
+      "2026-10-17T15:58:15Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=cef_ready",
+      "2026-10-17T15:58:15Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=source_created generation=1",
+      "2026-10-17T15:58:15Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=browser_created browser_id=1 generation=1 browser_count=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=begin phase=Closing browser_count=1 pending_source_tasks=0 active_source_tasks=0 already_started=0",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=close_requested browser_count=1 source_count=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=browser_close_call browser_id=1 reason=shutdown_started",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=browser_ref_released_before_close browser_id=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=browser_on_before_close_entry browser_id=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=client_keepalive_acquired browser_id=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=browser_detached browser_id=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=browser_close_observed browser_id=1 browser_count=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=browser_finalization_intent browser_id=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=browser_finalization_scheduled browser_id=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=browser_on_before_close_exit browser_id=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=browser_close_return browser_id=1 requested=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=audio_quiescent browser_id=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=browser_closed browser_id=1 browser_count=0",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=client_keepalive_released browser_id=1",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=barrier_released phase=Drained browser_count=0",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=cef_shutdown_begin browser_count=0",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=cef_shutdown_complete browser_count=0",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete",
+      "2026-10-17T15:59:18Z INFO h9ZGkhKU8rTp6JNk libobs | PULSAR_CEF_SHUTDOWN event=source_destroyed generation=1"
+    ]
+  },
+  "pageServer": {
+    "url": "http://127.0.0.1:57596/",
+    "threadAliveBeforeClose": true,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/",
+        "utc": "2026-10-17T15:58:15.344714+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/page.mjs",
+        "utc": "2026-10-17T15:58:15.558528+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/pkg/lumencast_vision_web.js",
+        "utc": "2026-10-17T15:58:15.563528+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/ui/mainpresenter.mjs",
+        "utc": "2026-10-17T15:58:15.564527+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/ui/fonts.mjs",
+        "utc": "2026-10-17T15:58:15.569449+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision-fixture/contribution-scene.lsml",
+        "utc": "2026-10-17T15:58:15.573449+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/pkg/lumencast_vision_web_bg.wasm",
+        "utc": "2026-10-17T15:58:15.595572+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:17.707685+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:17.957532+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:18.208529+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:18.458418+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:18.712726+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:18.965918+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:19.218686+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:19.468764+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:19.717482+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:19.955912+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:20.209336+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:20.461286+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:20.713591+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:20.966124+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:21.216045+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:21.465851+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:21.718570+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:21.968403+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:22.203765+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:22.468506+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:22.717078+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:22.967558+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:23.216011+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:23.466359+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:23.715785+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:23.955778+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:24.208298+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:24.461290+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:24.715790+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:24.954855+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:25.206555+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:25.457450+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:25.709001+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:25.961392+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:26.212959+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:26.465789+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:26.717968+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:26.968976+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:27.216053+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:27.468152+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:27.705348+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:27.957867+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:28.212311+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:28.461282+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:28.714816+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:28.966447+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:29.216943+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:29.464985+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:29.715734+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:29.965477+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:30.219034+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:30.465438+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:30.715424+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:30.965597+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:31.215353+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:31.465635+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:31.711678+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:31.962660+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:32.215733+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:32.469069+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:32.706695+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:32.958753+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:33.213900+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:33.465435+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:33.725298+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:33.965501+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:34.213665+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:34.461035+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:34.711494+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:34.965010+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:35.218488+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:35.465243+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:35.715977+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:35.966906+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:36.214738+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:36.464984+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:36.716781+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:36.981512+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:37.203549+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:37.454387+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:37.705363+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:37.955066+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:38.206702+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:38.458403+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:38.710408+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:38.963547+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:39.217573+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:39.455055+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:39.706692+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:39.960319+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:40.214113+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:40.464853+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:40.717471+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:40.955600+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:41.207442+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:41.458292+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:41.709372+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:41.960157+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:42.212326+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:42.464762+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:42.717433+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:42.968362+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:43.219415+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:43.456395+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:43.708188+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:43.959094+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:44.211192+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:44.464051+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:44.716144+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:44.964918+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:45.217312+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:45.468634+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:45.719344+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:45.956160+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:46.221089+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:46.456419+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:46.707045+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:46.957294+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:47.206182+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:47.456326+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:47.708353+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:47.958239+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:48.211912+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:48.460199+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:48.710911+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:48.966083+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:49.218073+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:49.454535+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:49.707057+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:49.960118+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:50.213595+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:50.464624+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:50.716899+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:50.966736+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:51.217772+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:51.456751+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:51.710784+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:51.962770+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:52.216709+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:52.454491+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:52.720998+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:52.957287+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:53.208943+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:53.460083+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:53.713676+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:53.966717+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:54.219683+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:54.457627+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:54.709946+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:54.961575+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:55.211286+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:55.462507+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:55.715646+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:55.966749+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:56.216576+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:56.466638+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:56.717924+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:56.966819+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:57.216340+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:57.468764+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:57.705705+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:57.958809+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:58.210899+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:58.464342+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:58.716565+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:58.954278+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:59.218304+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:59.458767+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:59.710754+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:58:59.964404+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:00.216437+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:00.454352+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:00.708397+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:00.962430+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:01.213845+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:01.465418+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:01.716372+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:01.966165+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:02.216165+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:02.464126+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:02.716159+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:02.967183+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:03.205591+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:03.457191+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:03.705183+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:03.955546+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:04.207333+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:04.457630+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:04.709059+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:04.959502+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:05.208101+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:05.457430+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:05.708365+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:05.956440+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:06.207327+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:06.456171+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:06.705489+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:06.956001+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:07.206300+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:07.453784+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:07.704899+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:07.955475+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:08.204884+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:08.468831+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:08.706273+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:08.954841+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:09.217799+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:09.468246+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:09.703534+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:09.960240+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:10.210730+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:10.461985+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:10.714371+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:10.965732+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:11.217220+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:11.465763+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:11.717233+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:11.966149+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:12.216973+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:12.469154+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:12.705822+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:12.957642+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:13.208186+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:13.459088+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:13.711703+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:13.962891+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:14.214838+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:14.465676+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:14.718604+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:14.957931+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:15.208732+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:15.460693+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:15.713503+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:15.964732+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:16.215529+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:16.467612+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:16.705644+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:16.958871+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:17.208836+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:17.459844+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:17.711404+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:59:17.963376+00:00"
+      }
+    ],
+    "events": [],
+    "submittedFrames": {
+      "initial": {
+        "sceneId": "vision-frame-mask-browser-proof",
+        "sceneVersion": "sha256:9c8038d08bebe7bb3e847e90b40d1c93dbb78cbc7831f83a176a8e26488edfeb",
+        "messageType": "frame-submitted",
+        "schema": "vision.native-composition-frame/2",
+        "pixelRevision": "0",
+        "canvasSize": [
+          322,
+          546
+        ],
+        "coverageSurfaceCount": 1,
+        "owners": [
+          {
+            "targetNodeId": null,
+            "maskPresent": false,
+            "maskSurfaceIndex": null
+          },
+          {
+            "targetNodeId": null,
+            "maskPresent": true,
+            "maskSurfaceIndex": 0
+          }
+        ]
+      }
+    }
+  },
+  "runtimeStopped": true,
+  "httpServerStopped": true,
+  "finishedUtc": "2026-10-17T15:59:18.892321+00:00"
+}
