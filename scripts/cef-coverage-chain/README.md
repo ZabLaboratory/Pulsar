@@ -7,10 +7,17 @@ Solar `public/vision` bytes and the Vision contribution WebGL2 fixture; the
 fixture's `color.webcam` capture is explicitly a synthetic contribution stand-in,
 not physical-device evidence.
 
-`page.mjs` serves two versions of one `scene_id` through one presenter and one
-CEF source. Its mask opacity changes from 0.5 to 1, and each accepted WASM
-`frame-submitted` receipt is posted with the exact LSML document. The emitter
-loads Solar's `projectNativeCompositionFrame` and
+page.mjs loads one immutable LSML scene version through one presenter and one
+CEF source. Its two mask-owning frames bind opacity to the same state path with
+a 0.5 default; the update uses the presenter's existing type=patch / patchJson
+path to set mask.opacity to 1.0. The accepted patch must report changed bound
+nodes, and its following frame-submitted receipt must keep sceneId and
+sceneVersion stable while advancing pixelRevision. The receipt is posted with
+the exact original LSML document to the same Solar/Prism emitter path. This is a
+Vision state-patch-to-composition proof, not an end-to-end Orion/LSDP proposal
+transaction proof.
+
+The emitter loads Solar's `projectNativeCompositionFrame` and
 `withNativeCompositionSource`, then Prism's validation, projection, and hashing
 functions from the supplied worktrees. It does not recreate either contract.
 After both CEF/native pixel captures and reset verification, the active presenter

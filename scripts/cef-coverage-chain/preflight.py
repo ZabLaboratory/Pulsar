@@ -33,7 +33,7 @@ PULSAR_COVERAGE = Path(
 
 PINS = {
     "solarCommit": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
-    "prismCommit": "321db8b2dbe6b5a429fc372306ac363b48e8900d",
+    "prismCommit": "09b893dee789519bf63a0726427bd663c1e03104",
     "prismProductBaselineCommit": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
     "visionCommit": "044ddb62df050eee9869150a69a1b88fd26f2962",
     "baselinePresenterCommit": "85c49664a029744369b063ddffaa92415a59c8a8",

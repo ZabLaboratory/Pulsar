@@ -648,10 +648,25 @@ async def run_probe(args) -> dict:
                 report["cefAtlasUpdatedSamples"] = updated_atlas_check
                 initial_receipt = initial["message"]["composition"]
                 updated_receipt = updated["message"]["composition"]
+                mutation = updated.get("mutation", {})
                 if (updated["document"]["scene_id"] != initial["document"]["scene_id"]
-                    or updated["document"]["scene_version"] == initial["document"]["scene_version"]
-                    or updated_receipt.get("pixelRevision") == initial_receipt.get("pixelRevision")):
-                    raise AssertionError("mask update did not revise the same scene through the same presenter")
+                    or updated["document"]["scene_version"] != initial["document"]["scene_version"]
+                    or int(updated_receipt.get("pixelRevision", -1)) <= int(initial_receipt.get("pixelRevision", -1))
+                    or mutation.get("type") != "patch"
+                    or mutation.get("path") != "mask.opacity"
+                    or mutation.get("value") != 1.0
+                    or not mutation.get("changedNodes")
+                    or mutation.get("seq") != updated["message"].get("seq")
+                    or updated_receipt.get("layoutProjectionRevision") != initial_receipt.get("layoutProjectionRevision")
+                    or updated_receipt.get("owners") != initial_receipt.get("owners")
+                    or updated_receipt.get("coverageSurfaces") != initial_receipt.get("coverageSurfaces")):
+                    raise AssertionError({
+                        "mask patch did not revise the same scene through the same presenter": {
+                            "initial": initial["message"]["composition"],
+                            "updated": updated_receipt,
+                            "mutation": mutation,
+                        }
+                    })
                 updated_chain = await emit(updated, 2, "updated")
                 report["evidence"]["updatedChain"] = updated_chain["artifact"]
                 updated_wire = updated_chain["record"]["wire"]
@@ -698,6 +713,9 @@ async def run_probe(args) -> dict:
                     "sceneVersionAfter": updated["document"]["scene_version"],
                     "pixelRevisionBefore": initial_receipt.get("pixelRevision"),
                     "pixelRevisionAfter": updated_receipt.get("pixelRevision"),
+                    "layoutProjectionRevisionBefore": initial_receipt.get("layoutProjectionRevision"),
+                    "layoutProjectionRevisionAfter": updated_receipt.get("layoutProjectionRevision"),
+                    "statePatch": mutation,
                     "wireGenerationBefore": initial_wire["generation"],
                     "wireGenerationAfter": updated_wire["generation"],
                     "rejectedMaskGeneration": negative_wire["generation"],
@@ -774,6 +792,7 @@ async def run_probe(args) -> dict:
                     "schema": receipt.get("schema"),
                     "pixelRevision": receipt.get("pixelRevision"),
                     "canvasSize": frame.get("canvasSize"),
+                    "mutation": frame.get("mutation"),
                     "coverageSurfaceCount": len(receipt.get("coverageSurfaces", [])),
                     "owners": [
                         {key: owner.get(key) for key in ("targetNodeId", "maskPresent", "maskSurfaceIndex")}

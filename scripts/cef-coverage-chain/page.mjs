@@ -27,7 +27,7 @@ async function pinSceneVersion(scene) {
   return scene;
 }
 
-function makeFrameMaskScene(source, opacity) {
+function makeFrameMaskScene(source) {
   const capture = structuredClone(
     source.layout.children[0].children.find(
       (child) => child.kind === "x-zab.capture",
@@ -41,7 +41,7 @@ function makeFrameMaskScene(source, opacity) {
     lsml: "1.2",
     scene_id: "vision-frame-mask-browser-proof",
     scene_version: `sha256:${"0".repeat(64)}`,
-    defaults: {},
+    defaults: { "mask.opacity": 0.5 },
     layout: {
       kind: "frame",
       id: "frame-mask-browser-root",
@@ -84,7 +84,7 @@ function makeFrameMaskScene(source, opacity) {
               position: { x: 8, y: 16 },
               size: { w: 52, h: 92 },
               clipsContent: true,
-              opacity,
+              bind: { opacity: "mask.opacity" },
               children: [
                 {
                   kind: "shape",
@@ -107,7 +107,7 @@ function makeFrameMaskScene(source, opacity) {
               position: { x: 80, y: 16 },
               size: { w: 20, h: 92 },
               clipsContent: false,
-              opacity,
+              bind: { opacity: "mask.opacity" },
               children: [
                 {
                   kind: "shape",
@@ -137,6 +137,7 @@ function makePresenter(target, loadWasm) {
       "init-empty": "engine-ready",
       "native-composition-mode": "native-composition-mode-set",
       load: "frame-submitted",
+      patch: "patch-applied",
     }[message.type];
     const error = messages.find(
       (entry) => entry.type === "error" && entry.seq === seq,
@@ -151,7 +152,7 @@ function makePresenter(target, loadWasm) {
   return { presenter, messages, request };
 }
 
-async function postFrame(variant, document, message, target) {
+async function postFrame(variant, document, message, target, mutation = null) {
   const gl = target.getContext("webgl2");
   if (!gl || gl.isContextLost()) throw new Error("Vision WebGL2 context unavailable");
   const receipt = message.composition;
@@ -172,6 +173,7 @@ async function postFrame(variant, document, message, target) {
     canvasSize: [target.width, target.height],
     maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
   };
+  if (mutation !== null) payload.mutation = mutation;
   const response = await fetch("/frame", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -282,14 +284,14 @@ async function proveLegacyRejectsExactReceipt(sceneDocument, actualReceipt, curr
   }
 }
 
-async function loadVariant(variant, opacity, source, presenter) {
-  const document = await pinSceneVersion(makeFrameMaskScene(source, opacity));
+async function loadInitialScene(source, presenter) {
+  const document = await pinSceneVersion(makeFrameMaskScene(source));
   const message = await presenter.request({
     type: "load",
     packageBytes: encoder.encode(JSON.stringify(document)),
     fonts: [],
   });
-  const payload = await postFrame(variant, document, message, canvas);
+  const payload = await postFrame("initial", document, message, canvas);
   return { document, receipt: message.composition, payload };
 }
 
@@ -310,7 +312,7 @@ try {
   });
   await presenter.request({ type: "native-composition-mode", enabled: true });
 
-  const initial = await loadVariant("initial", 0.5, fixture, presenter);
+  const initial = await loadInitialScene(fixture, presenter);
   const owner = initial.receipt.owners.find((entry) => entry.maskPresent);
   if (!owner || owner.maskSurfaceIndex == null)
     throw new Error("frame-masked owner was absent from the actual presenter receipt");
@@ -344,7 +346,34 @@ try {
       }
       if (control.opacity === lastOpacity) return;
       window.__visionCoverageChainBusy = true;
-      const updated = await loadVariant("updated", control.opacity, fixture, presenter);
+      const patchApplied = await presenter.request({
+        type: "patch",
+        patchJson: JSON.stringify({ "mask.opacity": control.opacity }),
+      });
+      const changedNodes = patchApplied.metadata?.changed_nodes;
+      if (!Array.isArray(changedNodes) || changedNodes.length === 0) {
+        throw new Error("mask opacity state patch did not change a bound Vision node");
+      }
+      const matchingFrames = presenter.messages.filter(
+        message => message.type === "frame-submitted" && message.seq === patchApplied.seq,
+      );
+      const frame = matchingFrames[matchingFrames.length - 1];
+      if (!frame) throw new Error("mask opacity patch did not submit a new Vision frame");
+      const mutation = {
+        type: "patch",
+        path: "mask.opacity",
+        value: control.opacity,
+        seq: patchApplied.seq,
+        changedNodes,
+      };
+      const payload = await postFrame("updated", latest.document, frame, canvas, mutation);
+      const updated = {
+        document: latest.document,
+        receipt: frame.composition,
+        payload,
+        message: frame,
+        mutation,
+      };
       lastOpacity = control.opacity;
       latest = updated;
       window.__visionCoverageChainUpdated = {
@@ -352,6 +381,8 @@ try {
         sceneVersion: updated.document.scene_version,
         canvasSize: updated.payload.canvasSize,
         pixelRevision: updated.receipt.pixelRevision,
+        layoutProjectionRevision: updated.receipt.layoutProjectionRevision,
+        mutation,
       };
       window.__visionCoverageChainBusy = false;
     } catch (error) {
