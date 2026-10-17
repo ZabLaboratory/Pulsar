@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <graphics/vec2.h>
 #include <graphics/vec4.h>
 #include <limits>
@@ -32,7 +33,9 @@ struct Stage {
 struct Effect {
   obs_source_t *context = nullptr;
   gs_effect_t *shader = nullptr;
-  gs_texrender_t *input = nullptr, *passes[2]{}, *background = nullptr;
+  gs_texrender_t *input = nullptr, *passes[2]{}, *background = nullptr,
+                 *coverage = nullptr;
+  obs_source_t *coverage_source = nullptr;
   obs_scene_t *background_scene = nullptr;
   std::vector<obs_sceneitem_t *> background_items;
   std::vector<Stage> stages;
@@ -45,6 +48,12 @@ struct Effect {
   vec2 raster_scale{1, 1};
   bool needs_background = false;
   int blend_mode = 0;
+  int coverage_crop_left = 0, coverage_crop_top = 0;
+  int coverage_crop_right = 0, coverage_crop_bottom = 0;
+  uint32_t coverage_source_width = 0, coverage_source_height = 0;
+  uint32_t coverage_rect_x = 0, coverage_rect_y = 0;
+  uint32_t coverage_rect_width = 0, coverage_rect_height = 0;
+  bool configuration_valid = true;
   vec4 crop_percent{};
   vec2 content_position{0.5f, 0.5f};
   vec2 content_origin{}, content_size{};
@@ -96,6 +105,53 @@ void update(void *data, obs_data_t *settings) {
   std::lock_guard<std::mutex> lock(f->mutex);
   f->size = {positive_dimension(settings, "width", 1),
              positive_dimension(settings, "height", 1)};
+  f->configuration_valid = true;
+  if (f->coverage_source) {
+    obs_source_release(f->coverage_source);
+    f->coverage_source = nullptr;
+  }
+  f->coverage_source_width = f->coverage_source_height = 0;
+  f->coverage_crop_left = f->coverage_crop_top = 0;
+  f->coverage_crop_right = f->coverage_crop_bottom = 0;
+  f->coverage_rect_x = f->coverage_rect_y = 0;
+  f->coverage_rect_width = f->coverage_rect_height = 0;
+  if (obs_data_has_user_value(settings, "coverage_source_name")) {
+    const char *source_name = obs_data_get_string(settings, "coverage_source_name");
+    f->coverage_source = source_name && *source_name
+                             ? obs_get_source_by_name(source_name)
+                             : nullptr;
+    f->coverage_crop_left = int(obs_data_get_int(settings, "coverage_crop_left"));
+    f->coverage_crop_top = int(obs_data_get_int(settings, "coverage_crop_top"));
+    f->coverage_crop_right = int(obs_data_get_int(settings, "coverage_crop_right"));
+    f->coverage_crop_bottom = int(obs_data_get_int(settings, "coverage_crop_bottom"));
+    f->coverage_rect_x = uint32_t(obs_data_get_int(settings, "coverage_rect_x"));
+    f->coverage_rect_y = uint32_t(obs_data_get_int(settings, "coverage_rect_y"));
+    f->coverage_rect_width = uint32_t(obs_data_get_int(settings, "coverage_rect_width"));
+    f->coverage_rect_height = uint32_t(obs_data_get_int(settings, "coverage_rect_height"));
+    if (f->coverage_source) {
+      f->coverage_source_width = obs_source_get_width(f->coverage_source);
+      f->coverage_source_height = obs_source_get_height(f->coverage_source);
+    }
+    const uint64_t cropped_width = uint64_t(f->coverage_source_width) -
+                                   uint64_t(std::max(0, f->coverage_crop_left)) -
+                                   uint64_t(std::max(0, f->coverage_crop_right));
+    const uint64_t cropped_height = uint64_t(f->coverage_source_height) -
+                                    uint64_t(std::max(0, f->coverage_crop_top)) -
+                                    uint64_t(std::max(0, f->coverage_crop_bottom));
+    f->configuration_valid = f->configuration_valid && f->coverage_source &&
+        !obs_source_removed(f->coverage_source) &&
+        (obs_source_get_output_flags(f->coverage_source) & OBS_SOURCE_VIDEO) &&
+        !obs_source_is_group(f->coverage_source) &&
+        f->coverage_source_width && f->coverage_source_height &&
+        f->coverage_crop_left >= 0 && f->coverage_crop_top >= 0 &&
+        f->coverage_crop_right >= 0 && f->coverage_crop_bottom >= 0 &&
+        cropped_width > 0 && cropped_height > 0 &&
+        cropped_width == f->coverage_rect_width &&
+        cropped_height == f->coverage_rect_height &&
+        f->coverage_rect_width && f->coverage_rect_height &&
+        uint64_t(f->coverage_rect_x) + f->coverage_rect_width <= double(f->size.x) &&
+        uint64_t(f->coverage_rect_y) + f->coverage_rect_height <= double(f->size.y);
+  }
   f->position = {number(settings, "x", -32768, 32768),
                  number(settings, "y", -32768, 32768)};
   f->corner = number(settings, "corner_radius", 0, 8192);
@@ -185,10 +241,13 @@ void destroy(void *data) {
   }
   if (f->background_scene)
     obs_scene_release(f->background_scene);
+  if (f->coverage_source)
+    obs_source_release(f->coverage_source);
   obs_enter_graphics();
   gs_effect_destroy(f->shader);
   gs_texrender_destroy(f->input);
   gs_texrender_destroy(f->background);
+  gs_texrender_destroy(f->coverage);
   for (auto *pass : f->passes)
     gs_texrender_destroy(pass);
   obs_leave_graphics();
@@ -203,6 +262,7 @@ void *create(obs_data_t *settings, obs_source_t *source) {
                                "pulsar-capture-effects.effect", &error);
   f->input = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
   f->background = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+  f->coverage = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
   for (auto &pass : f->passes)
     pass = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
   obs_leave_graphics();
@@ -215,6 +275,11 @@ void *create(obs_data_t *settings, obs_source_t *source) {
   bfree(error);
   f->background_scene = obs_scene_create_private("Pulsar capture backdrop");
   update(f, settings);
+  if (!f->configuration_valid) {
+    blog(LOG_ERROR, "[capture-effects] invalid composition coverage settings");
+    destroy(f);
+    return nullptr;
+  }
   {
     std::lock_guard<std::mutex> lock(registry_mutex);
     registry[source] = f;
@@ -259,6 +324,7 @@ bool mirror_item(obs_scene_t *, obs_sceneitem_t *item, void *data) {
   obs_sceneitem_set_blending_mode(clone, obs_sceneitem_get_blending_mode(item));
   obs_sceneitem_set_blending_method(clone,
                                     obs_sceneitem_get_blending_method(item));
+  obs_sceneitem_set_order_position(clone, int(b.index));
   obs_sceneitem_force_update_transform(clone);
   ++b.index;
   return true;
@@ -293,9 +359,32 @@ void render(void *data, gs_effect_t *) {
   }
   gs_blend_state_push();
   gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
+  gs_texture_t *coverage_texture = nullptr;
+  if (f->coverage_source) {
+    const uint32_t mask_width = obs_source_get_width(f->coverage_source);
+    const uint32_t mask_height = obs_source_get_height(f->coverage_source);
+    if (!f->configuration_valid || mask_width != f->coverage_source_width ||
+        mask_height != f->coverage_source_height || !mask_width || !mask_height) {
+      gs_blend_state_pop();
+      return;
+    }
+    if (!begin(f->coverage, mask_width, mask_height)) {
+      gs_blend_state_pop();
+      return;
+    }
+    obs_source_video_render(f->coverage_source);
+    gs_texrender_end(f->coverage);
+    coverage_texture = gs_texrender_get_texture(f->coverage);
+    if (!coverage_texture) {
+      gs_blend_state_pop();
+      return;
+    }
+  }
   if (f->needs_background) {
     auto *parent = obs_get_source_by_name(f->parent.c_str());
     auto *scene = parent ? obs_scene_from_source(parent) : nullptr;
+    if (!scene && parent)
+      scene = obs_group_from_source(parent);
     BackdropBuild build{f};
     if (scene)
       obs_scene_enum_items(scene, mirror_item, &build);
@@ -363,6 +452,26 @@ void render(void *data, gs_effect_t *) {
     vector2(f, "source_dimensions",
             index == 0 ? vec2{float(f->width), float(f->height)}
                        : vec2{float(w), float(h)});
+    gs_effect_set_int(
+        gs_effect_get_param_by_name(f->shader, "coverage_enabled"),
+        coverage_texture ? 1 : 0);
+    gs_effect_set_texture(
+        gs_effect_get_param_by_name(f->shader, "coverage_image"),
+        coverage_texture ? coverage_texture : texture);
+    vector2(f, "coverage_dimensions", coverage_texture
+                                          ? vec2{float(f->coverage_source_width),
+                                                 float(f->coverage_source_height)}
+                                          : vec2{1, 1});
+    vector2(f, "coverage_crop_origin",
+            coverage_texture
+                ? vec2{float(f->coverage_crop_left), float(f->coverage_crop_top)}
+                : vec2{0, 0});
+    vector4(f, "coverage_rect",
+            coverage_texture
+                ? vec4{float(f->coverage_rect_x), float(f->coverage_rect_y),
+                       float(f->coverage_rect_width),
+                       float(f->coverage_rect_height)}
+                : vec4{0, 0, 1, 1});
     gs_effect_set_int(gs_effect_get_param_by_name(f->shader, "kind"), e.kind);
     gs_effect_set_int(gs_effect_get_param_by_name(f->shader, "blend_mode"), f->blend_mode);
     uniform(f, "radius", e.radius);
