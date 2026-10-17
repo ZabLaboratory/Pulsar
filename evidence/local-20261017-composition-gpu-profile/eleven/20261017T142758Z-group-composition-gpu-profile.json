@@ -1,0 +1,1991 @@
+{
+  "bootstrap": {
+    "initializedWasapiDevices": [],
+    "microphoneConfigured": false,
+    "noBrowserModules": true,
+    "processAudioConfigured": false
+  },
+  "browserModulesInRuntime": [],
+  "elapsedSeconds": 22.016,
+  "finishedUtc": "2026-10-17T14:28:53.598433+00:00",
+  "firstMeasuredResultAvailable": true,
+  "forcedTerminationUsed": false,
+  "generatedMaskFixtures": [
+    {
+      "alphaSamples": {
+        "left": 255,
+        "right": 0
+      },
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\20261017T142758Z-atlas-a.png",
+      "sha256": "695611aabf8d270621a1b8e880cc4c399aad8a43b920faabda64ea6003e36f9e"
+    },
+    {
+      "alphaSamples": {
+        "left": 0,
+        "right": 255
+      },
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\20261017T142758Z-atlas-b.png",
+      "sha256": "92475cabefc2706f97cfbd4dd656623750b7cd456f4699e6ceaa1182ae01aaf6"
+    }
+  ],
+  "gracefulShutdownRequested": true,
+  "initialGetStats": {
+    "activeFps": 60.0000024000001,
+    "availableDiskSpace": 0.0,
+    "averageFrameRenderTime": 0.704472,
+    "cpuUsage": 1.207801124982685,
+    "memoryUsage": 75.73828125,
+    "outputSkippedFrames": 0,
+    "outputTotalFrames": 0,
+    "renderSkippedFrames": 0,
+    "renderTotalFrames": 139,
+    "webSocketSessionIncomingMessages": 3,
+    "webSocketSessionOutgoingMessages": 3
+  },
+  "inputs": {
+    "obs-websocket.dll": {
+      "bytes": 2855936,
+      "matchesPriorQualification": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+      "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+    },
+    "obs.dll": {
+      "bytes": 1491968,
+      "matchesPriorQualification": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\obs.dll",
+      "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+    },
+    "pulsar-capture-effects.dll": {
+      "bytes": 573440,
+      "matchesPriorQualification": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+      "sha256": "9b17835e8db5ed452fd59e0fbe31d07f12e022df888540db6986e3a73918d093"
+    },
+    "pulsar.exe": {
+      "bytes": 1677824,
+      "matchesPriorQualification": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\pulsar.exe",
+      "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973"
+    },
+    "z-group-composition-shutdown-test-helper.dll": {
+      "bytes": 55296,
+      "matchesPriorQualification": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\pulsar-private-build\\plugins\\pulsar-capture-effects\\RelWithDebInfo\\z-group-composition-shutdown-test-helper.dll",
+      "sha256": "f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff"
+    }
+  },
+  "latestScenario": "root-and-capture-masks-blends",
+  "limitations": [
+    "The mask atlas and captures are synthetic color/image sources; this is not an end-to-end Solar owner or physical-capture workload.",
+    "The reported renderTotalFrames delta proves the OBS render thread advanced while the committed scene was Program. OBS exposes no per-group composed-frame counter, so this does not isolate group shader frames from other scene-render work.",
+    "OBS averageFrameRenderTime is a rolling average, not a per-frame distribution; its sampled p95/max summarize the polling values only.",
+    "nvidia-smi load and VRAM are system-wide first-GPU readings, not attributable to Pulsar.",
+    "GetStats output frame counters are expected to remain zero because the probe deliberately starts no output.",
+    "Windows allocation counts are not observable here; process private bytes and working set are sampled instead."
+  ],
+  "nominalNoCompositionPixels": {
+    "dimensions": [
+      128,
+      72
+    ],
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\evidence\\local-20261017-composition-gpu-profile\\eleven\\20261017T142758Z-nominal-no-composition.png",
+    "samplePixels": {
+      "left": [
+        48,
+        32,
+        32,
+        255
+      ],
+      "right": [
+        48,
+        32,
+        32,
+        255
+      ]
+    },
+    "sha256": "cd0e67cb95e2e04bb366da7a41b1b0059f9628f304d7ae9533f5e70e2274418d"
+  },
+  "nominalNoCompositionSetupStats": {
+    "activeFps": 60.0000024000001,
+    "availableDiskSpace": 0.0,
+    "averageFrameRenderTime": 1.035939,
+    "cpuUsage": 1.0648306892431216,
+    "memoryUsage": 95.73828125,
+    "outputSkippedFrames": 0,
+    "outputTotalFrames": 0,
+    "renderSkippedFrames": 0,
+    "renderTotalFrames": 447,
+    "webSocketSessionIncomingMessages": 20,
+    "webSocketSessionOutgoingMessages": 20
+  },
+  "outputStateBeforeSampling": {
+    "record": {
+      "outputActive": false,
+      "outputBytes": 0,
+      "outputDuration": 0,
+      "outputPaused": false,
+      "outputTimecode": "00:00:00.000",
+      "outputTotalFrames": 0
+    },
+    "stream": {
+      "outputActive": false,
+      "outputBytes": 0,
+      "outputCongestion": 0.0,
+      "outputDuration": 0,
+      "outputReconnecting": false,
+      "outputSkippedFrames": 0,
+      "outputTimecode": "00:00:00.000",
+      "outputTotalFrames": 0
+    }
+  },
+  "ownedPid": 10564,
+  "ownedProcessExited": true,
+  "passed": true,
+  "privateRuntimePath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\private-runtime-c8d0adab7db24356ac6da78dfb08e5c0\\runtime",
+  "privateRuntimeRetained": true,
+  "processCounters": {
+    "available": true,
+    "error": null,
+    "logicalCpuCount": 16
+  },
+  "profileType": "offline synthetic OBS render workload",
+  "programSceneBeforeComposition": {
+    "currentProgramSceneName": "native-composition-perf-b10c910320",
+    "currentProgramSceneUuid": "0abd0268-6630-47e7-9b8e-39febf09711a",
+    "sceneName": "native-composition-perf-b10c910320",
+    "sceneUuid": "0abd0268-6630-47e7-9b8e-39febf09711a"
+  },
+  "programSceneConfiguredOnceBeforeSampling": true,
+  "redactedShutdownTail": ":28:53Z DEBUG HzofE9svjhR8jUWA libobs | private source 'Pulsar composition world-capture 14' destroyed\n  | 2026-10-17T14:28:53Z DEBUG HzofE9svjhR8jUWA libobs | source 'native-composition-perf-b10c910320-capture-1' destroyed\n  | 2026-10-17T14:28:53Z DEBUG HzofE9svjhR8jUWA libobs | source 'Pulsar composition bounds 12' destroyed\n  | 2026-10-17T14:28:53Z DEBUG HzofE9svjhR8jUWA libobs | private source 'Pulsar composition crop-scene 13' destroyed\n  | 2026-10-17T14:28:53Z DEBUG HzofE9svjhR8jUWA libobs | source 'native-composition-perf-b10c910320-capture-0' destroyed\n  | 2026-10-17T14:28:53Z INFO HzofE9svjhR8jUWA libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=1\n  | 2026-10-17T14:28:53Z INFO HzofE9svjhR8jUWA pulsar-frontend-stub | callbacks uninstalled\n  | 2026-10-17T14:28:53Z INFO HzofE9svjhR8jUWA libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=0 pending_released=0\n  | 2026-10-17T14:28:53Z INFO HzofE9svjhR8jUWA obs-websocket | [obs_module_unload] Shutting down...\n  | 2026-10-17T14:28:53Z INFO HzofE9svjhR8jUWA obs-websocket | [WebSocketServer::Stop] Server stopped successfully\n  | 2026-10-17T14:28:53Z INFO HzofE9svjhR8jUWA obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached\n  | 2026-10-17T14:28:53Z INFO HzofE9svjhR8jUWA obs-websocket | [obs_module_unload] Finished shutting down.\n  | 2026-10-17T14:28:53Z INFO HzofE9svjhR8jUWA libobs | Freeing OBS context data\n  | 2026-10-17T14:28:53Z DEBUG HzofE9svjhR8jUWA libobs | canvas 'Main' (6c69626f-6273-4c00-9d88-c5136d61696e) destroyed\n  | PULSAR_LEGACY_ALIAS lease=released id=composition-performance-e5eb882e59fc4ba68c4e870570c39a31 path=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\private-runtime-c8d0adab7db24356ac6da78dfb08e5c0\\state\\leases\\directshow-program-preview.lock authority=Local\\Pulsar.DirectShowProgramPreview metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\9eab04979f2b22fc.lock\n  | PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=composition-performance-e5eb882e59fc4ba68c4e870570c39a31 dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\private-runtime-c8d0adab7db24356ac6da78dfb08e5c0\\state\\runtime authority=Local\\Pulsar.Authority.c70399f777b29ea9 metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\c70399f777b29ea9.lock\n  | PULSAR_RUNTIME_INSTANCE lease=released id=composition-performance-e5eb882e59fc4ba68c4e870570c39a31 dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\private-runtime-c8d0adab7db24356ac6da78dfb08e5c0\\state\\runtime authority=Local\\Pulsar.Runtime.composition-performance-e5eb882e59fc4ba68c4e870570c39a31 metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\2993d4aff52f9adc.lock",
+  "runtimeInstanceId": "composition-performance-e5eb882e59fc4ba68c4e870570c39a31",
+  "scenarioLabels": [
+    "single-normal",
+    "root-and-capture-masks-blends",
+    "root-mask-multiply-opacity",
+    "capture-mask-screen",
+    "four-masked-blended-owners",
+    "dynamic-atlas-active"
+  ],
+  "scenarios": [
+    {
+      "commitResponse": {
+        "generation": 1,
+        "ok": true,
+        "planHash": "eb925975043428ea4af5176397b1defdfd446d9a25d6ea70ff49b66ba6b6baeb"
+      },
+      "compositionWasCommittedForEntireWindow": true,
+      "durationSeconds": 20.0,
+      "generation": 1,
+      "label": "single-normal",
+      "outputStateAfter": {
+        "record": {
+          "outputActive": false,
+          "outputBytes": 0,
+          "outputDuration": 0,
+          "outputPaused": false,
+          "outputTimecode": "00:00:00.000",
+          "outputTotalFrames": 0
+        },
+        "stream": {
+          "outputActive": false,
+          "outputBytes": 0,
+          "outputCongestion": 0.0,
+          "outputDuration": 0,
+          "outputReconnecting": false,
+          "outputSkippedFrames": 0,
+          "outputTimecode": "00:00:00.000",
+          "outputTotalFrames": 0
+        }
+      },
+      "planHash": "eb925975043428ea4af5176397b1defdfd446d9a25d6ea70ff49b66ba6b6baeb",
+      "programSceneAfterWindow": {
+        "currentProgramSceneName": "native-composition-perf-b10c910320",
+        "currentProgramSceneUuid": "0abd0268-6630-47e7-9b8e-39febf09711a",
+        "sceneName": "native-composition-perf-b10c910320",
+        "sceneUuid": "0abd0268-6630-47e7-9b8e-39febf09711a"
+      },
+      "programSceneBeforeWindow": {
+        "currentProgramSceneName": "native-composition-perf-b10c910320",
+        "currentProgramSceneUuid": "0abd0268-6630-47e7-9b8e-39febf09711a",
+        "sceneName": "native-composition-perf-b10c910320",
+        "sceneUuid": "0abd0268-6630-47e7-9b8e-39febf09711a"
+      },
+      "rawSamples": [
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 2.242606,
+            "cpuUsage": 1.440282893867457,
+            "memoryUsage": 98.74609375,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 750
+          },
+          "process": {
+            "cpuSeconds": 3.390625,
+            "privateMiB": 306.16015625,
+            "t": 716577.0,
+            "workingSetMiB": 98.74609375
+          },
+          "t": 1.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 2.298085,
+            "cpuUsage": 1.364464165971138,
+            "memoryUsage": 98.74609375,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 811
+          },
+          "process": {
+            "cpuSeconds": 3.609375,
+            "privateMiB": 306.16015625,
+            "t": 716578.0,
+            "workingSetMiB": 98.74609375
+          },
+          "t": 2.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 1.903521,
+            "cpuUsage": 1.0843480791465394,
+            "memoryUsage": 98.74609375,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 870
+          },
+          "process": {
+            "cpuSeconds": 3.78125,
+            "privateMiB": 306.16015625,
+            "t": 716578.984,
+            "workingSetMiB": 98.74609375
+          },
+          "t": 3.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 2.166327,
+            "cpuUsage": 1.554676556631718,
+            "memoryUsage": 98.74609375,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 930
+          },
+          "process": {
+            "cpuSeconds": 4.03125,
+            "privateMiB": 306.16015625,
+            "t": 716579.984,
+            "workingSetMiB": 98.74609375
+          },
+          "t": 4.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 1.959795,
+            "cpuUsage": 1.3634451158460257,
+            "memoryUsage": 98.74609375,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 991
+          },
+          "process": {
+            "cpuSeconds": 4.25,
+            "privateMiB": 306.16015625,
+            "t": 716581.0,
+            "workingSetMiB": 98.74609375
+          },
+          "t": 5.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 2.118767,
+            "cpuUsage": 0.8781448106346986,
+            "memoryUsage": 98.74609375,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1051
+          },
+          "process": {
+            "cpuSeconds": 4.390625,
+            "privateMiB": 306.16015625,
+            "t": 716582.0,
+            "workingSetMiB": 98.74609375
+          },
+          "t": 6.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 2.997149,
+            "cpuUsage": 1.9645209898097877,
+            "memoryUsage": 98.74609375,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1110
+          },
+          "process": {
+            "cpuSeconds": 4.703125,
+            "privateMiB": 306.16015625,
+            "t": 716582.984,
+            "workingSetMiB": 98.74609375
+          },
+          "t": 7.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 1.887583,
+            "cpuUsage": 1.1557229625917071,
+            "memoryUsage": 98.74609375,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1171
+          },
+          "process": {
+            "cpuSeconds": 4.890625,
+            "privateMiB": 306.16015625,
+            "t": 716584.0,
+            "workingSetMiB": 98.74609375
+          },
+          "t": 8.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 1.210875,
+            "cpuUsage": 1.180160315494932,
+            "memoryUsage": 98.74609375,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1231
+          },
+          "process": {
+            "cpuSeconds": 5.078125,
+            "privateMiB": 306.16015625,
+            "t": 716585.0,
+            "workingSetMiB": 98.74609375
+          },
+          "t": 9.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 1.788629,
+            "cpuUsage": 1.267038984317847,
+            "memoryUsage": 98.74609375,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1291
+          },
+          "process": {
+            "cpuSeconds": 5.28125,
+            "privateMiB": 306.16015625,
+            "t": 716586.0,
+            "workingSetMiB": 98.74609375
+          },
+          "t": 10.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 1.904421,
+            "cpuUsage": 1.5592259373766963,
+            "memoryUsage": 98.7578125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1351
+          },
+          "process": {
+            "cpuSeconds": 5.53125,
+            "privateMiB": 306.16015625,
+            "t": 716587.0,
+            "workingSetMiB": 98.7578125
+          },
+          "t": 11.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 2.159019,
+            "cpuUsage": 1.756150128288562,
+            "memoryUsage": 98.7578125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1411
+          },
+          "process": {
+            "cpuSeconds": 5.8125,
+            "privateMiB": 306.16015625,
+            "t": 716588.0,
+            "workingSetMiB": 98.7578125
+          },
+          "t": 12.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 1.951752,
+            "cpuUsage": 0.7793389828800797,
+            "memoryUsage": 98.7578125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1471
+          },
+          "process": {
+            "cpuSeconds": 5.9375,
+            "privateMiB": 306.16015625,
+            "t": 716589.0,
+            "workingSetMiB": 98.7578125
+          },
+          "t": 13.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 1.920901,
+            "cpuUsage": 1.3727381667773642,
+            "memoryUsage": 98.7578125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1531
+          },
+          "process": {
+            "cpuSeconds": 6.15625,
+            "privateMiB": 306.16015625,
+            "t": 716590.0,
+            "workingSetMiB": 98.7578125
+          },
+          "t": 14.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 1.743829,
+            "cpuUsage": 1.0862029356088663,
+            "memoryUsage": 98.7578125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1590
+          },
+          "process": {
+            "cpuSeconds": 6.328125,
+            "privateMiB": 306.16015625,
+            "t": 716590.984,
+            "workingSetMiB": 98.7578125
+          },
+          "t": 15.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 2.103098,
+            "cpuUsage": 1.251026812012794,
+            "memoryUsage": 98.7578125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1651
+          },
+          "process": {
+            "cpuSeconds": 6.546875,
+            "privateMiB": 306.16015625,
+            "t": 716592.0,
+            "workingSetMiB": 98.7578125
+          },
+          "t": 16.016
+        },
+        {
+          "getStatsLatencyMs": 16.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 2.532747,
+            "cpuUsage": 1.4812198200869169,
+            "memoryUsage": 98.7578125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1710
+          },
+          "process": {
+            "cpuSeconds": 6.765625,
+            "privateMiB": 306.16015625,
+            "t": 716592.984,
+            "workingSetMiB": 98.7578125
+          },
+          "t": 17.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 1.655306,
+            "cpuUsage": 1.6534832874966499,
+            "memoryUsage": 98.78125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1771
+          },
+          "process": {
+            "cpuSeconds": 7.03125,
+            "privateMiB": 306.1796875,
+            "t": 716594.0,
+            "workingSetMiB": 98.78125
+          },
+          "t": 18.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 2.163952,
+            "cpuUsage": 1.571644614187651,
+            "memoryUsage": 98.78125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1830
+          },
+          "process": {
+            "cpuSeconds": 7.28125,
+            "privateMiB": 306.1796875,
+            "t": 716594.984,
+            "workingSetMiB": 98.78125
+          },
+          "t": 19.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 2.163952,
+            "cpuUsage": 1.3752627679206768,
+            "memoryUsage": 98.78125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 0,
+            "renderTotalFrames": 1890
+          },
+          "process": {
+            "cpuSeconds": 7.5,
+            "privateMiB": 306.1796875,
+            "t": 716595.984,
+            "workingSetMiB": 98.78125
+          },
+          "t": 20.0
+        }
+      ],
+      "scenePixelReadbackBeforeWindow": {
+        "dimensions": [
+          128,
+          72
+        ],
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\evidence\\local-20261017-composition-gpu-profile\\eleven\\20261017T142758Z-single-normal-active-program.png",
+        "samplePixels": {
+          "left": [
+            112,
+            255,
+            48,
+            255
+          ],
+          "right": [
+            112,
+            255,
+            48,
+            255
+          ]
+        },
+        "sha256": "f7e33cbebe9f4b07125a4dca293c3de9f6e862abec21967bee239a3914b5ae88"
+      },
+      "sceneRemainedProgramForEntireWindow": true,
+      "summary": {
+        "activeFps": {
+          "count": 20,
+          "max": 60.0000024000001,
+          "mean": 60.0000024000001,
+          "median": 60.0000024000001,
+          "min": 60.0000024000001,
+          "p95": 60.0000024000001
+        },
+        "averageFrameRenderTimeIsObsRollingAverage": true,
+        "averageFrameRenderTimeMs": {
+          "count": 20,
+          "max": 2.997149,
+          "mean": 2.0436157,
+          "median": 2.0314465,
+          "min": 1.210875,
+          "p95": 2.5559671
+        },
+        "gpu": {
+          "error": null,
+          "gpuMemoryMiB": {
+            "count": 20,
+            "max": 3597.0,
+            "mean": 3584.4,
+            "median": 3581.0,
+            "min": 3580.0,
+            "p95": 3597.0
+          },
+          "gpuUtilPercent": {
+            "count": 20,
+            "max": 50.0,
+            "mean": 36.3,
+            "median": 37.0,
+            "min": 20.0,
+            "p95": 42.400000000000006
+          },
+          "memoryUtilPercent": {
+            "count": 20,
+            "max": 34.0,
+            "mean": 8.9,
+            "median": 8.0,
+            "min": 5.0,
+            "p95": 10.250000000000018
+          },
+          "sampleCount": 20,
+          "samples": [
+            {
+              "gpuMemoryMiB": 3597.0,
+              "gpuUtilPercent": 42.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716576.062
+            },
+            {
+              "gpuMemoryMiB": 3597.0,
+              "gpuUtilPercent": 32.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716577.062
+            },
+            {
+              "gpuMemoryMiB": 3597.0,
+              "gpuUtilPercent": 37.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716578.093
+            },
+            {
+              "gpuMemoryMiB": 3589.0,
+              "gpuUtilPercent": 37.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716579.109
+            },
+            {
+              "gpuMemoryMiB": 3589.0,
+              "gpuUtilPercent": 37.0,
+              "memoryUtilPercent": 7.0,
+              "t": 716580.109
+            },
+            {
+              "gpuMemoryMiB": 3589.0,
+              "gpuUtilPercent": 39.0,
+              "memoryUtilPercent": 7.0,
+              "t": 716581.093
+            },
+            {
+              "gpuMemoryMiB": 3584.0,
+              "gpuUtilPercent": 41.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716582.25
+            },
+            {
+              "gpuMemoryMiB": 3583.0,
+              "gpuUtilPercent": 50.0,
+              "memoryUtilPercent": 34.0,
+              "t": 716583.14
+            },
+            {
+              "gpuMemoryMiB": 3580.0,
+              "gpuUtilPercent": 20.0,
+              "memoryUtilPercent": 5.0,
+              "t": 716584.125
+            },
+            {
+              "gpuMemoryMiB": 3580.0,
+              "gpuUtilPercent": 27.0,
+              "memoryUtilPercent": 7.0,
+              "t": 716585.14
+            },
+            {
+              "gpuMemoryMiB": 3580.0,
+              "gpuUtilPercent": 36.0,
+              "memoryUtilPercent": 9.0,
+              "t": 716586.14
+            },
+            {
+              "gpuMemoryMiB": 3580.0,
+              "gpuUtilPercent": 35.0,
+              "memoryUtilPercent": 7.0,
+              "t": 716587.156
+            },
+            {
+              "gpuMemoryMiB": 3580.0,
+              "gpuUtilPercent": 40.0,
+              "memoryUtilPercent": 7.0,
+              "t": 716588.156
+            },
+            {
+              "gpuMemoryMiB": 3580.0,
+              "gpuUtilPercent": 35.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716589.156
+            },
+            {
+              "gpuMemoryMiB": 3580.0,
+              "gpuUtilPercent": 37.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716590.187
+            },
+            {
+              "gpuMemoryMiB": 3580.0,
+              "gpuUtilPercent": 37.0,
+              "memoryUtilPercent": 7.0,
+              "t": 716591.171
+            },
+            {
+              "gpuMemoryMiB": 3580.0,
+              "gpuUtilPercent": 38.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716592.187
+            },
+            {
+              "gpuMemoryMiB": 3581.0,
+              "gpuUtilPercent": 37.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716593.296
+            },
+            {
+              "gpuMemoryMiB": 3581.0,
+              "gpuUtilPercent": 34.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716594.312
+            },
+            {
+              "gpuMemoryMiB": 3581.0,
+              "gpuUtilPercent": 35.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716595.203
+            }
+          ],
+          "scope": "system-wide first NVIDIA GPU; not attributable to Pulsar"
+        },
+        "obsCpuUsagePercent": {
+          "count": 20,
+          "max": 1.9645209898097877,
+          "mean": 1.3569549163474055,
+          "median": 1.3686011663742512,
+          "min": 0.7793389828800797,
+          "p95": 1.7665686713646236
+        },
+        "obsMemoryUsageMiB": {
+          "count": 20,
+          "max": 98.78125,
+          "mean": 98.75546875,
+          "median": 98.751953125,
+          "min": 98.74609375,
+          "p95": 98.78125
+        },
+        "outputCountersExpectedZeroWithoutOutput": true,
+        "outputSkippedFramesDelta": 0,
+        "outputTotalFramesDelta": 0,
+        "processCpuPercentOfLogicalCapacity": {
+          "count": 19,
+          "max": 1.984883129970462,
+          "mean": 1.3531717409076363,
+          "median": 1.3671875,
+          "min": 0.78125,
+          "p95": 1.7805195629970458
+        },
+        "processPrivateBytesMiB": {
+          "count": 20,
+          "max": 306.1796875,
+          "mean": 306.1630859375,
+          "median": 306.16015625,
+          "min": 306.16015625,
+          "p95": 306.1796875
+        },
+        "processWorkingSetMiB": {
+          "count": 20,
+          "max": 98.78125,
+          "mean": 98.75546875,
+          "median": 98.751953125,
+          "min": 98.74609375,
+          "p95": 98.78125
+        },
+        "renderSkipRatio": 0.0,
+        "renderSkippedFramesDelta": 0,
+        "renderTargetFrameBudgetMs": 16.666667,
+        "renderThreadAdvanced": true,
+        "renderTotalFramesDelta": 1201,
+        "renderedFpsFromCounters": 60.05,
+        "sampleCount": 20,
+        "statsBeforeWindow": {
+          "activeFps": 60.0000024000001,
+          "averageFrameRenderTime": 2.22975,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 0,
+          "renderTotalFrames": 689
+        },
+        "windowSeconds": 20.0
+      },
+      "wirePlan": {
+        "coordinateSpace": "global-scene-texels",
+        "generation": 1,
+        "groups": [
+          {
+            "affine": {
+              "m00": 1,
+              "m01": 0,
+              "m10": 0,
+              "m11": 1,
+              "tx": 0,
+              "ty": 0
+            },
+            "blendMode": "normal",
+            "bounds": {
+              "height": 1080,
+              "width": 1920,
+              "x": 0,
+              "y": 0
+            },
+            "children": [
+              {
+                "id": "perf-owner-0",
+                "kind": "group"
+              }
+            ],
+            "id": "prism.native-composition.root.v1",
+            "mask": null,
+            "opacity": 1.0,
+            "order": 0,
+            "parentId": null,
+            "visible": true
+          },
+          {
+            "affine": {
+              "m00": 1,
+              "m01": 0,
+              "m10": 0,
+              "m11": 1,
+              "tx": 0,
+              "ty": 0
+            },
+            "blendMode": "normal",
+            "bounds": {
+              "height": 1080,
+              "width": 1920,
+              "x": 0,
+              "y": 0
+            },
+            "children": [
+              {
+                "affine": {
+                  "m00": 1,
+                  "m01": 0,
+                  "m10": 0,
+                  "m11": 1,
+                  "tx": 0,
+                  "ty": 0
+                },
+                "blendMode": "normal",
+                "crop": {
+                  "bottom": 0,
+                  "left": 0,
+                  "right": 0,
+                  "top": 0
+                },
+                "kind": "capture",
+                "localOpacity": 1.0,
+                "mask": null,
+                "sceneItemId": 2,
+                "visible": true
+              },
+              {
+                "affine": {
+                  "m00": 1,
+                  "m01": 0,
+                  "m10": 0,
+                  "m11": 1,
+                  "tx": 0,
+                  "ty": 0
+                },
+                "blendMode": "normal",
+                "crop": {
+                  "bottom": 0,
+                  "left": 0,
+                  "right": 0,
+                  "top": 0
+                },
+                "kind": "capture",
+                "localOpacity": 1.0,
+                "mask": null,
+                "sceneItemId": 3,
+                "visible": true
+              }
+            ],
+            "id": "perf-owner-0",
+            "mask": null,
+            "opacity": 1.0,
+            "order": 0,
+            "parentId": "prism.native-composition.root.v1",
+            "visible": true
+          }
+        ],
+        "planHash": "eb925975043428ea4af5176397b1defdfd446d9a25d6ea70ff49b66ba6b6baeb",
+        "protocol": "pulsar.group-composition/2",
+        "replacedSceneItems": [
+          {
+            "sceneItemId": 2
+          },
+          {
+            "sceneItemId": 3
+          },
+          {
+            "sceneItemId": 4
+          },
+          {
+            "sceneItemId": 5
+          },
+          {
+            "sceneItemId": 6
+          },
+          {
+            "sceneItemId": 7
+          },
+          {
+            "sceneItemId": 8
+          },
+          {
+            "sceneItemId": 9
+          },
+          {
+            "sceneItemId": 10
+          }
+        ],
+        "runtimeInstanceId": "composition-performance-e5eb882e59fc4ba68c4e870570c39a31",
+        "sceneName": "native-composition-perf-b10c910320"
+      },
+      "workload": {
+        "captureMasks": 0,
+        "captureRefs": 2,
+        "masksResolveFromSingleDynamicImageSource": true,
+        "ownerBlends": [
+          "normal"
+        ],
+        "ownerGroups": 1,
+        "rootBlend": "normal",
+        "rootMask": false
+      }
+    },
+    {
+      "commitResponse": {
+        "generation": 2,
+        "ok": true,
+        "planHash": "47ab7da8127ee826147df15250814b53e246a4b6dbb2512b88339a9186df78fc"
+      },
+      "compositionWasCommittedForEntireWindow": true,
+      "durationSeconds": 20.0,
+      "generation": 2,
+      "label": "root-and-capture-masks-blends",
+      "outputStateAfter": {
+        "record": {
+          "outputActive": false,
+          "outputBytes": 0,
+          "outputDuration": 0,
+          "outputPaused": false,
+          "outputTimecode": "00:00:00.000",
+          "outputTotalFrames": 0
+        },
+        "stream": {
+          "outputActive": false,
+          "outputBytes": 0,
+          "outputCongestion": 0.0,
+          "outputDuration": 0,
+          "outputReconnecting": false,
+          "outputSkippedFrames": 0,
+          "outputTimecode": "00:00:00.000",
+          "outputTotalFrames": 0
+        }
+      },
+      "planHash": "47ab7da8127ee826147df15250814b53e246a4b6dbb2512b88339a9186df78fc",
+      "programSceneAfterWindow": {
+        "currentProgramSceneName": "native-composition-perf-b10c910320",
+        "currentProgramSceneUuid": "0abd0268-6630-47e7-9b8e-39febf09711a",
+        "sceneName": "native-composition-perf-b10c910320",
+        "sceneUuid": "0abd0268-6630-47e7-9b8e-39febf09711a"
+      },
+      "programSceneBeforeWindow": {
+        "currentProgramSceneName": "native-composition-perf-b10c910320",
+        "currentProgramSceneUuid": "0abd0268-6630-47e7-9b8e-39febf09711a",
+        "sceneName": "native-composition-perf-b10c910320",
+        "sceneUuid": "0abd0268-6630-47e7-9b8e-39febf09711a"
+      },
+      "rawSamples": [
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.739795,
+            "cpuUsage": 2.233826468565227,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2074
+          },
+          "process": {
+            "cpuSeconds": 8.59375,
+            "privateMiB": 649.91015625,
+            "t": 716599.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 1.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.739795,
+            "cpuUsage": 1.8593046814883787,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2134
+          },
+          "process": {
+            "cpuSeconds": 8.890625,
+            "privateMiB": 649.91015625,
+            "t": 716600.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 2.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.328727,
+            "cpuUsage": 1.8759289442158793,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2193
+          },
+          "process": {
+            "cpuSeconds": 9.1875,
+            "privateMiB": 649.91015625,
+            "t": 716601.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 3.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.575155,
+            "cpuUsage": 2.308469658213523,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2254
+          },
+          "process": {
+            "cpuSeconds": 9.5625,
+            "privateMiB": 649.91015625,
+            "t": 716602.062,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 4.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.98708,
+            "cpuUsage": 1.8656235254111655,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2314
+          },
+          "process": {
+            "cpuSeconds": 9.859375,
+            "privateMiB": 649.91015625,
+            "t": 716603.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 5.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.65,
+            "cpuUsage": 1.3470156709247676,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2375
+          },
+          "process": {
+            "cpuSeconds": 10.09375,
+            "privateMiB": 649.91015625,
+            "t": 716604.062,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 6.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.387808,
+            "cpuUsage": 2.263398335635266,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2434
+          },
+          "process": {
+            "cpuSeconds": 10.4375,
+            "privateMiB": 649.91015625,
+            "t": 716605.062,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 7.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.494755,
+            "cpuUsage": 2.2597473695817496,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2494
+          },
+          "process": {
+            "cpuSeconds": 10.796875,
+            "privateMiB": 649.91015625,
+            "t": 716606.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 8.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.687413,
+            "cpuUsage": 1.7766077665446054,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2553
+          },
+          "process": {
+            "cpuSeconds": 11.078125,
+            "privateMiB": 649.91015625,
+            "t": 716607.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 9.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 4.064249,
+            "cpuUsage": 1.8436632212950812,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2614
+          },
+          "process": {
+            "cpuSeconds": 11.375,
+            "privateMiB": 649.91015625,
+            "t": 716608.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 10.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.652891,
+            "cpuUsage": 2.02939005821339,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2674
+          },
+          "process": {
+            "cpuSeconds": 11.703125,
+            "privateMiB": 649.91015625,
+            "t": 716609.062,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 11.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.37686,
+            "cpuUsage": 1.6719286338969956,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2734
+          },
+          "process": {
+            "cpuSeconds": 11.96875,
+            "privateMiB": 649.91015625,
+            "t": 716610.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 12.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.331354,
+            "cpuUsage": 2.065403480480409,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2794
+          },
+          "process": {
+            "cpuSeconds": 12.296875,
+            "privateMiB": 649.91015625,
+            "t": 716611.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 13.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.772339,
+            "cpuUsage": 1.8328245690147367,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2854
+          },
+          "process": {
+            "cpuSeconds": 12.59375,
+            "privateMiB": 649.91015625,
+            "t": 716612.062,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 14.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.864108,
+            "cpuUsage": 1.7739372346757556,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2914
+          },
+          "process": {
+            "cpuSeconds": 12.875,
+            "privateMiB": 649.91015625,
+            "t": 716613.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 15.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.252345,
+            "cpuUsage": 1.533942741378039,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 2975
+          },
+          "process": {
+            "cpuSeconds": 13.125,
+            "privateMiB": 649.91015625,
+            "t": 716614.062,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 16.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.35109,
+            "cpuUsage": 1.7684701855733578,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 3035
+          },
+          "process": {
+            "cpuSeconds": 13.40625,
+            "privateMiB": 649.91015625,
+            "t": 716615.062,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 17.016
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.235708,
+            "cpuUsage": 1.8725480737256444,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 3094
+          },
+          "process": {
+            "cpuSeconds": 13.703125,
+            "privateMiB": 649.91015625,
+            "t": 716616.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 18.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 3.558827,
+            "cpuUsage": 1.972756690934162,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 3153
+          },
+          "process": {
+            "cpuSeconds": 14.015625,
+            "privateMiB": 649.91015625,
+            "t": 716617.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 19.0
+        },
+        {
+          "getStatsLatencyMs": 0.0,
+          "obs": {
+            "activeFps": 60.0000024000001,
+            "averageFrameRenderTime": 4.086255,
+            "cpuUsage": 1.9355187472673574,
+            "memoryUsage": 104.1953125,
+            "outputSkippedFrames": 0,
+            "outputTotalFrames": 0,
+            "renderSkippedFrames": 3,
+            "renderTotalFrames": 3214
+          },
+          "process": {
+            "cpuSeconds": 14.34375,
+            "privateMiB": 649.91015625,
+            "t": 716618.046,
+            "workingSetMiB": 104.1953125
+          },
+          "t": 20.0
+        }
+      ],
+      "scenePixelReadbackBeforeWindow": {
+        "dimensions": [
+          128,
+          72
+        ],
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\evidence\\local-20261017-composition-gpu-profile\\eleven\\20261017T142758Z-root-and-capture-masks-blends-active-program.png",
+        "samplePixels": {
+          "left": [
+            32,
+            46,
+            44,
+            255
+          ],
+          "right": [
+            48,
+            32,
+            32,
+            255
+          ]
+        },
+        "sha256": "fb74e11b16b7f191fd36410ad391591e370c78aad5cbf016ebfc937017e01c04"
+      },
+      "sceneRemainedProgramForEntireWindow": true,
+      "summary": {
+        "activeFps": {
+          "count": 20,
+          "max": 60.0000024000001,
+          "mean": 60.0000024000001,
+          "median": 60.0000024000001,
+          "min": 60.0000024000001,
+          "p95": 60.0000024000001
+        },
+        "averageFrameRenderTimeIsObsRollingAverage": true,
+        "averageFrameRenderTimeMs": {
+          "count": 20,
+          "max": 4.086255,
+          "mean": 3.6068277,
+          "median": 3.6125775,
+          "min": 3.235708,
+          "p95": 4.0653493
+        },
+        "gpu": {
+          "error": null,
+          "gpuMemoryMiB": {
+            "count": 20,
+            "max": 3929.0,
+            "mean": 3919.9,
+            "median": 3918.0,
+            "min": 3914.0,
+            "p95": 3929.0
+          },
+          "gpuUtilPercent": {
+            "count": 20,
+            "max": 43.0,
+            "mean": 37.8,
+            "median": 38.0,
+            "min": 34.0,
+            "p95": 42.05
+          },
+          "memoryUtilPercent": {
+            "count": 20,
+            "max": 10.0,
+            "mean": 9.3,
+            "median": 9.0,
+            "min": 8.0,
+            "p95": 10.0
+          },
+          "sampleCount": 20,
+          "samples": [
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 38.0,
+              "memoryUtilPercent": 10.0,
+              "t": 716598.234
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 35.0,
+              "memoryUtilPercent": 10.0,
+              "t": 716599.125
+            },
+            {
+              "gpuMemoryMiB": 3914.0,
+              "gpuUtilPercent": 34.0,
+              "memoryUtilPercent": 10.0,
+              "t": 716600.14
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 40.0,
+              "memoryUtilPercent": 9.0,
+              "t": 716601.14
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 37.0,
+              "memoryUtilPercent": 9.0,
+              "t": 716602.171
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 38.0,
+              "memoryUtilPercent": 10.0,
+              "t": 716603.265
+            },
+            {
+              "gpuMemoryMiB": 3917.0,
+              "gpuUtilPercent": 37.0,
+              "memoryUtilPercent": 9.0,
+              "t": 716604.171
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 38.0,
+              "memoryUtilPercent": 9.0,
+              "t": 716605.296
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 42.0,
+              "memoryUtilPercent": 10.0,
+              "t": 716606.187
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 37.0,
+              "memoryUtilPercent": 9.0,
+              "t": 716607.203
+            },
+            {
+              "gpuMemoryMiB": 3928.0,
+              "gpuUtilPercent": 36.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716608.312
+            },
+            {
+              "gpuMemoryMiB": 3929.0,
+              "gpuUtilPercent": 40.0,
+              "memoryUtilPercent": 10.0,
+              "t": 716609.218
+            },
+            {
+              "gpuMemoryMiB": 3929.0,
+              "gpuUtilPercent": 38.0,
+              "memoryUtilPercent": 10.0,
+              "t": 716610.218
+            },
+            {
+              "gpuMemoryMiB": 3929.0,
+              "gpuUtilPercent": 38.0,
+              "memoryUtilPercent": 10.0,
+              "t": 716611.234
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 43.0,
+              "memoryUtilPercent": 10.0,
+              "t": 716612.343
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 35.0,
+              "memoryUtilPercent": 9.0,
+              "t": 716613.25
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 40.0,
+              "memoryUtilPercent": 9.0,
+              "t": 716614.25
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 34.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716615.265
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 35.0,
+              "memoryUtilPercent": 9.0,
+              "t": 716616.359
+            },
+            {
+              "gpuMemoryMiB": 3918.0,
+              "gpuUtilPercent": 41.0,
+              "memoryUtilPercent": 8.0,
+              "t": 716617.265
+            }
+          ],
+          "scope": "system-wide first NVIDIA GPU; not attributable to Pulsar"
+        },
+        "obsCpuUsagePercent": {
+          "count": 20,
+          "max": 2.308469658213523,
+          "mean": 1.9045153028517745,
+          "median": 1.869085799568405,
+          "min": 1.3470156709247676,
+          "p95": 2.265651901764179
+        },
+        "obsMemoryUsageMiB": {
+          "count": 20,
+          "max": 104.1953125,
+          "mean": 104.1953125,
+          "median": 104.1953125,
+          "min": 104.1953125,
+          "p95": 104.1953125
+        },
+        "outputCountersExpectedZeroWithoutOutput": true,
+        "outputSkippedFramesDelta": 0,
+        "outputTotalFramesDelta": 0,
+        "processCpuPercentOfLogicalCapacity": {
+          "count": 19,
+          "max": 2.30684055104154,
+          "mean": 1.8917810064662188,
+          "median": 1.85546875,
+          "min": 1.4417753444009627,
+          "p95": 2.2850380948666293
+        },
+        "processPrivateBytesMiB": {
+          "count": 20,
+          "max": 649.91015625,
+          "mean": 649.91015625,
+          "median": 649.91015625,
+          "min": 649.91015625,
+          "p95": 649.91015625
+        },
+        "processWorkingSetMiB": {
+          "count": 20,
+          "max": 104.1953125,
+          "mean": 104.1953125,
+          "median": 104.1953125,
+          "min": 104.1953125,
+          "p95": 104.1953125
+        },
+        "renderSkipRatio": 0.0,
+        "renderSkippedFramesDelta": 0,
+        "renderTargetFrameBudgetMs": 16.666667,
+        "renderThreadAdvanced": true,
+        "renderTotalFramesDelta": 1200,
+        "renderedFpsFromCounters": 60.0,
+        "sampleCount": 20,
+        "statsBeforeWindow": {
+          "activeFps": 60.0000024000001,
+          "averageFrameRenderTime": 3.914337,
+          "outputSkippedFrames": 0,
+          "outputTotalFrames": 0,
+          "renderSkippedFrames": 3,
+          "renderTotalFrames": 2014
+        },
+        "windowSeconds": 20.0
+      },
+      "wirePlan": {
+        "coordinateSpace": "global-scene-texels",
+        "generation": 2,
+        "groups": [
+          {
+            "affine": {
+              "m00": 1,
+              "m01": 0,
+              "m10": 0,
+              "m11": 1,
+              "tx": 0,
+              "ty": 0
+            },
+            "blendMode": "overlay",
+            "bounds": {
+              "height": 1080,
+              "width": 1920,
+              "x": 0,
+              "y": 0
+            },
+            "children": [
+              {
+                "id": "perf-owner-0",
+                "kind": "group"
+              }
+            ],
+            "id": "prism.native-composition.root.v1",
+            "mask": {
+              "crop": {
+                "bottom": 0,
+                "left": 0,
+                "right": 0,
+                "top": 0
+              },
+              "rect": {
+                "height": 1080,
+                "width": 1920,
+                "x": 0,
+                "y": 0
+              },
+              "sceneItemId": 10
+            },
+            "opacity": 0.9,
+            "order": 0,
+            "parentId": null,
+            "visible": true
+          },
+          {
+            "affine": {
+              "m00": 1,
+              "m01": 0,
+              "m10": 0,
+              "m11": 1,
+              "tx": 0,
+              "ty": 0
+            },
+            "blendMode": "multiply",
+            "bounds": {
+              "height": 1080,
+              "width": 1920,
+              "x": 0,
+              "y": 0
+            },
+            "children": [
+              {
+                "affine": {
+                  "m00": 1,
+                  "m01": 0,
+                  "m10": 0,
+                  "m11": 1,
+                  "tx": 0,
+                  "ty": 0
+                },
+                "blendMode": "screen",
+                "crop": {
+                  "bottom": 0,
+                  "left": 0,
+                  "right": 0,
+                  "top": 0
+                },
+                "kind": "capture",
+                "localOpacity": 0.85,
+                "mask": {
+                  "crop": {
+                    "bottom": 0,
+                    "left": 0,
+                    "right": 0,
+                    "top": 0
+                  },
+                  "rect": {
+                    "height": 1080,
+                    "width": 1920,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "sceneItemId": 10
+                },
+                "sceneItemId": 2,
+                "visible": true
+              },
+              {
+                "affine": {
+                  "m00": 1,
+                  "m01": 0,
+                  "m10": 0,
+                  "m11": 1,
+                  "tx": 0,
+                  "ty": 0
+                },
+                "blendMode": "difference",
+                "crop": {
+                  "bottom": 0,
+                  "left": 0,
+                  "right": 0,
+                  "top": 0
+                },
+                "kind": "capture",
+                "localOpacity": 0.9,
+                "mask": {
+                  "crop": {
+                    "bottom": 0,
+                    "left": 0,
+                    "right": 0,
+                    "top": 0
+                  },
+                  "rect": {
+                    "height": 1080,
+                    "width": 1920,
+                    "x": 0,
+                    "y": 0
+                  },
+                  "sceneItemId": 10
+                },
+                "sceneItemId": 3,
+                "visible": true
+              }
+            ],
+            "id": "perf-owner-0",
+            "mask": {
+              "crop": {
+                "bottom": 0,
+                "left": 0,
+                "right": 0,
+                "top": 0
+              },
+              "rect": {
+                "height": 1080,
+                "width": 1920,
+                "x": 0,
+                "y": 0
+              },
+              "sceneItemId": 10
+            },
+            "opacity": 0.85,
+            "order": 0,
+            "parentId": "prism.native-composition.root.v1",
+            "visible": true
+          }
+        ],
+        "planHash": "47ab7da8127ee826147df15250814b53e246a4b6dbb2512b88339a9186df78fc",
+        "protocol": "pulsar.group-composition/2",
+        "replacedSceneItems": [
+          {
+            "sceneItemId": 2
+          },
+          {
+            "sceneItemId": 3
+          },
+          {
+            "sceneItemId": 4
+          },
+          {
+            "sceneItemId": 5
+          },
+          {
+            "sceneItemId": 6
+          },
+          {
+            "sceneItemId": 7
+          },
+          {
+            "sceneItemId": 8
+          },
+          {
+            "sceneItemId": 9
+          },
+          {
+            "sceneItemId": 10
+          }
+        ],
+        "runtimeInstanceId": "composition-performance-e5eb882e59fc4ba68c4e870570c39a31",
+        "sceneName": "native-composition-perf-b10c910320"
+      },
+      "workload": {
+        "captureMasks": 2,
+        "captureRefs": 2,
+        "masksResolveFromSingleDynamicImageSource": true,
+        "ownerBlends": [
+          "multiply"
+        ],
+        "ownerGroups": 1,
+        "rootBlend": "overlay",
+        "rootMask": true
+      }
+    }
+  ],
+  "sceneInventory": {
+    "atlasSceneItemId": 10,
+    "backdropSceneItemId": 1,
+    "captureSceneItemIds": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "fullResolutionSyntheticSolidCaptures": 8,
+    "replacedSceneItems": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ]
+  },
+  "scope": {
+    "frameBudgetMs": 16.666667,
+    "noPhysicalCapture": true,
+    "noRecordingOrStreaming": true,
+    "sampledMetrics": [
+      "OBS GetStats",
+      "Windows process CPU time and memory",
+      "nvidia-smi system-wide GPU utilization"
+    ],
+    "samplesPerSecond": 1,
+    "scenarioLimit": 2,
+    "scenariosSeconds": 20,
+    "sceneSelectedOnceBeforeSampling": true,
+    "targetFps": 60.0,
+    "transitionAndSwitchTimingExcluded": true,
+    "viewport": [
+      1920,
+      1080
+    ]
+  },
+  "shutdownTimeoutSeconds": 30,
+  "sourceHead": "b8a2ee202d132a46519e8dd0c0a9a1c8a9e12913",
+  "sourceWorktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile",
+  "stagedRuntimeHashes": {
+    "obs-websocket.dll": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b",
+    "pulsar-capture-effects.dll": "9b17835e8db5ed452fd59e0fbe31d07f12e022df888540db6986e3a73918d093",
+    "z-group-composition-shutdown-test-helper.dll": "f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff"
+  },
+  "startedUtc": "2026-10-17T14:27:58.629724+00:00",
+  "syntheticScene": "native-composition-perf-b10c910320",
+  "videoSettings": {
+    "baseHeight": 1080,
+    "baseWidth": 1920,
+    "fpsDenominator": 1,
+    "fpsNumerator": 60,
+    "outputHeight": 1080,
+    "outputWidth": 1920
+  }
+}
