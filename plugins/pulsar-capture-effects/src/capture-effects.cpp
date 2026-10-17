@@ -7,6 +7,7 @@
 #include <cmath>
 #include <graphics/vec2.h>
 #include <graphics/vec4.h>
+#include <limits>
 #include <mutex>
 #include <obs-module.h>
 #include <string>
@@ -63,6 +64,19 @@ float number(obs_data_t *s, const char *key, float lo, float hi,
   return std::isfinite(v) ? float(std::clamp(v, double(lo), double(hi)))
                           : fallback;
 }
+// Framing is in local scene units, so one texture texel can be less than one
+// local pixel after layout. Keep positive fractional dimensions unchanged.
+float content_dimension(obs_data_t *settings, const char *key, float fallback) {
+  if (!obs_data_has_user_value(settings, key))
+    return fallback;
+  const double value = obs_data_get_double(settings, key);
+  if (!std::isfinite(value))
+    return fallback;
+  if (value <= 0)
+    return 1; // Preserve the existing invalid-input fallback.
+  return float(std::clamp(value, double(std::numeric_limits<float>::min()),
+                          16384.0));
+}
 vec4 color(obs_data_t *s, const char *key, vec4 fallback) {
   obs_data_t *c = obs_data_get_obj(s, key);
   if (!c)
@@ -95,7 +109,7 @@ void update(void *data, obs_data_t *settings) {
   }
   f->content_position = {number(settings, "content_x", 0, 1, 0.5f), number(settings, "content_y", 0, 1, 0.5f)};
   f->content_origin = {number(settings, "content_box_x", -32768, 32768), number(settings, "content_box_y", -32768, 32768)};
-  f->content_size = {number(settings, "content_box_width", 1, 16384, f->size.x), number(settings, "content_box_height", 1, 16384, f->size.y)};
+  f->content_size = {content_dimension(settings, "content_box_width", f->size.x), content_dimension(settings, "content_box_height", f->size.y)};
   f->clip_effects = obs_data_get_bool(settings, "clip_effects");
   f->skip_content_fit = obs_data_get_bool(settings, "skip_content_fit");
   auto *clips = obs_data_get_array(settings, "ancestor_clips");

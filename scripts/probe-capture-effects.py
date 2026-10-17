@@ -90,12 +90,41 @@ async def run(config,output):
                 image=Image.open(file).convert('RGBA')
                 assert image.getpixel((660,390))[2]>100,image.getpixel((660,390))
                 rotations.append({'angle':angle,'transform':t,'file':str(file)})
+            fractional=[]
+            for label,content_width,content_height,expected_width,expected_height,outside in [
+                ('fractional-width',.2,18,2,180,(54,50)),
+                ('fractional-height',32,.3,320,3,(50,54)),
+                ('zero-width-fallback',0,18,10,180,None),
+                ('negative-height-fallback',32,-2,320,10,None),
+            ]:
+                framing={**base,'padding':0,'corner_radius':0,'x':0,'y':0,'rotation':0,
+                         'content_box_x':50 if 'width' in label else 0,
+                         'content_box_y':50 if 'height' in label else 0,
+                         'content_box_width':content_width,'content_box_height':content_height,
+                         'source_zoom':10,'effects':[]}
+                admitted=await call('CallVendorRequest',{'vendorName':'pulsar-capture-effects','requestType':'CommitAppearance','requestData':{'sceneName':composite,'layer':layer,'inputName':source,'itemId':outer,'innerId':inner,'boundsType':'OBS_BOUNDS_STRETCH','blendMode':'OBS_BLEND_NORMAL','visible':True,'settings':framing}})
+                assert admitted['responseData'].get('ok'),admitted
+                transform=(await call('GetSceneItemTransform',{'sceneName':layer,'sceneItemId':inner}))['sceneItemTransform']
+                assert abs(transform['boundsWidth']-expected_width)<.0001,transform
+                assert abs(transform['boundsHeight']-expected_height)<.0001,transform
+                await asyncio.sleep(.05)
+                shot=await call('GetSourceScreenshot',{'sourceName':layer,'imageFormat':'png'})
+                raw=base64.b64decode(shot['imageData'].split(',',1)[1]);image=Image.open(io.BytesIO(raw)).convert('RGBA')
+                file=output/f'{stamp}-{label}.png';file.write_bytes(raw)
+                if outside:
+                    assert image.getpixel(outside)[3]==0,(label,outside,image.getpixel(outside))
+                    assert image.getpixel((50,50))[3]>0,(label,image.getpixel((50,50)))
+                fractional.append({'case':label,'requestedContentSize':[content_width,content_height],
+                                   'expectedZoomedBounds':[expected_width,expected_height],
+                                   'actualZoomedBounds':[transform['boundsWidth'],transform['boundsHeight']],
+                                   'outsidePixel':list(image.getpixel(outside)) if outside else None,
+                                   'file':str(file)})
             assert len((await call('GetSourceFilterList',{'sourceName':layer}))['filters'])==1
             await call('CreateSourceFilter',{'sourceName':layer,'filterName':'prism/capture-rounded','filterKind':'color_filter_v2','filterSettings':{'opacity':1}})
             refused=await call('CallVendorRequest',{'vendorName':'pulsar-capture-effects','requestType':'CommitAppearance','requestData':{'sceneName':composite,'layer':layer,'inputName':source,'itemId':outer,'innerId':inner,'settings':settings}})
             assert not refused['responseData'].get('ok') and 'collision' in refused['responseData']['error'],refused
             await call('RemoveSourceFilter',{'sourceName':layer,'filterName':'prism/capture-rounded'})
-            report={'zOrderPreserved':True,'foreignCollisionPreserved':True,'atomicAdmissions':atomic,'rotationAdmissions':rotations,'effects':results,'reset':True,'scope':'GPU fixed-fixture pixels and 80 atomic admissions; not physical device availability'}
+            report={'zOrderPreserved':True,'foreignCollisionPreserved':True,'atomicAdmissions':atomic,'rotationAdmissions':rotations,'fractionalFraming':fractional,'effects':results,'reset':True,'scope':'GPU fixed-fixture pixels, fractional framing and 80 atomic admissions; not physical device availability'}
             (output/f'{stamp}-gpu-proof.json').write_text(json.dumps(report,indent=2),encoding='utf8');return report
         finally:
             for kind,data in [('RemoveScene',{'sceneName':composite}),('RemoveScene',{'sceneName':layer}),('RemoveInput',{'inputName':background}),('RemoveInput',{'inputName':source})]:

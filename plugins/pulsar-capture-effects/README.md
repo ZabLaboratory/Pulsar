@@ -94,6 +94,17 @@ inner rectangle. The initial ROI and design effects still use the outer block;
 operator/physical capture filters remain on the upstream video. No frame source
 or second physical input is created. Settings and both transforms are admitted
 on the same graphics task, including first-frame and resolution-change handling.
+Positive fractional content-box dimensions are preserved in local scene units:
+the one-texel minimum is resolved by the producer before conversion from its
+texture grid. Clamping again to one local pixel would enlarge framing after
+layout. Missing/non-finite settings retain the outer-box fallback; nonpositive
+explicit dimensions retain the previous one-pixel invalid-input fallback.
+`scripts/probe-capture-framing.py` runs the existing capture-effects pixel probe
+and source-removal regression in the owned private native host. It additionally
+checks fractional horizontal/vertical framing, their pixels outside the fitted
+content, and zero/negative dimension fallbacks. It uses the same explicit runtime,
+host, plugin and helper arguments as `probe-group-composition.py`; it does not
+qualify physical capture or CEF.
 
 Inherited frame clipping accepts up to 32 source-local affine rectangle projections
 through ancestor_clips. Width/height/rounding are admitted with the existing
