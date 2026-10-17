@@ -1,0 +1,1097 @@
+{
+  "schema": "pulsar.vision-solar-prism-cef-native-coverage-chain/1",
+  "passed": false,
+  "startedUtc": "2026-10-17T15:44:26.833931+00:00",
+  "runtimeStarted": true,
+  "buildStarted": false,
+  "gpuUsed": true,
+  "gpuSlotReleasedByParent": true,
+  "preflight": {
+    "schema": "pulsar.vision-solar-cef-coverage-chain-preflight/1",
+    "checkedUtc": "2026-10-17T15:44:26.550886+00:00",
+    "runtimeStarted": false,
+    "buildStarted": false,
+    "gpuUsed": false,
+    "worktree": {
+      "worktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain",
+      "branch": "eleven/local-20261017-cef-coverage-chain",
+      "head": "392f9d94c7e24fadc5dae9dbfb08e43e4a5406d1",
+      "status": "?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153212Z-chain-preflight.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153348Z-agent-start.md\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153406Z-chain-preflight.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153423Z-cef-coverage-chain.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153518Z-chain-preflight.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153524Z-cef-coverage-chain.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153549Z-chain-preflight.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153557Z-cef-coverage-chain.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153845Z-chain-preflight.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153853Z-cef-coverage-chain.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153939Z-chain-preflight.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T153946Z-cef-coverage-chain.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T154408Z-chain-preflight.json\n?? scripts/cef-coverage-chain/",
+      "commonDir": "D:/Documents/Zab/Pulsar/.git"
+    },
+    "sourcePins": {
+      "solarCommit": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+      "prismCommit": "55aa9d7118b62f8caeea0d44534a129210eb20a1",
+      "prismProductBaselineCommit": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
+      "visionCommit": "044ddb62df050eee9869150a69a1b88fd26f2962",
+      "baselinePresenterCommit": "85c49664a029744369b063ddffaa92415a59c8a8",
+      "nativeSourceCommit": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+      "cefSourceCommit": "47cb08c56e010c5da45923a5eee147f294216756",
+      "solarHead": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+      "prismHead": "55aa9d7118b62f8caeea0d44534a129210eb20a1",
+      "prismConsumer": {
+        "path": "src/main/broadcast/engine/capture/native-composition-consumer.ts",
+        "headBlob": "016a579264550a4377d932ed447259da55e69ea0",
+        "productBaselineBlob": "016a579264550a4377d932ed447259da55e69ea0",
+        "byteIdentical": true
+      },
+      "visionFixtureHead": "044ddb62df050eee9869150a69a1b88fd26f2962",
+      "sourceBlobs": {
+        "assigned": {
+          "commit": "392f9d94c7e24fadc5dae9dbfb08e43e4a5406d1",
+          "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+          "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+        },
+        "native": {
+          "commit": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+          "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+          "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+        },
+        "cef": {
+          "commit": "47cb08c56e010c5da45923a5eee147f294216756",
+          "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+          "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+        }
+      }
+    },
+    "solarVisionAssets": {
+      "ui/mainpresenter.mjs": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\ui\\mainpresenter.mjs",
+          "bytes": 43272,
+          "sha256": "1046dafdf9d1544dd15e17d24b57dcf8e32fdf74a140285b5f200ca544ccf508"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\ui\\mainpresenter.mjs",
+          "bytes": 43272,
+          "sha256": "1046dafdf9d1544dd15e17d24b57dcf8e32fdf74a140285b5f200ca544ccf508"
+        },
+        "byteIdentical": true
+      },
+      "ui/fonts.mjs": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\ui\\fonts.mjs",
+          "bytes": 1977,
+          "sha256": "d49ed45181a8aa714f675aaa24f5439e9547b274d6eba6cd2bb995c981765c5f"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\ui\\fonts.mjs",
+          "bytes": 1977,
+          "sha256": "d49ed45181a8aa714f675aaa24f5439e9547b274d6eba6cd2bb995c981765c5f"
+        },
+        "byteIdentical": true
+      },
+      "pkg/lumencast_vision_web.js": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\pkg\\lumencast_vision_web.js",
+          "bytes": 157228,
+          "sha256": "2661fc24146f703adcfa1b94769d9c789b707abf0027792b6f4287fb40bc04e6"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\pkg\\lumencast_vision_web.js",
+          "bytes": 157228,
+          "sha256": "2661fc24146f703adcfa1b94769d9c789b707abf0027792b6f4287fb40bc04e6"
+        },
+        "byteIdentical": true
+      },
+      "pkg/lumencast_vision_web_bg.wasm": {
+        "public": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\pkg\\lumencast_vision_web_bg.wasm",
+          "bytes": 10618773,
+          "sha256": "39c64876a92c0d8d5a104fa8366dc437520140be92e8376db59ed127420ab4a9"
+        },
+        "dist": {
+          "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\pkg\\lumencast_vision_web_bg.wasm",
+          "bytes": 10618773,
+          "sha256": "39c64876a92c0d8d5a104fa8366dc437520140be92e8376db59ed127420ab4a9"
+        },
+        "byteIdentical": true
+      }
+    },
+    "visionFixture": {
+      "path": "D:\\Documents\\Lumencast\\lumencast-vision\\.worktrees\\eleven-local-20261017-native-mask-coverage\\crates\\vision-web\\tests\\contribution-webgl2-proof\\contribution-scene.lsml",
+      "bytes": 1739,
+      "sha256": "103930a1a01c9de4cab71feb6ed31cc9bafdd0411dcbaf2e0914a91c3b47b064"
+    },
+    "nativeAndCefRuntime": {
+      "nativeHost": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\pulsar.exe",
+        "bytes": 1677824,
+        "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973"
+      },
+      "nativeObs": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\obs.dll",
+        "bytes": 1491968,
+        "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+      },
+      "nativeWebsocket": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+        "bytes": 2855936,
+        "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+      },
+      "capturePlugin": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+        "bytes": 573440,
+        "sha256": "9b17835e8db5ed452fd59e0fbe31d07f12e022df888540db6986e3a73918d093"
+      },
+      "cefBrowser": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\pulsar-browser.dll",
+        "bytes": 2571264,
+        "sha256": "0602fdc46559109ad24a57fc769580480fe8b2794930cc591bf5a450129df8e6"
+      },
+      "cefHelper": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\pulsar-browser-page.exe",
+        "bytes": 2216960,
+        "sha256": "9148fb2f5e1cc8867b19ab1cfd033eaea4e647e05ff0ac313f883cf281ab65e6"
+      },
+      "cefLib": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\libcef.dll",
+        "bytes": 213993472,
+        "sha256": "551bea07c46c9a330eff7861105321f3c7d47e3c0412ced4b0ff35aa130f2536"
+      }
+    },
+    "websocketProvenance": {
+      "nativeDll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+        "bytes": 2855936,
+        "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+      },
+      "cefReportedDllSha256": "3130c2cf8485bfbf80b67b4ee09126f21a38a90229457aabdb03126526374f3a",
+      "cefReportedDllRetainedAtOverlayPath": false,
+      "sameObsDllSha256": true,
+      "apiVersion": 3,
+      "vendorRegistration": "obs_module_post_load → inline proc_handler API calls",
+      "directImportFromCaptureEffects": false,
+      "staticEvidence": {
+        "headerPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-websocket\\lib\\obs-websocket-api.h",
+        "headerSha256": "c29e8e38ee66c36db79cae86217ab0f270aad39f97e82090809d087c281b7948",
+        "sourcePath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-websocket\\src\\obs-websocket.cpp",
+        "sourceSha256": "a7218ae8699ad65214ab2d77726afa73cebabd6ec85f1dceb9a0700a5e67382b",
+        "captureEffectsPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-capture-effects\\src\\capture-effects.cpp",
+        "captureEffectsSha256": "1f625a897b2a86604a6b0d5ba619152b4f88eb5c0a043ea45ccbfe9dcf284e71"
+      },
+      "selectionForPrivateStage": "preserve native d3ecaf55 DLL and overlay CEF browser files only; runtime compatibility remains unproved until the private integrated run"
+    },
+    "harness": {
+      "page": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\index.html",
+      "pageModule": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\page.mjs",
+      "solarPrismEmitter": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\emit-wire.mjs",
+      "privateRunner": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\probe.py",
+      "offlinePreflight": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\preflight.py",
+      "executionGate": "the private runner requires both --execute and --gpu-slot-released",
+      "realAtlasRequirement": "use GetSourceScreenshot from this exact CEF browser_source; no generated PNG/image atlas may stand in for it"
+    },
+    "limitations": [
+      "No CEF/browser/GPU/native process was started by this preflight.",
+      "No build or test was run.",
+      "The LSML capture node uses the proof fixture's synthetic source binding; no physical camera is involved.",
+      "The exact d3ecaf55 native WebSocket binary is selected for this private stage because it is retained and already exercised with the matching host/obs.dll; the CEF report's 3130c2cf binary is absent from the retained overlay and is not substituted."
+    ]
+  },
+  "scratch": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-6776dea671df437da93c8a828b19340f",
+  "reportPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T154424Z-cef-coverage-chain.json",
+  "sourcePins": {
+    "solar": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+    "prismRuntimeHead": "55aa9d7118b62f8caeea0d44534a129210eb20a1",
+    "prismProductBaseline": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
+    "vision": "044ddb62df050eee9869150a69a1b88fd26f2962",
+    "visionBaselinePresenter": "85c49664a029744369b063ddffaa92415a59c8a8",
+    "pulsarNativeSource": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+    "pulsarCefSource": "47cb08c56e010c5da45923a5eee147f294216756"
+  },
+  "selectedWebsocket": "retained native d3ecaf55; CEF-reported 3130c2cf is not present in overlay and is not copied",
+  "evidence": {
+    "backdropSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T154426Z-6776dea6-backdrop-source.png",
+      "bytes": 697,
+      "sha256": "14f66420e3fa9965c27f7890a5ed155a711836af83ed10d4a508e982fc9e43f5"
+    },
+    "cefAtlasInitial": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T154426Z-6776dea6-cef-atlas-initial.png",
+      "bytes": 1748,
+      "sha256": "798ab5b72be0fcc49885b5be1d301538c6ccdf234a51b3acfb08611b8db0e80c"
+    },
+    "hostLog": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T154426Z-6776dea6-host.log",
+      "bytes": 30146,
+      "sha256": "fb883e26f04a8fc05c0a5bbd754325ed6ea27bdd364dc3706f45cec28f87a0eb"
+    }
+  },
+  "stagedRuntime": {
+    "sourceRuntime": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo",
+    "cefOverlay": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit",
+    "capturePluginSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "artifactPins": {
+      "pulsar.exe": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-6776dea671df437da93c8a828b19340f\\runtime\\bin\\64bit\\pulsar.exe",
+        "bytes": 1677824,
+        "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973"
+      },
+      "obs.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-6776dea671df437da93c8a828b19340f\\runtime\\bin\\64bit\\obs.dll",
+        "bytes": 1491968,
+        "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+      },
+      "obs-websocket.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-6776dea671df437da93c8a828b19340f\\runtime\\obs-plugins\\64bit\\obs-websocket.dll",
+        "bytes": 2855936,
+        "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+      },
+      "pulsar-capture-effects.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-6776dea671df437da93c8a828b19340f\\runtime\\obs-plugins\\64bit\\pulsar-capture-effects.dll",
+        "bytes": 573440,
+        "sha256": "9b17835e8db5ed452fd59e0fbe31d07f12e022df888540db6986e3a73918d093"
+      },
+      "pulsar-browser.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-6776dea671df437da93c8a828b19340f\\runtime\\obs-plugins\\64bit\\pulsar-browser.dll",
+        "bytes": 2571264,
+        "sha256": "0602fdc46559109ad24a57fc769580480fe8b2794930cc591bf5a450129df8e6"
+      },
+      "pulsar-browser-page.exe": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-6776dea671df437da93c8a828b19340f\\runtime\\obs-plugins\\64bit\\pulsar-browser-page.exe",
+        "bytes": 2216960,
+        "sha256": "9148fb2f5e1cc8867b19ab1cfd033eaea4e647e05ff0ac313f883cf281ab65e6"
+      },
+      "libcef.dll": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\.cache\\cef-coverage-chain\\run-6776dea671df437da93c8a828b19340f\\runtime\\obs-plugins\\64bit\\libcef.dll",
+        "bytes": 213993472,
+        "sha256": "551bea07c46c9a330eff7861105321f3c7d47e3c0412ced4b0ff35aa130f2536"
+      }
+    },
+    "cefOverlayFileCount": 68,
+    "cefReportedWebsocketDllCopied": false
+  },
+  "ownedPid": 6476,
+  "websocketPort": 59376,
+  "hostReady": true,
+  "videoSettings": {
+    "bootEnvironment": {
+      "PULSAR_RESOLUTION": "320x180",
+      "PULSAR_FPS": "30"
+    },
+    "after": {
+      "baseHeight": 180,
+      "baseWidth": 320,
+      "fpsDenominator": 1,
+      "fpsNumerator": 30,
+      "outputHeight": 180,
+      "outputWidth": 320
+    }
+  },
+  "scene": {
+    "sceneName": "cef-coverage-6776dea671df",
+    "sceneSize": [
+      320,
+      180
+    ],
+    "browserSourceUrl": "http://127.0.0.1:59375/",
+    "browserSourceSettings": {
+      "width": 322,
+      "height": 546,
+      "fps": 30
+    },
+    "sceneItemIds": {
+      "backdrop": 1,
+      "captureBinding": 2,
+      "captureContribution": 3,
+      "cefAtlas": 4
+    },
+    "captureInputKind": "synthetic color_source_v3; no camera/device opened",
+    "activation": {
+      "request": "SetCurrentProgramScene",
+      "response": {},
+      "readback": {
+        "currentProgramSceneName": "cef-coverage-6776dea671df",
+        "currentProgramSceneUuid": "0f559d2d-0969-4b48-bf5f-426332440a59",
+        "sceneName": "cef-coverage-6776dea671df",
+        "sceneUuid": "0f559d2d-0969-4b48-bf5f-426332440a59"
+      },
+      "browserLifecycle": "active private fixture scene to drive actual CEF browser_source"
+    }
+  },
+  "presenter": {
+    "initialReceiptSchema": "vision.native-composition-frame/2",
+    "initialReceiptIdentity": {
+      "sceneId": "vision-frame-mask-browser-proof",
+      "sceneVersion": "sha256:9c8038d08bebe7bb3e847e90b40d1c93dbb78cbc7831f83a176a8e26488edfeb",
+      "pixelRevision": "0"
+    },
+    "canvasSize": [
+      322,
+      546
+    ],
+    "legacyPresenterNegative": "pending until initial and updated native pixels are captured"
+  },
+  "cefAtlasInitialSamples": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\evidence\\local-20261017-cef-coverage-chain\\eleven\\20261017T154426Z-6776dea6-cef-atlas-initial.png",
+    "sha256": "798ab5b72be0fcc49885b5be1d301538c6ccdf234a51b3acfb08611b8db0e80c",
+    "dimensions": [
+      322,
+      546
+    ],
+    "channels": 4,
+    "coverageSurface": {
+      "targetNodeId": 1,
+      "coordinateSpace": "global-scene-texels",
+      "sceneRect": [
+        0,
+        0,
+        320,
+        180
+      ],
+      "atlasRect": [
+        1,
+        365,
+        320,
+        180
+      ]
+    },
+    "samples": {
+      "partial": {
+        "scenePoint": [
+          16,
+          40
+        ],
+        "atlasPoint": [
+          17,
+          405
+        ],
+        "rgba": [
+          127,
+          127,
+          127,
+          127
+        ],
+        "expectedAlpha": 128
+      },
+      "overlap": {
+        "scenePoint": [
+          36,
+          40
+        ],
+        "atlasPoint": [
+          37,
+          405
+        ],
+        "rgba": [
+          127,
+          127,
+          127,
+          127
+        ],
+        "expectedAlpha": 128
+      },
+      "clippedOverflow": {
+        "scenePoint": [
+          62,
+          40
+        ],
+        "atlasPoint": [
+          63,
+          405
+        ],
+        "rgba": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expectedAlpha": 0
+      },
+      "unclippedChild": {
+        "scenePoint": [
+          110,
+          40
+        ],
+        "atlasPoint": [
+          111,
+          405
+        ],
+        "rgba": [
+          127,
+          127,
+          127,
+          127
+        ],
+        "expectedAlpha": 128
+      },
+      "stencilFrameOverflow": {
+        "scenePoint": [
+          124,
+          40
+        ],
+        "atlasPoint": [
+          125,
+          405
+        ],
+        "rgba": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "expectedAlpha": 0
+      }
+    }
+  },
+  "error": {
+    "type": "RuntimeError",
+    "message": "{'emitterExit': 1, 'stdout': '', 'stderr': 'WebSocket server error: Port 24678 is already in use\\nfile:///D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-cef-coverage-chain/scripts/cef-coverage-chain/emit-wire.mjs:212\\n      captureContributionSceneItemId,\\n      ^\\n\\nReferenceError: captureContributionSceneItemId is not defined\\n    at file:///D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-cef-coverage-chain/scripts/cef-coverage-chain/emit-wire.mjs:212:7\\n\\nNode.js v24.16.0\\n'}"
+  },
+  "processExitCode": 0,
+  "shutdown": {
+    "exitCode": 0,
+    "gracefulEventRequested": true,
+    "forcedTerminationUsed": false,
+    "orderedMarkerNames": [
+      "pre_obs_shutdown_begin",
+      "cef_shutdown_begin",
+      "cef_shutdown_complete",
+      "pre_obs_shutdown_complete"
+    ],
+    "orderedMarkerPositions": [
+      210,
+      227,
+      228,
+      229
+    ],
+    "markers": [
+      "2026-10-17T15:44:30Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=manager_started",
+      "2026-10-17T15:44:30Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=cef_ready",
+      "2026-10-17T15:44:30Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=source_created generation=1",
+      "2026-10-17T15:44:30Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=browser_created browser_id=1 generation=1 browser_count=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=begin phase=Closing browser_count=1 pending_source_tasks=0 active_source_tasks=0 already_started=0",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=close_requested browser_count=1 source_count=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=browser_close_call browser_id=1 reason=shutdown_started",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=browser_ref_released_before_close browser_id=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=browser_on_before_close_entry browser_id=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=client_keepalive_acquired browser_id=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=browser_detached browser_id=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=browser_close_observed browser_id=1 browser_count=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=browser_finalization_intent browser_id=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=browser_finalization_scheduled browser_id=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=browser_on_before_close_exit browser_id=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=browser_close_return browser_id=1 requested=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=audio_quiescent browser_id=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=browser_closed browser_id=1 browser_count=0",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=client_keepalive_released browser_id=1",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=barrier_released phase=Drained browser_count=0",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=cef_shutdown_begin browser_count=0",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=cef_shutdown_complete browser_count=0",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete",
+      "2026-10-17T15:45:00Z INFO QJ60GhXP6TPXDY44 libobs | PULSAR_CEF_SHUTDOWN event=source_destroyed generation=1"
+    ]
+  },
+  "pageServer": {
+    "url": "http://127.0.0.1:59375/",
+    "threadAliveBeforeClose": true,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/",
+        "utc": "2026-10-17T15:44:30.760815+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/page.mjs",
+        "utc": "2026-10-17T15:44:30.863037+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/pkg/lumencast_vision_web.js",
+        "utc": "2026-10-17T15:44:31.074125+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/ui/mainpresenter.mjs",
+        "utc": "2026-10-17T15:44:31.074125+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/ui/fonts.mjs",
+        "utc": "2026-10-17T15:44:31.080158+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision-fixture/contribution-scene.lsml",
+        "utc": "2026-10-17T15:44:31.084161+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/vision/pkg/lumencast_vision_web_bg.wasm",
+        "utc": "2026-10-17T15:44:31.105709+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:33.229628+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:33.481635+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:33.750153+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:33.989020+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:34.237509+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:34.488120+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:34.725448+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:34.976216+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:35.229571+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:35.478832+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:35.732476+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:35.986998+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:36.239517+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:36.488582+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:36.728744+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:36.978831+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:37.230531+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:37.480710+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:37.730752+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:37.979449+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:38.229589+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:38.476104+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:38.729327+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:38.978769+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:39.228559+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:39.481744+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:39.732313+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:39.983007+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:40.232336+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:40.482327+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:40.736218+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:40.973288+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:41.224260+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:41.476049+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:41.725816+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:41.979501+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:42.232260+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:42.482256+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:42.733210+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:42.982269+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:43.233421+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:43.488257+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:43.724062+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:43.974248+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:44.229400+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:44.479102+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:44.728299+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:44.981014+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:45.231041+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:45.483029+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:45.732282+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:45.987978+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:46.225289+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:46.475786+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:46.726124+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:46.975833+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:47.229273+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:47.481108+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:47.731958+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:47.981276+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:48.233138+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:48.486093+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:48.737971+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:48.976502+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:49.227150+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:49.475685+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:49.725030+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:49.974804+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:50.225678+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:50.474976+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:50.723833+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:50.979091+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:51.231748+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:51.483903+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:51.736962+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:51.974645+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:52.228932+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:52.479814+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:52.730027+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:52.981586+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:53.232076+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:53.481765+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:53.730898+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:53.979608+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:54.228855+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:54.481957+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:54.730987+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:54.980913+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:55.229929+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:55.479565+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:55.729729+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:55.982734+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:56.228832+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:56.481460+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:56.729170+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:56.980390+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:57.228752+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:57.482406+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:57.732896+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:57.982777+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:58.231433+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:58.481605+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:58.731563+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:58.984598+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:59.234938+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:59.487399+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:59.738554+00:00"
+      },
+      {
+        "method": "GET",
+        "path": "/control",
+        "utc": "2026-10-17T15:44:59.976269+00:00"
+      }
+    ],
+    "events": [],
+    "submittedFrames": {
+      "initial": {
+        "sceneId": "vision-frame-mask-browser-proof",
+        "sceneVersion": "sha256:9c8038d08bebe7bb3e847e90b40d1c93dbb78cbc7831f83a176a8e26488edfeb",
+        "messageType": "frame-submitted",
+        "schema": "vision.native-composition-frame/2",
+        "pixelRevision": "0",
+        "canvasSize": [
+          322,
+          546
+        ],
+        "coverageSurfaceCount": 1,
+        "owners": [
+          {
+            "targetNodeId": null,
+            "maskPresent": false,
+            "maskSurfaceIndex": null
+          },
+          {
+            "targetNodeId": null,
+            "maskPresent": true,
+            "maskSurfaceIndex": 0
+          }
+        ]
+      }
+    }
+  },
+  "runtimeStopped": true,
+  "httpServerStopped": true,
+  "finishedUtc": "2026-10-17T15:45:00.416499+00:00"
+}

@@ -1,0 +1,238 @@
+PULSAR_RUNTIME_INSTANCE id=cef-coverage-a7416fe905b4486ba49ac00641e1b273 dir=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-coverage-chain\.cache\cef-coverage-chain\run-a7416fe905b4486ba49ac00641e1b273\state\runtime instance_lock=acquired instance_lock_path=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-coverage-chain\.cache\cef-coverage-chain\run-a7416fe905b4486ba49ac00641e1b273\state\instances\cef-coverage-a7416fe905b4486ba49ac00641e1b273\instance.lock runtime_dir_lock=acquired runtime_dir_lock_path=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-coverage-chain\.cache\cef-coverage-chain\run-a7416fe905b4486ba49ac00641e1b273\state\runtime\.runtime.lock instance_authority=Local\Pulsar.Runtime.cef-coverage-a7416fe905b4486ba49ac00641e1b273 instance_metadata=C:\Users\Mathias\AppData\Local\Pulsar\authorities\session-1\c2cd49738787973a.lock runtime_dir_authority=Local\Pulsar.Authority.57e0797088037fad runtime_dir_metadata=C:\Users\Mathias\AppData\Local\Pulsar\authorities\session-1\57e0797088037fad.lock legacy_alias=1 alias_lease=acquired alias_path=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-coverage-chain\.cache\cef-coverage-chain\run-a7416fe905b4486ba49ac00641e1b273\state\leases\directshow-program-preview.lock alias_authority=Local\Pulsar.DirectShowProgramPreview alias_metadata=C:\Users\Mathias\AppData\Local\Pulsar\authorities\session-1\9eab04979f2b22fc.lock
+PULSAR_LEGACY_ALIAS lease=acquired id=cef-coverage-a7416fe905b4486ba49ac00641e1b273 path=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-coverage-chain\.cache\cef-coverage-chain\run-a7416fe905b4486ba49ac00641e1b273\state\leases\directshow-program-preview.lock authority=Local\Pulsar.DirectShowProgramPreview metadata=C:\Users\Mathias\AppData\Local\Pulsar\authorities\session-1\9eab04979f2b22fc.lock
+PULSAR_SHUTDOWN_CONTROL event=ready id=cef-coverage-a7416fe905b4486ba49ac00641e1b273 mechanism=inherited_event
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg pulsar-headless | RTWQ platform started
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | CPU Name: AMD Ryzen 7 3800X 8-Core Processor             
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | CPU Speed: 3893MHz
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | Physical Cores: 8, Logical Cores: 16
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | Physical Memory: 32712MB Total, 7371MB Free
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | Windows Version: 10.0 Build 26200 (release: 25H2; revision: 9457; 64-bit)
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | Running as administrator: false
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | Windows 10/11 Gaming Features:
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	Game DVR: On
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	Game Mode: Probably On (no reg key set)
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | Sec. Software Status:
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	Antivirus Microsoft Defender: enabled (AV)
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	Pare-feu Windows: enabled (FW)
+2026-10-17T15:35:26Z DEBUG 9QaFPNUeEgapd5Mg libobs | canvas 'Main' (6c69626f-6273-4c00-9d88-c5136d61696e) created
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg pulsar-runtime | instance_id=cef-coverage-a7416fe905b4486ba49ac00641e1b273 runtime_dir=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-coverage-chain\.cache\cef-coverage-chain\run-a7416fe905b4486ba49ac00641e1b273\state\runtime legacy_alias=1 alias_lease=acquired instance_authority=Local\Pulsar.Runtime.cef-coverage-a7416fe905b4486ba49ac00641e1b273 runtime_dir_authority=Local\Pulsar.Authority.57e0797088037fad alias_authority=Local\Pulsar.DirectShowProgramPreview
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | ---------------------------------
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | Initializing D3D11...
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | Available Video Adapters: 
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	Adapter 0: NVIDIA GeForce RTX 3070
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	  Dedicated VRAM: 8407482368 (7.8 GiB)
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	  Shared VRAM:    17150578688 (16.0 GiB)
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	  PCI ID:         10de:2484
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	  HAGS Status:    Enabled (Default: No, Driver status: Supported)
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	  Driver Version: 32.0.16.1714
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	  output 0:
+	    name=ASUS VG279Q1A
+	    pos={0, 0}
+	    size={1920, 1080}
+	    attached=true
+	    refresh=60
+	    bits_per_color=8
+	    space=RGB_FULL_G22_NONE_P709
+	    primaries=[r=(0.643555, 0.332031), g=(0.300781, 0.600586), b=(0.149414, 0.056641), wp=(0.313477, 0.329102)]
+	    relative_gamut_area=[709=1.013389, P3=0.747041, 2020=0.535952]
+	    sdr_white_nits=80
+	    nit_range=[min=0.500000, max=270.000000, max_full_frame=270.000000]
+	    dpi=96 (100%)
+	    id=\\?\DISPLAY#AUS2703#5&1034816a&0&UID41216#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}
+	    alt_id=\\.\DISPLAY1
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | 	  output 1:
+	    name=S24D330
+	    pos={1920, 0}
+	    size={1920, 1080}
+	    attached=true
+	    refresh=60
+	    bits_per_color=8
+	    space=RGB_FULL_G22_NONE_P709
+	    primaries=[r=(0.646484, 0.333008), g=(0.315430, 0.620117), b=(0.151367, 0.065430), wp=(0.313477, 0.329102)]
+	    relative_gamut_area=[709=1.029611, P3=0.758999, 2020=0.544531]
+	    sdr_white_nits=80
+	    nit_range=[min=0.500000, max=270.000000, max_full_frame=270.000000]
+	    dpi=96 (100%)
+	    id=\\?\DISPLAY#SAM0D92#5&1034816a&0&UID41219#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}
+	    alt_id=\\.\DISPLAY2
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | Loading up D3D11 on adapter NVIDIA GeForce RTX 3070 (0)
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | D3D11 loaded successfully, feature level used: b000
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | DXGI increase maximum frame latency success
+2026-10-17T15:35:26Z WARN 9QaFPNUeEgapd5Mg libobs | Hardware-Accelerated GPU Scheduling enabled on adapter!
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | ---------------------------------
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | video settings reset:
+	base resolution:   1920x1080
+	output resolution: 1920x1080
+	downscale filter:  Bicubic
+	fps:               60/1
+	format:            NV12
+	YUV mode:          Rec. 709/Partial
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | NV12 texture support enabled
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | P010 texture support not available
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg pulsar-headless | video 1920x1080 @ 60 fps
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | ---------------------------------
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | audio settings reset:
+	samples per sec: 48000
+	speakers:        2
+	max buffering:   21 milliseconds
+	buffering type:  fixed
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | LoadLibrary failed for 'libobs-winrt': (null) (126)
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg pulsar-headless | audio buffering fixed at 20 ms
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg pulsar-headless | audio monitoring device bound (resolved default, id={0.0.0.00000000}.{3a9b3ef5-04ae-4b95-88d7-53e24294bc68})
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | callbacks installed
+2026-10-17T15:35:26Z INFO 9QaFPNUeEgapd5Mg libobs | Enabling fixed audio buffering, total audio buffering is now 21 milliseconds
+2026-10-17T15:35:26Z WARN 9QaFPNUeEgapd5Mg libobs | Skipping module 'D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-cef-coverage-chain/.cache/cef-coverage-chain/run-a7416fe905b4486ba49ac00641e1b273/runtime/bin/64bit/../../obs-plugins/64bit/chrome_elf.dll', not an OBS plugin
+2026-10-17T15:35:26Z DEBUG 9QaFPNUeEgapd5Mg libobs | ---------------------------------
+2026-10-17T15:35:26Z DEBUG 9QaFPNUeEgapd5Mg libobs | Loading module: image-source.dll
+2026-10-17T15:35:26Z WARN 9QaFPNUeEgapd5Mg libobs | Skipping module 'D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-cef-coverage-chain/.cache/cef-coverage-chain/run-a7416fe905b4486ba49ac00641e1b273/runtime/bin/64bit/../../obs-plugins/64bit/libcef.dll', not an OBS plugin
+2026-10-17T15:35:26Z WARN 9QaFPNUeEgapd5Mg libobs | Skipping module 'D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-cef-coverage-chain/.cache/cef-coverage-chain/run-a7416fe905b4486ba49ac00641e1b273/runtime/bin/64bit/../../obs-plugins/64bit/libEGL.dll', not an OBS plugin
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Skipping module 'D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-cef-coverage-chain/.cache/cef-coverage-chain/run-a7416fe905b4486ba49ac00641e1b273/runtime/bin/64bit/../../obs-plugins/64bit/libGLESv2.dll', not an OBS plugin
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | ---------------------------------
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | Loading module: obs-filters.dll
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | ---------------------------------
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | Loading module: obs-websocket.dll
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [obs_module_load] you can haz websockets (Version: 5.7.3 | RPC Version: 1)
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [obs_module_load] Qt version (compile-time): 6.8.3 | Qt version (run-time): 6.8.3
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [obs_module_load] Linked ASIO Version: 103200
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg obs-websocket | [Config::Save] Saved config.
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [obs_module_load] Module loaded.
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | ---------------------------------
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | Loading module: pulsar-browser.dll
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Failed to load 'en-US' text for module: 'pulsar-browser.dll'
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-browser | : Version 2.26.8
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-browser | : CEF Version 127.0.6533.120 (runtime), 127.145.7+g2b7d20b+chromium-127.0.6533.120 (compiled)
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | ---------------------------------
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | Loading module: pulsar-capture-effects.dll
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Failed to load 'en-US' text for module: 'pulsar-capture-effects.dll'
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg libobs | PULSAR_GROUP_COMPOSITION event=module_load
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [obs_module_post_load] WebSocket server is enabled, starting...
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [WebSocketServer::Start] Server started successfully on 127.0.0.1:62107.
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [WebSocketServer::ServerRunner] IO thread started.
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-program-audio | ProgramAudioRoute=program-common ProgramAudio=0000029B30B4BA00 cut_policy=common-program-route-unchanged preview_audio_supported=false afv_supported=false
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | source 'Default' (scene) created
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Source ID 'fade_transition' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Failed to create source 'Fade'!
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | private source 'Fade' (fade_transition) created
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | native stinger compositing disabled (default; OBS hard-cut) (PULSAR_NATIVE_STINGER)
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Output ID 'rtmp_output' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Failed to create output 'PulsarStream'!
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarStream' (rtmp_output) created
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Output ID 'ffmpeg_muxer' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Failed to create output 'PulsarRecord'!
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarRecord' (ffmpeg_muxer) created
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Output ID 'replay_buffer' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Failed to create output 'PulsarReplay'!
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarReplay' (replay_buffer) created
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | signal_handler_connect: signal 'saved' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Output ID 'virtualcam_output' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Failed to create output 'PulsarVCam'!
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarVCam' (virtualcam_output) created
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Output ID 'program_return_output' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Failed to create output 'PulsarProgramReturn'!
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarProgramReturn' (program_return_output) created
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarProgramReturn' destroyed
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Output ID 'program_return_output' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Failed to create output 'PulsarProgramReturn'!
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarProgramReturn' (program_return_output) created
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg pulsar-frontend-stub | program return output allocated; awaiting stable ProgramView
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Output ID 'preview_return_output' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Failed to create output 'PulsarPreviewReturn'!
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarPreviewReturn' (preview_return_output) created
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarPreviewReturn' destroyed
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Output ID 'preview_return_output' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Failed to create output 'PulsarPreviewReturn'!
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarPreviewReturn' (preview_return_output) created
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg pulsar-frontend-stub | preview return output allocated; awaiting stable PreviewView
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Service 'rtmp_custom' not found
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg pulsar-frontend-stub | rtmp_custom service unavailable
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg pulsar-frontend-stub | encoder 'x264' unavailable on this machine, falling back to x264
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Encoder ID 'obs_x264' not found
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | encoder 'PulsarVideoEnc' (obs_x264) created
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Output 'PulsarRecord': Tried to use obs_output_set_video_encoder2 on a raw output
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Output 'PulsarStream': Tried to use obs_output_set_video_encoder2 on a raw output
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Output 'PulsarReplay': Tried to use obs_output_set_video_encoder2 on a raw output
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | video encoder allocated: family=x264 id=obs_x264, 6000 kbps (stable ProgramView binding follows)
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Encoder ID 'ffmpeg_aac' not found
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | encoder 'PulsarAudioEnc' (ffmpeg_aac) created
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | aac track 1 configured: 160 kbps (mixer index 0)
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Output 'PulsarRecord': Tried to use obs_output_set_audio_encoder on a raw output
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | record audio tracks: 1
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Output 'PulsarStream': Tried to use obs_output_set_audio_encoder on a raw output
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | stream audio tracks: 1
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Output 'PulsarReplay': Tried to use obs_output_set_audio_encoder on a raw output
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | replay audio tracks: 1
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | window_capture has no target (set PULSAR_CAPTURE_WINDOW); will produce black frames
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Source ID 'window_capture' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Failed to create source 'PulsarCapture'!
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | source 'PulsarCapture' (window_capture) created
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-dual-lane | activation=enabled source=default rollback_after_takes=0 flag_resolved_at=setup
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Attempted to add Scene without specifying a canvas! Using default canvas instead.
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | private source 'PulsarLaneA' (scene) created
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Attempted to add Scene without specifying a canvas! Using default canvas instead.
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | private source 'PulsarLaneB' (scene) created
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg libobs | Attempted to add Scene without specifying a canvas! Using default canvas instead.
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | private source 'PulsarPreviewBootstrap' (scene) created
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg libobs | NV12 texture support enabled
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg libobs | P010 texture support not available
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg pulsar-scene-switch | failed to start PreviewView producer: (null)
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg pulsar-frontend-stub | dual-lane setup unavailable; keeping legacy canvas path
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-dual-lane | encoder video_t bound once to ProgramView
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | desktop audio configured use_device_timing=false
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Source ID 'wasapi_output_capture' not found
+2026-10-17T15:35:27Z ERROR 9QaFPNUeEgapd5Mg libobs | Failed to create source 'PulsarDesktopAudio'!
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | source 'PulsarDesktopAudio' (wasapi_output_capture) created
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | desktop audio bound to channel 1
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | mic skipped (PULSAR_MIC_DEVICE_ID unset)
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | PULSAR_PROCESS_AUDIO_NAME unset; process audio not wired
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | recordings will land under: D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-coverage-chain\.cache\cef-coverage-chain\run-a7416fe905b4486ba49ac00641e1b273\state\runtime\recordings
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | recording container: mp4
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | replay buffer configured: dir=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-coverage-chain\.cache\cef-coverage-chain\run-a7416fe905b4486ba49ac00641e1b273\state\runtime\recordings max_time_sec=30 max_size_mb=512
+2026-10-17T15:35:27Z WARN 9QaFPNUeEgapd5Mg pulsar-runtime-telemetry | trace disabled: exact build, host/GPU, and producer topology metadata are required
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-scene-switch | vendor registered name=pulsar-scene-switch
+PULSAR_SESSION 9QaFPNUeEgapd5Mg
+PULSAR_READY ws=ws://127.0.0.1:62107 password=[redacted]
+pulsar-headless: libobs 32.1.2-67-g70a583024-modified-pulsar ready, idling (Ctrl+C to exit)
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [WebSocketServer::onOpen] New WebSocket client has connected from 127.0.0.1:62109
+PULSAR_SHUTDOWN_CONTROL event=signaled id=cef-coverage-a7416fe905b4486ba49ac00641e1b273 mechanism=inherited_event
+[pulsar-headless] shutting down
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [WebSocketServer::onClose] WebSocket client `127.0.0.1:62109` has disconnected with code `1000` and reason: 
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-headless | shutting down
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | PULSAR_WEBSOCKET_QUIESCE event=ack active_handlers=0 sessions=0 no_handlers_after_ack=1
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [WebSocketServer::ServerRunner] IO thread exited.
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_not_running
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=scripting_shutdown
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=started
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=complete
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=exit
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=duplicate_skipped
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_detached phase=exit
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_begin scenes=1 sources=2
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarStream' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarRecord' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarReplay' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarVCam' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarProgramReturn' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | output 'PulsarPreviewReturn' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | encoder 'PulsarVideoEnc' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | encoder 'PulsarAudioEnc' destroyed
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | private source 'PulsarLaneA' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | private source 'PulsarLaneB' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | private source 'Fade' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | private source 'PulsarPreviewBootstrap' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | source 'Default' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | source 'PulsarCapture' destroyed
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | source 'PulsarDesktopAudio' destroyed
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=0
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg pulsar-frontend-stub | callbacks uninstalled
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=0 pending_released=0
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [obs_module_unload] Shutting down...
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [WebSocketServer::Stop] Server stopped successfully
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg obs-websocket | [obs_module_unload] Finished shutting down.
+2026-10-17T15:35:27Z INFO 9QaFPNUeEgapd5Mg libobs | Freeing OBS context data
+2026-10-17T15:35:27Z DEBUG 9QaFPNUeEgapd5Mg libobs | canvas 'Main' (6c69626f-6273-4c00-9d88-c5136d61696e) destroyed
+PULSAR_LEGACY_ALIAS lease=released id=cef-coverage-a7416fe905b4486ba49ac00641e1b273 path=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-coverage-chain\.cache\cef-coverage-chain\run-a7416fe905b4486ba49ac00641e1b273\state\leases\directshow-program-preview.lock authority=Local\Pulsar.DirectShowProgramPreview metadata=C:\Users\Mathias\AppData\Local\Pulsar\authorities\session-1\9eab04979f2b22fc.lock
+PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=cef-coverage-a7416fe905b4486ba49ac00641e1b273 dir=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-coverage-chain\.cache\cef-coverage-chain\run-a7416fe905b4486ba49ac00641e1b273\state\runtime authority=Local\Pulsar.Authority.57e0797088037fad metadata=C:\Users\Mathias\AppData\Local\Pulsar\authorities\session-1\57e0797088037fad.lock
+PULSAR_RUNTIME_INSTANCE lease=released id=cef-coverage-a7416fe905b4486ba49ac00641e1b273 dir=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-cef-coverage-chain\.cache\cef-coverage-chain\run-a7416fe905b4486ba49ac00641e1b273\state\runtime authority=Local\Pulsar.Runtime.cef-coverage-a7416fe905b4486ba49ac00641e1b273 metadata=C:\Users\Mathias\AppData\Local\Pulsar\authorities\session-1\c2cd49738787973a.lock
