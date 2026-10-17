@@ -1,0 +1,62 @@
+{
+  "timestampUtc": "2026-10-17T14:19:42.3599992Z",
+  "passed": true,
+  "integrationHead": "913bb166ad02cf6ddda7fbe1aa072d95b366d1c3",
+  "qualifiedUnit": "b8a2ee202d132a46519e8dd0c0a9a1c8a9e12913",
+  "checks": [
+    {
+      "path": "plugins/pulsar-capture-effects/src/capture-effects.cpp",
+      "gitBlob": "16e62275ac69990f13ff4817526a34b3a9556a64",
+      "matchesQualifiedUnit": true
+    },
+    {
+      "path": "plugins/pulsar-capture-effects/src/capture-effects.effect",
+      "gitBlob": "acbc7a8696c89afa4b52f2239313826fa236b75c",
+      "matchesQualifiedUnit": true
+    },
+    {
+      "path": "plugins/pulsar-capture-effects/src/group-composition-plan.cpp",
+      "gitBlob": "6834b9f6df32b663c5058fec08cc6135e546ce42",
+      "matchesQualifiedUnit": true
+    },
+    {
+      "path": "plugins/pulsar-capture-effects/src/group-composition-plan.hpp",
+      "gitBlob": "6d6c87dfbed06ea79cc8550575a235d0693d1018",
+      "matchesQualifiedUnit": true
+    },
+    {
+      "path": "plugins/pulsar-capture-effects/src/group-composition-world-source.cpp",
+      "gitBlob": "3ceb92e6359b69d203c5160866695cb330c0491e",
+      "matchesQualifiedUnit": true
+    },
+    {
+      "path": "plugins/pulsar-capture-effects/src/group-composition-world-source.hpp",
+      "gitBlob": "a8e4775418ab11a5ecdf6715998ec940f30ce150",
+      "matchesQualifiedUnit": true
+    },
+    {
+      "path": "plugins/pulsar-capture-effects/src/group-composition.cpp",
+      "gitBlob": "1080e35a03bb7e22ef9e554941e240ef5c5bdb24",
+      "matchesQualifiedUnit": true
+    },
+    {
+      "path": "plugins/pulsar-capture-effects/README.md",
+      "gitBlob": "4e024de40902fe001908344158a667d1c2762bff",
+      "matchesQualifiedUnit": true
+    },
+    {
+      "path": "scripts/probe-group-composition.py",
+      "gitBlob": "0c69135eff2aa9488a3771ad170ab1c2f41ed901",
+      "matchesQualifiedUnit": true
+    }
+  ],
+  "positiveReport": "evidence/local-20261017-native-group-coverage/eleven/20261017T140734Z-group-composition-probe.json",
+  "negativeReport": "evidence/local-20261017-native-group-coverage/eleven/20261017T140818Z-group-composition-v2-negative-control.json",
+  "independentPrismPixelProof": "D:/Documents/Zab/Prism/.worktrees/eleven-local-20261017-native-mask-consumer/evidence/local-20261017-native-mask-consumer/eleven/20261017T141100Z-independent-wire-pixels.json",
+  "limitations": [
+    "Git blob equality and preserved private GPU evidence; no fresh host rerun.",
+    "Private OBS ABI differs from installed runtime; do not install standalone DLL.",
+    "No LSDP/CEF/physical capture/stream/endurance proof.",
+    "No transitions or scene switch duration changes."
+  ]
+}
