@@ -1,0 +1,58 @@
+{
+  "captured_utc": "2026-10-17T10:57:04.8170369Z",
+  "head": "3f51ed31c64545faf475deb279a31e85c960a076",
+  "runtime_files": [
+    {
+      "kind": "installed",
+      "path": "C:\\Users\\Mathias\\AppData\\Roaming\\prism-dev\\components\\pulsar\\active\\bin\\64bit\\pulsar.exe",
+      "exists": true,
+      "sha256": "4ed762b6bb1f9665931e5fbcbcab15553465ce9200d13c4f0157be44c7cf69c4"
+    },
+    {
+      "kind": "installed",
+      "path": "C:\\Users\\Mathias\\AppData\\Roaming\\prism-dev\\components\\pulsar\\active\\bin\\64bit\\obs.dll",
+      "exists": true,
+      "sha256": "45c24523735c20ae6a6a3f1f3070b1a2936db2bf66c8995cb6291dc337e94de4"
+    },
+    {
+      "kind": "installed",
+      "path": "C:\\Users\\Mathias\\AppData\\Roaming\\prism-dev\\components\\pulsar\\active\\obs-plugins\\64bit\\pulsar-browser.dll",
+      "exists": true,
+      "sha256": "040eeadf1c7805d80401265ddc8c877ecd043699a4d691a3e6f0ce39fc2e023a"
+    },
+    {
+      "kind": "installed",
+      "path": "C:\\Users\\Mathias\\AppData\\Roaming\\prism-dev\\components\\pulsar\\active\\obs-plugins\\64bit\\obs-browser.dll",
+      "exists": false,
+      "sha256": null
+    },
+    {
+      "kind": "private-qualified",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\probe-runtime\\rundir\\RelWithDebInfo\\bin\\64bit\\pulsar.exe",
+      "exists": true,
+      "sha256": "cdd3a8d4589d712e32fc9c25357a7d240e8289fba359519e5e76906b42b9b25b"
+    },
+    {
+      "kind": "private-qualified",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\probe-runtime\\rundir\\RelWithDebInfo\\bin\\64bit\\obs.dll",
+      "exists": true,
+      "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+    },
+    {
+      "kind": "private-qualified",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\probe-runtime\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\pulsar-browser.dll",
+      "exists": false,
+      "sha256": null
+    },
+    {
+      "kind": "private-qualified",
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\probe-runtime\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-browser.dll",
+      "exists": false,
+      "sha256": null
+    }
+  ],
+  "private_capture_plugin_sha256": "52e0c2117bc13e647c032dee4f528e58edc0c63007d3fb6a75319cb76884ffb1",
+  "conclusion": "Installed runtime OBS binary differs from private-qualified runtime. Native private pixel proof does not qualify installed CEF runtime; build/pin a coherent ABI candidate before runtime adoption.",
+  "installed_changed": false,
+  "transition_changed": false
+}
