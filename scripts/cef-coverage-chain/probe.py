@@ -126,6 +126,79 @@ def validate_atlas_samples(browser, frame: dict, png: bytes, expected_partial: i
             "channels": channels, "coverageSurface": surface, "samples": samples}
 
 
+def root_background_witness(browser, document: dict, projection: dict, wire: dict, png: bytes) -> dict:
+    """Read the opaque Vision root band that remains visible where owner coverage is zero."""
+    background = document.get("layout", {}).get("background")
+    if not isinstance(background, str) or len(background) != 7 or not background.startswith("#"):
+        raise AssertionError({"rootBackgroundNotOpaqueRgb": background})
+    groups = wire.get("groups", [])
+    roots = [group for group in groups if group.get("parentId") is None]
+    if len(roots) != 1:
+        raise AssertionError({"nativeCompositionRootCount": len(roots)})
+    root = roots[0]
+    identity = {"m00": 1, "m01": 0, "tx": 0, "m10": 0, "m11": 1, "ty": 0}
+    if (root.get("affine") != identity or root.get("opacity") != 1
+            or root.get("visible") is not True or root.get("blendMode") != "normal"):
+        raise AssertionError({"rootBandTransformOrBlendNotIdentity": root})
+    children = root.get("children", [])
+    root_bands = [
+        (index, child) for index, child in enumerate(children)
+        if child.get("kind") == "solarBand" and child.get("band") == 0
+    ]
+    if len(root_bands) != 1:
+        raise AssertionError({"rootSolarBandZeroCount": len(root_bands)})
+    root_band_index, root_band = root_bands[0]
+    if root_band.get("affine") != identity:
+        raise AssertionError({"rootBandTransformNotIdentity": root_band})
+
+    group_by_id = {group.get("id"): group for group in groups}
+    owner_order = []
+    for coverage in projection.get("coverageSurfaces", []):
+        owner_id = coverage.get("targetId")
+        owner_refs = [
+            index for index, child in enumerate(children)
+            if child.get("kind") == "group" and child.get("id") == owner_id
+        ]
+        owner = group_by_id.get(owner_id)
+        if len(owner_refs) != 1 or owner is None or owner.get("mask") is None:
+            raise AssertionError({"coverageOwnerMissingFromNativeRoot": owner_id})
+        owner_ref_index = owner_refs[0]
+        if root_band_index >= owner_ref_index:
+            raise AssertionError({"rootBackgroundDoesNotPrecedeMaskedOwner": {
+                "rootBandIndex": root_band_index, "ownerId": owner_id,
+                "ownerRefIndex": owner_ref_index,
+            }})
+        owner_order.append({"ownerId": owner_id, "rootBandIndex": root_band_index,
+                            "ownerRefIndex": owner_ref_index, "rootBandPrecedesOwner": True})
+
+    rect = root_band.get("rect", {})
+    crop = root_band.get("crop", {})
+    width, height, channels, pixels = browser.decode_png(png)
+    if (width, height) != CANVAS_SIZE or channels != 4:
+        raise AssertionError({"rootBandAtlasDimensionsOrChannels": [width, height, channels]})
+    root_samples = {}
+    for label, (scene_x, scene_y) in SAMPLE_POINTS.items():
+        if not (rect.get("x", 0) <= scene_x < rect.get("x", 0) + rect.get("width", 0)
+                and rect.get("y", 0) <= scene_y < rect.get("y", 0) + rect.get("height", 0)):
+            raise AssertionError({"rootBandDoesNotCoverSample": {"label": label, "rect": rect}})
+        atlas_point = (crop["left"] + scene_x - rect["x"],
+                       crop["top"] + scene_y - rect["y"])
+        rgba = pixel(width, channels, pixels, atlas_point)
+        if rgba[3] != 255:
+            raise AssertionError({"rootBackgroundBandNotOpaque": {"label": label, "rgba": rgba}})
+        root_samples[label] = {"scenePoint": [scene_x, scene_y],
+                               "atlasPoint": list(atlas_point), "rgba": rgba}
+    return {
+        "contract": "opaque LSML root band paints before the masked owner; zero coverage reveals that band, not the OBS scene backdrop",
+        "rootLayoutBackground": background,
+        "rootGroupId": root.get("id"),
+        "rootBand": {"band": 0, "rect": rect, "crop": crop,
+                     "paintOrderIndex": root_band_index},
+        "coverageOwnerOrder": owner_order,
+        "atlasSamples": root_samples,
+    }
+
+
 async def run_probe(args) -> dict:
     if os.name != "nt":
         raise RuntimeError("This probe requires the pinned Windows Pulsar/CEF runtime")
@@ -317,7 +390,9 @@ async def run_probe(args) -> dict:
                         check["path"] = shot["artifact"]["path"]
                         return png, shot, check
 
-                async def wait_native_scene(label: str, expected_alpha: int, compare_to: list[int] | None = None):
+                async def wait_native_scene(label: str, expected_alpha: int,
+                                            root_background_samples: dict,
+                                            compare_to: list[int] | None = None):
                     path = EVIDENCE / f"{stamp}-{token[:8]}-scene-mask-{label}.png"
                     deadline = time.monotonic() + 45
                     last_error = None
@@ -332,10 +407,13 @@ async def run_probe(args) -> dict:
                             for key in ("overlap", "unclippedChild"):
                                 assert_close(samples[key], partial, 4, f"coverage {key} matches partial")
                             for key in ("clippedOverflow", "stencilFrameOverflow"):
-                                assert_close(samples[key], baseline_point, 4, f"coverage {key} remains backdrop")
-                            distance = sum(abs(a - b) for a, b in zip(partial[:3], baseline_point[:3]))
+                                assert_close(samples[key], root_background_samples[key]["rgba"], 4,
+                                             f"coverage {key} reveals opaque LSML root band")
+                            root_point = root_background_samples["partial"]["rgba"]
+                            distance = sum(abs(a - b) for a, b in zip(partial[:3], root_point[:3]))
                             if distance < 80:
-                                raise AssertionError({"partialCoverageWasNotVisible": partial, "backdrop": baseline_point})
+                                raise AssertionError({"partialCoverageWasNotVisible": partial,
+                                                      "opaqueLsmlRootBackground": root_point})
                             if compare_to is not None and sum(abs(a - b) for a, b in zip(partial[:3], compare_to[:3])) < 90:
                                 raise AssertionError({"sameSourceMaskUpdateNotVisible": {"previous": compare_to, "current": partial}})
                         except AssertionError as error:
@@ -430,8 +508,10 @@ async def run_probe(args) -> dict:
                     EVIDENCE / f"{stamp}-{token[:8]}-backdrop-source.png",
                 )
                 report["evidence"]["backdropSource"] = backdrop_shot["artifact"]
-                baseline_point = pixel(SCENE_SIZE[0], backdrop_shot["channels"],
-                                       backdrop_shot["pixels"], SAMPLE_POINTS["partial"])
+                obs_backdrop_source_point = pixel(
+                    SCENE_SIZE[0], backdrop_shot["channels"], backdrop_shot["pixels"],
+                    SAMPLE_POINTS["partial"],
+                )
 
                 initial_atlas_png, initial_atlas, initial_atlas_check = await wait_atlas(initial, 128, "initial")
                 report["evidence"]["cefAtlasInitial"] = initial_atlas["artifact"]
@@ -486,6 +566,15 @@ async def run_probe(args) -> dict:
                     "coverageSurfaces": initial_chain["record"]["solarProjection"]["coverageSurfaces"],
                     "wireGroups": len(initial_wire["groups"]),
                 }
+                initial_root_background = root_background_witness(
+                    browser, initial["document"], initial_chain["record"]["solarProjection"],
+                    initial_wire, initial_atlas_png,
+                )
+                report["rootBackgroundWitness"] = {
+                    **initial_root_background,
+                    "obsBackdropSourceSampleAtPartial": obs_backdrop_source_point,
+                    "initialAtlasSha256": initial_atlas_check["sha256"],
+                }
                 initial_native = await call("CallVendorRequest", {
                     "vendorName": "pulsar-capture-effects",
                     "requestType": "CommitGroupComposition",
@@ -495,11 +584,17 @@ async def run_probe(args) -> dict:
                 if not initial_outcome.get("ok"):
                     raise RuntimeError({"nativeInitialCommitRejected": initial_native})
                 report["nativeInitialCommit"] = initial_native
-                initial_scene_png, initial_scene, initial_pixels = await wait_native_scene("050", 128)
+                initial_scene_png, initial_scene, initial_pixels = await wait_native_scene(
+                    "050", 128, initial_root_background["atlasSamples"],
+                )
                 report["evidence"]["sceneMask050"] = initial_scene["artifact"]
                 half = initial_pixels["partial"]
+                report["rootBackgroundWitness"]["initialNativeSamples"] = {
+                    key: initial_pixels[key] for key in ("clippedOverflow", "stencilFrameOverflow")
+                }
                 report["nativeInitialPixels"] = {
-                    "backdrop": baseline_point,
+                    "opaqueLsmlRootBandSamples": initial_root_background["atlasSamples"],
+                    "obsBackdropSourceSample": obs_backdrop_source_point,
                     "samples": {key: {"scenePoint": list(SAMPLE_POINTS[key]), "rgba": value}
                                 for key, value in initial_pixels.items()},
                     "assertions": ["partial mask visible", "overlapping children do not double-apply frame opacity",
@@ -543,6 +638,21 @@ async def run_probe(args) -> dict:
                 updated_chain = await emit(updated, 2, "updated")
                 report["evidence"]["updatedChain"] = updated_chain["artifact"]
                 updated_wire = updated_chain["record"]["wire"]
+                updated_root_background = root_background_witness(
+                    browser, updated["document"], updated_chain["record"]["solarProjection"],
+                    updated_wire, updated_atlas_png,
+                )
+                if any(
+                    updated_root_background["atlasSamples"][key]["rgba"]
+                    != initial_root_background["atlasSamples"][key]["rgba"]
+                    for key in SAMPLE_POINTS
+                ):
+                    raise AssertionError({"rootBackgroundChangedWithMaskOpacity": {
+                        "initial": initial_root_background["atlasSamples"],
+                        "updated": updated_root_background["atlasSamples"],
+                    }})
+                report["rootBackgroundWitness"]["updatedAtlasSamples"] = \
+                    updated_root_background["atlasSamples"]
                 updated_native = await call("CallVendorRequest", {
                     "vendorName": "pulsar-capture-effects",
                     "requestType": "CommitGroupComposition",
@@ -551,9 +661,14 @@ async def run_probe(args) -> dict:
                 updated_outcome = updated_native.get("responseData", {})
                 if not updated_outcome.get("ok"):
                     raise RuntimeError({"nativeUpdatedCommitRejected": updated_native})
-                updated_scene_png, updated_scene, updated_pixels = await wait_native_scene("100", 255, half)
+                updated_scene_png, updated_scene, updated_pixels = await wait_native_scene(
+                    "100", 255, updated_root_background["atlasSamples"], half,
+                )
                 report["evidence"]["sceneMask100"] = updated_scene["artifact"]
                 full = updated_pixels["partial"]
+                report["rootBackgroundWitness"]["updatedNativeSamples"] = {
+                    key: updated_pixels[key] for key in ("clippedOverflow", "stencilFrameOverflow")
+                }
                 report["nativeUpdatedCommit"] = updated_native
                 report["sameSceneMaskUpdate"] = {
                     "sceneId": updated["document"]["scene_id"],

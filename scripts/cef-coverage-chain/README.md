@@ -18,6 +18,13 @@ is terminated and the pinned historical presenter is run in isolation. That
 negative receives the exact real `/2` receipt produced for the updated scene and
 must reject it without submitting a frame.
 
+For this fixture the LSML root has an opaque `#0c1119` background. The native
+wire places its root `solarBand` before the masked owner group, so pixels outside
+coverage reveal that real CEF atlas band. The probe samples band 0 from the same
+CEF screenshot and verifies its paint order before comparing native overflow
+pixels; the separate OBS backdrop source is not the expected pixel in these
+opaque-root areas.
+
 `probe.py` defaults to an offline pin/provenance preflight. `--execute` is an
 explicit private runtime action and also requires `--gpu-slot-released`; do not
 pass it until the parent has released the GPU slot. It reuses the owned-process
