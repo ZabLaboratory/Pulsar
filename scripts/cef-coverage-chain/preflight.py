@@ -33,7 +33,7 @@ PULSAR_COVERAGE = Path(
 
 PINS = {
     "solarCommit": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
-    "prismCommit": "8eb3f0d32b5f658e5f6cc6159c867d153eae40ae",
+    "prismCommit": "321db8b2dbe6b5a429fc372306ac363b48e8900d",
     "prismProductBaselineCommit": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
     "visionCommit": "044ddb62df050eee9869150a69a1b88fd26f2962",
     "baselinePresenterCommit": "85c49664a029744369b063ddffaa92415a59c8a8",
@@ -72,7 +72,7 @@ def sha256(path: Path) -> str:
 def git(path: Path, *args: str) -> str:
     return subprocess.check_output(
         ["git", "-C", str(path), *args], text=True, encoding="utf-8"
-    ).strip()
+    ).rstrip()
 
 
 def file_record(path: Path, expected_size: int | None = None, expected_hash: str | None = None):
