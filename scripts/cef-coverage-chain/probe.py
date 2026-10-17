@@ -584,7 +584,7 @@ async def run_probe(args) -> dict:
                 if not initial_outcome.get("ok"):
                     raise RuntimeError({"nativeInitialCommitRejected": initial_native})
                 report["nativeInitialCommit"] = initial_native
-                initial_scene_png, initial_scene, initial_pixels = await wait_native_scene(
+                _, initial_scene, initial_pixels = await wait_native_scene(
                     "050", 128, initial_root_background["atlasSamples"],
                 )
                 report["evidence"]["sceneMask050"] = initial_scene["artifact"]
@@ -609,21 +609,33 @@ async def run_probe(args) -> dict:
                 })
                 negative_outcome = negative_native.get("responseData", {})
                 expected_negative_generation = initial_wire["generation"] + 1
+                expected_negative_error = (
+                    "invalid-mask-rect: mask crop and global rect must have exact "
+                    "one-to-one dimensions"
+                )
                 if (negative_wire.get("generation") != expected_negative_generation
-                        or negative_outcome.get("ok")
-                        or negative_outcome.get("error") != "invalid-mask-rect"):
+                        or negative_outcome.get("ok") is not False
+                        or negative_outcome.get("error") != expected_negative_error):
                     raise AssertionError({"maskDimensionNegativeWasNotDiscriminating": negative_native})
-                after_negative_png, after_negative = await screenshot(
+                _, after_negative = await screenshot(
                     call, browser, scene_name, SCENE_SIZE,
                     EVIDENCE / f"{stamp}-{token[:8]}-scene-after-negative.png",
                 )
-                if initial_scene_png != after_negative_png:
+                pixel_buffers_equal = (
+                    initial_scene["channels"] == after_negative["channels"]
+                    and initial_scene["pixels"] == after_negative["pixels"]
+                )
+                if not pixel_buffers_equal:
                     raise AssertionError("invalid /2 mask changed native scene pixels")
                 report["negativeControl"] = {
                     "wirePlanHashRecomputed": True,
                     "changedMaskCropLeftBy": 1,
                     "rejectedCandidateGeneration": negative_wire["generation"],
-                    "expectedError": "invalid-mask-rect",
+                    "expectedError": expected_negative_error,
+                    "comparison": (
+                        "decoded screenshot pixel buffers (channel count and every pixel), "
+                        "not PNG encoding bytes"
+                    ),
                     "nativeResponse": negative_native,
                     "pixelsExactlyUnchanged": True,
                     "evidence": after_negative["artifact"],

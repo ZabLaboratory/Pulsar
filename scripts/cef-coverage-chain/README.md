@@ -30,6 +30,9 @@ commit. Native validation checks the generation fence before resolving mask
 dimensions, so reusing an already committed generation would only prove stale
 generation rejection. A rejected malformed candidate must leave that fence
 unchanged, allowing the valid opacity update to reuse the candidate generation.
+The negative asserts the full native `invalid-mask-rect` code and detail, then
+compares decoded scene pixel buffers across the rejection; PNG encoding bytes
+are not used as a proxy for pixel equality.
 
 `probe.py` defaults to an offline pin/provenance preflight. `--execute` is an
 explicit private runtime action and also requires `--gpu-slot-released`; do not
