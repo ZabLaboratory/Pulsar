@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+#include <chrono>
+#endif
 #include <cmath>
 #include <cstdint>
 #include <graphics/vec2.h>
@@ -15,6 +18,7 @@
 #include <obs-module.h>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 OBS_DECLARE_MODULE()
@@ -24,6 +28,9 @@ MODULE_EXPORT const char *obs_module_description(void) {
 }
 
 namespace {
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+thread_local CaptureShaderCreationTiming *active_shader_creation_timing = nullptr;
+#endif
 struct Stage {
   int kind = 0, noise_type = 0;
   float clip = 1;
@@ -331,8 +338,19 @@ void *create(obs_data_t *settings, obs_source_t *source) {
   effect_trace(f, "create", source);
   char *error = nullptr;
   obs_enter_graphics();
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  const auto shader_started = std::chrono::steady_clock::now();
+#endif
   f->shader = gs_effect_create(capture_effect_source,
                                "pulsar-capture-effects.effect", &error);
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  if (active_shader_creation_timing) {
+    active_shader_creation_timing->milliseconds +=
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - shader_started).count();
+    ++active_shader_creation_timing->calls;
+  }
+#endif
   f->input = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
   f->background = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
   f->coverage = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
@@ -904,6 +922,13 @@ void blend_request(obs_data_t *request, obs_data_t *response, void *) {
   obs_queue_task(OBS_TASK_GRAPHICS, blend_graphics, &c, true);
 }
 } // namespace
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+CaptureShaderCreationTiming *capture_effects_exchange_shader_creation_timing(
+    CaptureShaderCreationTiming *timing)
+{
+  return std::exchange(active_shader_creation_timing, timing);
+}
+#endif
 bool capture_effects_bind_background_parent(obs_source_t *filter,
                                             obs_source_t *parent) {
   if (!filter || !parent || obs_source_removed(parent))

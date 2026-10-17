@@ -367,3 +367,24 @@ rotation, refusal pixel preservation and coordinate-space replay checks at
 readbacks cover the admitted group masks and blends but do not certify physical
 capture availability, CEF teardown, installed-runtime admission, or other
 capture effects.
+
+For private recommit diagnosis, a build with
+`PULSAR_GROUP_COMPOSITION_RESET_TRACE` adds `debugCommitTiming` to each
+`CommitGroupComposition` response. Its steady-clock fields measure the wait
+before the graphics callback, the callback, plan parsing, capture resolution,
+group construction, the atomic visibility swap, retirement of the replaced
+candidate, and the synchronous vendor-handler total. `filterSourcesCreated`
+counts successful capture-effect filter creations during that build.
+`shaderCreateCalls` and `shaderCreateMs` count and sum the synchronous
+`gs_effect_create` calls within that build, excluding graphics-lock entry and
+texture allocation. The exact reset probe requires all 12 expected calls.
+Timings are diagnostic only: the handler total excludes WebSocket travel, the stage
+fields do not cover every callback instruction, and the existing detailed
+reset trace can add logging cost. Normal builds do not emit this receipt.
+
+`scripts/probe-group-composition-reset-exact.py` records `GetStats` immediately
+before and after the same-plan, higher-generation recommit, before its settling
+delay or PNG readback. It also records stats after the delay but before the PNG,
+then keeps the existing pixel and reset checks. This separates the immediate
+recommit skip delta from later diagnostic work without changing composition
+semantics or qualifying an inactive scene.
