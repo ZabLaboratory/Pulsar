@@ -2,7 +2,9 @@
 #include "group-composition-world-source.hpp"
 #include <graphics/matrix4.h>
 #include <obs-module.h>
+#include <cstring>
 #include <new>
+#include <cmath>
 
 namespace {
 constexpr const char *source_id = "pulsar_composition_world_affine";
@@ -202,6 +204,72 @@ obs_source_t *create_group_world_source(const char *name, obs_source_t *base,
   state->affine.t.x = float(affine.tx);
   state->affine.t.y = float(affine.ty);
   return source;
+}
+
+namespace {
+bool affine_matrix_matches(const matrix4 &matrix,
+                           const group_composition::Affine &affine)
+{
+  const float m00 = float(affine.m00);
+  const float m01 = float(affine.m01);
+  const float tx = float(affine.tx);
+  const float m10 = float(affine.m10);
+  const float m11 = float(affine.m11);
+  const float ty = float(affine.ty);
+  return std::isfinite(m00) && std::isfinite(m01) && std::isfinite(tx) &&
+         std::isfinite(m10) && std::isfinite(m11) && std::isfinite(ty) &&
+         matrix.x.x == m00 && matrix.x.y == m10 && matrix.x.z == 0 &&
+         matrix.x.w == 0 && matrix.y.x == m01 && matrix.y.y == m11 &&
+         matrix.y.z == 0 && matrix.y.w == 0 && matrix.z.x == 0 &&
+         matrix.z.y == 0 && matrix.z.z == 1 && matrix.z.w == 0 &&
+         matrix.t.x == tx && matrix.t.y == ty && matrix.t.z == 0 &&
+         matrix.t.w == 1;
+}
+
+WorldSource *get_world_source(obs_source_t *source)
+{
+  if (!source || !obs_source_get_id(source) ||
+      strcmp(obs_source_get_id(source), source_id) != 0)
+    return nullptr;
+  return static_cast<WorldSource *>(obs_obj_get_data(source));
+}
+} // namespace
+
+bool group_world_source_matches(obs_source_t *source, obs_source_t *base,
+                                const group_composition::Affine &affine)
+{
+  auto *state = get_world_source(source);
+  return state && base && state->base == base &&
+         affine_matrix_matches(state->affine, affine);
+}
+
+bool group_world_source_update_translations(
+    const GroupWorldSourceTranslationUpdate *updates, size_t count)
+{
+  if (count && !updates)
+    return false;
+  for (size_t index = 0; index < count; ++index) {
+    const auto &update = updates[index];
+    auto *state = get_world_source(update.source);
+    const float x = float(update.replacement.tx);
+    const float y = float(update.replacement.ty);
+    if (!state || !update.base || state->base != update.base ||
+        !affine_matrix_matches(state->affine, update.expected) ||
+        update.expected.m00 != update.replacement.m00 ||
+        update.expected.m01 != update.replacement.m01 ||
+        update.expected.m10 != update.replacement.m10 ||
+        update.expected.m11 != update.replacement.m11 ||
+        !std::isfinite(x) || !std::isfinite(y))
+      return false;
+  }
+  for (size_t index = 0; index < count; ++index) {
+    auto *state = get_world_source(updates[index].source);
+    // Every source is retained by its active composition, and the complete
+    // batch was validated above before the first matrix write.
+    state->affine.t.x = float(updates[index].replacement.tx);
+    state->affine.t.y = float(updates[index].replacement.ty);
+  }
+  return true;
 }
 
 obs_source_t *create_group_dependency_source(const char *name,

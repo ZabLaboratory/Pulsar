@@ -397,3 +397,39 @@ delay or PNG readback. It also records stats after the delay but before the PNG,
 then keeps the existing pixel and reset checks. This separates the immediate
 recommit skip delta from later diagnostic work without changing composition
 semantics or qualifying an inactive scene.
+
+### Translation-only retained-tree recommits
+
+When a higher-generation `CommitGroupComposition` differs from the admitted
+plan only in capture `tx`/`ty`, Pulsar can retain the active native group tree
+and update the retained child transforms. The gate compares the plan's full
+non-translation meaning and revalidates runtime, the bound host scene UUID and
+source (the lane's scene identity), generation, source bindings, exact
+scene-item identities and nested topology.
+Capture inputs keep strict dimensions, visibility and scale checks; the same
+retained input source may keep its current settings. Internal group filters and
+other structural source semantics remain fenced. Preview and Live use this
+same API path; there is no Preview-only fast path.
+
+OBS nested scenes are locked from parent to child. The implementation validates
+the entire retained graph and computes every matrix change before applying the
+batch, so a failed prevalidation leaves the current tree untouched and proceeds
+through the existing full candidate rebuild and atomic swap. A newly created
+root group may settle from `0x0` to its exact planned viewport bounds once, but
+only for the retained root item/source; all later size checks are strict.
+
+Build with `PULSAR_GROUP_COMPOSITION_RESET_TRACE` to inspect
+`geometrySnapshotMs`, `geometryUpdateMs` and `geometryFastPath` in
+`debugCommitTiming`. The exact probe also exercises repeated drags and a return
+to a prior position, a mutable capture setting, a structural group-filter
+change that must fall back to a full rebuild, response generation/hash fields,
+pixel equality and model equality. In the isolated four-owner/eight-capture
+run, the five translation commits reported `geometryUpdateMs` of 0.138–0.242 ms
+and graphics callbacks of 11.92–14.98 ms, with no group rebuild or filter/shader
+creation. The unchanged full-build path took 224.55 ms for initial construction;
+the filter-change fallback took 245.92 ms. Fast commit windows observed 1–2
+render skips, while the adjacent roughly 0.5-second idle controls observed
+5–12; these counters are noisy under this synthetic runtime, so the run reports
+idle-relative deltas rather than claiming zero skips. Exact-pixel and structural
+fallback evidence is in
+[`20261018T152955Z-reset-exact.json`](../../evidence/local-20261018-group-geometry/eleven/20261018T152955Z-reset-exact.json).

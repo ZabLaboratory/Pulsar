@@ -24,13 +24,16 @@ from PIL import Image
 import websockets
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-EVIDENCE = ROOT / "evidence" / "local-20261017-native-reset-stability" / "eleven"
-CACHE = ROOT / ".cache" / "native-reset-stability"
+EVIDENCE = ROOT / "evidence" / "local-20261018-group-geometry" / "eleven"
+CACHE = ROOT / ".cache" / "native-group-geometry"
 EXPECTED_HELPER_SHA256 = "f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff"
 EXPECTED_UPSTREAM_HEAD = "6328ff8b3c29f10f29b7e1fad75f170efc41e198"
 EXPECTED_BUILD_SOURCE_HEAD = "70a58302435308e609e0b1114efe3ef402f810b7"
 EXPECTED_OBS_LIB_SHA256 = "b11eee9ea91c6bcff2d9fe62cfe6edba2fbcff57036c8cfb9d8f3f1b5a0729e4"
-MUTEX_OWNER_PROBE = EVIDENCE / "20261017T163849Z-mutex-owner-stack-probe.py"
+MUTEX_OWNER_PROBE = (ROOT.parent /
+                     "eleven-local-20261017-native-reset-stability" /
+                     "evidence" / "local-20261017-native-reset-stability" /
+                     "eleven" / "20261017T163849Z-mutex-owner-stack-probe.py")
 WINDOW_SECONDS = 20
 VIEWPORT = (1920, 1080)
 
@@ -313,10 +316,11 @@ async def request(protocol, inbox, ws, request_type: str, data=None,
 
 
 async def screenshot(protocol, inbox, ws, source_name: str,
-                     label: str, stamp: str):
+                     label: str, stamp: str,
+                     image_width: int = 128, image_height: int = 72):
     result = await request(protocol, inbox, ws, "GetSourceScreenshot", {
         "sourceName": source_name, "imageFormat": "png",
-        "imageWidth": 128, "imageHeight": 72,
+        "imageWidth": image_width, "imageHeight": image_height,
     }, timeout=12)
     encoded = result["imageData"].split(",", 1)[1]
     data = base64.b64decode(encoded)
@@ -330,6 +334,136 @@ async def screenshot(protocol, inbox, ws, source_name: str,
             "left": list(image.getpixel((24, 36))),
             "right": list(image.getpixel((96, 36))),
         },
+    }
+
+
+def assert_translation_only_plan_delta(
+        before: dict, after: dict,
+        expected_delta: tuple[float, float] | None = (37, 23)) -> dict:
+    if (before.get("protocol") != after.get("protocol") or
+            before.get("sceneName") != after.get("sceneName") or
+            before.get("runtimeInstanceId") != after.get("runtimeInstanceId") or
+            before.get("replacedSceneItems") != after.get("replacedSceneItems") or
+            before.get("coordinateSpace") != after.get("coordinateSpace")):
+        raise RuntimeError("translation-only plans changed a fenced outer identity")
+    previous_groups = copy.deepcopy(before["groups"])
+    next_groups = copy.deepcopy(after["groups"])
+    changed = []
+    for group_before, group_after in zip(previous_groups, next_groups, strict=True):
+        for child_before, child_after in zip(
+                group_before.get("children", []),
+                group_after.get("children", []), strict=True):
+            if child_before.get("kind") == "capture":
+                affine_before = child_before["affine"]
+                affine_after = child_after["affine"]
+                dx = affine_after["tx"] - affine_before["tx"]
+                dy = affine_after["ty"] - affine_before["ty"]
+                if dx or dy:
+                    changed.append({
+                        "sceneItemId": child_before["sceneItemId"],
+                        "dx": dx, "dy": dy,
+                    })
+                affine_before["tx"] = affine_after["tx"] = 0
+                affine_before["ty"] = affine_after["ty"] = 0
+    if previous_groups != next_groups:
+        raise RuntimeError("translation-only plans changed topology or nontranslation semantics")
+    if len(changed) != 1 or (expected_delta is not None and
+                             (changed[0]["dx"], changed[0]["dy"]) != expected_delta):
+        raise RuntimeError(f"translation fixture did not move exactly one capture: {changed}")
+    return changed[0]
+
+
+async def capture_scene_model(protocol, inbox, ws, scene_name: str,
+                              is_group: bool = False,
+                              visited: set[str] | None = None) -> list[dict]:
+    visited = visited if visited is not None else set()
+    if scene_name in visited:
+        raise RuntimeError(f"scene model contains a cycle at {scene_name}")
+    visited.add(scene_name)
+    request_type = "GetGroupSceneItemList" if is_group else "GetSceneItemList"
+    response = await request(protocol, inbox, ws, request_type,
+                             {"sceneName": scene_name})
+    model = []
+    for item in response.get("sceneItems", []):
+        entry = copy.deepcopy(item)
+        if item.get("sourceType") == "OBS_SOURCE_TYPE_SCENE":
+            entry["children"] = await capture_scene_model(
+                protocol, inbox, ws, item["sourceName"],
+                bool(item.get("isGroup")), visited)
+        model.append(entry)
+    visited.remove(scene_name)
+    return model
+
+
+def image_pixel_identity(path: pathlib.Path) -> dict:
+    image = Image.open(path).convert("RGBA")
+    pixels = image.tobytes()
+    return {
+        "dimensions": list(image.size),
+        "pixelSha256": hashlib.sha256(pixels).hexdigest(),
+    }
+
+
+def scene_model_hash(model: list[dict]) -> str:
+    encoded = json.dumps(model, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def scene_model_items(items: list[dict]):
+    for item in items:
+        yield item
+        yield from scene_model_items(item.get("children", []))
+
+
+def assert_fast_geometry_commit(timing: dict, skipped_frames: int,
+                                generation: int,
+                                idle_control: dict | None = None,
+                                observed_window_ms: float | None = None) -> None:
+    if not isinstance(timing, dict):
+        raise RuntimeError(f"generation-{generation} debug timing missing")
+    if timing.get("geometryFastPath") is not True:
+        raise RuntimeError(f"generation-{generation} did not use retained geometry path: {timing}")
+    if timing.get("buildGroupMs") != 0 or timing.get("filterSourcesCreated") != 0 or \
+            timing.get("shaderCreateCalls") != 0:
+        raise RuntimeError(f"generation-{generation} rebuilt filters on geometry path: {timing}")
+    if timing.get("geometryUpdateMs", float("inf")) >= 1000 / 60:
+        raise RuntimeError(
+            f"generation-{generation} lock-held geometry validation/update exceeded one frame: {timing}")
+    if idle_control is None or observed_window_ms is None:
+        if skipped_frames != 0:
+            raise RuntimeError(
+                f"generation-{generation} translation fast path skipped "
+                f"{skipped_frames} frames without an idle control sample; timing={timing}")
+        return
+    idle_duration_ms = max(float(idle_control.get("durationMs", 0)), 1.0)
+    idle_skipped = int(idle_control.get("skippedFrames", 0))
+    expected_idle_skips = math.ceil(
+        idle_skipped * max(observed_window_ms, 0) / idle_duration_ms)
+    allowed_skips = expected_idle_skips + 1
+    if skipped_frames > allowed_skips:
+        raise RuntimeError(
+            f"generation-{generation} fast path skipped {skipped_frames} frames "
+            f"in {observed_window_ms:.2f} ms, above idle control allowance "
+            f"{allowed_skips} from {idle_control}; timing={timing}")
+
+
+async def measure_render_skip_control(protocol, inbox, ws, duration_seconds=0.5):
+    before = await request(protocol, inbox, ws, "GetStats", timeout=3)
+    started = time.perf_counter()
+    await asyncio.sleep(duration_seconds)
+    after = await request(protocol, inbox, ws, "GetStats", timeout=3)
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    skipped = int(after["renderSkippedFrames"] - before["renderSkippedFrames"])
+    rendered = int(after["renderTotalFrames"] - before["renderTotalFrames"])
+    if skipped < 0 or rendered < 0:
+        raise RuntimeError("GetStats counters regressed during idle control")
+    return {
+        "durationMs": round(elapsed_ms, 3),
+        "skippedFrames": skipped,
+        "renderedFrames": rendered,
+        "beforeStats": before,
+        "afterStats": after,
     }
 
 
@@ -479,10 +613,16 @@ async def run_scenario(args, process, runtime_id: str, port: int,
         commit_one_result = commit_one.get("responseData", {})
         if not commit_one_result.get("ok"):
             raise RuntimeError(f"generation-1 composition commit failed: {commit_one}")
+        if (commit_one_result.get("generation") != generation_one["generation"] or
+                commit_one_result.get("planHash") != generation_one["planHash"]):
+            raise RuntimeError("generation-1 response changed the commit contract")
+        commit_one_timing = commit_one_result.get("debugCommitTiming")
+        if not isinstance(commit_one_timing, dict):
+            raise RuntimeError("generation-1 full-build timing missing")
         await asyncio.sleep(2)
         window_baseline = await request(protocol, primary_inbox, primary, "GetStats")
         start = time.monotonic()
-        deadline = start + WINDOW_SECONDS
+        deadline = start + args.window_seconds
         next_sample = start
         samples = []
         while time.monotonic() < deadline:
@@ -546,11 +686,33 @@ async def run_scenario(args, process, runtime_id: str, port: int,
                 pass
         if screenshot_status != "success":
             after_window_screenshot = None
-        pre_recommit_stats = await request(protocol, stats_inbox, stats_ws,
-                                           "GetStats", timeout=3)
+        model_before_translation = await capture_scene_model(
+            protocol, primary_inbox, primary, scene)
+        recommit_idle_control = await measure_render_skip_control(
+            protocol, stats_inbox, stats_ws)
+        pre_recommit_stats = recommit_idle_control["afterStats"]
 
         generation_two = make_plan(2)
-        if generation_one.get("planHash") != generation_two.get("planHash"):
+        translation_delta = None
+        if args.translation_only:
+            translated_groups = copy.deepcopy(generation_two["groups"])
+            moved = False
+            for group in translated_groups:
+                for child in group.get("children", []):
+                    if child.get("kind") == "capture":
+                        child["affine"]["tx"] += 37
+                        child["affine"]["ty"] += 23
+                        moved = True
+                        break
+                if moved:
+                    break
+            if not moved:
+                raise RuntimeError("translation fixture found no capture child")
+            generation_two = comp.make_global_v2_plan(
+                scene, runtime_id, 2, translated_groups, viewport, replaced_ids)
+            translation_delta = assert_translation_only_plan_delta(
+                generation_one, generation_two)
+        elif generation_one.get("planHash") != generation_two.get("planHash"):
             raise RuntimeError("generation-2 recommit changed the canonical graph hash")
         commit_two_started = time.perf_counter()
         commit_two = await request(protocol, primary_inbox, primary, "CallVendorRequest", {
@@ -563,28 +725,44 @@ async def run_scenario(args, process, runtime_id: str, port: int,
         commit_two_result = commit_two.get("responseData", {})
         if not commit_two_result.get("ok"):
             raise RuntimeError(f"generation-2 replacement commit failed: {commit_two}")
+        if (commit_two_result.get("generation") != generation_two["generation"] or
+                commit_two_result.get("planHash") != generation_two["planHash"]):
+            raise RuntimeError(
+                "generation-2 response did not preserve the generation/planHash contract")
         commit_timing = commit_two_result.get("debugCommitTiming")
         timing_fields = (
             "queueWaitMs", "graphicsCallbackMs", "parseMs",
             "resolveCapturesMs", "buildGroupMs", "atomicSwapMs",
-            "retirePreviousMs", "handlerTotalMs", "shaderCreateMs")
+            "retirePreviousMs", "handlerTotalMs", "shaderCreateMs",
+            "inputBindingSnapshotMs", "geometrySnapshotMs",
+            "geometryUpdateMs", "geometryFastPath")
         if not isinstance(commit_timing, dict) or any(
                 not isinstance(commit_timing.get(key), (int, float)) or
                 not math.isfinite(commit_timing[key]) or
                 commit_timing[key] < 0 for key in timing_fields):
             raise RuntimeError("generation-2 debug commit timing missing or invalid")
-        if commit_timing.get("filterSourcesCreated") != 12:
-            raise RuntimeError(
-                "generation-2 filter creation count differs from the 12-filter fixture")
-        if commit_timing.get("shaderCreateCalls") != 12:
-            raise RuntimeError(
-                "generation-2 shader creation count differs from the 12-filter fixture")
-        if commit_timing["shaderCreateMs"] > commit_timing["buildGroupMs"]:
-            raise RuntimeError("shader creation time exceeds group build time")
+        if args.translation_only:
+            if (commit_timing.get("geometryFastPath") is not True or
+                    commit_timing.get("buildGroupMs") != 0 or
+                    commit_timing.get("filterSourcesCreated") != 0 or
+                    commit_timing.get("shaderCreateCalls") != 0):
+                raise RuntimeError(
+                    f"generation-2 did not use the retained geometry path: {commit_timing}")
+        else:
+            if commit_timing.get("filterSourcesCreated") != 12:
+                raise RuntimeError(
+                    "generation-2 filter creation count differs from the 12-filter fixture")
+            if commit_timing.get("shaderCreateCalls") != 12:
+                raise RuntimeError(
+                    "generation-2 shader creation count differs from the 12-filter fixture")
+            if commit_timing["shaderCreateMs"] > commit_timing["buildGroupMs"]:
+                raise RuntimeError("shader creation time exceeds group build time")
         # Sample immediately after the synchronous commit, before either the
         # settling delay or PNG readback can contribute to the skip delta.
         post_recommit_stats = await request(protocol, stats_inbox, stats_ws,
                                             "GetStats", timeout=3)
+        recommit_stats_window_ms = round(
+            (time.perf_counter() - commit_two_started) * 1000.0, 3)
         recommit_skipped_frames_delta = int(
             post_recommit_stats["renderSkippedFrames"] -
             pre_recommit_stats["renderSkippedFrames"])
@@ -593,6 +771,78 @@ async def run_scenario(args, process, runtime_id: str, port: int,
             pre_recommit_stats["renderTotalFrames"])
         if recommit_skipped_frames_delta < 0 or recommit_rendered_frames_delta < 0:
             raise RuntimeError("GetStats counters regressed across recommit")
+        if args.translation_only:
+            assert_fast_geometry_commit(
+                commit_timing, recommit_skipped_frames_delta, 2,
+                recommit_idle_control, recommit_stats_window_ms)
+        geometry_commits = [{
+            "generation": 2,
+            "planHash": generation_two["planHash"],
+            "timing": commit_timing,
+            "skippedFrames": recommit_skipped_frames_delta,
+            "renderedFrames": recommit_rendered_frames_delta,
+            "idleControl": recommit_idle_control,
+            "statsWindowMs": recommit_stats_window_ms,
+        }]
+        final_translation_plan = generation_two
+        repeated_deltas = ([(11, 7), (-11, -7)] *
+                           (args.translation_repeats // 2)
+                           if args.translation_only else [])
+        for delta_index, (dx, dy) in enumerate(repeated_deltas, start=1):
+            generation = final_translation_plan["generation"] + 1
+            moved_groups = copy.deepcopy(final_translation_plan["groups"])
+            moved = False
+            for group in moved_groups:
+                for child in group.get("children", []):
+                    if child.get("kind") == "capture":
+                        child["affine"]["tx"] += dx
+                        child["affine"]["ty"] += dy
+                        moved = True
+                        break
+                if moved:
+                    break
+            if not moved:
+                raise RuntimeError("repeated translation fixture found no capture child")
+            translated_plan = comp.make_global_v2_plan(
+                scene, runtime_id, generation, moved_groups, viewport, replaced_ids)
+            delta = assert_translation_only_plan_delta(
+                final_translation_plan, translated_plan, (dx, dy))
+            idle_control = await measure_render_skip_control(
+                protocol, stats_inbox, stats_ws)
+            before_stats = idle_control["afterStats"]
+            started = time.perf_counter()
+            repeated_commit = await request(protocol, primary_inbox, primary,
+                                            "CallVendorRequest", {
+                "vendorName": "pulsar-capture-effects",
+                "requestType": "CommitGroupComposition",
+                "requestData": translated_plan,
+            })
+            round_trip_ms = round((time.perf_counter() - started) * 1000.0, 3)
+            repeated_result = repeated_commit.get("responseData", {})
+            if (not repeated_result.get("ok") or
+                    repeated_result.get("generation") != generation or
+                    repeated_result.get("planHash") != translated_plan["planHash"]):
+                raise RuntimeError(
+                    f"generation-{generation} response contract changed: {repeated_commit}")
+            after_stats = await request(protocol, stats_inbox, stats_ws,
+                                        "GetStats", timeout=3)
+            stats_window_ms = round((time.perf_counter() - started) * 1000.0, 3)
+            skipped = int(after_stats["renderSkippedFrames"] -
+                          before_stats["renderSkippedFrames"])
+            rendered = int(after_stats["renderTotalFrames"] -
+                           before_stats["renderTotalFrames"])
+            if skipped < 0 or rendered < 0:
+                raise RuntimeError(f"GetStats counters regressed at generation-{generation}")
+            timing = repeated_result.get("debugCommitTiming")
+            assert_fast_geometry_commit(
+                timing, skipped, generation, idle_control, stats_window_ms)
+            geometry_commits.append({
+                "generation": generation, "translationDelta": delta,
+                "roundTripMs": round_trip_ms, "timing": timing,
+                "skippedFrames": skipped, "renderedFrames": rendered,
+                "idleControl": idle_control, "statsWindowMs": stats_window_ms,
+            })
+            final_translation_plan = translated_plan
         freeze_dump = FreezeDumpCapture(
             args.capture_freeze_dump, process.proc.proc.pid,
             CACHE / f"{stamp}-gen2-freeze.dmp",
@@ -601,13 +851,217 @@ async def run_scenario(args, process, runtime_id: str, port: int,
         await asyncio.sleep(0.5)
         after_recommit_settle_before_png_stats = await request(
             protocol, stats_inbox, stats_ws, "GetStats", timeout=3)
+        translation_final_screenshot = None
+        translation_pixel_baseline = None
+        retained_model_after_translation = None
+        source_setting_fast_commit = None
+        internal_filter_fallback_commit = None
+        filter_semantics_change = None
+        final_active_plan = final_translation_plan
+        if args.translation_only:
+            translation_final_screenshot = await screenshot(
+                protocol, primary_inbox, primary, scene,
+                "translation-final-1920x1080", stamp, 1920, 1080)
+            baseline_identity = image_pixel_identity(args.translation_baseline_image)
+            final_identity = image_pixel_identity(
+                pathlib.Path(translation_final_screenshot["path"]))
+            translation_pixel_baseline = {
+                "path": str(args.translation_baseline_image),
+                "baseline": baseline_identity,
+                "final": final_identity,
+                "exactPixelMatch": baseline_identity == final_identity,
+            }
+            if not translation_pixel_baseline["exactPixelMatch"]:
+                raise RuntimeError(
+                    f"repeated fast-path drag pixels differ from full-rebuild baseline: {translation_pixel_baseline}")
+            retained_model_after_translation = await capture_scene_model(
+                protocol, primary_inbox, primary, scene)
+            model_before_hash = scene_model_hash(model_before_translation)
+            model_after_hash = scene_model_hash(retained_model_after_translation)
+            if model_before_hash != model_after_hash:
+                raise RuntimeError(
+                    "retained OBS scene model changed across translation-only updates")
+
+            # The capture source object is deliberately retained by the nested
+            # scenes. A same-object color setting update should propagate through
+            # that tree and remain eligible for the geometry path.
+            changed_color = 0xFF20E0F0
+            input_settings_response = await request(
+                protocol, primary_inbox, primary, "SetInputSettings", {
+                    "inputName": capture_names[0],
+                    "inputSettings": {"color": changed_color},
+                    "overlay": True,
+                })
+            settings_changed_screenshot = None
+            for attempt in range(20):
+                await asyncio.sleep(0.1)
+                settings_changed_screenshot = await screenshot(
+                    protocol, primary_inbox, primary, scene,
+                    f"capture-setting-updated-{attempt}", stamp, 1920, 1080)
+                if image_pixel_identity(
+                        pathlib.Path(settings_changed_screenshot["path"])) != baseline_identity:
+                    break
+            else:
+                raise RuntimeError(
+                    "same-object capture color setting did not propagate into the retained composition")
+
+            settings_generation = final_translation_plan["generation"] + 1
+            settings_groups = copy.deepcopy(final_translation_plan["groups"])
+            moved = False
+            for group in settings_groups:
+                for child in group.get("children", []):
+                    if child.get("kind") == "capture":
+                        child["affine"]["tx"] += 7
+                        child["affine"]["ty"] -= 3
+                        moved = True
+                        break
+                if moved:
+                    break
+            if not moved:
+                raise RuntimeError("source-setting test found no capture to translate")
+            settings_plan = comp.make_global_v2_plan(
+                scene, runtime_id, settings_generation, settings_groups,
+                viewport, replaced_ids)
+            settings_delta = assert_translation_only_plan_delta(
+                final_translation_plan, settings_plan, (7, -3))
+            settings_idle_control = await measure_render_skip_control(
+                protocol, stats_inbox, stats_ws)
+            settings_before_stats = settings_idle_control["afterStats"]
+            settings_commit_started = time.perf_counter()
+            settings_commit = await request(protocol, primary_inbox, primary,
+                                            "CallVendorRequest", {
+                "vendorName": "pulsar-capture-effects",
+                "requestType": "CommitGroupComposition",
+                "requestData": settings_plan,
+            })
+            settings_result = settings_commit.get("responseData", {})
+            if (not settings_result.get("ok") or
+                    settings_result.get("generation") != settings_generation or
+                    settings_result.get("planHash") != settings_plan["planHash"]):
+                raise RuntimeError(
+                    f"same-object settings translation response contract changed: {settings_commit}")
+            settings_after_stats = await request(
+                protocol, stats_inbox, stats_ws, "GetStats", timeout=3)
+            settings_stats_window_ms = round(
+                (time.perf_counter() - settings_commit_started) * 1000.0, 3)
+            settings_skipped = int(settings_after_stats["renderSkippedFrames"] -
+                                   settings_before_stats["renderSkippedFrames"])
+            settings_timing = settings_result.get("debugCommitTiming")
+            assert_fast_geometry_commit(
+                settings_timing, settings_skipped, settings_generation,
+                settings_idle_control, settings_stats_window_ms)
+            await asyncio.sleep(0.2)
+            settings_fast_screenshot = await screenshot(
+                protocol, primary_inbox, primary, scene,
+                "capture-setting-after-fast-translation", stamp, 1920, 1080)
+            if image_pixel_identity(pathlib.Path(settings_fast_screenshot["path"])) == baseline_identity:
+                raise RuntimeError(
+                    "capture source settings stopped propagating after retained translation")
+            settings_model = await capture_scene_model(
+                protocol, primary_inbox, primary, scene)
+            if scene_model_hash(settings_model) != model_before_hash:
+                raise RuntimeError(
+                    "host/group scene model changed after same-object source settings update")
+            source_setting_fast_commit = {
+                "inputName": capture_names[0],
+                "newColor": changed_color,
+                "setInputSettingsResponse": input_settings_response,
+                "pixelsChangedBeforeNextTranslation": True,
+                "translationDelta": settings_delta,
+                "generation": settings_generation,
+                "commitTiming": settings_timing,
+                "skippedFrames": settings_skipped,
+                "statsWindowMs": settings_stats_window_ms,
+                "idleControl": settings_idle_control,
+                "sourceScreenshot": settings_fast_screenshot,
+            }
+            final_active_plan = settings_plan
+
+            # Mutate a structural filter owned by a retained composition group.
+            # Exact snapshot mismatch must decline reuse and atomically rebuild.
+            internal_filter = None
+            for item in scene_model_items(model_before_translation):
+                if item.get("sourceType") != "OBS_SOURCE_TYPE_SCENE":
+                    continue
+                filters_response = await request(
+                    protocol, primary_inbox, primary, "GetSourceFilterList",
+                    {"sourceName": item["sourceName"]})
+                for filter_item in filters_response.get("filters", []):
+                    settings = filter_item.get("filterSettings") or {}
+                    opacity = settings.get("opacity")
+                    if (filter_item.get("filterKind") == "pulsar_capture_effects" and
+                            isinstance(opacity, (int, float))):
+                        internal_filter = {
+                            "sourceName": item["sourceName"],
+                            "filterName": filter_item["filterName"],
+                            "opacityBefore": opacity,
+                            "opacityAfter": max(0.1, float(opacity) * 0.8),
+                        }
+                        break
+                if internal_filter:
+                    break
+            if internal_filter is None:
+                raise RuntimeError(
+                    "no retained composition filter with opacity settings was exposed for the fallback test")
+            await request(protocol, primary_inbox, primary,
+                          "SetSourceFilterSettings", {
+                "sourceName": internal_filter["sourceName"],
+                "filterName": internal_filter["filterName"],
+                "filterSettings": {"opacity": internal_filter["opacityAfter"]},
+                "overlay": True,
+            })
+            filter_generation = final_active_plan["generation"] + 1
+            filter_groups = copy.deepcopy(final_active_plan["groups"])
+            moved = False
+            for group in filter_groups:
+                for child in group.get("children", []):
+                    if child.get("kind") == "capture":
+                        child["affine"]["tx"] += 4
+                        child["affine"]["ty"] -= 6
+                        moved = True
+                        break
+                if moved:
+                    break
+            if not moved:
+                raise RuntimeError("internal-filter test found no capture to translate")
+            filter_plan = comp.make_global_v2_plan(
+                scene, runtime_id, filter_generation, filter_groups,
+                viewport, replaced_ids)
+            assert_translation_only_plan_delta(
+                final_active_plan, filter_plan, (4, -6))
+            filter_commit = await request(protocol, primary_inbox, primary,
+                                          "CallVendorRequest", {
+                "vendorName": "pulsar-capture-effects",
+                "requestType": "CommitGroupComposition",
+                "requestData": filter_plan,
+            })
+            filter_result = filter_commit.get("responseData", {})
+            if (not filter_result.get("ok") or
+                    filter_result.get("generation") != filter_generation or
+                    filter_result.get("planHash") != filter_plan["planHash"]):
+                raise RuntimeError(
+                    f"internal filter fallback response contract changed: {filter_commit}")
+            filter_timing = filter_result.get("debugCommitTiming")
+            if (not isinstance(filter_timing, dict) or
+                    filter_timing.get("geometryFastPath") is not False or
+                    filter_timing.get("buildGroupMs", 0) <= 0 or
+                    filter_timing.get("filterSourcesCreated") != 12):
+                raise RuntimeError(
+                    f"internal filter change did not fall back to safe full rebuild: {filter_timing}")
+            filter_semantics_change = internal_filter
+            internal_filter_fallback_commit = {
+                "generation": filter_generation,
+                "commitTiming": filter_timing,
+                "response": filter_result,
+            }
+            final_active_plan = filter_plan
         pre_reset_screenshot = None
         pre_reset_screenshot_error = None
         pre_reset_screenshot_stats = []
         pre_reset_screenshot_stats_errors = []
         pre_reset_screenshot_task = asyncio.create_task(screenshot(
             protocol, primary_inbox, primary, scene,
-            "pre-reset-generation-2", stamp))
+            f"pre-reset-generation-{final_active_plan['generation']}", stamp))
         pre_reset_screenshot_started = time.monotonic()
         try:
             while not pre_reset_screenshot_task.done():
@@ -659,12 +1113,14 @@ async def run_scenario(args, process, runtime_id: str, port: int,
         reset_request = {
             "vendorName": "pulsar-capture-effects",
             "requestType": "ResetGroupComposition",
-            "requestData": {"sceneName": scene, "generation": 2,
+            "requestData": {"sceneName": scene,
+                            "generation": final_active_plan["generation"],
                             "runtimeInstanceId": runtime_id},
         }
         scenario_report.update({
             "sceneName": scene, "viewport": list(viewport), "fps": fps,
-            "windowSeconds": round(duration, 3), "windowTargetSeconds": WINDOW_SECONDS,
+            "windowSeconds": round(duration, 3),
+            "windowTargetSeconds": args.window_seconds,
             "programSceneBeforeWindow": program_before,
             "programSceneAfterWindow": program_after,
             "compositionCommittedDuringEntireWindow": True,
@@ -680,7 +1136,9 @@ async def run_scenario(args, process, runtime_id: str, port: int,
             "independentGetStatsDuringScreenshot": during_screenshot,
             "independentGetStatsErrorsDuringScreenshot": screenshot_errors,
             "preRecommitStats": pre_recommit_stats,
+            "recommitIdleRenderControl": recommit_idle_control,
             "generation2CommitRoundTripMs": commit_two_round_trip_ms,
+            "generation2StatsWindowMs": recommit_stats_window_ms,
             "generation2DebugCommitTiming": commit_timing,
             "postRecommitStatsBeforeSleepOrPng": post_recommit_stats,
             "recommitSkippedFramesDeltaBeforeSleepOrPng": (
@@ -693,8 +1151,23 @@ async def run_scenario(args, process, runtime_id: str, port: int,
             "preResetStats": pre_reset_stats,
             "generation1Plan": generation_one,
             "generation1CommitResponse": commit_one,
+            "generation1FullBuildTimingIncludingSnapshots": commit_one_timing,
             "generation2ReplacementPlan": generation_two,
             "generation2CommitResponse": commit_two,
+            "geometryFastPathCommits": geometry_commits,
+            "repeatedTranslationCount": args.translation_repeats,
+            "translationOnlyDelta": translation_delta,
+            "translationFinalScreenshot": translation_final_screenshot,
+            "translationPixelBaseline": translation_pixel_baseline,
+            "retainedSceneModelBeforeTranslationSha256": (
+                scene_model_hash(model_before_translation)),
+            "retainedSceneModelAfterTranslationSha256": (
+                scene_model_hash(retained_model_after_translation)
+                if retained_model_after_translation is not None else None),
+            "sourceSettingFastPathProof": source_setting_fast_commit,
+            "internalFilterChangeProof": filter_semantics_change,
+            "internalFilterFullRebuildFallbackProof": internal_filter_fallback_commit,
+            "lastActivePlan": final_active_plan,
             "samePlanHashAcrossGenerations": (
                 generation_one.get("planHash") == generation_two.get("planHash")),
             "rootAppearance": {key: groups_template[0].get(key)
@@ -817,11 +1290,28 @@ def main() -> int:
     parser.add_argument("--reference-report", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path, default=EVIDENCE)
     parser.add_argument("--reset-timeout", type=float, default=20.0)
+    parser.add_argument("--window-seconds", type=float, default=WINDOW_SECONDS,
+                        help="render-window duration; shorten for isolated fast-path diagnosis")
+    parser.add_argument("--translation-only", action="store_true",
+                        help="move one synthetic /2 capture by (+37,+23) during generation 2")
+    parser.add_argument("--translation-repeats", type=int, default=4,
+                        help="even number of additional (+/-11,+/-7) retained-tree translations")
+    parser.add_argument("--translation-baseline-image", type=pathlib.Path,
+                        default=EVIDENCE / "20261018T143423Z-translation-final-1920x1080.png",
+                        help="full-rebuild 1920x1080 PNG used for exact pixel comparison")
     parser.add_argument("--capture-freeze-dump", action="store_true",
                         help="write one private Windows minidump after a 2s render-frame stall and read the exact live mutex fields")
     args = parser.parse_args()
     if not 5 <= args.reset_timeout <= 60:
         raise ValueError("reset timeout must be bounded between 5 and 60 seconds")
+    if not 2 <= args.window_seconds <= 60:
+        raise ValueError("render window must be between 2 and 60 seconds")
+    if args.translation_only:
+        if not 2 <= args.translation_repeats <= 12 or args.translation_repeats % 2:
+            raise ValueError("translation repeats must be an even number from 2 through 12")
+        args.translation_baseline_image = args.translation_baseline_image.resolve()
+        if not args.translation_baseline_image.is_file():
+            raise FileNotFoundError(args.translation_baseline_image)
 
     runtime_source = args.runtime_source.resolve()
     upstream_source = args.upstream_source.resolve()

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "group-composition-plan.hpp"
+#include <cstddef>
 #include <obs.h>
 
 // Private live source, owned by the admitted composition. It applies a full
@@ -9,6 +10,16 @@ void register_group_world_source();
 obs_source_t *create_group_world_source(const char *name, obs_source_t *base,
                                        const group_composition::Affine &affine,
                                        uint32_t width, uint32_t height);
+bool group_world_source_matches(obs_source_t *source, obs_source_t *base,
+                                const group_composition::Affine &affine);
+struct GroupWorldSourceTranslationUpdate {
+  obs_source_t *source = nullptr;
+  obs_source_t *base = nullptr;
+  group_composition::Affine expected;
+  group_composition::Affine replacement;
+};
+bool group_world_source_update_translations(
+    const GroupWorldSourceTranslationUpdate *updates, size_t count);
 // Private no-paint scene child that keeps a resolved atlas source active for
 // as long as the admitted composition containing it is active.
 obs_source_t *create_group_dependency_source(const char *name,
