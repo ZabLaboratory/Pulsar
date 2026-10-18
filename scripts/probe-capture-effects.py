@@ -72,11 +72,23 @@ async def run(config,output):
                 outside=img.getpixel((20,20))
                 assert outside==Image.open(ROOT/'tests/capture-effects/fixtures/background.png').convert('RGBA').getpixel((20,20)),outside
                 atomic.append({'index':index,'effect':label,'padding':padding,'size':[t['sourceWidth'],t['sourceHeight']]})
+            staged_direct=(await call('CreateSceneItem',{'sceneName':composite,'sourceName':source,'sceneItemEnabled':True}))['sceneItemId']
+            staged=await call('CallVendorRequest',{'vendorName':'pulsar-capture-effects','requestType':'CommitAppearance','requestData':{
+                'sceneName':composite,'layer':layer,'inputName':source,'itemId':outer,'innerId':inner,
+                'boundsType':'OBS_BOUNDS_STRETCH','blendMode':'OBS_BLEND_NORMAL','visible':True,
+                'preserveDirect':True,'settings':{**base,'padding':0,'x':500,'y':300,'effects':[]}}})
+            assert staged['responseData'].get('ok'),staged
+            staged_items=(await call('GetSceneItemList',{'sceneName':composite}))['sceneItems']
+            assert any(i['sceneItemId']==staged_direct and i['sceneItemEnabled'] for i in staged_items),staged_items
+            assert any(i['sceneItemId']==outer and not i['sceneItemEnabled'] for i in staged_items),staged_items
             rotations=[]
             for angle in [-90,-35,30,90,180,0]:
                 settings={**base,'padding':60,'x':500,'y':300,'rotation':angle,'effects':[]}
                 commit=await call('CallVendorRequest',{'vendorName':'pulsar-capture-effects','requestType':'CommitAppearance','requestData':{'sceneName':composite,'layer':layer,'inputName':source,'itemId':outer,'innerId':inner,'boundsType':'OBS_BOUNDS_STRETCH','blendMode':'OBS_BLEND_NORMAL','visible':True,'settings':settings}})
                 assert commit['responseData'].get('ok'),commit
+                if angle==-90:
+                    items=(await call('GetSceneItemList',{'sceneName':composite}))['sceneItems']
+                    assert not any(i['sceneItemId']==staged_direct for i in items),items
                 t=(await call('GetSceneItemTransform',{'sceneName':composite,'sceneItemId':outer}))['sceneItemTransform']
                 assert t['rotation']==angle,t
                 assert (t['positionX'],t['positionY'])==((660,390) if angle else (440,240)),t
@@ -299,7 +311,7 @@ async def run(config,output):
             refused=await call('CallVendorRequest',{'vendorName':'pulsar-capture-effects','requestType':'CommitAppearance','requestData':{'sceneName':composite,'layer':layer,'inputName':source,'itemId':outer,'innerId':inner,'settings':settings}})
             assert not refused['responseData'].get('ok') and 'collision' in refused['responseData']['error'],refused
             await call('RemoveSourceFilter',{'sourceName':layer,'filterName':'prism/capture-rounded'})
-            report={'zOrderPreserved':True,'foreignCollisionPreserved':True,'atomicAdmissions':atomic,'rotationAdmissions':rotations,'fractionalFraming':fractional,'optionalGeometryReset':optional_geometry_reset,'externalGeometry':external,'effects':results,'reset':True,'scope':'GPU fixed-fixture pixels, fractional inner and outer geometry under zoom, integer raster allocation, and 80 atomic admissions; not physical device availability'}
+            report={'zOrderPreserved':True,'stagedDirectPreserved':True,'stagedOuterHidden':True,'ordinaryDirectRemoved':True,'foreignCollisionPreserved':True,'atomicAdmissions':atomic,'rotationAdmissions':rotations,'fractionalFraming':fractional,'optionalGeometryReset':optional_geometry_reset,'externalGeometry':external,'effects':results,'reset':True,'scope':'GPU fixed-fixture pixels, fractional inner and outer geometry under zoom, integer raster allocation, and 80 atomic admissions; not physical device availability'}
             (output/f'{stamp}-gpu-proof.json').write_text(json.dumps(report,indent=2),encoding='utf8');return report
         finally:
             for kind,data in [('RemoveScene',{'sceneName':composite}),('RemoveScene',{'sceneName':layer}),('RemoveInput',{'inputName':background}),('RemoveInput',{'inputName':source})]:

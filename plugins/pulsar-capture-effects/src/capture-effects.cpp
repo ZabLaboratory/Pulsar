@@ -827,12 +827,18 @@ void admit(void *data, obs_scene_t *scene) {
   // the Solar object compositor. Gamma decoding it again corrupts opacity.
   obs_sceneitem_set_blending_method(outer, OBS_BLEND_METHOD_SRGB_OFF);
   auto *direct = obs_scene_find_source(scene, input_name);
-  if (direct && direct != outer) {
+  // A group-composition candidate still resolves the original direct item
+  // by id. Keep that item until the atomic group swap has admitted it.
+  const bool preserve_direct = obs_data_get_bool(r, "preserveDirect");
+  if (direct && direct != outer && !preserve_direct) {
     obs_sceneitem_set_order_position(outer,
                                      obs_sceneitem_get_order_position(direct));
     obs_sceneitem_remove(direct);
   }
-  obs_sceneitem_set_visible(outer, obs_data_get_bool(r, "visible"));
+  // Staged wrappers contribute through the candidate group only. Publishing
+  // the outer item before the swap would briefly double-render the capture.
+  obs_sceneitem_set_visible(outer,
+                            !preserve_direct && obs_data_get_bool(r, "visible"));
   obs_data_set_bool(c.response, "ok", true);
 }
 bool prepare_appearance(Commit &c, PreparedAppearance &prepared) {

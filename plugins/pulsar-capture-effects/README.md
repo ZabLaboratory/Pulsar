@@ -66,8 +66,12 @@ starts Live or recording. This proves GPU paint, not physical device availabilit
 `obs_scene_atomic_update` on the graphics task queue. The commit validates
 layer/input IDs, internal filter registrations and applies GPU settings, inner
 fit, outer ROI position, zero crop, blend and visibility before a frame. A direct
-reference stays visible until this admission removes it while preserving its
-stack index. Updates to video filters are otherwise deferred by libobs; the
+reference stays visible until ordinary admission removes it while preserving its
+stack index. `preserveDirect: true` is reserved for staged native group composition:
+admission leaves the direct item in place and keeps the new outer item hidden.
+The subsequent `CommitGroupComposition` resolves both IDs and atomically swaps
+visibility; a failed group commit leaves the direct input available. Updates to
+video filters are otherwise deferred by libobs; the
 plugin synchronously admits its own settings before the transform is recalculated.
 Zero stages still runs the initial ROI/rounding/opacity pass. There is no bitmap
 or full-canvas renderer switch on clearing Effects. Retired internal color and
