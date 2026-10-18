@@ -1,0 +1,43 @@
+{
+  "started": 1791619565.0414534,
+  "mode": "isolated synthetic camera-effect regression",
+  "inputInventoryCount": 16,
+  "baseline": {
+    "center": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "corner": [
+      255,
+      255,
+      255,
+      255
+    ]
+  },
+  "vignette": {
+    "center": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "corner": [
+      51,
+      51,
+      51,
+      255
+    ]
+  },
+  "failure": {
+    "type": "AssertionError",
+    "message": ""
+  },
+  "shutdown": {
+    "exitCode": 0,
+    "forced": false
+  },
+  "stagingErrors": 0,
+  "passed": false
+}

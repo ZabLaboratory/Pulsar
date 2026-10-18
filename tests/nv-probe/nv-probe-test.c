@@ -475,11 +475,16 @@ static void test_fallback_root_is_not_environment(void)
 	char progfiles[MAX_PATH];
 	char poisoned[MAX_PATH];
 	struct pulsar_nv_sdk_probe p;
+	struct pulsar_nv_sdk_probe baseline;
 
 	section("VFX fallback root -- SHGetKnownFolderPath, never %ProgramFiles%");
 
 	check(pulsar_nv_program_files(progfiles, sizeof(progfiles)) && progfiles[0] != '\0',
 	      "the known-folder API answers for FOLDERID_ProgramFiles");
+	/* The system may already contain the real SDK. Compare its observed
+	 * baseline instead of assuming every development machine has no SDK. */
+	SetEnvironmentVariableA(PULSAR_NV_VFX_DIR_ENV, NULL);
+	pulsar_nv_probe_vfx(&baseline);
 
 	/* Point %ProgramFiles% at a directory we control and fully stock,
 	 * exactly as a hostile parent process would. If the fallback still
@@ -499,7 +504,10 @@ static void test_fallback_root_is_not_environment(void)
 		SetEnvironmentVariableA("ProgramFiles", poisoned);
 		SetEnvironmentVariableA(PULSAR_NV_VFX_DIR_ENV, NULL);
 		pulsar_nv_probe_vfx(&p);
-		check(!p.dir_valid && !p.usable,
+		check(p.dir_valid == baseline.dir_valid && p.usable == baseline.usable &&
+		      p.dlls_present == baseline.dlls_present && p.models_present == baseline.models_present &&
+		      p.version == baseline.version && p.version_ok == baseline.version_ok &&
+		      strcmp(p.dir, baseline.dir) == 0,
 		      "poisoning %ProgramFiles% with a complete, non-writable fake SDK changes nothing");
 
 		{

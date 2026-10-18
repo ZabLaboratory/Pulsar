@@ -1,0 +1,182 @@
+{
+  "schema": "pulsar.vision-solar-cef-coverage-chain-preflight/1",
+  "checkedUtc": "2026-10-17T16:12:03.243707+00:00",
+  "runtimeStarted": false,
+  "buildStarted": false,
+  "gpuUsed": false,
+  "worktree": {
+    "worktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain",
+    "branch": "eleven/local-20261017-cef-coverage-chain",
+    "head": "72a4a6111d6985735e3e786920e381d5523d861c",
+    "status": " M scripts/cef-coverage-chain/README.md\n M scripts/cef-coverage-chain/probe.py\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T160811Z-cef-coverage-chain.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T160811Z-cfcadbbd-backdrop-source.png\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T160811Z-cfcadbbd-cef-atlas-initial.png\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T160811Z-cfcadbbd-initial-chain.json\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T160811Z-cfcadbbd-scene-mask-050.png\n?? evidence/local-20261017-cef-coverage-chain/eleven/20261017T161128Z-chain-preflight.json",
+    "commonDir": "D:/Documents/Zab/Pulsar/.git"
+  },
+  "sourcePins": {
+    "solarCommit": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+    "prismCommit": "321db8b2dbe6b5a429fc372306ac363b48e8900d",
+    "prismProductBaselineCommit": "49080662c422eded328bcf0e7fdf8dd16febb0d2",
+    "visionCommit": "044ddb62df050eee9869150a69a1b88fd26f2962",
+    "baselinePresenterCommit": "85c49664a029744369b063ddffaa92415a59c8a8",
+    "nativeSourceCommit": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+    "cefSourceCommit": "47cb08c56e010c5da45923a5eee147f294216756",
+    "solarHead": "e8ca9a3a6944fac68430fa9ddb79b93366a2f99a",
+    "prismHead": "321db8b2dbe6b5a429fc372306ac363b48e8900d",
+    "prismConsumer": {
+      "path": "src/main/broadcast/engine/capture/native-composition-consumer.ts",
+      "headBlob": "016a579264550a4377d932ed447259da55e69ea0",
+      "productBaselineBlob": "016a579264550a4377d932ed447259da55e69ea0",
+      "byteIdentical": true
+    },
+    "visionFixtureHead": "044ddb62df050eee9869150a69a1b88fd26f2962",
+    "sourceBlobs": {
+      "assigned": {
+        "commit": "72a4a6111d6985735e3e786920e381d5523d861c",
+        "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+        "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+      },
+      "native": {
+        "commit": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+        "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+        "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+      },
+      "cef": {
+        "commit": "47cb08c56e010c5da45923a5eee147f294216756",
+        "websocketSourceBlob": "18c01264fa9604bb66c5437a3dffbaf6be4a826b",
+        "websocketApiBlob": "b7a6d5c071cf52bb78f76d7a060cf7d3c9fa2304"
+      }
+    }
+  },
+  "solarVisionAssets": {
+    "ui/mainpresenter.mjs": {
+      "public": {
+        "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\ui\\mainpresenter.mjs",
+        "bytes": 43272,
+        "sha256": "1046dafdf9d1544dd15e17d24b57dcf8e32fdf74a140285b5f200ca544ccf508"
+      },
+      "dist": {
+        "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\ui\\mainpresenter.mjs",
+        "bytes": 43272,
+        "sha256": "1046dafdf9d1544dd15e17d24b57dcf8e32fdf74a140285b5f200ca544ccf508"
+      },
+      "byteIdentical": true
+    },
+    "ui/fonts.mjs": {
+      "public": {
+        "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\ui\\fonts.mjs",
+        "bytes": 1977,
+        "sha256": "d49ed45181a8aa714f675aaa24f5439e9547b274d6eba6cd2bb995c981765c5f"
+      },
+      "dist": {
+        "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\ui\\fonts.mjs",
+        "bytes": 1977,
+        "sha256": "d49ed45181a8aa714f675aaa24f5439e9547b274d6eba6cd2bb995c981765c5f"
+      },
+      "byteIdentical": true
+    },
+    "pkg/lumencast_vision_web.js": {
+      "public": {
+        "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\pkg\\lumencast_vision_web.js",
+        "bytes": 157228,
+        "sha256": "2661fc24146f703adcfa1b94769d9c789b707abf0027792b6f4287fb40bc04e6"
+      },
+      "dist": {
+        "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\pkg\\lumencast_vision_web.js",
+        "bytes": 157228,
+        "sha256": "2661fc24146f703adcfa1b94769d9c789b707abf0027792b6f4287fb40bc04e6"
+      },
+      "byteIdentical": true
+    },
+    "pkg/lumencast_vision_web_bg.wasm": {
+      "public": {
+        "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\public\\vision\\pkg\\lumencast_vision_web_bg.wasm",
+        "bytes": 10618773,
+        "sha256": "39c64876a92c0d8d5a104fa8366dc437520140be92e8376db59ed127420ab4a9"
+      },
+      "dist": {
+        "path": "D:\\Documents\\Zab\\Solar\\.worktrees\\eleven-local-20261015-project-integration\\dist\\host\\vision\\pkg\\lumencast_vision_web_bg.wasm",
+        "bytes": 10618773,
+        "sha256": "39c64876a92c0d8d5a104fa8366dc437520140be92e8376db59ed127420ab4a9"
+      },
+      "byteIdentical": true
+    }
+  },
+  "visionFixture": {
+    "path": "D:\\Documents\\Lumencast\\lumencast-vision\\.worktrees\\eleven-local-20261017-native-mask-coverage\\crates\\vision-web\\tests\\contribution-webgl2-proof\\contribution-scene.lsml",
+    "bytes": 1739,
+    "sha256": "103930a1a01c9de4cab71feb6ed31cc9bafdd0411dcbaf2e0914a91c3b47b064"
+  },
+  "nativeAndCefRuntime": {
+    "nativeHost": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\pulsar.exe",
+      "bytes": 1677824,
+      "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973"
+    },
+    "nativeObs": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\obs.dll",
+      "bytes": 1491968,
+      "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+    },
+    "nativeWebsocket": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+      "bytes": 2855936,
+      "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+    },
+    "capturePlugin": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+      "bytes": 573440,
+      "sha256": "9b17835e8db5ed452fd59e0fbe31d07f12e022df888540db6986e3a73918d093"
+    },
+    "cefBrowser": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\pulsar-browser.dll",
+      "bytes": 2571264,
+      "sha256": "0602fdc46559109ad24a57fc769580480fe8b2794930cc591bf5a450129df8e6"
+    },
+    "cefHelper": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\pulsar-browser-page.exe",
+      "bytes": 2216960,
+      "sha256": "9148fb2f5e1cc8867b19ab1cfd033eaea4e647e05ff0ac313f883cf281ab65e6"
+    },
+    "cefLib": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-runtime-qualification\\.cache\\cef-runtime\\upstream-build\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\libcef.dll",
+      "bytes": 213993472,
+      "sha256": "551bea07c46c9a330eff7861105321f3c7d47e3c0412ced4b0ff35aa130f2536"
+    }
+  },
+  "websocketProvenance": {
+    "nativeDll": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+      "bytes": 2855936,
+      "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+    },
+    "cefReportedDllSha256": "3130c2cf8485bfbf80b67b4ee09126f21a38a90229457aabdb03126526374f3a",
+    "cefReportedDllRetainedAtOverlayPath": false,
+    "sameObsDllSha256": true,
+    "apiVersion": 3,
+    "vendorRegistration": "obs_module_post_load \u2192 inline proc_handler API calls",
+    "directImportFromCaptureEffects": false,
+    "staticEvidence": {
+      "headerPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-websocket\\lib\\obs-websocket-api.h",
+      "headerSha256": "c29e8e38ee66c36db79cae86217ab0f270aad39f97e82090809d087c281b7948",
+      "sourcePath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-websocket\\src\\obs-websocket.cpp",
+      "sourceSha256": "a7218ae8699ad65214ab2d77726afa73cebabd6ec85f1dceb9a0700a5e67382b",
+      "captureEffectsPath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\plugins\\pulsar-capture-effects\\src\\capture-effects.cpp",
+      "captureEffectsSha256": "1f625a897b2a86604a6b0d5ba619152b4f88eb5c0a043ea45ccbfe9dcf284e71"
+    },
+    "selectionForPrivateStage": "preserve native d3ecaf55 DLL and overlay CEF browser files only; runtime compatibility remains unproved until the private integrated run"
+  },
+  "harness": {
+    "page": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\index.html",
+    "pageModule": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\page.mjs",
+    "solarPrismEmitter": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\emit-wire.mjs",
+    "privateRunner": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\probe.py",
+    "offlinePreflight": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-cef-coverage-chain\\scripts\\cef-coverage-chain\\preflight.py",
+    "executionGate": "the private runner requires both --execute and --gpu-slot-released",
+    "realAtlasRequirement": "use GetSourceScreenshot from this exact CEF browser_source; no generated PNG/image atlas may stand in for it"
+  },
+  "limitations": [
+    "No CEF/browser/GPU/native process was started by this preflight.",
+    "No build or test was run.",
+    "The LSML capture node uses the proof fixture's synthetic source binding; no physical camera is involved.",
+    "The exact d3ecaf55 native WebSocket binary is selected for this private stage because it is retained and already exercised with the matching host/obs.dll; the CEF report's 3130c2cf binary is absent from the retained overlay and is not substituted."
+  ]
+}

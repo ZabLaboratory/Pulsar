@@ -1,0 +1,77 @@
+{
+  "time": "2026-10-08T20:57:39.258Z",
+  "hostPid": 33260,
+  "hostCwd": "D:\\Documents\\Zab\\Prism\\.worktrees\\eleven-local-20261008-scene-sync\\.cache\\jump-session",
+  "nativePid": 44836,
+  "nativeSha256": "fac3466e90a744bff14ca68dac2967e5a51ecd610e9fcf1c1381f8b203299ac8",
+  "websocketSha256": "2604e4038f873104aefafd9ec23d24aa4887229d60a04184d009206a7d53288d",
+  "runtimeInstanceId": "prism-45138b6f75f74ccd9ae45aae001d90a7",
+  "selected": "06c5c92a-66f8-4431-92df-374dc56fab51",
+  "native": {
+    "busy": false,
+    "config": {
+      "cut_point_ms": 875,
+      "muted": false,
+      "path": "D:/Documents/Zab/Artifacts/2026-10-08/zab-transition-trace-sound/zab-smooth-alpha.webm",
+      "volume": 1
+    },
+    "configured": true,
+    "last_switch": {},
+    "media_duration_ms": 2008,
+    "operational": true,
+    "preview_overlay": {
+      "channel": "preview",
+      "command_id": "preview-34a7cca1-a7da-47e1-8abc-88dfcafdff65",
+      "cover_kind": "outgoing_frame",
+      "cut_time_ms": 894,
+      "frame_id": 6525,
+      "media_paused": false,
+      "media_time_ms": 2014,
+      "operational": true,
+      "playback_start_frame_id": 6399,
+      "playback_start_pts_ns": 1697450225362466,
+      "pts_ns": 1697452325362382,
+      "runtime_instance_id": "prism-45138b6f75f74ccd9ae45aae001d90a7",
+      "start_frame_id": 6380,
+      "start_pts_ns": 1697449892029146,
+      "status": "completed"
+    },
+    "readiness_error": "",
+    "ready": true,
+    "role_map": {
+      "on_air": "A",
+      "preview": "B"
+    },
+    "runtime_instance_id": "prism-45138b6f75f74ccd9ae45aae001d90a7",
+    "transition_duration_ms": 2258
+  },
+  "status": {
+    "pulsarRunning": true,
+    "pulsarPort": 63289,
+    "libobsVersion": "32.1.2-47-g76c902175-modified-pulsar",
+    "activeDestinations": [],
+    "activeDestinationLabels": [],
+    "captureMode": null,
+    "state": "idle"
+  },
+  "recording": {
+    "active": false,
+    "paused": false
+  },
+  "dom": {
+    "stage": {
+      "previewLane": "preview",
+      "previewDualReturn": "false",
+      "previewLaneTransition": "false",
+      "previewActivation": "ready",
+      "previewUrlVersion": "1",
+      "previewRenderReady": "true",
+      "previewSceneId": "06c5c92a-66f8-4431-92df-374dc56fab51"
+    },
+    "video": {
+      "width": 1920,
+      "height": 1080,
+      "ready": 4
+    }
+  }
+}

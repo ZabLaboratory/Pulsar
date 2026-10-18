@@ -1,0 +1,27 @@
+{
+  "capturedUtc": "2026-10-17T12:59:20.266836+00:00",
+  "sourceCommit": "a083170593d0155749c9011f2d224b059f49bfcb",
+  "integrationCommit": "87f8b5043aed1b9cde2e5abeb11ef460a8690738",
+  "sixProductDocProbeGitBlobsIdentical": true,
+  "threePythonProbeAstChecks": "pass",
+  "gitDiffCheck": "pass",
+  "gitConnectivityFsck": "pass",
+  "commitGraphVerify": "pass",
+  "qualifiedDllSha256": "1e128beb9da67798745c8d240217336564c867929def600c7abd6d25153107f3",
+  "positiveReport": {
+    "qualifiedRawSha256": "dc803d6ba0594846094060f308bce474413700990966f4bae5dba4bc58170dc6",
+    "integratedRawSha256": "fed921dcd27dd1ce9f75dc1205be48287a0f4a3fe3634c3b5dfc4a82e43fdfaa"
+  },
+  "negativeReport": {
+    "qualifiedRawSha256": "75959fa8bb07c1a120bead8973ee9baf028ea6af9a1161fb32ee1713097e5e19",
+    "integratedRawSha256": "ace5cba279788d10eb8471ad7b89ebeb2cebb977aa09cbfb80568fdb6760e8a2"
+  },
+  "reportCheckoutDifference": "First raw-file hash assertion failed after merge. Investigation confirms only LF to CRLF checkout conversion; exact Git blobs and normalized bytes identical. No baseline or source altered.",
+  "newNativeHostRerun": false,
+  "independentPixelReview": "evidence/local-20261015-project-integration/eleven/20261017T125011Z-fractional-independent-review.json",
+  "installedRuntimeModified": false,
+  "physicalCameraQualified": false,
+  "transitionModified": false,
+  "switchDurationModified": false,
+  "retainedUnit": "eleven-local-20261017-fractional-capture-box; qualified DLL cache retained for next coherent candidate; review on candidate admission"
+}

@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,15 +48,20 @@ describe("spawn()", () => {
     await expect(spawn({ binariesPath: tmp })).rejects.toThrow(/pulsar\.exe not found/);
   });
 
-  it("rejects when the executable exits before the ready marker", async () => {
+  it.each([0, 7])("reports an unsolicited exit with code %i before the ready marker", async (exitCode) => {
+    const events: Array<{ code: string; severity: string }> = [];
     // A node command that exits immediately won't print the marker.
     await expect(
       spawn({
         binariesPath: tmp,
-        launchCommand: { exe: process.execPath, args: ["-e", "process.exit(0)"] },
+        launchCommand: { exe: process.execPath, args: ["-e", `process.exit(${exitCode})`] },
+        onPrismLog: (event) => events.push(event),
         readyTimeoutMs: 2_000,
       }),
     ).rejects.toThrow(/exited prematurely|did not signal ready/);
+    expect(events.filter((event) => event.severity === "error").map((event) => event.code))
+      .toEqual(["PULSAR_PROCESS_EXITED"]);
+    expect(events.some((event) => event.code === "PULSAR_PROCESS_STOPPED")).toBe(false);
   });
 
   it("forwards stdout/stderr lines via onLog", async () => {
@@ -117,6 +123,39 @@ describe("spawn()", () => {
     expect(handle.client.isConnected()).toBe(false);
   });
 
+  it("reports concurrent requested shutdown as one informational stop, not a crash", async () => {
+    const events: Array<{ code: string; severity: string }> = [];
+    const handle = await spawn({
+      binariesPath: tmp,
+      launchCommand: { exe: process.execPath, args: [FAKE_PULSAR] },
+      onPrismLog: (event) => events.push(event),
+    });
+    await Promise.all([handle.shutdown(), handle.shutdown()]);
+    expect(events.filter((event) => event.code === "PULSAR_PROCESS_STOPPED"))
+      .toEqual([expect.objectContaining({ severity: "info", context: { action: "shutdown" },
+        details: expect.objectContaining({ reason: "shutdown" }) })]);
+    expect(events.filter((event) => event.severity === "error")).toEqual([]);
+  });
+
+  it("still reports an external SIGTERM after readiness as an unexpected exit", async () => {
+    const events: Array<{ code: string; severity: string }> = [];
+    const handle = await spawn({
+      binariesPath: tmp,
+      launchCommand: { exe: process.execPath, args: [FAKE_PULSAR] },
+      onPrismLog: (event) => events.push(event),
+    });
+    try {
+      const exited = once(handle.child, "exit");
+      expect(handle.child.kill("SIGTERM")).toBe(true);
+      await exited;
+      expect(events.filter((event) => event.code === "PULSAR_PROCESS_EXITED"))
+        .toEqual([expect.objectContaining({ severity: "error" })]);
+      expect(events.some((event) => event.code === "PULSAR_PROCESS_STOPPED")).toBe(false);
+    } finally {
+      await handle.shutdown();
+    }
+  });
+
   it("gives concurrent children distinct runtime identities and config namespaces", async () => {
     const handles = await Promise.all(
       Array.from({ length: 4 }, () =>
@@ -167,17 +206,24 @@ describe("spawn()", () => {
 
   it("cleans a generated namespace when boot times out", async () => {
     const runtimeRoot = join(tmp, "runtime-root");
+    const events: Array<{ code: string; severity: string }> = [];
     await expect(
       spawn({
         binariesPath: tmp,
         env: { PULSAR_RUNTIME_ROOT: runtimeRoot },
         launchCommand: { exe: process.execPath, args: ["-e", "setInterval(() => {}, 1000)" ] },
         readyTimeoutMs: 100,
+        onPrismLog: (event) => events.push(event),
       }),
     ).rejects.toMatchObject({
       name: "PulsarRuntimeError",
       prism: { code: "PULSAR_READY_TIMEOUT" },
     });
     expect(readdirSync(runtimeRoot)).toHaveLength(0);
+    expect(events.filter((event) => event.severity === "error").map((event) => event.code))
+      .toEqual(["PULSAR_READY_TIMEOUT"]);
+    expect(events.filter((event) => event.code === "PULSAR_PROCESS_STOPPED"))
+      .toEqual([expect.objectContaining({ severity: "info",
+        details: expect.objectContaining({ reason: "startup-cleanup" }) })]);
   });
 });

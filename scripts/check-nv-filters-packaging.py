@@ -41,6 +41,7 @@ PACKAGE_SCRIPT = REPO / "scripts" / "package-win.ps1"
 NVIDIA_SDK_DLLS = (
     "NVAudioEffects.dll",
     "NVVideoEffects.dll",
+    "nvARPose.dll",
     "NVCVImage.dll",
     "nvcuda.dll",
 )

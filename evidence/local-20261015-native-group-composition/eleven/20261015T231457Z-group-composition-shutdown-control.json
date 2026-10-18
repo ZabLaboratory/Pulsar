@@ -1,0 +1,93 @@
+{
+  "startedUtc": "2026-10-15T23:14:57.634252+00:00",
+  "passed": false,
+  "provenance": {
+    "runtimeSource": "D:\\Documents\\Zab\\Pulsar\\upstream\\build_x64\\rundir\\RelWithDebInfo",
+    "runtimeExeSha256": "0ff68d43e6e615bf99f01f858fd114f0308b9ff100a4bbe761b3dbc7e3a1559a",
+    "runtimeObsSha256": "fc8eb80e1104b39501e5c23113c5b2e73138334cd4c1c0f98f9e158f9cf46048",
+    "privateCapturePlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "privateCapturePluginSha256": "9ebea57d35638170761c0b1384fb71861cca08502a2c47b392cdb4614225e5e6",
+    "privateWebsocketPlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\websocket-build\\private-runtime\\obs-plugins\\64bit\\obs-websocket.dll",
+    "privateWebsocketPluginSha256": "0d12aa1e1a887a5402f1d6c275d8eb5fa8735d6373de2e46a7ac465c13ff6e52",
+    "privateGraphicsRemoveHelper": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\plugin-build\\RelWithDebInfo\\group-composition-graphics-remove-helper.dll",
+    "privateGraphicsRemoveHelperSha256": "be6a66060c025e2b88004e1672a457a06242d592bf05a022c20a371f6a7f6181",
+    "graphicsRemoveHelperPurpose": "test-only module calls obs_source_remove within an OBS graphics task",
+    "jsonBridgeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\plugins\\pulsar-websocket\\src\\utils\\Json.cpp",
+    "jsonBridgeSourceSha256": "e40f65258346441c4435928e46c929ba20b8e0eabcc9a8334f6edfa538fadc0f",
+    "jsonBridgeBuiltFrom": "the supplied private obs-websocket.dll, built by this unit from this checkout"
+  },
+  "ownedPid": 20876,
+  "syntheticOnlyBootstrap": {
+    "desktopAudioDeviceId": "pulsar-synthetic-test-no-device",
+    "microphoneConfigured": false,
+    "processAudioConfigured": false,
+    "initializedWasapiDevices": [],
+    "result": "no WASAPI endpoint initialized during private bootstrap"
+  },
+  "shutdownControl": {
+    "compositionCreated": false,
+    "reason": "compare host bootstrap/shutdown without group ownership"
+  },
+  "shutdownWaitSeconds": 30.078,
+  "shutdownTimeoutSeconds": 30.0,
+  "ownedProcessExited": true,
+  "gracefulShutdownRequested": true,
+  "forcedTerminationUsed": true,
+  "redactedShutdownTail": [
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_not_running",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 pulsar-directshow | PreviewReturn lease state=stop name=OBSPulsarPreviewReturnVideo.ConsumerActive",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | Virtual output stopping",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | Output 'PulsarPreviewReturn': stopping",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | Output 'PulsarPreviewReturn': Total frames output: 121",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | Output 'PulsarPreviewReturn': Total drawn frames: 123",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | Virtual output stopped",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_begin scenes=1 sources=2",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | output 'PulsarStream' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | output 'PulsarRecord' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | output 'PulsarReplay' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | output 'PulsarVCam' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | output 'PulsarProgramReturn' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | output 'PulsarPreviewReturn' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | service 'PulsarService' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | encoder 'PulsarVideoEnc' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | encoder 'PulsarAudioEnc' destroyed",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | source 'PulsarCapture' destroyed",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | WASAPI: Device '' Terminated",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | source 'PulsarDesktopAudio' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | private source 'PulsarLaneA' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | private source 'PulsarLaneB' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | private source 'Fade' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | source 'Default' destroyed",
+    "2026-10-15T23:15:13Z DEBUG 9xrDBsnmCcWaeS77 libobs | private source 'PulsarPreviewBootstrap' destroyed",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=0",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 pulsar-frontend-stub | callbacks uninstalled",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 pulsar-scene-source | obs_module_unload",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 pulsar-multi-stream | obs_module_unload"
+  ],
+  "shutdownMilestones": [
+    "PULSAR_SHUTDOWN_CONTROL event=ready id=group-proof-075c43035f854ff98126deba9405bae3 mechanism=inherited_event",
+    "PULSAR_SHUTDOWN_CONTROL event=signaled id=group-proof-075c43035f854ff98126deba9405bae3 mechanism=inherited_event",
+    "[pulsar-headless] shutting down",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_begin scenes=1 sources=2",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=0",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 pulsar-scene-source | obs_module_unload",
+    "2026-10-15T23:15:13Z INFO 9xrDBsnmCcWaeS77 pulsar-multi-stream | obs_module_unload"
+  ],
+  "gracefulShutdownEvidence": {
+    "eventAdopted": true,
+    "eventSignaled": true,
+    "hostShutdownReached": true,
+    "exitCode": 1
+  },
+  "gracefulHostShutdownWithoutComposition": false,
+  "activeCompositionCleanlyUnloaded": null,
+  "shutdownError": {
+    "type": "GracefulShutdownControlFailed",
+    "message": "private host did not exit through the graceful path without a composition"
+  },
+  "scratchRemoved": true,
+  "finishedUtc": "2026-10-15T23:15:43.967056+00:00",
+  "limits": "Private synthetic GPU readback only; SolarBand source crops and owner-local placement are covered, masks remain explicitly unsupported, and no physical capture, public output, transition or switch is exercised"
+}

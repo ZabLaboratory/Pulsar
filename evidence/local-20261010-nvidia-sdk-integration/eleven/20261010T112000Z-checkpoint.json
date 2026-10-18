@@ -1,0 +1,36 @@
+{
+  "repo": "D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261009-capability-audit",
+  "branch": "eleven/local-20261009-capability-audit",
+  "codeAndProofHead": "32d3830a0f18aa25243548a649bbbd84c02786f1",
+  "base": "c5011056f307424d5ce033972b7e07b0b07c45f5",
+  "changedFiles": [
+    "README.md",
+    "docs/LIBOBS-CHANGES.md",
+    "evidence/local-20261010-nvidia-sdk-integration/eleven/20261010T111100Z-native-worker.json",
+    "evidence/local-20261010-nvidia-sdk-integration/eleven/20261010T111100Z-patch-replay.json",
+    "evidence/local-20261010-nvidia-sdk-integration/eleven/20261010T111100Z-sdk-intensity-experiment.json",
+    "evidence/local-20261010-nvidia-sdk-integration/eleven/20261010T111700Z-media-check.json",
+    "evidence/local-20261010-nvidia-sdk-integration/eleven/20261010T111700Z-media-probe.txt",
+    "evidence/local-20261010-nvidia-sdk-integration/eleven/20261010T111700Z-native-video.json",
+    "evidence/local-20261010-nvidia-sdk-integration/eleven/20261010T111700Z-report.md",
+    "evidence/local-20261010-nvidia-sdk-integration/eleven/20261010T111700Z-video-manifest.json",
+    "patches/0062-fix-nvidia-audio-settings-worker.patch",
+    "patches/README.md",
+    "plugins/pulsar-nv-secure-load/README.md",
+    "scripts/probe-nvidia-effects.py"
+  ],
+  "validation": [
+    "MSVC targeted module build pass",
+    "NVIDIA patch replay pass",
+    "native installed SDK and lifecycle/video probe pass",
+    "H264/AAC decoded pixels and signal pass",
+    "Python compilation and packaging pass",
+    "workspace guard continue=true"
+  ],
+  "remaining": [
+    "Full release build/CI",
+    "Physical quality and capacity qualification",
+    "Absent consumers listed in Prism aggregate"
+  ],
+  "retention": "Active continuation worktree retained while draft PR #301 is unmerged; existing cache preserved"
+}

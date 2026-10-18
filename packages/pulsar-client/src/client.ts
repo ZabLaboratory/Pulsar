@@ -9,6 +9,8 @@ import { AdaptiveNamespace } from "./adaptive.js";
 import { RecordNamespace } from "./record.js";
 import { StreamNamespace } from "./stream.js";
 import { AudioNamespace } from "./audio.js";
+import { TransitionsNamespace } from "./transitions.js";
+import type { LaneSwitchResult } from "./transitions.js";
 import { bitrateAdjustedFromWire, type WireBitrateAdjustedEvent } from "./wire.js";
 import type {
   ConnectOptions,
@@ -60,6 +62,7 @@ export class PulsarClient extends TypedEventEmitter {
   public readonly record: RecordNamespace;
   public readonly stream: StreamNamespace;
   public readonly audio: AudioNamespace;
+  public readonly transitions: TransitionsNamespace;
 
   private connected = false;
 
@@ -73,6 +76,7 @@ export class PulsarClient extends TypedEventEmitter {
     this.record = new RecordNamespace(this);
     this.stream = new StreamNamespace(this);
     this.audio = new AudioNamespace(this);
+    this.transitions = new TransitionsNamespace(this);
 
     this.obs.on("ConnectionClosed", (info) => {
       this.connected = false;
@@ -109,6 +113,10 @@ export class PulsarClient extends TypedEventEmitter {
     // Pulsar vendor events -- VendorEvent payload includes vendorName +
     // eventType + eventData. We dispatch on eventType under our namespace.
     this.obs.on("VendorEvent", (data) => {
+      if (data.vendorName === "pulsar-transitions" && data.eventType === "LaneSwitchCompleted") {
+        this.emit("laneSwitchCompleted", data.eventData as unknown as LaneSwitchResult);
+        return;
+      }
       if (data.vendorName !== VENDOR) return;
       switch (data.eventType) {
         case "BitrateAdjusted": {

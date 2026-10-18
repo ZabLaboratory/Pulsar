@@ -1,0 +1,23 @@
+{"report": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T122918Z-group-composition-probe.json", "passed": false, "ownedProcessExited": true, "scratchRemoved": true, "scratchCleanupError": null}
+Traceback (most recent call last):
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-fractional-capture-box\scripts\probe-capture-framing.py", line 37, in <module>
+    native.main()
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-fractional-capture-box\scripts\probe-group-composition.py", line 1607, in main
+    report["probe"] = asyncio.run(exercise(
+                      ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mathias\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Mathias\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mathias\AppData\Local\Programs\Python\Python311\Lib\asyncio\base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-fractional-capture-box\scripts\probe-capture-framing.py", line 26, in combined
+    paint = await effects.run(config, output)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-fractional-capture-box\scripts\probe-capture-effects.py", line 64, in run
+    assert (t['positionX'],t['positionY'])==(500-padding,300-padding),t
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'alignment': 5, 'boundsAlignment': 0, 'boundsHeight': 0.0, 'boundsType': 'OBS_BOUNDS_NONE', 'boundsWidth': 0.0, 'cropBottom': 0, 'cropLeft': 0, 'cropRight': 0, 'cropToBounds': False, 'cropTop': 0, 'height': 1.0, 'positionX': 0.0, 'positionY': 0.0, 'rotation': 0.0, 'scaleX': 1.0, 'scaleY': 1.0, 'sourceHeight': 1.0, 'sourceWidth': 1.0, 'width': 1.0}

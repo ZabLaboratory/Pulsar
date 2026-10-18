@@ -1,0 +1,50 @@
+Test project D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/build
+      Start  4: pulsar-ws-debug-probe
+ 1/13 Test  #4: pulsar-ws-debug-probe ............................   Passed    0.04 sec
+      Start  5: pulsar-log-handler-probe
+ 2/13 Test  #5: pulsar-log-handler-probe .........................   Passed    0.08 sec
+      Start  6: pulsar-dir-hardening-probe
+ 3/13 Test  #6: pulsar-dir-hardening-probe .......................***Failed    0.12 sec
+pulsar-dir-hardening: C:\Users\Mathias\AppData\Local\Temp\pulsar-dir-hardening-test-reparse-12246480859836571893\obs-websocket is a reparse point (junction/symlink); refusing (fail closed, #201 N1); test
+dir-hardening-probe-test: WARN gesture NOT RUN: gesture-3:different-owner-refusal
+dir-hardening-probe-test: WARN gesture NOT RUN: gesture-4:post-rename-substitution-detection
+dir-hardening-probe-test: FAIL -- 2 named gesture(s) could not be exercised on this runner; a security assertion that silently does not run must not report success
+dir-hardening-probe-test: reparse-point gesture: mklink /J rc=0 junction_exists=1
+dir-hardening-probe-test: reparse-point gesture: junction refusal confirmed
+dir-hardening-probe-test: NOT RUN -- different-owner refusal case (gesture 3, #201 N1, A2.RC2 #213) cannot be exercised on this runner: SeRestorePrivilege is not held by this runner's token (ERROR_NOT_ALL_ASSIGNED) -- reassigning ownership to a different principal requires it in the absence of a second real Windows account
+dir-hardening-probe-test: NOT RUN -- post-rename substitution detection case (gesture 4, #201 N1, A2.RC2 #213) cannot be exercised on this runner: SeRestorePrivilege is not held by this runner's token (ERROR_NOT_ALL_ASSIGNED) -- reassigning ownership to a different principal requires it in the absence of a second real Windows account
+
+      Start  7: pulsar-runtime-isolation-probe
+ 4/13 Test  #7: pulsar-runtime-isolation-probe ...................   Passed    0.38 sec
+      Start  8: pulsar-rtwq-lifecycle
+ 5/13 Test  #8: pulsar-rtwq-lifecycle ............................   Passed    0.05 sec
+      Start  9: pulsar-directshow-namespace-probe
+ 6/13 Test  #9: pulsar-directshow-namespace-probe ................   Passed    0.04 sec
+      Start 10: pulsar-directshow-namespace-command-line-probe
+ 7/13 Test #10: pulsar-directshow-namespace-command-line-probe ...   Passed    0.01 sec
+      Start 11: pulsar-lease-registration-pipe-probe
+ 8/13 Test #11: pulsar-lease-registration-pipe-probe .............   Passed    0.04 sec
+      Start 12: pulsar-output-classify-probe
+ 9/13 Test #12: pulsar-output-classify-probe .....................   Passed    0.04 sec
+      Start 13: pulsar-output-attempt-settled-probe
+10/13 Test #13: pulsar-output-attempt-settled-probe ..............   Passed    0.04 sec
+      Start 23: pulsar-audio-callback-gate-test
+11/13 Test #23: pulsar-audio-callback-gate-test ..................   Passed    0.04 sec
+      Start 24: pulsar-browser-source-task-state-test
+12/13 Test #24: pulsar-browser-source-task-state-test ............   Passed    0.13 sec
+      Start 25: pulsar-headless-websocket-quiesce
+13/13 Test #25: pulsar-headless-websocket-quiesce ................   Passed   17.21 sec
+
+92% tests passed, 1 tests failed out of 13
+
+Label Time Summary:
+integration    =  17.64 sec*proc (3 tests)
+runtime        =  17.73 sec*proc (6 tests)
+security       =   0.34 sec*proc (6 tests)
+unit           =   0.97 sec*proc (11 tests)
+
+Total Test time (real) =  18.34 sec
+
+The following tests FAILED:
+	  6 - pulsar-dir-hardening-probe (Failed)               security unit
+Errors while running CTest

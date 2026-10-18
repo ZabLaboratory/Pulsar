@@ -28,6 +28,7 @@ REQUIRED = (
     "upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/pulsar.exe",
     "upstream/build_x64/rundir/RelWithDebInfo/bin/64bit/obs.dll",
     "build/CTestTestfile.cmake",
+    "upstream/build_x64/rundir/RelWithDebInfo/obs-plugins/64bit/pulsar-capture-effects.dll",
     "upstream/build_x64/rundir/RelWithDebInfo/obs-plugins/64bit/pulsar-browser.dll",
     "upstream/build_x64/rundir/RelWithDebInfo/obs-plugins/64bit/pulsar-browser-page.exe",
     "upstream/build_x64/rundir/RelWithDebInfo/obs-plugins/64bit/libcef.dll",

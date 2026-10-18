@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "websocket_sha256": "e93ad8bd2ae86e9cdb2f6ba2b3c70a92abe3969d46db422a3347026ee3341447",
+  "screenshot_dimension_modes": 4,
+  "modern_filter_lifecycle": true,
+  "staging_errors": 0,
+  "shutdown": {
+    "exit_code": 0,
+    "forced": false
+  },
+  "type": "native screenshot regression",
+  "binaryPath": "C:/Users/Mathias/AppData/Roaming/prism-dev/components/pulsar/active/bin/64bit/pulsar.exe",
+  "probeSourceSha256": "cec99dfd2696a75fe3fbc68abfe9ebdc4834d323082f8fb193ffac4b3e49132e"
+}

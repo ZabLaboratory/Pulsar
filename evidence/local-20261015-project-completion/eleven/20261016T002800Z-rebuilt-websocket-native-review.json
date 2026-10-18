@@ -1,0 +1,114 @@
+{
+  "capturedUtc": "2026-10-16T00:23:41.2974532Z",
+  "sourceReport": "evidence/local-20261015-native-group-composition/eleven/20261016T002156Z-group-composition-probe.json",
+  "sourceReportSha256": "dad04fdbf24631c7ea9e8c939e2169619a529afa524c4d6062826541a537dd84",
+  "rootVerification": {
+    "pngHashMatches": 33,
+    "pixelDecoder": "System.Drawing.Bitmap.GetPixel from persisted mixed-composition-committed PNG",
+    "pixels": [
+      {
+        "point": [
+          260,
+          150
+        ],
+        "rgba": [
+          0,
+          127,
+          0,
+          127
+        ]
+      },
+      {
+        "point": [
+          532,
+          282
+        ],
+        "rgba": [
+          0,
+          32,
+          0,
+          32
+        ]
+      },
+      {
+        "point": [
+          632,
+          282
+        ],
+        "rgba": [
+          0,
+          95,
+          0,
+          95
+        ]
+      },
+      {
+        "point": [
+          772,
+          378
+        ],
+        "rgba": [
+          0,
+          64,
+          127,
+          127
+        ]
+      }
+    ],
+    "currentWebsocketFileMatchesReportedLoadedSha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+  },
+  "shutdown": {
+    "seconds": 0.172,
+    "processExited": true,
+    "forced": false,
+    "clean": true,
+    "frontendCallbacks": {
+      "scriptShutdownThenExitRunsCleanupOnce": true,
+      "exitCleanupMarkerCountsAreExact": true,
+      "exitCallbackDetachedBeforeTableUninstall": true,
+      "destructorSkippedDuplicateRemovalAfterUninstall": true,
+      "noMissingFrontendCallbackError": true,
+      "markerIndexes": {
+        "scriptingShutdownReceived": 373,
+        "exitReceived": 379,
+        "exitCleanupStarted": 375,
+        "exitCleanupComplete": 377,
+        "duplicateCleanupSkipped": 380,
+        "exitDetach": 382,
+        "callbacksUninstalled": 418,
+        "websocketUnloadStarted": 422,
+        "destructorSkip": 424,
+        "websocketUnloadFinished": 425
+      },
+      "passed": true
+    },
+    "pendingRemovalProof": {
+      "testHelperLoadedAfterCapturePlugin": true,
+      "testRemovalRanBeforeCapturePluginUnload": true,
+      "helperRemovalOnStoppedGraphicsThread": true,
+      "pendingEventObservedAtCaptureUnload": true,
+      "pendingEventReleasedAtCaptureUnload": true,
+      "markerIndexes": {
+        "captureModuleLoad": 97,
+        "testHelperModuleLoad": 101,
+        "testHelperUnloadRemoval": 419,
+        "captureModuleUnloadCleanup": 420
+      },
+      "passed": true
+    },
+    "moduleCleanup": {
+      "markerObserved": true,
+      "activeCompositionsBeforeCleanup": 0,
+      "generationFencesBeforeCleanup": 0,
+      "pendingRemovalEventsBeforeCleanup": 1,
+      "pendingRemovalEventsReleased": 1
+    }
+  },
+  "limits": [
+    "Private synthetic GPU input; no physical capture, public output or common runtime installation",
+    "Explicit no-browser helper; CEF shutdown not exercised",
+    "Pending source-removal helper forwards private source signal; active composition already disposed before module unload",
+    "Build producer/source/header/import-library chain owner manifest still awaiting signed checkpoint",
+    "Masks, non-normal group blends and shear remain incomplete"
+  ]
+}

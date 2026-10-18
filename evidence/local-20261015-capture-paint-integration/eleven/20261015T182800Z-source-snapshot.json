@@ -1,0 +1,81 @@
+{
+  "capturedUtc": "2026-10-15T18:25:30.7092060Z",
+  "sourceWorktree": "D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261009-capture-effects",
+  "sourceHead": "ad2c290bb7ab1f73edc68add30fc31d35a577adc",
+  "sourceStatus": "Plugin/probes/fixtures untracked; no claim they belong to source HEAD",
+  "targetWorktree": "D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261015-capture-paint-integration",
+  "targetBase": "b0b62cd81ab6967bf758dfbdaa5d28e1a3325a23",
+  "copy": "Byte-identical snapshot, source hashes checked before and after copy; foreign worktree unchanged",
+  "files": [
+    {
+      "path": "plugins/pulsar-capture-effects/CMakeLists.txt",
+      "bytes": 1460,
+      "sha256": "c85016121f4923ad59daec2c21129b63eafd0d5abeb06195281eeeadf19c1ea6"
+    },
+    {
+      "path": "plugins/pulsar-capture-effects/README.md",
+      "bytes": 7113,
+      "sha256": "4969bc5f32bcbe4a1f85750de3d53a8606c220103c4591d6cdae987a9f46eb47"
+    },
+    {
+      "path": "plugins/pulsar-capture-effects/src/capture-effects.cpp",
+      "bytes": 27310,
+      "sha256": "70b6ccc06787cf1a80f78454c19140317ff6e7099276d6232669f92caa182d04"
+    },
+    {
+      "path": "plugins/pulsar-capture-effects/src/capture-effects.effect",
+      "bytes": 7922,
+      "sha256": "9174c57105d4ad2c0cbe114b75721e65f7310916af31fe9a8ccd578f4436872b"
+    },
+    {
+      "path": "plugins/pulsar-capture-effects/src/effect-source.hpp.in",
+      "bytes": 113,
+      "sha256": "ea01a69d47c018f5c444bacc45ef6208cb32701fd12d0d17c6a8a755eea804b3"
+    },
+    {
+      "path": "scripts/probe-capture-effects.py",
+      "bytes": 10422,
+      "sha256": "f1f36341430e428b651ddf6fb3cbc2cacd5280580f0d9cbb49dea4d693174545"
+    },
+    {
+      "path": "scripts/probe-capture-ancestor-clips.py",
+      "bytes": 6492,
+      "sha256": "6f762f1801c9bd7bc88246e93543b0ee8ae8c968ba48be9c64004e6641c58305"
+    },
+    {
+      "path": "tests/capture-effects/generate-fixtures.py",
+      "bytes": 550,
+      "sha256": "5a077e7fbe59d502d9b35287a796137f07e84a60e3c634567e5472108e423b23"
+    },
+    {
+      "path": "tests/capture-effects/fixtures/background.png",
+      "bytes": 961,
+      "sha256": "52d956059da4249b3cc77f8fee5e64144cbd1629721c5fb5f5e0aeb0fbed9ed8"
+    },
+    {
+      "path": "tests/capture-effects/fixtures/foreground.png",
+      "bytes": 969,
+      "sha256": "c925e7367dd69c4e962f9a2b92b07ab9735366a7c202d3f109273aa6d16f5a64"
+    },
+    {
+      "path": "tests/capture-effects/fixtures/blend-90.png",
+      "bytes": 70,
+      "sha256": "11ee27ab33681bb03cde5cde0d0c13b62db504a5a1c3b8af03d0e1df25c80028"
+    },
+    {
+      "path": "tests/capture-effects/fixtures/blend-128.png",
+      "bytes": 70,
+      "sha256": "9084bbbca2dd10f78ec87c8857865dcf31a75119200c08e2a939dd1e8bf34e2f"
+    },
+    {
+      "path": "tests/capture-effects/fixtures/blend-178.png",
+      "bytes": 70,
+      "sha256": "2aa6dc9b459349f39c06b94c4fbcc50d646b426c728ab2c91f101503f1e73c2f"
+    },
+    {
+      "path": "tests/capture-effects/fixtures/blend-255.png",
+      "bytes": 70,
+      "sha256": "2f1d3f8dcb2f74eb11139991730a50402c5ad6eae5587efe623a126c2484526b"
+    }
+  ]
+}

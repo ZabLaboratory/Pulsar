@@ -1,0 +1,24 @@
+{
+  "base": "fb29cd7fcf41d0979198df25d4d58b832cf723aa",
+  "checks": {
+    "scene_control_contracts": 101,
+    "native_tests": 4,
+    "headless_websocket_quiesce": true,
+    "graceful_cef_fixture": false,
+    "prior_headless_same_failure": true
+  },
+  "graceful_cef_fixture_limitation": {
+    "failure": "CEF source creation marker was not observed",
+    "candidate_log": "build-transition/preview-native-tests-final.txt",
+    "baseline_log": "build-transition/preview-graceful-baseline.txt",
+    "baseline_sha256": "e255ca6767c778532b84b1f2775c8aa1f3c30bc578d6c5bdf60aec30b67a4bb0",
+    "browser_binary_has_lifecycle_marker": {
+      "obs-browser.dll": false,
+      "pulsar-browser.dll": false
+    }
+  },
+  "activated_sha256": {
+    "bin/64bit/pulsar.exe": "feb36c35f5f238060b26f524f7c26a11e6b3b110f8d438bbe3dc2087fd2ee611",
+    "obs-plugins/64bit/obs-websocket.dll": "2604e4038f873104aefafd9ec23d24aa4887229d60a04184d009206a7d53288d"
+  }
+}

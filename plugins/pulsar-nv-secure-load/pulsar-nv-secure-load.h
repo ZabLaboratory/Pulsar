@@ -157,6 +157,7 @@ struct pulsar_nv_sdk_probe {
 struct pulsar_nv_probe_result {
 	struct pulsar_nv_sdk_probe afx;
 	struct pulsar_nv_sdk_probe vfx;
+	struct pulsar_nv_sdk_probe ar;
 };
 
 /* ---- path validation --------------------------------------------------
@@ -583,12 +584,34 @@ static void pulsar_nv_probe_vfx(struct pulsar_nv_sdk_probe *p)
 	p->usable = p->dir_valid && p->dlls_present && p->models_present && p->version_ok;
 }
 
+/* AR has a fixed system-known installation root, never an inherited override. */
+static void pulsar_nv_probe_ar(struct pulsar_nv_sdk_probe *p)
+{
+	char progfiles[MAX_PATH], candidate[MAX_PATH];
+	memset(p, 0, sizeof(*p));
+	p->min_version = 0x00080700u;
+	if (!pulsar_nv_program_files(progfiles, sizeof(progfiles)))
+		return;
+	if (snprintf(candidate, sizeof(candidate), "%s\\NVIDIA Corporation\\NVIDIA AR SDK", progfiles) <= 0)
+		return;
+	if (!pulsar_nv_validate_dir(candidate, p->dir, MAX_PATH))
+		return;
+	p->dir_valid = true;
+	p->dlls_present = pulsar_nv_file_exists(p->dir, NULL, "nvARPose.dll") &&
+		pulsar_nv_file_exists(p->dir, NULL, PULSAR_NV_CVIMAGE_DLL);
+	p->models_present = pulsar_nv_subdir_ok(p->dir, PULSAR_NV_MODEL_SUBDIR);
+	p->version_readable = pulsar_nv_read_version(p->dir, "nvARPose.dll", &p->version);
+	p->version_ok = p->version_readable && p->version >= p->min_version;
+	p->usable = p->dir_valid && p->dlls_present && p->models_present && p->version_ok;
+}
+
 static void pulsar_nv_probe(struct pulsar_nv_probe_result *out)
 {
 	if (!out)
 		return;
 	pulsar_nv_probe_afx(&out->afx);
 	pulsar_nv_probe_vfx(&out->vfx);
+	pulsar_nv_probe_ar(&out->ar);
 }
 
 /* The module gate. False here means obs_module_load() refuses, so neither

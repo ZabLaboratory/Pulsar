@@ -1,0 +1,10 @@
+OK  pulsar.exe                  (0 exports)
+OK  pulsar-browser-page.exe     (0 exports)
+OK  pulsar-browser.dll (9 ABI symbol(s))
+OK  pulsar-camera-effects.dll (4 ABI symbol(s))
+OK  pulsar-capture-effects.dll (8 ABI symbol(s))
+OK  pulsar-multi-stream.dll (11 ABI symbol(s))
+OK  pulsar-scene-source.dll (11 ABI symbol(s))
+OK  obs-websocket.dll (11 ABI symbol(s))
+
+::notice::All Pulsar binaries conform to LICENSE-INVARIANTS.md (#3) -- only OBS module ABI symbols exported.

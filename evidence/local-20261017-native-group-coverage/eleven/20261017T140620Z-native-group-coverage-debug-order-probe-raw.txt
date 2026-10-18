@@ -1,0 +1,22 @@
+{"report": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\evidence\\local-20261017-native-group-coverage\\eleven\\20261017T135124Z-group-composition-probe.json", "passed": false, "ownedProcessExited": true, "scratchRemoved": true, "scratchCleanupError": null}
+Traceback (most recent call last):
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-group-coverage\scripts\probe-group-composition.py", line 2734, in <module>
+    main()
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-group-coverage\scripts\probe-group-composition.py", line 2379, in main
+    report["probe"] = asyncio.run(exercise(
+                      ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mathias\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Mathias\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mathias\AppData\Local\Programs\Python\Python311\Lib\asyncio\base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-group-coverage\scripts\probe-group-composition.py", line 1351, in exercise
+    assert_pixel_near(child_mask_actual, child_mask_expected,
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-group-coverage\scripts\probe-group-composition.py", line 325, in assert_pixel_near
+    assert all(abs(value - target) <= tolerance
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'label': 'masked capture multiply with local opacity', 'actual': (96, 56, 92, 255), 'expected': (71, 50, 47, 255), 'tolerance': 5}

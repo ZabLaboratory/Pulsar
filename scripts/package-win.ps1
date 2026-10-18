@@ -300,6 +300,11 @@ if (Test-Path $dataPluginsSrc) {
     }
 }
 
+# A protocol module can advertise GetSourceStats while an older core lacks its
+# profiling lease. Refuse mixed native binaries before stamping/zipping a bundle.
+& python (Join-Path $PSScriptRoot 'check-source-telemetry-bundle.py') --bundle $dist
+if ($LASTEXITCODE -ne 0) { throw 'Native source telemetry bundle coherence check failed' }
+
 # --- Marker file -----------------------------------------------------------
 $readme = @"
 Pulsar v$version (windows-x64)

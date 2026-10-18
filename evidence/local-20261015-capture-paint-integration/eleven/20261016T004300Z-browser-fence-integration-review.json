@@ -1,0 +1,21 @@
+{
+  "capturedUtc": "2026-10-16T00:41:28.1093027Z",
+  "source": "6328ff8b3c29f10f29b7e1fad75f170efc41e198",
+  "merge": "f6356e48216ff937695ad6b3d6965d696693720f",
+  "review": "Both failed browser lifecycle fences call the existing no-return process integrity exit; no early lease release, handle closure, frontend/libobs teardown or return through destructors. Websocket marker compatibility preserved.",
+  "independentlyVerifiedArtifacts": 18,
+  "independentlyVerifiedPngHashes": 33,
+  "hashMismatches": 0,
+  "currentHostSha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973",
+  "integratedTestCommand": "python -m pytest -q tests/pulsar-headless-shutdown/test_websocket_quiesce.py tests/pulsar-headless-shutdown/test_graceful_shutdown.py -k 'not d3d11_direct_shared_copy_api_is_optional_and_validated'",
+  "testsPassed": 22,
+  "testsDeselected": 1,
+  "deselectionReason": "Pinned canonical upstream submodule deinitialized; exact private ABI chain qualified separately",
+  "privateMissingProc": "Expected exit1, no access violation, no early lease release, no frontend/libobs teardown",
+  "privateNormalAndComposition": "exit0; 33 image hashes match; pending source removal payload released at unload",
+  "limits": [
+    "No real CEF shutdown exercised",
+    "No installed common runtime changed",
+    "Masks, non-normal group blends and shear remain open"
+  ]
+}

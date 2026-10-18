@@ -1,0 +1,380 @@
+{
+  "startedAt": "2026-10-08T13:46:40.795Z",
+  "provenance": "Running Prism BroadcastEngine client and unmodified PulsarSceneSwitch adapter; development inspector invocation; no UI automation",
+  "limitations": [
+    "Preview UI bridge SetPreviewComposite is absent from tested Pulsar branch",
+    "No subjective visual or audio verdict",
+    "Development reloads interrupted prior visual sampling"
+  ],
+  "events": [
+    {
+      "eventData": {
+        "command_id": "prism-native-1791467204610",
+        "frame_id": 178,
+        "lane_id": "B",
+        "pts_ns": 1671760033865882,
+        "role_map": {
+          "on_air": "A",
+          "preview": "B"
+        },
+        "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+        "scene_name": "WebMProbe.Incoming",
+        "status": "completed"
+      },
+      "eventType": "LaneSwitchCompleted",
+      "vendorName": "pulsar-transitions"
+    },
+    {
+      "eventData": {
+        "command_id": "prepare-ad9ea2ab-9c62-4c4d-ab33-f21e5f27d917",
+        "contract": "pulsar.scene-switch.v1",
+        "deadline_monotonic_ns": 1671770067878000,
+        "event_type": "PrepareAccepted",
+        "intent_id": "prism-0682a771-9e24-4749-af87-16184f0a5453",
+        "message_type": "event",
+        "observed_at_monotonic_ns": 1671760067984500,
+        "payload_sha256": "e8d76b58d83432c5072f1eb7404190362d1768722289b3d985837d4d38f65b18",
+        "previous_revisions": {
+          "preview": 1,
+          "program": 0,
+          "role_map": 0
+        },
+        "revisions": {
+          "preview": 2,
+          "program": 0,
+          "role_map": 0
+        },
+        "role_map": {
+          "on_air": "A",
+          "preview": "B"
+        },
+        "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+        "schema_version": 1,
+        "server_seq": 1,
+        "state": "preparing",
+        "target_lane_id": "B",
+        "target_scene_id": "WebMProbe.Outgoing"
+      },
+      "eventType": "PrepareAccepted",
+      "vendorName": "pulsar-scene-switch"
+    },
+    {
+      "eventData": {
+        "command_id": "prepare-ad9ea2ab-9c62-4c4d-ab33-f21e5f27d917",
+        "contract": "pulsar.scene-switch.v1",
+        "event_type": "PreviewReady",
+        "first_frame_id": 0,
+        "first_pts_ns": 1671760067199214,
+        "intent_id": "prism-0682a771-9e24-4749-af87-16184f0a5453",
+        "message_type": "event",
+        "observed_at_monotonic_ns": 1671760084337600,
+        "payload_sha256": "e8d76b58d83432c5072f1eb7404190362d1768722289b3d985837d4d38f65b18",
+        "previous_revisions": {
+          "preview": 2,
+          "program": 0,
+          "role_map": 0
+        },
+        "revisions": {
+          "preview": 2,
+          "program": 0,
+          "role_map": 0
+        },
+        "role_map": {
+          "on_air": "A",
+          "preview": "B"
+        },
+        "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+        "schema_version": 1,
+        "server_seq": 2,
+        "state": "preview_ready",
+        "target_lane_id": "B",
+        "target_scene_id": "WebMProbe.Outgoing"
+      },
+      "eventType": "PreviewReady",
+      "vendorName": "pulsar-scene-switch"
+    },
+    {
+      "eventData": {
+        "command_id": "take-50308dfc-820a-4516-b243-21824778dee4",
+        "contract": "pulsar.scene-switch.v1",
+        "event_type": "TakeAccepted",
+        "freeze_until_monotonic_ns": 1671770085382800,
+        "intent_id": "prism-0682a771-9e24-4749-af87-16184f0a5453",
+        "message_type": "event",
+        "observed_at_monotonic_ns": 1671760087973900,
+        "payload_sha256": "3c77d617486d8cdb19240d318769475d2da4c4fa6622a9e981fcacca40e5c0cb",
+        "previous_revisions": {
+          "preview": 2,
+          "program": 0,
+          "role_map": 0
+        },
+        "revisions": {
+          "preview": 2,
+          "program": 0,
+          "role_map": 0
+        },
+        "role_map": {
+          "on_air": "A",
+          "preview": "B"
+        },
+        "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+        "schema_version": 1,
+        "server_seq": 3,
+        "state": "take_accepted",
+        "take_command_id": "take-50308dfc-820a-4516-b243-21824778dee4",
+        "target_lane_id": "B",
+        "target_scene_id": "WebMProbe.Outgoing"
+      },
+      "eventType": "TakeAccepted",
+      "vendorName": "pulsar-scene-switch"
+    },
+    {
+      "eventData": {
+        "command_id": "take-50308dfc-820a-4516-b243-21824778dee4",
+        "contract": "pulsar.scene-switch.v1",
+        "event_type": "TakeCommitted",
+        "frame_id": 318,
+        "intent_id": "prism-0682a771-9e24-4749-af87-16184f0a5453",
+        "message_type": "event",
+        "observed_at_monotonic_ns": 1671762368805500,
+        "payload_sha256": "3c77d617486d8cdb19240d318769475d2da4c4fa6622a9e981fcacca40e5c0cb",
+        "preview_lane_id": "A",
+        "previous_revisions": {
+          "preview": 2,
+          "program": 0,
+          "role_map": 0
+        },
+        "previous_role_map": {
+          "on_air": "A",
+          "preview": "B"
+        },
+        "program_lane_id": "B",
+        "pts_ns": 1671762367199122,
+        "revisions": {
+          "preview": 2,
+          "program": 1,
+          "role_map": 1
+        },
+        "role_map": {
+          "on_air": "B",
+          "preview": "A"
+        },
+        "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+        "schema_version": 1,
+        "server_seq": 4,
+        "source_lane_id": "A",
+        "state": "ready",
+        "take_command_id": "take-50308dfc-820a-4516-b243-21824778dee4",
+        "target_lane_id": "B",
+        "target_scene_id": "WebMProbe.Outgoing"
+      },
+      "eventType": "TakeCommitted",
+      "vendorName": "pulsar-scene-switch"
+    }
+  ],
+  "before": {
+    "pulsarRunning": false,
+    "pulsarPort": null,
+    "libobsVersion": null,
+    "activeDestinations": [],
+    "activeDestinationLabels": [],
+    "captureMode": null,
+    "state": "idle"
+  },
+  "recordingBefore": {
+    "active": false,
+    "paused": false
+  },
+  "pid": 27888,
+  "runtime": "prism-7590f4645ecb4ff297f503521eae7569",
+  "configured": {
+    "busy": false,
+    "config": {
+      "cut_point_ms": 875,
+      "muted": false,
+      "path": "D:/Documents/Zab/Artifacts/2026-10-08/zab-transition-trace-sound/zab-smooth-alpha.webm",
+      "volume": 1
+    },
+    "configured": true,
+    "last_switch": {},
+    "media_duration_ms": 0,
+    "operational": true,
+    "readiness_error": "MEDIA_NOT_READY",
+    "ready": false,
+    "role_map": {
+      "on_air": "A",
+      "preview": "B"
+    },
+    "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+    "transition_duration_ms": 0
+  },
+  "ready": {
+    "busy": false,
+    "config": {
+      "cut_point_ms": 875,
+      "muted": false,
+      "path": "D:/Documents/Zab/Artifacts/2026-10-08/zab-transition-trace-sound/zab-smooth-alpha.webm",
+      "volume": 1
+    },
+    "configured": true,
+    "last_switch": {},
+    "media_duration_ms": 2008,
+    "operational": true,
+    "readiness_error": "",
+    "ready": true,
+    "role_map": {
+      "on_air": "A",
+      "preview": "B"
+    },
+    "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+    "transition_duration_ms": 2258
+  },
+  "previewAccepted": {
+    "command_id": "prism-native-1791467204610",
+    "lane_id": "B",
+    "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+    "scene_name": "WebMProbe.Incoming",
+    "status": "accepted"
+  },
+  "previewResult": {
+    "command_id": "prism-native-1791467204610",
+    "frame_id": 178,
+    "lane_id": "B",
+    "pts_ns": 1671760033865882,
+    "role_map": {
+      "on_air": "A",
+      "preview": "B"
+    },
+    "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+    "scene_name": "WebMProbe.Incoming",
+    "status": "completed"
+  },
+  "afterPreview": {
+    "currentPreviewSceneName": "WebMProbe.Incoming",
+    "currentPreviewSceneUuid": "b541d366-6b46-4d79-aaf2-e0f9bcf76842",
+    "currentProgramSceneName": "WebMProbe.Program",
+    "currentProgramSceneUuid": "3f38f89b-de73-4edd-b24d-407e37bc4db9",
+    "scenes": [
+      {
+        "sceneIndex": 0,
+        "sceneName": "WebMProbe.Incoming",
+        "sceneUuid": "b541d366-6b46-4d79-aaf2-e0f9bcf76842"
+      },
+      {
+        "sceneIndex": 1,
+        "sceneName": "WebMProbe.Outgoing",
+        "sceneUuid": "0a690606-b056-4127-acce-881adf09a1ca"
+      },
+      {
+        "sceneIndex": 2,
+        "sceneName": "WebMProbe.Program",
+        "sceneUuid": "3f38f89b-de73-4edd-b24d-407e37bc4db9"
+      },
+      {
+        "sceneIndex": 3,
+        "sceneName": "Default",
+        "sceneUuid": "f6963c0f-e5bc-473b-b020-336ae4c817e1"
+      }
+    ]
+  },
+  "take": {
+    "intentId": "prism-0682a771-9e24-4749-af87-16184f0a5453",
+    "prepareCommandId": "prepare-ad9ea2ab-9c62-4c4d-ab33-f21e5f27d917",
+    "takeCommandId": "take-50308dfc-820a-4516-b243-21824778dee4",
+    "lane": "B",
+    "sceneName": "WebMProbe.Outgoing",
+    "frameId": 318,
+    "ptsNs": 1671762367199122,
+    "state": {
+      "contract": "pulsar.scene-switch.v1",
+      "frozen": false,
+      "idempotency_cache_capacity": 4096,
+      "idempotency_cache_entries": 2,
+      "operational": true,
+      "revisions": {
+        "preview": 2,
+        "program": 1,
+        "role_map": 1
+      },
+      "role_map": {
+        "on_air": "B",
+        "preview": "A"
+      },
+      "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+      "schema_version": 1,
+      "server_seq": 4,
+      "state": "ready"
+    }
+  },
+  "afterTake": {
+    "currentPreviewSceneName": "WebMProbe.Program",
+    "currentPreviewSceneUuid": "3f38f89b-de73-4edd-b24d-407e37bc4db9",
+    "currentProgramSceneName": "WebMProbe.Outgoing",
+    "currentProgramSceneUuid": "0a690606-b056-4127-acce-881adf09a1ca",
+    "scenes": [
+      {
+        "sceneIndex": 0,
+        "sceneName": "WebMProbe.Incoming",
+        "sceneUuid": "b541d366-6b46-4d79-aaf2-e0f9bcf76842"
+      },
+      {
+        "sceneIndex": 1,
+        "sceneName": "WebMProbe.Outgoing",
+        "sceneUuid": "0a690606-b056-4127-acce-881adf09a1ca"
+      },
+      {
+        "sceneIndex": 2,
+        "sceneName": "WebMProbe.Program",
+        "sceneUuid": "3f38f89b-de73-4edd-b24d-407e37bc4db9"
+      },
+      {
+        "sceneIndex": 3,
+        "sceneName": "Default",
+        "sceneUuid": "f6963c0f-e5bc-473b-b020-336ae4c817e1"
+      }
+    ]
+  },
+  "cleared": {
+    "busy": false,
+    "config": {},
+    "configured": false,
+    "last_switch": {
+      "command_id": "prism-native-1791467204610",
+      "frame_id": 178,
+      "lane_id": "B",
+      "pts_ns": 1671760033865882,
+      "role_map": {
+        "on_air": "A",
+        "preview": "B"
+      },
+      "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+      "scene_name": "WebMProbe.Incoming",
+      "status": "completed"
+    },
+    "media_duration_ms": 0,
+    "operational": true,
+    "readiness_error": "NOT_CONFIGURED",
+    "ready": false,
+    "role_map": {
+      "on_air": "B",
+      "preview": "A"
+    },
+    "runtime_instance_id": "prism-7590f4645ecb4ff297f503521eae7569",
+    "transition_duration_ms": 0
+  },
+  "passed": true,
+  "after": {
+    "pulsarRunning": true,
+    "pulsarPort": 64807,
+    "libobsVersion": "32.1.2-47-g76c902175-modified-pulsar",
+    "activeDestinations": [],
+    "activeDestinationLabels": [],
+    "captureMode": null,
+    "state": "idle"
+  },
+  "recordingAfter": {
+    "active": false,
+    "paused": false
+  },
+  "finishedAt": "2026-10-08T13:46:49.235Z"
+}

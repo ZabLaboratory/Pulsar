@@ -1,0 +1,27 @@
+DUMP=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-reset-stability\.cache\native-reset-stability\20261017T155459Z-gen2-freeze.dmp
+TID=18964 name=see MINIDUMP_THREAD_NAMES context_size=1232 RIP=0x00007ff9a3b60e44 RSP=0x000000a13f41f098 RBP=0x0000000000000001
+SIZES STACKFRAME64=264 SYMBOL_INFO=88 nameoff=84
+SYMBOL_PATH=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-reset-stability\.cache\native-reset-stability\plugin-build\RelWithDebInfo;D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261015-native-group-composition\.cache\native-group-composition\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\libobs\RelWithDebInfo;D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-native-reset-stability\.cache\native-reset-stability\private-runtime-exact-20261017T155459Z\runtime\bin\64bit;C:\Windows\System32
+MODULES=109 LOADED=109
+INITIAL PC:
+  0x7ff9a3b60e44 ntdll.dll+0x160e44 NtWaitForSingleObject + 0x14
+STACK_SAMPLE=9fbefea0f97f000050dd5222140200008f50d670f97f00000000000000000000c0f0413fa1000000000000000000000000000000000000004800000000000000
+STACKWALK:
+  0x7ff9a3b60e44 ntdll.dll+0x160e44 NtWaitForSingleObject + 0x14
+walk[1] ok=True prev=['0x7ff9a3b60e44', '0xa13f41f098', '0x1', '0x0'] now=['0x7ff9a3b60e44', '0xa13f41f098', '0xa13f41f090', '0x7ff9a0febe9f'] err=0
+  0x7ff9a3b60e44 ntdll.dll+0x160e44 NtWaitForSingleObject + 0x14
+walk[2] ok=True prev=['0x7ff9a3b60e44', '0xa13f41f098', '0xa13f41f090', '0x7ff9a0febe9f'] now=['0x7ff9a0febe9f', '0xa13f41f0a0', '0xa13f41f130', '0x7ff970d6383f'] err=0
+  0x7ff9a0febe9f KERNELBASE.dll+0x1be9f WaitForSingleObjectEx + 0xaf
+walk[3] ok=True prev=['0x7ff9a0febe9f', '0xa13f41f0a0', '0xa13f41f130', '0x7ff970d6383f'] now=['0x7ff970d6383f', '0xa13f41f140', '0xa13f41f138', '0x2142252dd50'] err=0
+  0x7ff970d6383f w32-pthreads.dll+0x383f pthread_mutex_lock + 0x12f
+walk[4] ok=True prev=['0x7ff970d6383f', '0xa13f41f140', '0xa13f41f138', '0x2142252dd50'] now=['0x2142252dd50', '0xa13f41f148', '0xa13f41f140', '0x0'] err=0
+  0x2142252dd50 <no-module> <no-symbol err=126>
+walk[5] ok=False prev=['0x2142252dd50', '0xa13f41f148', '0xa13f41f140', '0x0'] now=['0x2142252dd50', '0xa13f41f148', '0xa13f41f140', '0x0'] err=0
+READM={'attempts': 70, 'ok': 70, 'fail': 0, 'last_error': None, 'last_range': None} image_reads=50
+RELEVANT_MODULES:
+pulsar.exe 0x7ff6e4410000 0x7ff6e46db000
+ntdll.dll 0x7ff9a3a00000 0x7ff9a3c67000
+kernel32.dll 0x7ff9a2360000 0x7ff9a242b000
+KERNELBASE.dll 0x7ff9a0fd0000 0x7ff9a13d2000
+obs.dll 0x7ff9039a0000 0x7ff903b13000
+pulsar-capture-effects.dll 0x7ff904890000 0x7ff904923000

@@ -148,7 +148,10 @@ jobs:
             exit 0
           fi
           changed="$(git diff --name-only "${base}" "${head}")"
-          if echo "${changed}" | grep -vE '(^|/)[^/]+\.md$|^docs/|^CHANGELOG\.md$|^\.gitignore$|^LICENSE$' | grep -q .; then
+          # grep -q closes its input on the first match. With pipefail, a
+          # large changed-path list can then make echo fail with SIGPIPE and
+          # incorrectly classify a code PR as docs-only.
+          if [[ -n "${changed}" ]] && grep -vE '(^|/)[^/]+\.md$|^docs/|^CHANGELOG\.md$|^\.gitignore$|^LICENSE$' <<< "${changed}" > /dev/null; then
             echo "::notice::non-docs changes detected"
             echo "code=true" >> "$GITHUB_OUTPUT"
           else

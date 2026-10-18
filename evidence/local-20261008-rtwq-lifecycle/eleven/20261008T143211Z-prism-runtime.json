@@ -1,0 +1,86 @@
+{
+  "startedAt": "2026-10-08T14:29:27.096Z",
+  "checkedAt": "2026-10-08T14:32:11.067Z",
+  "provenance": "Existing Prism BroadcastEngine/native obs-websocket client and local development inspector; no Computer Use or UI automation",
+  "baseRevision": "0d13a5ff851c7ffc4304463f61a7b7566b93f0e2",
+  "originalExecutableSha256": "559C64249BF6E242B527F37F811282389F36989AF90C37196BCB5AB072079DB1",
+  "installedExecutableSha256": "06d7267d44061e6aa5f5192ea94d9d983518d52439a87b23783f9f712341e59b",
+  "oldPid": 13344,
+  "pid": 17144,
+  "status": {
+    "pulsarRunning": true,
+    "pulsarPort": 53157,
+    "libobsVersion": "32.1.2-47-g76c902175-modified-pulsar",
+    "activeDestinations": [],
+    "activeDestinationLabels": [],
+    "captureMode": null,
+    "state": "idle"
+  },
+  "recording": {
+    "active": false,
+    "paused": false
+  },
+  "preview": {
+    "state": "live",
+    "consumers": 1,
+    "outputActive": true,
+    "source": "PulsarPreviewReturn",
+    "transport": "media-stream",
+    "error": null
+  },
+  "sceneRestored": true,
+  "previewFrames": [
+    {
+      "width": 1920,
+      "height": 1080,
+      "readyState": 4,
+      "newFrames": 60,
+      "tracksLive": true
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "readyState": 4,
+      "newFrames": 60,
+      "tracksLive": true
+    }
+  ],
+  "audioKinds": [
+    "wasapi_output_capture",
+    "wasapi_input_capture",
+    "wasapi_process_output_capture"
+  ],
+  "rtwqStartup": [
+    "2026-10-08T14:29:40Z INFO 7800HUYUmWMUOJo- pulsar-headless | RTWQ platform started"
+  ],
+  "wasapiInitializations": [
+    {
+      "source": "PulsarDesktopAudio"
+    },
+    {
+      "source": "PulsarMic"
+    },
+    {
+      "source": "ZabCapture:google-chrome"
+    },
+    {
+      "source": "ZabCapture:google-chrome"
+    },
+    {
+      "source": "ZabCapture:google-chrome"
+    },
+    {
+      "source": "ZabCapture:google-chrome"
+    }
+  ],
+  "runtimeErrorCount": 0,
+  "rtwqFailures": [],
+  "journalErrors": [],
+  "rollback": "D:/Documents/Zab/Artifacts/backups/2026-10-08/pulsar-rtwq-fix/pulsar.exe",
+  "limits": [
+    "Local executable replacement; no release or merge",
+    "No subjective audio-quality assessment",
+    "No external broadcast or recording"
+  ],
+  "passed": true
+}

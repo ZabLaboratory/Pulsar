@@ -1,0 +1,62 @@
+{
+  "phase": "synthetic-local-only",
+  "started": 1791538656.0153248,
+  "checks": {
+    "all_real_audio_muted": [
+      {
+        "name": "PulsarDesktopAudio",
+        "muted": true
+      }
+    ],
+    "synthetic_program_items_only": true,
+    "program": {
+      "currentProgramSceneName": "AuditSynthetic",
+      "currentProgramSceneUuid": "37901f41-391d-4fb9-ab8e-2921b17eb02e",
+      "sceneName": "AuditSynthetic",
+      "sceneUuid": "37901f41-391d-4fb9-ab8e-2921b17eb02e"
+    },
+    "video": {
+      "baseHeight": 1080,
+      "baseWidth": 1920,
+      "fpsDenominator": 1,
+      "fpsNumerator": 60,
+      "outputHeight": 1080,
+      "outputWidth": 1920
+    },
+    "native_modern_filter_create_update_read_remove": true,
+    "valid_screenshots_four_dimension_modes": true
+  },
+  "before": {
+    "activeFps": 60.0000024000001,
+    "availableDiskSpace": 123037.9609375,
+    "averageFrameRenderTime": 0.615759,
+    "cpuUsage": 1.7068603295582254,
+    "memoryUsage": 93.84375,
+    "outputSkippedFrames": 0,
+    "outputTotalFrames": 0,
+    "renderSkippedFrames": 0,
+    "renderTotalFrames": 95,
+    "webSocketSessionIncomingMessages": 17,
+    "webSocketSessionOutgoingMessages": 31
+  },
+  "screenshot_status": {
+    "code": 702,
+    "comment": "Failed to render screenshot.",
+    "result": false
+  },
+  "exit_code": 0,
+  "forced_kill": false,
+  "elapsed_s": 3.216407299041748,
+  "staging_errors": [],
+  "encoder_markers": [
+    "2026-10-09T09:37:37Z INFO cYfNcLYrUrXWb-oJ pulsar-frontend-stub | video encoder allocated: family=nvenc id=jim_nvenc, 6000 kbps (stable ProgramView binding follows)"
+  ],
+  "shutdown_markers": [
+    "PULSAR_SHUTDOWN_CONTROL event=ready id=audit-synthetic-20261009 mechanism=inherited_event",
+    "PULSAR_SHUTDOWN_CONTROL event=signaled id=audit-synthetic-20261009 mechanism=inherited_event",
+    "2026-10-09T09:37:38Z INFO cYfNcLYrUrXWb-oJ libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_begin",
+    "2026-10-09T09:37:38Z INFO cYfNcLYrUrXWb-oJ libobs | PULSAR_CEF_SHUTDOWN event=pre_obs_shutdown_complete reason=cef_not_running",
+    "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=audit-synthetic-20261009 dir=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\runtimes\\audit-synthetic-20261009 authority=Local\\Pulsar.Authority.31eb85ecb5c9d1cf metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\31eb85ecb5c9d1cf.lock",
+    "PULSAR_RUNTIME_INSTANCE lease=released id=audit-synthetic-20261009 dir=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\runtimes\\audit-synthetic-20261009 authority=Local\\Pulsar.Runtime.audit-synthetic-20261009 metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\b8fa9ec736f9a3bb.lock"
+  ]
+}

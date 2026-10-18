@@ -1,0 +1,899 @@
+Using cmake: C:\Program Files\CMake\bin\cmake.exe
+Preset:       windows-x64
+Source:       D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream
+ATL headers found: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.38.33130\atlmfc\include
+
+--- Applying Pulsar patches ---
+Pinned upstream commit: 25ed780b7f392a1690dfca929cd57679959cf3ad
+Root patches found:     60
+OBS-browser patches:    1
+  reusing exact patched upstream HEAD (fingerprint 919fb2653969)
+  reusing exact patched obs-browser HEAD (fingerprint c0b75b3895c6)
+
+--- Building (RelWithDebInfo) ---
+Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-capture/graphics-hook/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/deps/glad/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/deps/libcaption/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/deps/w32-pthreads/CMakeLists.txt
+  d3d10-capture.cpp
+  d3d11-return-transport.cpp
+  placeholder.cpp
+  virtualcam-filter.cpp
+  virtualcam-module.cpp
+  d3d11-capture.cpp
+  d3d12-capture.cpp
+  d3d8-capture.cpp
+  capture-filter.cpp
+  device-vendor.cpp
+  device.cpp
+  dshow-base.cpp
+  d3d9-capture.cpp
+  dshow-demux.cpp
+  dshow-encoded-device.cpp
+  pthread.c
+  dshow-enum.cpp
+  dshow-formats.cpp
+  dshow-media-type.cpp
+  dshowcapture.cpp
+  dshowencode.cpp
+  dxgi-capture.cpp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/libobs/CMakeLists.txt
+  encoder.cpp
+  caption.c
+  cea708.c
+  eia608.c
+  eia608_charmap.c
+  eia608_from_utf8.c
+  mpeg.c
+  scc.c
+  srt.c
+  utf8.c
+  xds.c
+  glad.c
+  glad_wgl.c
+  obsversion.c
+  caption.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\deps\libcaption\RelWithDebInfo\caption.lib
+  log.cpp
+  output-filter.cpp
+  EGAVResult.cpp
+  ElgatoUVCDevice.cpp
+  EGAVHIDImplementation.cpp
+  gl-capture.c
+  obsglad.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\deps\glad\obsglad.dir\RelWithDebInfo\obsglad.lib
+  DriverInterface.cpp
+  graphics-hook.c
+  vulkan-capture.c
+  pipe-windows.c
+  obfuscate.c
+  libobs-version.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\libobs\libobs-version.dir\RelWithDebInfo\libobs-version.lib
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/deps/w32-pthreads/RelWithDebInfo/w32-pthreads.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/deps/w32-pthreads/RelWithDebInfo/w32-pthreads.exp
+  w32-pthreads.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\deps\w32-pthreads\RelWithDebInfo\w32-pthreads.dll
+  Copy w32-pthreads to destination
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/libobs/CMakeLists.txt
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-capture/graphics-hook/RelWithDebInfo/graphics-hook64.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-capture/graphics-hook/RelWithDebInfo/graphics-hook64.exp
+  obs-hevc.c
+  obs-audio-controls.c
+  obs-audio.c
+  obs-av1.c
+  obs-avc.c
+  obs-canvas.c
+  obs-display.c
+  obs-encoder.c
+  obs-hotkey-name-map.c
+  obs-hotkey.c
+  obs-missing-files.c
+  obs-module.c
+  obs-nal.c
+  obs-output-delay.c
+  obs-output.c
+  obs-properties.c
+  obs-scene.c
+  obs-service.c
+  obs-source-deinterlace.c
+  obs-source-transition.c
+  obs-source.c
+  obs-video-gpu-encode.c
+  obs-video.c
+  obs-view.c
+  obs.c
+  array-serializer.c
+  base.c
+  bitstream.c
+  bmem.c
+  buffered-file-serializer.c
+  cf-lexer.c
+  cf-parser.c
+  config-file.c
+  crc32.c
+  dstr.c
+  file-serializer.c
+  lexer.c
+  pipe.c
+  platform.c
+  profiler.c
+  source-profiler.c
+  task.c
+  text-lookup.c
+  utf8.c
+  calldata.c
+  decl.c
+  proc.c
+  signal.c
+  audio-io.c
+  audio-resampler-ffmpeg.c
+  format-conversion.c
+  media-remux.c
+  video-fourcc.c
+  video-frame.c
+  video-io.c
+  video-matrices.c
+  video-scaler-ffmpeg.c
+  axisang.c
+  bounds.c
+  effect-parser.c
+  effect.c
+  graphics-ffmpeg.c
+  graphics-imports.c
+  graphics.c
+  image-file.c
+  libnsgif.c
+  math-extra.c
+  matrix3.c
+  sleepto.c
+  tiny-nv12-scale.c
+  shared-memory-queue.c
+  matrix4.c
+  graphics-hook.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\win-capture\graphics-hook\RelWithDebInfo\graphics-hook64.dll
+  plane.c
+  quat.c
+  shader-parser.c
+  texture-render.c
+  Build x86 graphics-hook				
+  vec2.c
+  vec3.c
+  vec4.c
+  wasapi-enum-devices.c
+  wasapi-monitoring-available.c
+  wasapi-output.c
+  obs-windows.c
+  pipe-windows.c
+  platform-windows.c
+  threading-windows.c
+  device-enum.c
+  window-helpers.c
+  obfuscate.c
+  Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+  
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-dshow/virtualcam-module/RelWithDebInfo/obs-virtualcam-module64.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-dshow/virtualcam-module/RelWithDebInfo/obs-virtualcam-module64.exp
+    1>Checking Build System
+  obs-data.c
+    Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-capture/graphics-hook/CMakeLists.txt
+    d3d10-capture.cpp
+    d3d11-capture.cpp
+    d3d12-capture.cpp
+    d3d8-capture.cpp
+    d3d9-capture.cpp
+    dxgi-capture.cpp
+  obs-virtualcam-module.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\win-dshow\virtualcam-module\RelWithDebInfo\obs-virtualcam-module64.dll
+  Build x86 obs-virtualcam-module				
+  obs-win-crash-handler.c
+  Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+  
+    Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+    gl-capture.c
+    graphics-hook.c
+    vulkan-capture.c
+    pipe-windows.c
+    obfuscate.c
+    d3d11-return-transport.cpp
+    placeholder.cpp
+    virtualcam-filter.cpp
+    virtualcam-module.cpp
+    capture-filter.cpp
+    device-vendor.cpp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/libobs/RelWithDebInfo/obs.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/libobs/RelWithDebInfo/obs.exp
+    device.cpp
+    dshow-base.cpp
+    dshow-demux.cpp
+    dshow-encoded-device.cpp
+    dshow-enum.cpp
+    dshow-formats.cpp
+    dshow-media-type.cpp
+    dshowcapture.cpp
+    dshowencode.cpp
+    encoder.cpp
+    log.cpp
+    output-filter.cpp
+    EGAVResult.cpp
+    ElgatoUVCDevice.cpp
+    EGAVHIDImplementation.cpp
+    DriverInterface.cpp
+  libobs.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\libobs\RelWithDebInfo\obs.dll
+       Cr├®ation de la biblioth├¿que D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x86/plugins/win-capture/graphics-hook/RelWithDebInfo/graphics-hook32.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x86/plugins/win-capture/graphics-hook/RelWithDebInfo/graphics-hook32.exp
+  Copy libobs to destination
+  Copy libobs resources to data directory
+  Automatic MOC and UIC for target obs-vst
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/shared/opts-parser/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-filters/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/nv-filters/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-qsv11/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/libobs-d3d11/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-webrtc/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/image-source/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-wasapi/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/shared/happy-eyeballs/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/rtmp-services/CMakeLists.txt
+    graphics-hook.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x86\plugins\win-capture\graphics-hook\RelWithDebInfo\graphics-hook32.dll
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/libobs-winrt/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/aja/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/shared/bpm/CMakeLists.txt
+  Copy graphics-hook resource D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-capture/graphics-hook/obs-vulkan64.json to library directory
+  happy-eyeballs.c
+  1>Generate idl files
+  win-wasapi.cpp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/vlc-video/CMakeLists.txt
+  cmake_pch.cxx
+  wasapi-notify.cpp
+  enum-wasapi.cpp
+  plugin-main.cpp
+  d3d11-duplicator.cpp
+  d3d11-indexbuffer.cpp
+  Microsoft (R) 32b/64b MIDL Compiler Version 8.01.0628 
+  Copyright (c) Microsoft Corporation. All rights reserved.
+  d3d11-rebuild.cpp
+  d3d11-samplerstate.cpp
+  Copy graphics-hook resource D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-capture/graphics-hook/obs-vulkan32.json to library directory
+  d3d11-shader.cpp
+  obs-webrtc.cpp
+  d3d11-shaderprocessor.cpp
+  d3d11-stagesurf.cpp
+  d3d11-subsystem.cpp
+  common_directx11.cpp
+  d3d11-texture2d.cpp
+  opts-parser.c
+  whip-output.cpp
+  bpm.c
+  d3d11-texture3d.cpp
+  common_utils_windows.cpp
+  common_utils.cpp
+  64 bit Processing D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\plugins\decklink\win\decklink-sdk\DeckLinkAPI.idl
+  d3d11-vertexbuffer.cpp
+  async-delay-filter.c
+  chroma-key-filter.c
+  d3d11-zstencilbuffer.cpp
+  QSV_Encoder.cpp
+  color-source.c
+  QSV_Encoder_Internal.cpp
+  whip-service.cpp
+  aja-card-manager.cpp
+  color-correction-filter.c
+  rtmp-common.c
+  aja-common.cpp
+  nvidia-audiofx-filter.c
+  color-grade-filter.c
+  aja-presets.cpp
+  color-key-filter.c
+  rtmp-custom.c
+  aja-props.cpp
+  compressor-filter.c
+  crop-filter.c
+  image-source.c
+  aja-routing.cpp
+  DeckLinkAPI.idl
+  nvidia-videofx-filter.c
+  eq-filter.c
+  nv-filters.c
+  expander-filter.c
+  aja-vpid-data.cpp
+  rtmp-services-main.c
+  amazon-ivs.c
+  obs-slideshow.c
+  dacast.c
+  nimotv.c
+  obs-slideshow-mk2.c
+  aja-widget-io.cpp
+  service-ingest.c
+  gain-filter.c
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um\unknwn.idl
+  gpu-delay.c
+  showroom.c
+  hdr-tonemap-filter.c
+  invert-audio-polarity.c
+  limiter-filter.c
+  twitch.c
+  luma-key-filter.c
+  mask-filter.c
+  noise-gate-filter.c
+  unknwn.idl
+  file-updater.c
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\shared\wtypes.idl
+  obs-filters.c
+    sleepto.c
+    tiny-nv12-scale.c
+    shared-memory-queue.c
+  wtypes.idl
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\shared\wtypesbase.idl
+  opts-parser.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\shared\opts-parser\opts-parser.dir\RelWithDebInfo\opts-parser.lib
+  wtypesbase.idl
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\shared\basetsd.h
+  basetsd.h
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\shared\guiddef.h
+  guiddef.h
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um\oaidl.idl
+  scale-filter.c
+  scroll-filter.c
+  vlc-video-plugin.c
+  sharpness-filter.c
+  noise-suppress-filter.c
+  vlc-video-source.c
+  Copy graphics-hook (x86) to destination
+  happy-eyeballs.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\shared\happy-eyeballs\happy-eyeballs.dir\RelWithDebInfo\happy-eyeballs.lib
+  bpm.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-outputs\bpm\bpm.dir\RelWithDebInfo\bpm.lib
+  oaidl.idl
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-ffmpeg/CMakeLists.txt
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um\objidl.idl
+  objidl.idl
+  64 bit Processing C:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um\oaidl.acf
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-nvenc/CMakeLists.txt
+  oaidl.acf
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-x264/CMakeLists.txt
+  Copy graphics-hook to destination
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-filters/RelWithDebInfo/obs-filters.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-filters/RelWithDebInfo/obs-filters.exp
+  obs-qsv11-plugin-main.c
+  obs-qsv11.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/image-source/RelWithDebInfo/image-source.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/image-source/RelWithDebInfo/image-source.exp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-wasapi/RelWithDebInfo/win-wasapi.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-wasapi/RelWithDebInfo/win-wasapi.exp
+  obs-ffmpeg-mpegts.c
+  obs-ffmpeg-audio-encoders.c
+  obs-ffmpeg-av1.c
+  obs-ffmpeg-openh264.c
+  obs-ffmpeg-hls-mux.c
+  obs-ffmpeg-mux.c
+  obs-ffmpeg-output.c
+  obs-ffmpeg-source.c
+  obs-ffmpeg-video-encoders.c
+  obs-ffmpeg.c
+  cache.c
+  decode.c
+  media-playback.c
+  media.c
+       Cr├®ation de la biblioth├¿que D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x86/plugins/win-dshow/virtualcam-module/RelWithDebInfo/obs-virtualcam-module32.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x86/plugins/win-dshow/virtualcam-module/RelWithDebInfo/obs-virtualcam-module32.exp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/vlc-video/RelWithDebInfo/vlc-video.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/vlc-video/RelWithDebInfo/vlc-video.exp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/decklink/CMakeLists.txt
+  image-source.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\image-source\RelWithDebInfo\image-source.dll
+  nvenc-d3d11.c
+  vlc-video.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\vlc-video\RelWithDebInfo\vlc-video.dll
+  cuda-helpers.c
+  nvenc-compat.c
+  nvenc-cuda.c
+  nvenc-helpers.c
+  nvenc-opts-parser.c
+  nvenc-properties.c
+  nvenc.c
+  obs-nvenc.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/nv-filters/RelWithDebInfo/nv-filters.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/nv-filters/RelWithDebInfo/nv-filters.exp
+  obs-filters.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-filters\RelWithDebInfo\obs-filters.dll
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-webrtc/RelWithDebInfo/obs-webrtc.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-webrtc/RelWithDebInfo/obs-webrtc.exp
+  texture-amf.cpp
+  obs-x264.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/libobs-d3d11/RelWithDebInfo/libobs-d3d11.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/libobs-d3d11/RelWithDebInfo/libobs-d3d11.exp
+  obs-x264-plugin-main.c
+  Copy vlc-video to destination
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-transitions/CMakeLists.txt
+  Copy obs-filters to destination
+  aja-support.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\aja\aja-support.dir\RelWithDebInfo\aja-support.lib
+  Copy image-source to destination
+  platform.cpp
+  decklink-device-discovery.cpp
+  decklink-device-instance.cpp
+  decklink-device-mode.cpp
+  decklink-device.cpp
+  win-wasapi.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\win-wasapi\RelWithDebInfo\win-wasapi.dll
+  decklink-devices.cpp
+  decklink-output.cpp
+  decklink-source.cpp
+  nv-filters.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\nv-filters\RelWithDebInfo\nv-filters.dll
+  DecklinkBase.cpp
+  DecklinkInput.cpp
+  DecklinkOutput.cpp
+  OBSVideoFrame.cpp
+  plugin-main.cpp
+  util.cpp
+  Copy obs-filters resources to data directory
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/rtmp-services/RelWithDebInfo/rtmp-services.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/rtmp-services/RelWithDebInfo/rtmp-services.exp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-x264/RelWithDebInfo/obs-x264.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-x264/RelWithDebInfo/obs-x264.exp
+  libobs-d3d11.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\libobs-d3d11\RelWithDebInfo\libobs-d3d11.dll
+  obs-transitions.c
+  transition-cut.c
+  Copy nv-filters to destination
+  transition-fade-to-color.c
+  transition-fade.c
+  transition-luma-wipe.c
+  transition-slide.c
+  transition-stinger.c
+  transition-swipe.c
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-vst/CMakeLists.txt
+  obs-webrtc.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-webrtc\RelWithDebInfo\obs-webrtc.dll
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/text-freetype2/CMakeLists.txt
+  Copy win-wasapi to destination
+  Copy vlc-video resources to data directory
+  Copy obs-webrtc to destination
+  obs-x264.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-x264\RelWithDebInfo\obs-x264.dll
+  Copy nv-filters resources to data directory
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-nvenc/RelWithDebInfo/obs-nvenc.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-nvenc/RelWithDebInfo/obs-nvenc.exp
+  Copy image-source resources to data directory
+  rtmp-services.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\rtmp-services\RelWithDebInfo\rtmp-services.dll
+  Copy libobs-d3d11 to destination
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-text/CMakeLists.txt
+  EditorWidget-win.cpp
+  VSTPlugin-win.cpp
+  EditorWidget.cpp
+  obs-vst.cpp
+  VSTPlugin.cpp
+  mocs_compilation_RelWithDebInfo.cpp
+    obs-virtualcam-module.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x86\plugins\win-dshow\virtualcam-module\RelWithDebInfo\obs-virtualcam-module32.dll
+  Copy obs-x264 to destination
+  find-font.c
+  find-font-windows.c
+  obs-convenience.c
+  text-freetype2.c
+  text-functionality.c
+  Copy obs-webrtc resources to data directory
+  obs-nvenc.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-nvenc\RelWithDebInfo\obs-nvenc.dll
+  Copy rtmp-services to destination
+  Copy obs-virtualcam-module resource D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-dshow/virtualcam-module/virtualcam-install.bat to library directory
+  Copy win-wasapi resources to data directory
+  winrt-capture.cpp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/aja/CMakeLists.txt
+  winrt-dispatch.cpp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-transitions/RelWithDebInfo/obs-transitions.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-transitions/RelWithDebInfo/obs-transitions.exp
+  obs-text.cpp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-capture/get-graphics-offsets/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-capture/inject-helper/CMakeLists.txt
+  Copy obs-nvenc to destination
+  Copy obs-virtualcam-module resource D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-dshow/virtualcam-module/virtualcam-uninstall.bat to library directory
+  Copy obs-x264 resources to data directory
+  obs-transitions.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-transitions\RelWithDebInfo\obs-transitions.dll
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-qsv11/RelWithDebInfo/obs-qsv11.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-qsv11/RelWithDebInfo/obs-qsv11.exp
+  aja-output.cpp
+  Copy rtmp-services resources to data directory
+  aja-source.cpp
+  main.cpp
+  Copy obs-virtualcam-module (x86) to destination
+  inject-helper.c
+  inject-library.c
+  obfuscate.c
+  Copy obs-transitions to destination
+  d3d8-offsets.cpp
+  Copy obs-nvenc resources to data directory
+  d3d9-offsets.cpp
+  dxgi-offsets.cpp
+  obs-qsv11.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-qsv11\RelWithDebInfo\obs-qsv11.dll
+  Copy obs-virtualcam-module to destination
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/libobs-winrt/RelWithDebInfo/libobs-winrt.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/libobs-winrt/RelWithDebInfo/libobs-winrt.exp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-ffmpeg/RelWithDebInfo/obs-ffmpeg.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-ffmpeg/RelWithDebInfo/obs-ffmpeg.exp
+  Copy obs-qsv11 to destination
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-text/RelWithDebInfo/obs-text.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-text/RelWithDebInfo/obs-text.exp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/coreaudio-encoder/CMakeLists.txt
+  Copy obs-transitions resources to data directory
+  inject-helper.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\win-capture\inject-helper\RelWithDebInfo\inject-helper64.exe
+  Build x86 inject-helper		
+  Copy obs-qsv11 resources to data directory
+  audio-repack.c
+  DeckLinkAPI_i.c
+  obs-text.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-text\RelWithDebInfo\obs-text.dll
+  Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+  encoder.cpp
+  
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-dshow/CMakeLists.txt
+  obs-ffmpeg.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-ffmpeg\RelWithDebInfo\obs-ffmpeg.dll
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-outputs/CMakeLists.txt
+  Copy obs-ffmpeg to destination
+  Copy obs-text to destination
+  libobs-winrt.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\libobs-winrt\RelWithDebInfo\libobs-winrt.dll
+    Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-capture/inject-helper/CMakeLists.txt
+  Copy obs-ffmpeg resources to data directory
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/decklink/RelWithDebInfo/decklink.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/decklink/RelWithDebInfo/decklink.exp
+  Copy libobs-winrt to destination
+  rtmp-hevc.c
+  dshow-plugin.cpp
+  win-dshow-encoder.cpp
+  win-dshow.cpp
+  flv-mux.c
+  d3d11-return-transport.cpp
+  capture-filter.cpp
+  device-vendor.cpp
+  flv-output.c
+  device.cpp
+  dshow-base.cpp
+  dshow-demux.cpp
+  dshow-encoded-device.cpp
+  dshow-enum.cpp
+  amf.c
+  dshow-formats.cpp
+  dshow-media-type.cpp
+  dshowcapture.cpp
+  cencode.c
+  dshowencode.cpp
+  hashswf.c
+  log.c
+  md5.c
+  parseurl.c
+  encoder.cpp
+  rtmp.c
+  mp4-mux.c
+  mp4-output.c
+  net-if.c
+  null-output.c
+  obs-outputs.c
+  rtmp-av1.c
+  Copy obs-text resources to data directory
+  rtmp-stream.c
+  rtmp-windows.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/text-freetype2/RelWithDebInfo/text-freetype2.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/text-freetype2/RelWithDebInfo/text-freetype2.exp
+  log.cpp
+  output-filter.cpp
+  decklink.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\decklink\RelWithDebInfo\decklink.dll
+  EGAVResult.cpp
+  ElgatoUVCDevice.cpp
+  EGAVHIDImplementation.cpp
+    inject-helper.c
+    inject-library.c
+    obfuscate.c
+  DriverInterface.cpp
+  get-graphics-offsets.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/coreaudio-encoder/RelWithDebInfo/coreaudio-encoder.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/coreaudio-encoder/RelWithDebInfo/coreaudio-encoder.exp
+  text-freetype2.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\text-freetype2\RelWithDebInfo\text-freetype2.dll
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-outputs/RelWithDebInfo/obs-outputs.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-outputs/RelWithDebInfo/obs-outputs.exp
+  Copy decklink to destination
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-vst/RelWithDebInfo/obs-vst.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-vst/RelWithDebInfo/obs-vst.exp
+  Copy text-freetype2 to destination
+  ffmpeg-decode.c
+  d3d11-return-auth.c
+  virtualcam.c
+  tiny-nv12-scale.c
+  shared-memory-queue.c
+  Copy decklink resources to data directory
+  obs-vst.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-vst\RelWithDebInfo\obs-vst.dll
+  coreaudio-encoder.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\coreaudio-encoder\RelWithDebInfo\coreaudio-encoder.dll
+  Copy text-freetype2 resources to data directory
+  Copy coreaudio-encoder to destination
+  Copy obs-vst to destination
+  Copy coreaudio-encoder resources to data directory
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-dshow/RelWithDebInfo/win-dshow.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-dshow/RelWithDebInfo/win-dshow.exp
+  get-graphics-offsets.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\win-capture\get-graphics-offsets\RelWithDebInfo\get-graphics-offsets64.exe
+  Build x86 get-graphics-offsets		
+    inject-helper.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x86\plugins\win-capture\inject-helper\RelWithDebInfo\inject-helper32.exe
+  obs-outputs.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-outputs\RelWithDebInfo\obs-outputs.dll
+  Copy obs-vst resources to data directory
+  Copy inject-helper (x86) to destination
+  win-dshow.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\win-dshow\RelWithDebInfo\win-dshow.dll
+  Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+  Copy obs-outputs to destination
+  
+  Copy win-dshow to destination
+    Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-capture/get-graphics-offsets/CMakeLists.txt
+  audio-repack.c
+    d3d8-offsets.cpp
+    d3d9-offsets.cpp
+  Copy obs-outputs resources to data directory
+    dxgi-offsets.cpp
+  Copy inject-helper to destination
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/aja/RelWithDebInfo/aja.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/aja/RelWithDebInfo/aja.exp
+  Copy win-dshow resources to data directory
+  aja.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\aja\RelWithDebInfo\aja.dll
+    get-graphics-offsets.c
+  Copy aja to destination
+  Copy aja resources to data directory
+    get-graphics-offsets.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x86\plugins\win-capture\get-graphics-offsets\RelWithDebInfo\get-graphics-offsets32.exe
+  Copy get-graphics-offsets (x86) to destination
+  Copy get-graphics-offsets to destination
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-capture/CMakeLists.txt
+  app-helpers.c
+  audio-helpers.c
+  compat-helpers.c
+  cursor-capture.c
+  dc-capture.c
+  duplicator-monitor-capture.c
+  game-capture-file-init.c
+  game-capture.c
+  load-graphics-offsets.c
+  monitor-capture.c
+  nt-stuff.c
+  plugin-main.c
+  window-capture.c
+  file-updater.c
+  inject-library.c
+  obfuscate.c
+  pipe-windows.c
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-capture/RelWithDebInfo/win-capture.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/win-capture/RelWithDebInfo/win-capture.exp
+  win-capture.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\win-capture\RelWithDebInfo\win-capture.dll
+  Copy win-capture to destination
+  Copy win-capture resources to data directory
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/win-dshow/virtualcam-module/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-ffmpeg/ffmpeg-mux/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-ffmpeg/obs-amf-test/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/frontend/api/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-qsv11/obs-qsv-test/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-nvenc/obs-nvenc-test/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/plugins/obs-x264/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/libobs-opengl/CMakeLists.txt
+  obs-amf-test.cpp
+  ffmpeg-mux.c
+  d3d11-return-auth.c
+  shared-memory-queue.c
+  tiny-nv12-scale.c
+  obs-frontend-api.cpp
+  obs-nvenc-test.cpp
+  obs-qsv-test.cpp
+  obs-x264-test.c
+  gl-windows.c
+  gl-helpers.c
+  gl-indexbuffer.c
+  gl-shader.c
+  gl-shaderparser.c
+  gl-stagesurf.c
+  gl-subsystem.c
+  gl-texture2d.c
+  gl-texture3d.c
+  gl-texturecube.c
+  gl-vertexbuffer.c
+  gl-zstencil.c
+  d3d11-return-transport.cpp
+  pulsar-d3d11-return-helper.cpp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/frontend/api/RelWithDebInfo/obs-frontend-api.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/frontend/api/RelWithDebInfo/obs-frontend-api.exp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-ffmpeg/obs-amf-test/RelWithDebInfo/obs-amf-test.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-ffmpeg/obs-amf-test/RelWithDebInfo/obs-amf-test.exp
+  obs-x264-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-x264\RelWithDebInfo\obs-x264-test.exe
+  obs-ffmpeg-mux.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-ffmpeg\ffmpeg-mux\RelWithDebInfo\obs-ffmpeg-mux.exe
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-qsv11/obs-qsv-test/RelWithDebInfo/obs-qsv-test.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/plugins/obs-qsv11/obs-qsv-test/RelWithDebInfo/obs-qsv-test.exp
+  obs-frontend-api.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\frontend\api\RelWithDebInfo\obs-frontend-api.dll
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/libobs-opengl/RelWithDebInfo/libobs-opengl.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64/libobs-opengl/RelWithDebInfo/libobs-opengl.exp
+  Copy obs-frontend-api to destination
+  obs-amf-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-ffmpeg\obs-amf-test\RelWithDebInfo\obs-amf-test.exe
+  Copy obs-ffmpeg-mux to destination
+  Copy obs-amf-test to destination
+  obs-qsv-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-qsv11\obs-qsv-test\RelWithDebInfo\obs-qsv-test.exe
+  libobs-opengl.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\libobs-opengl\RelWithDebInfo\libobs-opengl.dll
+  Copy obs-qsv-test to destination
+  Copy libobs-opengl to destination
+  obs-nvenc-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\obs-nvenc\obs-nvenc-test\RelWithDebInfo\obs-nvenc-test.exe
+  pulsar-d3d11-return-helper.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\plugins\win-dshow\virtualcam-module\RelWithDebInfo\pulsar-d3d11-return-helper64.exe
+  Copy obs-nvenc-test to destination
+  Copy pulsar-d3d11-return-helper to destination
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/CMakeLists.txt
+
+--- Configuring Pulsar plugins ---
+-- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.26200.
+-- The C compiler identification is MSVC 19.44.35228.0
+-- The CXX compiler identification is MSVC 19.44.35228.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx86/x64/cl.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx86/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Pulsar upstream build directory: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64
+-- Found nlohmann_json: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/share/cmake/nlohmann_json/nlohmann_jsonConfig.cmake (found suitable version "3.11.3", minimum required is "3.11")
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
+-- Looking for pthread_create in pthreads
+-- Looking for pthread_create in pthreads - not found
+-- Looking for pthread_create in pthread
+-- Looking for pthread_create in pthread - not found
+-- Found Threads: TRUE
+-- Performing Test HAVE_STDATOMIC
+-- Performing Test HAVE_STDATOMIC - Success
+-- Found WrapAtomic: TRUE
+-- Pulsar browser : using CEF at D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/cef_binary_6533_windows_x64
+-- Pulsar browser: using pinned prebuilt CEF wrapper (same library as upstream OBS)
+-- Configuring done (35.2s)
+-- Generating done (2.2s)
+-- Build files have been written to: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build
+
+--- Building Pulsar plugins ---
+Version MSBuild 17.14.40+3e7442088 pour .NET Framework
+
+  Checking File Globs
+  1>Checking Build System
+  Automatic MOC for target pulsar-websocket
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/plugins/pulsar-multi-stream/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/plugins/pulsar-camera-effects/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/plugins/pulsar-browser/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/plugins/pulsar-scene-source/CMakeLists.txt
+  camera-effects.cpp
+  plugin-main.cpp
+  plugin-main.cpp
+  browser-app.cpp
+  browser-client.cpp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/plugins/pulsar-camera-effects/RelWithDebInfo/pulsar-camera-effects.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/plugins/pulsar-camera-effects/RelWithDebInfo/pulsar-camera-effects.exp
+  pulsar-camera-effects.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\rundir\RelWithDebInfo\obs-plugins\64bit\pulsar-camera-effects.dll
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/plugins/pulsar-scene-source/RelWithDebInfo/pulsar-scene-source.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/plugins/pulsar-scene-source/RelWithDebInfo/pulsar-scene-source.exp
+  pulsar-scene-source.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\rundir\RelWithDebInfo\obs-plugins\64bit\pulsar-scene-source.dll
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/plugins/pulsar-multi-stream/RelWithDebInfo/pulsar-multi-stream.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/plugins/pulsar-multi-stream/RelWithDebInfo/pulsar-multi-stream.exp
+  pulsar-multi-stream.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\rundir\RelWithDebInfo\obs-plugins\64bit\pulsar-multi-stream.dll
+  browser-scheme.cpp
+  base64.cpp
+  ip-string-windows.cpp
+  signal-restore.cpp
+  wide-string.cpp
+  obs-browser-plugin.cpp
+  obs-browser-source.cpp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/plugins/pulsar-websocket/CMakeLists.txt
+  cmake_pch.cxx
+  Config.cpp
+  WebSocketApi.cpp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/plugins/pulsar-browser/RelWithDebInfo/pulsar-browser.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/plugins/pulsar-browser/RelWithDebInfo/pulsar-browser.exp
+  EventHandler.cpp
+  EventHandler_Canvases.cpp
+  EventHandler_Config.cpp
+  pulsar-browser.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\rundir\RelWithDebInfo\obs-plugins\64bit\pulsar-browser.dll
+  Stage the complete pinned CEF runtime for pulsar-browser
+  EventHandler_Filters.cpp
+  EventHandler_General.cpp
+  EventHandler_Inputs.cpp
+  EventHandler_MediaInputs.cpp
+  EventHandler_Outputs.cpp
+  EventHandler_SceneItems.cpp
+  EventHandler_Scenes.cpp
+  EventHandler_Transitions.cpp
+  EventHandler_Ui.cpp
+  obs-websocket.cpp
+  RequestBatchHandler.cpp
+  RequestHandler.cpp
+  RequestHandler_Canvases.cpp
+  RequestHandler_Config.cpp
+  RequestHandler_Filters.cpp
+  RequestHandler_General.cpp
+  RequestHandler_Inputs.cpp
+  RequestHandler_MediaInputs.cpp
+  RequestHandler_Outputs.cpp
+  RequestHandler_Record.cpp
+  RequestHandler_SceneItems.cpp
+  RequestHandler_Scenes.cpp
+  RequestHandler_Sources.cpp
+  RequestHandler_Stream.cpp
+  RequestHandler_Transitions.cpp
+  RequestHandler_Ui.cpp
+  Request.cpp
+  RequestBatchRequest.cpp
+  RequestResult.cpp
+  Compat.cpp
+  Crypto.cpp
+  Json.cpp
+  Obs.cpp
+  Obs_ActionHelper.cpp
+  Obs_ArrayHelper.cpp
+  Obs_NumberHelper.cpp
+  Obs_ObjectHelper.cpp
+  Obs_OutputHelper.cpp
+  Obs_SearchHelper.cpp
+  Obs_StringHelper.cpp
+  Obs_VolumeMeter.cpp
+  Platform.cpp
+  WebSocketServer.cpp
+  WebSocketServer_Protocol.cpp
+  mocs_compilation_RelWithDebInfo.cpp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/plugins/pulsar-websocket/RelWithDebInfo/obs-websocket.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/plugins/pulsar-websocket/RelWithDebInfo/obs-websocket.exp
+  pulsar-websocket.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\rundir\RelWithDebInfo\obs-plugins\64bit\obs-websocket.dll
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/lease-watcher/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/equal-view-swap/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/dir-hardening-probe/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/probe-nvenc-async-output/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/native-rtmp-receiver/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/pulsar-headless-shutdown/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/log-handler-probe/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/directshow-namespace-probe/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/output-attempt-settled-probe/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/pulsar-headless-shutdown/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/output-classify-probe/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/plugins/pulsar-browser/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/dual-lane-config/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/plugins/pulsar-frontend-stub/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/nv-probe/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/nv-probe/CMakeLists.txt
+cl : ligne de commande  warning D9025: substitution de '/DNDEBUG' par '/UNDEBUG' [D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\probe-nvenc-async-output\async-gpu-runtime.vcxproj]
+  async-gpu-runtime.c
+  swap-test.c
+  native-rtmp-receiver.c
+  browser-source-task-state-test.cpp
+  dir-hardening-probe-test.cpp
+  dir-hardening.cpp
+  registration-pipe-probe.cpp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/pulsar-transition-controller/CMakeLists.txt
+  log-handler-probe-test.cpp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/probe-nvenc-ready-drain/CMakeLists.txt
+  log-handler.cpp
+  directshow-namespace-probe-test.cpp
+  output-attempt-settled-probe-test.cpp
+  pulsar-frontend-stub.cpp
+  dual-lane-config-probe.cpp
+  pulsar-media-transition.cpp
+  audio-callback-gate-test.cpp
+  browser-app.cpp
+  obs-browser-page-main.cpp
+  output-classify-probe-test.cpp
+  fake-nv-dep.c
+  fake-nv-dep.c
+cl : ligne de commande  warning D9025: substitution de '/DNDEBUG' par '/UNDEBUG' [D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\probe-nvenc-ready-drain\ready-drain-runtime.vcxproj]
+  ready-drain-runtime.c
+  transition-controller-probe.cpp
+  equal-view-swap.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\equal-view-swap.exe
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/return-queue-safety/CMakeLists.txt
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/tests/nv-probe/fixtures-evil/PulsarNvFakeDep.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/tests/nv-probe/fixtures-evil/PulsarNvFakeDep.exp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/tests/nv-probe/fixtures-good/PulsarNvFakeDep.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/tests/nv-probe/fixtures-good/PulsarNvFakeDep.exp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/return-queue-safety/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/rtwq-lifecycle/CMakeLists.txt
+cl : ligne de commande  warning D9025: substitution de '/DNDEBUG' par '/UNDEBUG' [D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\return-queue-safety\return-queue-runtime.vcxproj]
+cl : ligne de commande  warning D9025: substitution de '/DNDEBUG' par '/UNDEBUG' [D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\return-queue-safety\return-queue-runtime.vcxproj]
+  queue-runtime-test.c
+  output-attempt-settled-probe-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\output-attempt-settled-probe-test.exe
+cl : ligne de commande  warning D9025: substitution de '/DNDEBUG' par '/UNDEBUG' [D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\return-queue-safety\return-queue-runtime.vcxproj]
+  shared-memory-queue.c
+  output-classify-probe-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\output-classify-probe-test.exe
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/runtime-isolation-probe/CMakeLists.txt
+  native-rtmp-receiver.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\native-rtmp-receiver.exe
+  async-gpu-runtime.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\async-gpu-runtime.exe
+  pulsar-dual-lane-config-probe.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\pulsar-dual-lane-config-probe.exe
+  tiny-nv12-scale.c
+  lease-registration-pipe-probe-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\lease-registration-pipe-probe-test.exe
+cl : ligne de commande  warning D9025: substitution de '/DNDEBUG' par '/UNDEBUG' [D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\return-queue-safety\video-content-runtime.vcxproj]
+  video-content-test.c
+  rtwq-lifecycle-test.cpp
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/ws-debug-probe/CMakeLists.txt
+  realtime-work-queue.cpp
+  pulsar-browser-source-task-state-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\pulsar-browser-source-task-state-test.exe
+  directshow-namespace-probe-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\directshow-namespace-probe-test.exe
+  pulsar-media-transition-config.cpp
+  runtime-isolation-probe-test.cpp
+  runtime-identity.cpp
+  pulsar-audio-callback-gate-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\pulsar-audio-callback-gate-test.exe
+  ws-debug-probe-test.cpp
+  pulsar-transition-controller-probe.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\pulsar-transition-controller-probe.exe
+  ready-drain-runtime.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\ready-drain-runtime.exe
+  dir-hardening-probe-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\dir-hardening-probe-test.exe
+  pulsar-nv-fake-dep-evil.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\fixtures-evil\PulsarNvFakeDep.dll
+  rtwq-lifecycle-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\rtwq-lifecycle-test.exe
+  return-queue-runtime.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\return-queue-runtime.exe
+  video-content-runtime.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\video-content-runtime.exe
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/nv-probe/CMakeLists.txt
+  ws-debug-probe-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\ws-debug-probe-test.exe
+  pulsar-nv-fake-dep-good.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\fixtures-good\PulsarNvFakeDep.dll
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/nv-probe/CMakeLists.txt
+  fake-nv-sdk.c
+  fake-nv-sdk.c
+  log-handler-probe-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\log-handler-probe-test.exe
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/tests/nv-probe/fixtures-evil/pulsar-nv-fake-sdk-evil.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/tests/nv-probe/fixtures-evil/pulsar-nv-fake-sdk-evil.exp
+  pulsar-preview-frame.cpp
+     Création de la bibliothèque D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/tests/nv-probe/fixtures-good/pulsar-nv-fake-sdk-good.lib et de l'objet D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/build/tests/nv-probe/fixtures-good/pulsar-nv-fake-sdk-good.exp
+  pulsar-nv-fake-sdk-evil.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\fixtures-evil\pulsar-nv-fake-sdk-evil.dll
+  pulsar-nv-fake-sdk-good.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\fixtures-good\pulsar-nv-fake-sdk-good.dll
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/nv-probe/CMakeLists.txt
+  runtime-isolation-probe-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\runtime-isolation-probe-test.exe
+  nv-probe-test.c
+  pulsar-browser-page.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\rundir\RelWithDebInfo\obs-plugins\64bit\pulsar-browser-page.exe
+  nv-probe-test.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\nv-probe-test.exe
+  pulsar-frontend-stub.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\plugins\pulsar-frontend-stub\RelWithDebInfo\pulsar-frontend-stub.lib
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/plugins/pulsar-headless/CMakeLists.txt
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/tests/pulsar-media-transition/CMakeLists.txt
+  config-probe.cpp
+  main.cpp
+  log-handler.cpp
+  dir-hardening.cpp
+  pulsar-media-transition-config-probe.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\build\tests\nv-probe\RelWithDebInfo\pulsar-media-transition-config-probe.exe
+  runtime-identity.cpp
+  realtime-work-queue.cpp
+  pulsar-headless.vcxproj -> D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\rundir\RelWithDebInfo\bin\64bit\pulsar.exe
+  Building Custom Rule D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/CMakeLists.txt
+
+Built: D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\build_x64\rundir\RelWithDebInfo\bin\64bit\pulsar.exe
+Staged 6 Qt6 runtime DLLs into rundir/bin/64bit/
+Staged 2 Qt6 platform plugins into rundir/bin/64bit/platforms/
+Staged 14 obs-deps runtime DLLs into rundir/bin/64bit/

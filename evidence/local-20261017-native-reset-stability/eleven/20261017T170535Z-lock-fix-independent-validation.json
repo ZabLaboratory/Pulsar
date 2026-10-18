@@ -1,0 +1,204 @@
+{
+  "schema": "pulsar.native-lock-fix-independent-validation/1",
+  "checkedUtc": "2026-10-17T17:05:35.732909+00:00",
+  "passed": true,
+  "newPlugin": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "sha256": "1deaa45c64f30d877f93aa9133c6b562a306cacb72931a376f293e8c52403375",
+    "bytes": 581632
+  },
+  "newHeader": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\plugins\\pulsar-capture-effects\\src\\capture-effects.hpp",
+    "sha256": "3ec5082be156757428ee6968ab392b62832066552cfc09f174ad114c9cb22606",
+    "bytes": 315
+  },
+  "exactRepetitions": [
+    {
+      "report": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170202Z-reset-exact.json",
+        "sha256": "622a3e4a19a340e84eef3b23480978d65f66af75ffacb2bf596b87e58eda1ae7",
+        "bytes": 549395
+      },
+      "pid": 23076,
+      "windowSeconds": 20.0,
+      "renderFramesDelta": 1200,
+      "steadySkippedFramesDelta": 0,
+      "recommitSkippedFramesDelta": 20,
+      "resetDurationSeconds": 0.313,
+      "allReadbackPixelsRestored": true,
+      "readbackSize": [
+        128,
+        72
+      ],
+      "readbackPixelCount": 9216,
+      "nominal": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170202Z-nominal-before-composition.png",
+        "sha256": "cd0e67cb95e2e04bb366da7a41b1b0059f9628f304d7ae9533f5e70e2274418d",
+        "bytes": 281
+      },
+      "afterReset": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170202Z-after-reset.png",
+        "sha256": "cd0e67cb95e2e04bb366da7a41b1b0059f9628f304d7ae9533f5e70e2274418d",
+        "bytes": 281
+      },
+      "gracefulExitCode": 0
+    },
+    {
+      "report": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170236Z-reset-exact.json",
+        "sha256": "bcedce26206f5ab6a1b462678cd61c3b1886058e292b0bbae4fdefdc747ec82e",
+        "bytes": 549981
+      },
+      "pid": 19756,
+      "windowSeconds": 20.0,
+      "renderFramesDelta": 1200,
+      "steadySkippedFramesDelta": 0,
+      "recommitSkippedFramesDelta": 16,
+      "resetDurationSeconds": 0.313,
+      "allReadbackPixelsRestored": true,
+      "readbackSize": [
+        128,
+        72
+      ],
+      "readbackPixelCount": 9216,
+      "nominal": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170236Z-nominal-before-composition.png",
+        "sha256": "cd0e67cb95e2e04bb366da7a41b1b0059f9628f304d7ae9533f5e70e2274418d",
+        "bytes": 281
+      },
+      "afterReset": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170236Z-after-reset.png",
+        "sha256": "cd0e67cb95e2e04bb366da7a41b1b0059f9628f304d7ae9533f5e70e2274418d",
+        "bytes": 281
+      },
+      "gracefulExitCode": 0
+    },
+    {
+      "report": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170311Z-reset-exact.json",
+        "sha256": "9b1b7c69bdd75ed2da2bc01d83ddf5109fd6de6a7f4098a4c812842f97e88bdc",
+        "bytes": 550252
+      },
+      "pid": 5488,
+      "windowSeconds": 20.0,
+      "renderFramesDelta": 1199,
+      "steadySkippedFramesDelta": 0,
+      "recommitSkippedFramesDelta": 16,
+      "resetDurationSeconds": 0.312,
+      "allReadbackPixelsRestored": true,
+      "readbackSize": [
+        128,
+        72
+      ],
+      "readbackPixelCount": 9216,
+      "nominal": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170311Z-nominal-before-composition.png",
+        "sha256": "cd0e67cb95e2e04bb366da7a41b1b0059f9628f304d7ae9533f5e70e2274418d",
+        "bytes": 281
+      },
+      "afterReset": {
+        "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170311Z-after-reset.png",
+        "sha256": "cd0e67cb95e2e04bb366da7a41b1b0059f9628f304d7ae9533f5e70e2274418d",
+        "bytes": 281
+      },
+      "gracefulExitCode": 0
+    }
+  ],
+  "broaderQualification": {
+    "report": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170355Z-group-composition-probe.json",
+      "sha256": "68c3c7a99c7f27924038f26638733dc7cb6b72c7fb8c11cbd00530756baae235",
+      "bytes": 115186
+    },
+    "effects": 7,
+    "atomicAdmissions": 80,
+    "rotationAdmissions": 6,
+    "fractionalFraming": [
+      {
+        "case": "fractional-width",
+        "requestedContentSize": [
+          0.2,
+          18
+        ],
+        "expectedZoomedBounds": [
+          2,
+          180
+        ],
+        "actualZoomedBounds": [
+          2.0,
+          180.0
+        ],
+        "outsidePixel": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170359Z-22617bacdc-fractional-width.png"
+      },
+      {
+        "case": "fractional-height",
+        "requestedContentSize": [
+          32,
+          0.3
+        ],
+        "expectedZoomedBounds": [
+          320,
+          3
+        ],
+        "actualZoomedBounds": [
+          320.0,
+          3.0
+        ],
+        "outsidePixel": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170359Z-22617bacdc-fractional-height.png"
+      },
+      {
+        "case": "zero-width-fallback",
+        "requestedContentSize": [
+          0,
+          18
+        ],
+        "expectedZoomedBounds": [
+          10,
+          180
+        ],
+        "actualZoomedBounds": [
+          10.0,
+          180.0
+        ],
+        "outsidePixel": null,
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170359Z-22617bacdc-zero-width-fallback.png"
+      },
+      {
+        "case": "negative-height-fallback",
+        "requestedContentSize": [
+          32,
+          -2
+        ],
+        "expectedZoomedBounds": [
+          320,
+          10
+        ],
+        "actualZoomedBounds": [
+          320.0,
+          10.0
+        ],
+        "outsidePixel": null,
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\evidence\\local-20261017-native-reset-stability\\eleven\\20261017T170359Z-22617bacdc-negative-height-fallback.png"
+      }
+    ],
+    "cleanShutdown": true
+  },
+  "limits": [
+    "Three successful repetitions and code review do not prove all concurrency schedules.",
+    "Recommit still skips frames; this is not a general fluidity qualification.",
+    "Native steady rendering uses synthetic sources and no CEF, physical device, Live or recording.",
+    "Restoration proof compares every pixel of the 128x72 readback; host rendering is configured at 1920x1080."
+  ]
+}

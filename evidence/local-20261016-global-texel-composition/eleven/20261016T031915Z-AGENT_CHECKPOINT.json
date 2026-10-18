@@ -1,0 +1,132 @@
+{
+  "capturedUtc": "2026-10-16T03:19:15.301494+00:00",
+  "unit": "local-20261016-global-texel-composition",
+  "base": "5ae8ca490f524cdd79bb460362d1251aaa275b61",
+  "report": "20261016T031817Z-group-composition-probe.json",
+  "reportSha256": "0dbbb4523cad3a2669660fe54e7b8c7f835a63e6693b578c3b235dad9a778a2d",
+  "passed": true,
+  "binarySha256": "52e0c2117bc13e647c032dee4f528e58edc0c63007d3fb6a75319cb76884ffb1",
+  "provenanceClarification": "Legacy runner inherited jsonBridgeBuiltFrom wording says this unit. The websocket DLL and private host were actually reused read-only from native-group-composition; only capture-effects DLL was rebuilt here. Json.cpp bytes independently match that unit. Raw reports retained unchanged.",
+  "privateObsRevision": "70a58302435308e609e0b1114efe3ef402f810b7",
+  "checks": {
+    "coordinateSpace": "global-scene-texels",
+    "viewport": [
+      1920,
+      1080
+    ],
+    "generations": [
+      {
+        "generation": 1,
+        "exactCheckerboardPixels": 1024
+      },
+      {
+        "generation": 2,
+        "sample": [
+          0,
+          50,
+          50,
+          127
+        ]
+      },
+      {
+        "generation": 3,
+        "sample": [
+          0,
+          25,
+          25,
+          63
+        ]
+      },
+      {
+        "generation": 4,
+        "sample": [
+          0,
+          50,
+          0,
+          63
+        ]
+      }
+    ],
+    "refusals": [
+      {
+        "case": "unknown-space",
+        "error": "unsupported-coordinate-space: unknown",
+        "pixelsPreserved": true
+      },
+      {
+        "case": "scaled-band",
+        "error": "global-band-resampling: global texels require exact integer placement without scaling",
+        "pixelsPreserved": true
+      },
+      {
+        "case": "fractional-band",
+        "error": "global-band-resampling: global texels require exact integer placement without scaling",
+        "pixelsPreserved": true
+      },
+      {
+        "case": "float-overflow",
+        "error": "invalid-affine: transform exceeds native float range",
+        "pixelsPreserved": true
+      },
+      {
+        "case": "same-generation-different-space",
+        "error": "stale-generation: global-texel-proof-b244273f3f"
+      }
+    ],
+    "images": [
+      {
+        "phase": "exact-grid",
+        "path": "20261016T031821Z-b244273f3f-world-exact-grid.png",
+        "sha256": "6b7de5300cf4f5f4281af91024d27d01f7586bd59da7dd39411cbc14dad8fa92"
+      },
+      {
+        "phase": "mixed-shear-opacity",
+        "path": "20261016T031821Z-b244273f3f-world-mixed-shear-opacity.png",
+        "sha256": "c964f9e534dcf2b4625ed473da6c6755bfbf5a4e242a962f2f51bf84a1110743"
+      },
+      {
+        "phase": "nested-opacity",
+        "path": "20261016T031821Z-b244273f3f-world-nested-opacity.png",
+        "sha256": "7d08a91abaadedc1f01185e9569d95929afc1d5d7f1ff7def6e3e956a5ba4e43"
+      },
+      {
+        "phase": "rotated-crop",
+        "path": "20261016T031821Z-b244273f3f-world-rotated-crop.png",
+        "sha256": "1c6eb6808bdf8c6d1af21a8f342c6d61d421aea46ddfdbd05f915a591ede2f62"
+      },
+      {
+        "phase": "unknown-space",
+        "path": "20261016T031821Z-b244273f3f-world-unknown-space.png",
+        "sha256": "1c6eb6808bdf8c6d1af21a8f342c6d61d421aea46ddfdbd05f915a591ede2f62"
+      },
+      {
+        "phase": "scaled-band",
+        "path": "20261016T031821Z-b244273f3f-world-scaled-band.png",
+        "sha256": "1c6eb6808bdf8c6d1af21a8f342c6d61d421aea46ddfdbd05f915a591ede2f62"
+      },
+      {
+        "phase": "fractional-band",
+        "path": "20261016T031821Z-b244273f3f-world-fractional-band.png",
+        "sha256": "1c6eb6808bdf8c6d1af21a8f342c6d61d421aea46ddfdbd05f915a591ede2f62"
+      },
+      {
+        "phase": "float-overflow",
+        "path": "20261016T031821Z-b244273f3f-world-float-overflow.png",
+        "sha256": "1c6eb6808bdf8c6d1af21a8f342c6d61d421aea46ddfdbd05f915a591ede2f62"
+      }
+    ],
+    "capture": "synthetic image with vertical source-space crop; full affine shear",
+    "physicalPresentation": "not-measured",
+    "passed": true
+  },
+  "cleanShutdown": true,
+  "forcedTerminationUsed": false,
+  "scratchRemoved": true,
+  "limits": [
+    "No common-runtime admission",
+    "Synthetic image stands in for capture",
+    "Masks and non-normal group blend remain unsupported",
+    "No CEF shutdown or physical stream qualification",
+    "No scene switch duration or transition changes"
+  ]
+}

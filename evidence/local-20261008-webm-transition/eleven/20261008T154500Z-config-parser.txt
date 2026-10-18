@@ -1,0 +1,1 @@
+media configuration: valid WebM/MP4 accepted; 22 invalid cases rejected

@@ -215,6 +215,12 @@ file path. See [destinations](plugins/pulsar-multi-stream/README.md) and the
 
 ## Capture, composition and browser rendering
 
+The native [camera-effects module](plugins/pulsar-camera-effects/README.md) adds
+`pulsar_vignette_filter`. It darkens source edges on the GPU while preserving
+alpha, with independent enable/bypass and bounded intensity, radius and softness.
+Hosts expose it only when the runtime filter inventory registers it. It does
+not require NVIDIA AI SDKs or create another capture producer.
+
 Pulsar retains OBS's source and scene model. The engine loads the source types
 provided by the selected bundle and the host's available hardware; query
 `GetInputKindList` and the capability manifest instead of assuming that a DLL
@@ -467,7 +473,7 @@ does not recover scene identity from arbitrary pixels.
 Pulsar is a maintained native fork, not only a JavaScript wrapper around stock
 OBS. Its OBS submodule is pinned to
 `bd73b922891e56839b0bc86bdc519802802f9d68`, an OBS 32.1.2-derived revision.
-Five foundational modifications are incorporated in that pin; **52 additional
+Five foundational modifications are incorporated in that pin; **61 additional
 patch files** build the current media core.
 
 | Area | What Pulsar changes |
@@ -592,7 +598,7 @@ as a troubleshooting shortcut.
 | [Client](packages/pulsar-client/README.md) | TypeScript API, typed events, errors and examples. |
 | [Embedding](docs/PRISM-EMBEDDING.md) | Host lifecycle, readiness and verified bundle integration. |
 | [Architecture](docs/ARCHITECTURE.md) | Runtime structure and ownership boundaries. |
-| [All libobs changes](docs/LIBOBS-CHANGES.md) | Integrated OBS changes and all 52 source patches. |
+| [All libobs changes](docs/LIBOBS-CHANGES.md) | Integrated OBS changes and all 61 source patches. |
 | [All documentation](docs/README.md) | Current guides, operational runbooks, contracts and historical studies. |
 | [Development](docs/DEVELOPMENT.md) | Build toolchain and local development. |
 | [Dual-lane canary](docs/runbooks/pulsar-dual-lane-canary.md) | Qualification and operational checks. |

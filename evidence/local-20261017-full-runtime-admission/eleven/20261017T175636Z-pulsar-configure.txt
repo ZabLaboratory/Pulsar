@@ -1,0 +1,30 @@
+-- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.26200.
+-- The C compiler identification is MSVC 19.44.35228.0
+-- The CXX compiler identification is MSVC 19.44.35228.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx86/x64/cl.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx86/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Pulsar upstream build directory: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/build_x64
+-- Found nlohmann_json: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/.deps/obs-deps-2025-08-23-x64/share/cmake/nlohmann_json/nlohmann_jsonConfig.cmake (found suitable version "3.11.3", minimum required is "3.11")
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
+-- Looking for pthread_create in pthreads
+-- Looking for pthread_create in pthreads - not found
+-- Looking for pthread_create in pthread
+-- Looking for pthread_create in pthread - not found
+-- Found Threads: TRUE
+-- Performing Test HAVE_STDATOMIC
+-- Performing Test HAVE_STDATOMIC - Success
+-- Found WrapAtomic: TRUE
+-- Pulsar browser : using CEF at D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/upstream/.deps/cef_binary_6533_windows_x64
+-- Pulsar browser: using pinned prebuilt CEF wrapper (same library as upstream OBS)
+-- Configuring done (9.8s)
+-- Generating done (1.2s)
+-- Build files have been written to: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261017-full-runtime-admission/build

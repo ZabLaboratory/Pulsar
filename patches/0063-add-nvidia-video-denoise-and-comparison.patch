@@ -1,0 +1,471 @@
+From dedb9f8f2bcf005d22f31900c730cde36c2a5c68 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 15:12:26 +0200
+Subject: [PATCH] feat(nvidia): native video noise removal and same-frame
+ comparison
+
+Continue local-20261010 NVIDIA parity. Reuse the private upstream GPU interop and image/state lifetime for the Denoising SDK consumer; no second camera, CPU pixel readback or redistributed SDK. Expose two model strengths and independently blended intensity, exact zero bypass, original alpha and same-frame split. This private filter pipeline change is maintained as a downstream patch and is a candidate for upstream contribution after qualification.
+---
+ plugins/nv-filters/data/rtx_blur.effect       |   5 +-
+ .../nv-filters/data/rtx_greenscreen.effect    |   3 +
+ plugins/nv-filters/nv-filters.c               |   9 +
+ plugins/nv-filters/nvidia-videofx-filter.c    | 167 ++++++++++++++++--
+ 4 files changed, 165 insertions(+), 19 deletions(-)
+
+diff --git a/plugins/nv-filters/data/rtx_blur.effect b/plugins/nv-filters/data/rtx_blur.effect
+index 32ab2df80..89824b8c2 100644
+--- a/plugins/nv-filters/data/rtx_blur.effect
++++ b/plugins/nv-filters/data/rtx_blur.effect
+@@ -3,6 +3,8 @@
+ uniform float4x4 ViewProj;
+ uniform texture2d image;
+ uniform float multiplier;
++uniform float compare;
++uniform float processed_mix;
+ uniform texture2d mask;
+ uniform texture2d blurred;
+ 
+@@ -57,7 +59,8 @@ float4 Mask(FragData f_in)
+ 	float3 blur = srgb_nonlinear_to_linear(blurred.Sample(texSampler, f_in.uv).rgb);
+ 	// Between blurred and unblurred area we interpolate to have a smooth transition.
+ 	float m = smoothstep(0.85, 0.95, mask.Sample(texSampler, f_in.uv).a);
+-	float3 out_lin = lerp(blur, rgba.rgb, m);
++	float mix_amount = (compare > 0.5 && f_in.uv.x < 0.5) ? 0.0 : processed_mix;
++	float3 out_lin = lerp(rgba.rgb, lerp(blur, rgba.rgb, m), mix_amount);
+ 	return float4(out_lin, rgba.a);
+ }
+ 
+diff --git a/plugins/nv-filters/data/rtx_greenscreen.effect b/plugins/nv-filters/data/rtx_greenscreen.effect
+index fc945d232..df93ed88f 100644
+--- a/plugins/nv-filters/data/rtx_greenscreen.effect
++++ b/plugins/nv-filters/data/rtx_greenscreen.effect
+@@ -3,6 +3,7 @@
+ uniform float4x4 ViewProj;
+ uniform texture2d image;
+ uniform float multiplier;
++uniform float compare;
+ 
+ uniform texture2d mask;
+ uniform float threshold;
+@@ -55,6 +56,8 @@ FragPos VSConvertUnorm(uint id : VERTEXID)
+ float4 Mask(FragData f_in)
+ {
+ 	float4 rgba = image.Sample(texSampler, f_in.uv);
++	if (compare > 0.5 && f_in.uv.x < 0.5)
++		return rgba;
+ 	rgba *= smoothstep(threshold - 0.1,threshold,mask.Sample(texSampler, f_in.uv).a);
+ 	return rgba;
+ }
+diff --git a/plugins/nv-filters/nv-filters.c b/plugins/nv-filters/nv-filters.c
+index 57203c4cb..411f77ec6 100644
+--- a/plugins/nv-filters/nv-filters.c
++++ b/plugins/nv-filters/nv-filters.c
+@@ -5,6 +5,11 @@
+ 
+ OBS_DECLARE_MODULE()
+ OBS_MODULE_USE_DEFAULT_LOCALE("nv-filters", "en-US")
++/* Host capability probe: version 1 includes the native split comparator. */
++MODULE_EXPORT uint32_t pulsar_nv_feature_flags(void)
++{
++	return 1u;
++}
+ MODULE_EXPORT const char *obs_module_description(void)
+ {
+ 	return "NVIDIA filters";
+@@ -19,6 +24,8 @@ extern void unload_nvidia_afx(void);
+ extern struct obs_source_info nvidia_greenscreen_filter_info;
+ extern struct obs_source_info nvidia_blur_filter_info;
+ extern struct obs_source_info nvidia_background_blur_filter_info;
++extern struct obs_source_info nvidia_denoise_filter_info;
++extern bool nvvfx_denoise_models_available(void);
+ extern bool load_nvidia_vfx(void);
+ extern void unload_nvidia_vfx(void);
+ #endif
+@@ -69,6 +76,8 @@ bool obs_module_load(void)
+ 		obs_register_source(&nvidia_greenscreen_filter_info);
+ 		obs_register_source(&nvidia_blur_filter_info);
+ 		obs_register_source(&nvidia_background_blur_filter_info);
++		if (nvvfx_denoise_models_available())
++			obs_register_source(&nvidia_denoise_filter_info);
+ 	}
+ #endif
+ 	return true;
+diff --git a/plugins/nv-filters/nvidia-videofx-filter.c b/plugins/nv-filters/nvidia-videofx-filter.c
+index 9e80a59b9..60421f8a5 100644
+--- a/plugins/nv-filters/nvidia-videofx-filter.c
++++ b/plugins/nv-filters/nvidia-videofx-filter.c
+@@ -45,7 +45,7 @@
+ #define S_STRENGTH_DEFAULT 0.5
+ #define TEXT_MODE_BLUR_STRENGTH MT_("Nvvfx.Method.Blur.Strength")
+ 
+-enum nvvfx_fx_id { S_FX_AIGS, S_FX_BLUR, S_FX_BG_BLUR };
++enum nvvfx_fx_id { S_FX_AIGS, S_FX_BLUR, S_FX_BG_BLUR, S_FX_DENOISE };
+ 
+ bool nvvfx_loaded = false;
+ bool nvvfx_new_sdk = false;
+@@ -84,6 +84,8 @@ struct nvvfx_data {
+ 	gs_eparam_t *threshold_param;
+ 	gs_eparam_t *multiplier_param;
+ 	float threshold;
++	bool compare;
++	bool denoise_reset;
+ 
+ 	/* Every nth frame is processed through the FX (where n =
+ 	 * processing_interval) so that the same mask is used for n consecutive
+@@ -123,15 +125,58 @@ static const char *nv_background_blur_filter_name(void *unused)
+ 	return obs_module_text("Nvvfx.Method.BackgroundBlurFilter");
+ }
+ 
++static const char *nv_denoise_filter_name(void *unused)
++{
++    UNUSED_PARAMETER(unused);
++    return "NVIDIA Video Noise Removal";
++}
++
++/* The SDK family may be installed without the optional denoising models. */
++bool nvvfx_denoise_models_available(void)
++{
++    char sdk[MAX_PATH], pattern[MAX_PATH];
++    WIN32_FIND_DATAA item;
++    if (!nvvfx_get_sdk_path(sdk, MAX_PATH))
++        return false;
++    const char *models[] = {"Denoise-con-*.trtpkg", "Denoise-agg-*.trtpkg"};
++    for (size_t i = 0; i < 2; ++i) {
++        snprintf(pattern, sizeof(pattern), "%s\\models\\%s", sdk, models[i]);
++        HANDLE search = FindFirstFileA(pattern, &item);
++        if (search == INVALID_HANDLE_VALUE)
++            return false;
++        bool valid = !(item.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) &&
++                     (item.nFileSizeHigh || item.nFileSizeLow);
++        FindClose(search);
++        if (!valid)
++            return false;
++    }
++    return true;
++}
++
+ static void nvvfx_filter_update(void *data, obs_data_t *settings)
+ {
+ 	struct nvvfx_data *filter = (struct nvvfx_data *)data;
+ 	NvCV_Status vfxErr;
+ 	enum nvvfx_fx_id id = filter->filter_id;
+ 
++	filter->compare = obs_data_get_bool(settings, "compare");
+ 	filter->threshold = (float)obs_data_get_double(settings, S_THRESHOLDFX);
+ 	filter->processing_interval = (int)obs_data_get_int(settings, S_PROCESSING);
+ 	float strength = (float)obs_data_get_double(settings, S_STRENGTH);
++    if (id == S_FX_DENOISE) {
++        filter->strength = strength;
++        int mode = obs_data_get_int(settings, S_MODE) == 1 ? 1 : 0;
++        if (filter->mode != mode) {
++            filter->mode = mode;
++            vfxErr = NvVFX_SetF32(filter->handle_blur, NVVFX_STRENGTH, (float)mode);
++            if (vfxErr == NVCV_SUCCESS && filter->images_allocated)
++                vfxErr = NvVFX_Load(filter->handle_blur);
++            if (vfxErr != NVCV_SUCCESS)
++                error("Error updating denoising FX %i", vfxErr);
++        }
++        if (strength == 0.f)
++            filter->denoise_reset = true;
++    }
+ 	if (id == S_FX_AIGS || id == S_FX_BG_BLUR) {
+ 		int mode = id == S_FX_BG_BLUR ? (int)S_MODE_PERF : (int)obs_data_get_int(settings, S_MODE);
+ 		if (filter->mode != mode) {
+@@ -194,6 +239,8 @@ static void nvvfx_filter_actual_destroy(void *data)
+ 		NvVFX_DestroyEffect(filter->handle);
+ 	}
+ 	if (filter->handle_blur) {
++        if (filter->filter_id == S_FX_DENOISE && filter->stateObjectHandle)
++            NvVFX_DeallocateState(filter->handle_blur, filter->stateObjectHandle);
+ 		NvVFX_DestroyEffect(filter->handle_blur);
+ 	}
+ 	if (filter->stream)
+@@ -233,6 +280,9 @@ static bool nvvfx_filter_create_internal(struct nvvfx_data *filter)
+ 	case S_FX_AIGS:
+ 		vfxErr = NvVFX_CreateEffect(NVVFX_FX_GREEN_SCREEN, &filter->handle);
+ 		break;
++	case S_FX_DENOISE:
++		vfxErr = NvVFX_CreateEffect(NVVFX_FX_DENOISING, &filter->handle_blur);
++		break;
+ 	case S_FX_BLUR:
+ 		vfxErr = NvVFX_CreateEffect(NVVFX_FX_BGBLUR, &filter->handle_blur);
+ 		break;
+@@ -290,6 +340,18 @@ static bool nvvfx_filter_create_internal(struct nvvfx_data *filter)
+ 		if (NVCV_SUCCESS != vfxErr)
+ 			log_nverror_destroy(filter, vfxErr);
+ 	}
++    if (id == S_FX_DENOISE) {
++        char sdk[MAX_PATH], modelDir[MAX_PATH];
++        if (!nvvfx_get_sdk_path(sdk, MAX_PATH))
++            return false;
++        snprintf(modelDir, sizeof(modelDir), "%s\\models", sdk);
++        vfxErr = NvVFX_SetString(filter->handle_blur, NVVFX_MODEL_DIRECTORY, modelDir);
++        if (vfxErr != NVCV_SUCCESS)
++            return false;
++        vfxErr = NvVFX_SetCudaStream(filter->handle_blur, NVVFX_CUDA_STREAM, filter->stream);
++        if (vfxErr != NVCV_SUCCESS)
++            return false;
++    }
+ 	return true;
+ }
+ 
+@@ -358,7 +420,7 @@ static void *nvvfx_filter_create(obs_data_t *settings, obs_source_t *context, en
+ 	obs_leave_graphics();
+ 
+ 	/* 4. Allocate state for the AIGS & background blur */
+-	if (nvvfx_new_sdk && id != S_FX_BLUR) {
++	if (nvvfx_new_sdk && (id == S_FX_AIGS || id == S_FX_BG_BLUR)) {
+ 		vfxErr = NvVFX_AllocateState(filter->handle, &filter->stateObjectHandle);
+ 		if (NVCV_SUCCESS != vfxErr)
+ 			return log_nverror_destroy(filter, vfxErr);
+@@ -396,6 +458,11 @@ static void *nv_background_blur_filter_create(obs_data_t *settings, obs_source_t
+ 	return nvvfx_filter_create(settings, context, S_FX_BG_BLUR);
+ }
+ 
++static void *nv_denoise_filter_create(obs_data_t *settings, obs_source_t *context)
++{
++    return nvvfx_filter_create(settings, context, S_FX_DENOISE);
++}
++
+ static void nvvfx_filter_reset(void *data, calldata_t *calldata)
+ {
+ 	struct nvvfx_data *filter = (struct nvvfx_data *)data;
+@@ -410,6 +477,8 @@ static void nvvfx_filter_reset(void *data, calldata_t *calldata)
+ 		NvVFX_DestroyEffect(filter->handle);
+ 	}
+ 	if (filter->handle_blur) {
++        if (filter->filter_id == S_FX_DENOISE && filter->stateObjectHandle)
++            NvVFX_DeallocateState(filter->handle_blur, filter->stateObjectHandle);
+ 		NvVFX_DestroyEffect(filter->handle_blur);
+ 	}
+ 	if (filter->stream) {
+@@ -423,7 +492,7 @@ static void nvvfx_filter_reset(void *data, calldata_t *calldata)
+ 		return;
+ 
+ 	/* 3. load FX */
+-	if (filter->filter_id != S_FX_BLUR) {
++	if (filter->filter_id == S_FX_AIGS || filter->filter_id == S_FX_BG_BLUR) {
+ 		vfxErr = NvVFX_SetU32(filter->handle, NVVFX_MODE, filter->mode);
+ 		if (NVCV_SUCCESS != vfxErr)
+ 			error("Error loading NVIDIA Video FX %i", vfxErr);
+@@ -435,7 +504,7 @@ static void nvvfx_filter_reset(void *data, calldata_t *calldata)
+ 			error("Error loading NVIDIA Video FX %i", vfxErr);
+ 	}
+ 	if (filter->filter_id != S_FX_AIGS) {
+-		vfxErr = NvVFX_SetF32(filter->handle_blur, NVVFX_STRENGTH, filter->strength);
++		vfxErr = NvVFX_SetF32(filter->handle_blur, NVVFX_STRENGTH, filter->filter_id == S_FX_DENOISE ? (float)filter->mode : filter->strength);
+ 		if (NVCV_SUCCESS != vfxErr)
+ 			error("Error loading NVIDIA Video FX %i", vfxErr);
+ 		/* Newly recreated handles have no bound images yet. The next
+@@ -535,9 +604,17 @@ static bool init_blur_images(struct nvvfx_data *filter)
+ 	uint32_t height = filter->height;
+ 	enum nvvfx_fx_id id = filter->filter_id;
+ 
++    bool denoise = id == S_FX_DENOISE;
++    NvCVImage_ComponentType component = denoise ? NVCV_F32 : NVCV_U8;
++    unsigned char layout = denoise ? NVCV_PLANAR : NVCV_CHUNKY;
+ 	/* 1. Create and allocate Blur BGR NvCVimage (blur FX dst) */
+-	NvCVImage_Create(width, height, NVCV_BGR, NVCV_U8, NVCV_CHUNKY, NVCV_GPU, 1, &filter->blur_BGR_dst_img);
+-	NvCVImage_Alloc(filter->blur_BGR_dst_img, width, height, NVCV_BGR, NVCV_U8, NVCV_CHUNKY, NVCV_GPU, 1);
++    NvCV_Status status;
++    if (filter->blur_BGR_dst_img)
++        status = NvCVImage_Realloc(filter->blur_BGR_dst_img, width, height, NVCV_BGR, component, layout, NVCV_GPU, 1);
++    else
++        status = NvCVImage_Create(width, height, NVCV_BGR, component, layout, NVCV_GPU, 1, &filter->blur_BGR_dst_img);
++    if (status != NVCV_SUCCESS)
++        return false;
+ 
+ 	/* 2. Create dst NvCVImage */
+ 	if (filter->RGBA_dst_img) {
+@@ -549,13 +626,26 @@ static bool init_blur_images(struct nvvfx_data *filter)
+ 
+ 	/* 3. Set input & output images for nv blur FX */
+ 	NvVFX_SetImage(filter->handle_blur, NVVFX_INPUT_IMAGE, filter->BGR_src_img);
+-	if (id != S_FX_BLUR)
++	if (id == S_FX_BG_BLUR)
+ 		NvVFX_SetImage(filter->handle_blur, NVVFX_INPUT_IMAGE_1, filter->A_dst_img);
+-	else
++	else if (!denoise)
+ 		NvVFX_SetImage(filter->handle_blur, NVVFX_INPUT_IMAGE_1, NULL);
+ 
+ 	NvVFX_SetImage(filter->handle_blur, NVVFX_OUTPUT_IMAGE, filter->blur_BGR_dst_img);
+ 
++    if (denoise) {
++        if (filter->stateObjectHandle)
++            NvVFX_DeallocateState(filter->handle_blur, filter->stateObjectHandle);
++        filter->stateObjectHandle = NULL;
++        status = NvVFX_AllocateState(filter->handle_blur, &filter->stateObjectHandle);
++        if (status != NVCV_SUCCESS) {
++            error("Error allocating denoising temporal state %i", status);
++            return false;
++        }
++        status = NvVFX_SetStateObjectHandleArray(filter->handle_blur, NVVFX_STATE, &filter->stateObjectHandle);
++        if (status != NVCV_SUCCESS)
++            return false;
++    }
+ 	if (NvVFX_Load(filter->handle_blur) != NVCV_SUCCESS) {
+ 		error("Error loading blur FX");
+ 		return false;
+@@ -576,7 +666,7 @@ static void init_images(struct nvvfx_data *filter)
+ 			goto fail;
+ 	}
+ 	/* 2. Create blur texture & associated NvCVImage */
+-	if (filter->filter_id == S_FX_BG_BLUR || filter->filter_id == S_FX_BLUR) {
++	if (filter->filter_id == S_FX_BG_BLUR || filter->filter_id == S_FX_BLUR || filter->filter_id == S_FX_DENOISE) {
+ 		if (!create_blur_texture(filter))
+ 			goto fail;
+ 	}
+@@ -584,12 +674,15 @@ static void init_images(struct nvvfx_data *filter)
+ 	if (!create_texrenders(filter))
+ 		goto fail;
+ 
++    bool denoise = filter->filter_id == S_FX_DENOISE;
++    NvCVImage_ComponentType component = denoise ? NVCV_F32 : NVCV_U8;
++    unsigned char layout = denoise ? NVCV_PLANAR : NVCV_CHUNKY;
+ 	/* 4. Create and allocate BGR NvCVImage (alpha mask FX src) */
+ 	if (filter->BGR_src_img) {
+-		NvCVImage_Realloc(filter->BGR_src_img, width, height, NVCV_BGR, NVCV_U8, NVCV_CHUNKY, NVCV_GPU, 1);
++		NvCVImage_Realloc(filter->BGR_src_img, width, height, NVCV_BGR, component, layout, NVCV_GPU, 1);
+ 	} else {
+-		NvCVImage_Create(width, height, NVCV_BGR, NVCV_U8, NVCV_CHUNKY, NVCV_GPU, 1, &filter->BGR_src_img);
+-		NvCVImage_Alloc(filter->BGR_src_img, width, height, NVCV_BGR, NVCV_U8, NVCV_CHUNKY, NVCV_GPU, 1);
++		NvCVImage_Create(width, height, NVCV_BGR, component, layout, NVCV_GPU, 1, &filter->BGR_src_img);
++		NvCVImage_Alloc(filter->BGR_src_img, width, height, NVCV_BGR, component, layout, NVCV_GPU, 1);
+ 	}
+ 
+ 	/* 5. Create and allocate Alpha NvCVimage (mask fx dst). */
+@@ -601,7 +694,7 @@ static void init_images(struct nvvfx_data *filter)
+ 	}
+ 
+ 	/* 6. Init blur images */
+-	if (filter->filter_id == S_FX_BLUR || filter->filter_id == S_FX_BG_BLUR) {
++	if (filter->filter_id == S_FX_BLUR || filter->filter_id == S_FX_BG_BLUR || filter->filter_id == S_FX_DENOISE) {
+ 		if (!init_blur_images(filter))
+ 			goto fail;
+ 	}
+@@ -643,7 +736,7 @@ static bool process_texture(struct nvvfx_data *filter)
+ 	}
+ 
+ 	/* 2. Convert to BGR. */
+-	vfxErr = NvCVImage_Transfer(filter->src_img, filter->BGR_src_img, 1.0f, process_stream, NULL);
++	vfxErr = NvCVImage_Transfer(filter->src_img, filter->BGR_src_img, id == S_FX_DENOISE ? 1.f / 255.f : 1.f, process_stream, NULL);
+ 	if (vfxErr != NVCV_SUCCESS) {
+ 		const char *errString = NvCV_GetErrorStringFromCode(vfxErr);
+ 		error("Error converting src to BGR img; error %i: %s", vfxErr, errString);
+@@ -657,7 +750,7 @@ static bool process_texture(struct nvvfx_data *filter)
+ 	}
+ 
+ 	/* 3. Run AIGS (AI Greenscreen) fx */
+-	if (id != S_FX_BLUR) {
++	if (id == S_FX_AIGS || id == S_FX_BG_BLUR) {
+ 		vfxErr = NvVFX_Run(filter->handle, SYNC);
+ 		if (vfxErr != NVCV_SUCCESS) {
+ 			const char *errString = NvCV_GetErrorStringFromCode(vfxErr);
+@@ -691,6 +784,12 @@ static bool process_texture(struct nvvfx_data *filter)
+ 	/* 5. BLUR FX */
+ 	if (id != S_FX_AIGS) {
+ 		/* 5a. Run BLUR FX except for AIGS */
++        if (id == S_FX_DENOISE && filter->denoise_reset) {
++            vfxErr = NvVFX_ResetState(filter->handle_blur, filter->stateObjectHandle);
++            if (vfxErr != NVCV_SUCCESS)
++                goto fail;
++            filter->denoise_reset = false;
++        }
+ 		vfxErr = NvVFX_Run(filter->handle_blur, SYNC);
+ 		if (vfxErr != NVCV_SUCCESS) {
+ 			const char *errString = NvCV_GetErrorStringFromCode(vfxErr);
+@@ -699,7 +798,7 @@ static bool process_texture(struct nvvfx_data *filter)
+ 				nvvfx_filter_reset(filter, NULL);
+ 		}
+ 		/* 5b. Transfer blur result to an intermediate dst [RGBA, chunky, u8] */
+-		vfxErr = NvCVImage_Transfer(filter->blur_BGR_dst_img, filter->RGBA_dst_img, 1.0f, filter->stream, NULL);
++		vfxErr = NvCVImage_Transfer(filter->blur_BGR_dst_img, filter->RGBA_dst_img, id == S_FX_DENOISE ? 255.f : 1.f, filter->stream, NULL);
+ 		if (vfxErr != NVCV_SUCCESS) {
+ 			error("Error transferring blurred to intermediate img [RGBA, chunky, u8], error %i, ", vfxErr);
+ 			goto fail;
+@@ -760,6 +859,11 @@ static void nvvfx_filter_tick(void *data, float t)
+ 	const uint32_t cx = obs_source_get_base_width(target);
+ 	const uint32_t cy = obs_source_get_base_height(target);
+ 
++    if (filter->filter_id == S_FX_DENOISE) {
++        filter->target_valid = cx >= 80 && cy >= 80 && cx <= 1920 && cy <= 1080;
++        if (!filter->target_valid)
++            return; // Unsupported resolutions bypass; never submit them to the SDK.
++    }
+ 	// initially the sizes are 0
+ 	if (!cx || !cy) {
+ 		filter->target_valid = false;
+@@ -767,7 +871,7 @@ static void nvvfx_filter_tick(void *data, float t)
+ 	}
+ 
+ 	/* minimum size supported by SDK is (512,288) */
+-	if (filter->filter_id != S_FX_BLUR) {
++	if (filter->filter_id == S_FX_AIGS || filter->filter_id == S_FX_BG_BLUR) {
+ 		filter->target_valid = cx >= 512 && cy >= 288;
+ 		if (!filter->target_valid) {
+ 			error("Size must be larger than (512,288)");
+@@ -840,6 +944,10 @@ static void draw_greenscreen_blur(struct nvvfx_data *filter, bool has_blur)
+ 
+ 	if (obs_source_process_filter_begin_with_color_space(filter->context, format, source_space,
+ 							     OBS_ALLOW_DIRECT_RENDERING)) {
++        gs_effect_set_float(gs_effect_get_param_by_name(filter->effect, "compare"), filter->compare ? 1.f : 0.f);
++        if (has_blur)
++            gs_effect_set_float(gs_effect_get_param_by_name(filter->effect, "processed_mix"),
++                                filter->filter_id == S_FX_DENOISE ? filter->strength : 1.f);
+ 		gs_effect_set_texture(filter->mask_param, filter->alpha_texture);
+ 		if (has_blur) {
+ 			gs_effect_set_texture_srgb(filter->blur_param, filter->blur_texture);
+@@ -905,7 +1013,7 @@ static void nvvfx_filter_render(void *data, gs_effect_t *effect, bool has_blur)
+ 		obs_source_get_color_space(target, OBS_COUNTOF(preferred_spaces), preferred_spaces);
+ 
+ 	enum nvvfx_fx_id id = filter->filter_id;
+-	if (id == S_FX_BLUR && (source_space == GS_CS_709_EXTENDED || source_space == GS_CS_709_SCRGB)) {
++	if ((id == S_FX_BLUR || id == S_FX_DENOISE) && (source_space == GS_CS_709_EXTENDED || source_space == GS_CS_709_SCRGB)) {
+ 		obs_source_skip_video_filter(filter->context);
+ 		return;
+ 	}
+@@ -1066,6 +1174,12 @@ static obs_properties_t *nvvfx_filter_properties(void *data)
+ {
+ 	struct nvvfx_data *filter = (struct nvvfx_data *)data;
+ 	obs_properties_t *props = obs_properties_create();
++    obs_properties_add_bool(props, "compare", "Before / after split (native output)");
++    if (filter->filter_id == S_FX_DENOISE) {
++        obs_property_t *mode = obs_properties_add_list(props, S_MODE, "Noise removal mode", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
++        obs_property_list_add_int(mode, "Preserve details", 0);
++        obs_property_list_add_int(mode, "Strong noise removal", 1);
++    }
+ 	if (filter->filter_id != S_FX_AIGS) {
+ 		obs_property_t *strength =
+ 			obs_properties_add_float_slider(props, S_STRENGTH, TEXT_MODE_BLUR_STRENGTH, 0, 1, 0.05);
+@@ -1093,6 +1207,7 @@ static obs_properties_t *nvvfx_filter_properties(void *data)
+ 
+ static void nvvfx_filter_defaults(obs_data_t *settings)
+ {
++	obs_data_set_default_bool(settings, "compare", false);
+ 	obs_data_set_default_int(settings, S_MODE, S_MODE_QUALITY);
+ 	obs_data_set_default_double(settings, S_THRESHOLDFX, S_THRESHOLDFX_DEFAULT);
+ 	obs_data_set_default_int(settings, S_PROCESSING, 1);
+@@ -1282,3 +1397,19 @@ struct obs_source_info nvidia_background_blur_filter_info = {
+ 	.video_tick = nvvfx_filter_tick,
+ 	.video_get_color_space = nvvfx_filter_get_color_space,
+ };
++
++struct obs_source_info nvidia_denoise_filter_info = {
++    .id = "nv_denoise_filter",
++    .type = OBS_SOURCE_TYPE_FILTER,
++    .output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_SRGB,
++    .get_name = nv_denoise_filter_name,
++    .create = nv_denoise_filter_create,
++    .destroy = nvvfx_filter_destroy,
++    .get_defaults = nvvfx_filter_defaults,
++    .get_properties = nvvfx_filter_properties,
++    .update = nvvfx_filter_update,
++    .filter_video = nvvfx_filter_video,
++    .video_render = nv_blur_filter_render,
++    .video_tick = nvvfx_filter_tick,
++    .video_get_color_space = nvvfx_filter_get_color_space,
++};
+-- 
+2.54.0.windows.1
+

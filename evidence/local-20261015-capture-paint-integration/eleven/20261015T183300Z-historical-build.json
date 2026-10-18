@@ -1,0 +1,27 @@
+{
+  "head": "ad2c290bb7ab1f73edc68add30fc31d35a577adc",
+  "pixelCases": 8,
+  "files": [
+    {
+      "sha256": "70B6CCC06787CF1A80F78454C19140317FF6E7099276D6232669F92CAA182D04",
+      "file": "plugins/pulsar-capture-effects/src/capture-effects.cpp"
+    },
+    {
+      "sha256": "9174C57105D4AD2C0CBE114B75721E65F7310916AF31FE9A8CCD578F4436872B",
+      "file": "plugins/pulsar-capture-effects/src/capture-effects.effect"
+    },
+    {
+      "sha256": "4969BC5F32BCBE4A1F85750DE3D53A8606C220103C4591D6CDAE987A9F46EB47",
+      "file": "plugins/pulsar-capture-effects/README.md"
+    },
+    {
+      "sha256": "6F762F1801C9BD7BC88246E93543B0EE8AE8C968BA48BE9C64004E6641C58305",
+      "file": "scripts/probe-capture-ancestor-clips.py"
+    }
+  ],
+  "worktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capture-effects",
+  "existingEffectKinds": 7,
+  "binarySha256": "60E6195DDC170E81CD93837426C29135149204873306A8DE044B72FA8A82ED32",
+  "branch": "eleven/local-20261009-capture-effects",
+  "gpuPassesAdded": 0
+}

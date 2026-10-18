@@ -69,6 +69,31 @@ The build:
 4. Configures/builds the Pulsar CMake targets against those headers/libraries.
 5. Stages the matching Qt/runtime/module resources in the rundir.
 
+`package-win.ps1` checks the native telemetry cohort before stamping or zipping.
+`scripts/check-source-telemetry-bundle.py` reads PE tables without loading libobs:
+AMD64 binaries, profiler/RAM/lease exports and every named obs.dll import used by
+the executable, WebSocket and Pulsar modules must agree. An older core missing
+`source_profiler_request_telemetry` is refused even when GetVersion advertises
+GetSourceStats. Both light and full bundles must contain the mandatory authored
+capture module `pulsar-capture-effects.dll`; checking only the modules present
+would miss a build that failed to stage it. This gate checks binary compatibility
+and required capture-module presence; the real protocol probe
+must separately prove samples and polling-lease expiry.
+The exact CI native cache also requires this module when sealing or restoring
+an artifact, so a build-only job cannot admit an incomplete runtime before packaging.
+
+```powershell
+python scripts/check-source-telemetry-bundle.py --bundle dist/pulsar-windows-x64-full-v3.0.1 --out .cache/telemetry-cohort.json
+python scripts/probe-source-telemetry.py --exe dist/pulsar-windows-x64-full-v3.0.1/bin/64bit/pulsar.exe --work-dir .cache/telemetry-probe --report .cache/telemetry-probe/result.json
+```
+
+The protocol probe reuses the existing isolated process/shutdown controller.
+It measures a color source and an animated local CEF page, stops polling to
+verify five-second lease expiry, asserts outputs remain inactive, and requires
+graceful shutdown. Its explicit work/report paths contain runtime configuration;
+never point it at Prism's active component. `--config` retains the existing
+connect-only mode for an already owned disposable runtime.
+
 **Preserve local upstream work before running this script.** Reconstructing a
 generated patched checkout can reset it. Never use a shared/dirty upstream
 tree as a scratch space for changes that have not been exported as patches.

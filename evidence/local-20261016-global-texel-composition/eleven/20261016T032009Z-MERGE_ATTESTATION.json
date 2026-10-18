@@ -1,0 +1,13 @@
+{
+  "capturedUtc": "2026-10-16T03:20:09.501970+00:00",
+  "source": "a4f465a53f1f9603e45d58930347f961dd8452db",
+  "merge": "8f23d6da612cb1eef7ee49d441afd4f5ed764b42",
+  "productTreesIdentical": true,
+  "report": "20261016T031817Z-group-composition-probe.json",
+  "passed": true,
+  "cleanShutdown": true,
+  "privatePluginSha256": "52e0c2117bc13e647c032dee4f528e58edc0c63007d3fb6a75319cb76884ffb1",
+  "privatePluginRetainedAt": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\.cache\\global-texel-composition\\qualified\\pulsar-capture-effects.dll",
+  "runtimeAdmission": "not installed",
+  "unitClosure": "Integrated code and durable evidence. Retain qualified DLL in integration cache for Solar consumer proof; remove clean owned unit worktree and integrated local branch. No foreign worktree cleanup."
+}

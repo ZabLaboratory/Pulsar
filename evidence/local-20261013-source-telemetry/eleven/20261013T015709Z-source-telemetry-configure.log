@@ -1,0 +1,326 @@
+Using cmake: C:\Program Files\CMake\bin\cmake.exe
+Preset:       windows-x64
+Source:       D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream
+ATL headers found: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.38.33130\atlmfc\include
+
+--- Applying Pulsar patches ---
+Pinned upstream commit: 25ed780b7f392a1690dfca929cd57679959cf3ad
+Root patches found:     60
+OBS-browser patches:    1
+  applying 0007-fix-win-dshow-namespace-virtual-camera-queues-by-run.patch
+Applying: fix(win-dshow): namespace virtual camera queues by runtime
+  applying 0008-use-executable-path-for-libobs-data-with-private-cwd.patch
+Applying: fix(win32): resolve libobs data from executable with private cwd
+  applying 0009-feat-libobs-add-frame-boundary-dual-lane-swaps.patch
+Applying: feat(libobs): add frame-boundary dual-lane swaps
+  applying 0010-fix-win-dshow-reject-ambiguous-queue-namespaces.patch
+Applying: fix(win-dshow): reject ambiguous queue namespaces
+  applying 0011-feat-runtime-telemetry-producer.patch
+Applying: feat(telemetry): emit correlated runtime trace boundaries
+  applying 0012-feat-libobs-add-low-latency-output-interleaving.patch
+Applying: feat(libobs): add low-latency output interleaving
+  applying 0013-perf-libobs-decouple-live-video-from-audio-watermark.patch
+Applying: perf(libobs): decouple live video from audio watermark
+  applying 0014-perf-nvenc-drain-ULL-bitstreams-immediately.patch
+Applying: perf(nvenc): bound ULL bitstream queue
+  applying 0015-perf-libobs-configurable-aux-view-cache.patch
+Applying: perf(libobs): make auxiliary view cache configurable
+  applying 0016-feat-libobs-expose-video-pipeline-stage-telemetry.patch
+Applying: feat(libobs): expose per-stage video pipeline telemetry
+  applying 0017-perf-libobs-pipeline-borrowed-preview-publication.patch
+Applying: perf(libobs): pipeline borrowed preview publication
+  applying 0018-feat-libobs-close-video-mix-stage-accounting.patch
+Applying: feat(libobs): close video mix stage accounting
+  applying 0019-perf-win-dshow-pipeline-program-return-publication.patch
+Applying: perf(win-dshow): pipeline borrowed ProgramReturn publication
+  applying 0020-perf-win-dshow-elide-unconsumed-preview-return-copies.patch
+Applying: perf(win-dshow): elide unconsumed PreviewReturn copies
+  applying 0021-perf-win-dshow-elide-unconsumed-program-return-copies.patch
+Applying: perf(win-dshow): elide idle ProgramReturn copies
+  applying 0022-fix-cmake-qt-host-tool-argument-parsing.patch
+Applying: fix(cmake): parse Qt host tool arguments correctly
+  applying 0022-perf-libobs-remove-initial-gpu-encode-frame-delay.patch
+Applying: perf(libobs): remove initial GPU encode frame delay
+  applying 0023-fix-win-dshow-atomic-return-queue.patch
+Applying: fix(win-dshow): harden latest-frame return queue
+  applying 0024-feat-win-dshow-d3d11-return-capability-skeleton.patch
+Applying: fix(pulsar): validate shared queue mapping before atomic reads
+  applying 0025-fix-win-dshow-bootstrap-consumer-gated-return-format.patch
+Applying: fix(win-dshow): bootstrap consumer-gated return formats
+  applying 0026-fix-libobs-pipeline-stats-atomic-snapshot.patch
+Applying: fix(libobs): make pipeline telemetry counters atomic
+  applying 0027-perf-win-dshow-bulk-copy-tight-nv12.patch
+Applying: perf(win-dshow): bulk-copy tightly packed NV12 returns
+  applying 0028-feat-libobs-telemetry-output-enqueue-timestamp.patch
+Applying: feat(libobs): expose output enqueue telemetry timestamp
+  applying 0029-fix-win-dshow-lease-watcher.patch
+Applying: perf(win-dshow): watch return consumer lease off frame path
+  applying 0030-feat-libobs-interleaver-mutex-wait-telemetry.patch
+Applying: perf(libobs): expose interleaver mutex wait telemetry
+  applying 0031-fix-replay-buffer-stop-without-timestamp.patch
+Applying: fix(replay): stop buffer on next packet deterministically
+  applying 0032-fix-cpu-queue-mapping-collision.patch
+Applying: fix(dshow): reject pre-existing CPU queue mappings
+  applying 0033-fix-consumer-lease-collision.patch
+Applying: fix(dshow): reject spoofed consumer lease objects
+  applying 0034-fix-d3d11-consumer-liveness.patch
+Applying: fix(d3d11): track consumer process liveness
+  applying 0035-fix-modern-cpu-queue-mapping-collision.patch
+Applying: fix(queue): reject raced existing mapping
+  applying 0036-fix-d3d11-producer-consumer-liveness.patch
+Applying: fix(d3d11): fail closed on producer consumer exit
+  applying 0037-fix-d3d11-consumer-session-cleanup.patch
+Applying: fix(d3d11): validate consumer session and cleanup
+  applying 0038-fix-d3d11-stale-registration-invalidation.patch
+Applying: fix(d3d11): invalidate stale consumer registration
+  applying 0039-fix-d3d11-invalidate-registration-before-session-loo.patch
+Applying: fix(d3d11): invalidate registration before session lookup
+  applying 0040-fix-dshow-move-registration-to-producer-owned-pipe.patch
+Applying: fix(dshow): move registration to producer-owned pipe
+  applying 0041-fix-d3d11-producer-authoritative-readonly-abi-v2.patch
+Applying: fix(d3d11): enforce producer-authoritative readonly ABI v2
+  applying 0042-feat-libobs-d3d11-direct-nt-shared-copy.patch
+Applying: feat(graphics): copy NT shared textures without wrapper
+  applying 0043-fix-d3d11-private-helper-authenticated-return.patch
+Applying: fix(win-dshow): bind return transport to private helper
+  applying 0044-fix-dshow-trace-sidecar.patch
+Applying: fix: route DirectShow trace observations through sidecar
+  applying 0045-perf-libobs-preserve-hot-lane-activation.patch
+Applying: perf(libobs): preserve activation across dual-lane swaps
+  applying 0046-fix-win-dshow-propagate-runtime-namespace-through-Ch.patch
+Applying: fix(win-dshow): propagate runtime namespace through Chromium
+  applying 0046-perf-libobs-preserve-equal-view-activation.patch
+Applying: perf(libobs): preserve equal-view activation during atomic swaps
+  applying 0047-fix-dshow-retain-equal-clock-stage-observations.patch
+Applying: fix(dshow): retain stages with equal clock readings
+  applying 0048-perf-dshow-evaluate-fresh-frame-polling.patch
+Applying: perf(dshow): evaluate bounded fresh-frame polling for ProgramReturn
+  applying 0049-fix-telemetry-encode-content-time.patch
+Applying: fix(telemetry): distinguish encoded content time from cadence CTS
+  applying 0050-perf-libobs-current-readback-content-identity.patch
+Applying: perf(libobs): evaluate current-surface readback with content identity
+  applying 0051-perf-nvenc-drain-ready-batches.patch
+Applying: perf(nvenc): drain ready batches
+  applying 0052-perf-nvenc-service-asynchronous-output.patch
+Applying: perf(nvenc): service asynchronous output
+  applying 0053-fix-libobs-current-readback-audio-alignment.patch
+Applying: fix(libobs): align current readback media time with audio
+  applying 0054-fix-libobs-gpu-error-stop-lifecycle.patch
+Applying: fix(libobs): retire GPU encoder errors outside the encode thread
+  applying 0055-perf-libobs-default-qualified-current-readback.patch
+Applying: perf(libobs): enable qualified immediate CPU readback by default
+  applying 0056-fix-libobs-auto-readback-hardware-gate.patch
+Applying: fix(libobs): require hardware for automatic current readback
+  applying 0057-feat-source-core-memory-readback.patch
+Applying: feat(libobs): expose core-owned source memory lower bound
+  applying 0058-fix-build-provision-cef-for-full-pulsar.patch
+Applying: fix(build): provision CEF for the full Pulsar browser
+  applying 0059-fix-source-telemetry-profiling-lease.patch
+Applying: fix(telemetry): expire read-owned source profiling leases
+  applying 0060-fix-nvidia-effect-initialization-and-logging.patch
+Applying: fix(nv-filters): bind blur images before loading and guard empty SDK logs
+  applying 0061-fix-nvidia-audio-zero-intensity-bypass.patch
+Applying: fix(nv-filters): guarantee audio intensity zero passes original PCM
+  applying 0062-fix-nvidia-audio-settings-worker.patch
+Applying: fix(nv-filters): reload audio settings off the real-time thread
+  applying 0063-add-nvidia-video-denoise-and-comparison.patch
+Applying: feat(nvidia): native video noise removal and same-frame comparison
+  applying 0064-add-nvidia-ar-effects-and-demand-processing.patch
+Applying: feat(nvidia): AR camera effects and demand processing
+  applying 0006-obs-browser-software-osr-and-helper.patch in obs-browser
+Applying: fix(browser): keep software OSR deterministic in Pulsar
+
+--- Configuring (headless: ENABLE_FRONTEND=OFF + ENABLE_UI=OFF + ENABLE_BROWSER=OFF) ---
+  -Full: Pulsar browser + CEF enabled; unused upstream browser not built
+  host architecture env absent: QT_HOST_PATH=D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261013-source-telemetry\upstream\.deps\obs-deps-qt6-2025-08-23-x64
+-- Selecting Windows SDK version 10.0.22621.0 to target Windows 10.0.26200.
+-- The C compiler identification is MSVC 19.44.35228.0
+-- The CXX compiler identification is MSVC 19.44.35228.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Checking for interprocedural optimization support
+-- Checking for interprocedural optimization support - available
+-- Checking for interprocedural optimization support - enabled [Release, MinSizeRel]
+-- Selecting Windows SDK version 10.0.22621.0 to target Windows 10.0.26200.
+-- The C compiler identification is MSVC 19.44.35228.0
+-- The CXX compiler identification is MSVC 19.44.35228.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x86/cl.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x86/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Checking for interprocedural optimization support
+-- Checking for interprocedural optimization support - available
+-- Checking for interprocedural optimization support - enabled [Release, MinSizeRel]
+-- Setting up Pre-Built obs-deps (x86)
+-- Downloading https://github.com/obsproject/obs-deps/releases/download/2025-08-23/windows-deps-2025-08-23-x86.zip
+-- Downloading https://github.com/obsproject/obs-deps/releases/download/2025-08-23/windows-deps-2025-08-23-x86.zip - done
+-- Setting up Pre-Built obs-deps (x86) - done
+-- Found Detours: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x86/lib/detours.lib (found version "0.0.0")
+CMake Warning (dev) at cmake/finders/FindDetours.cmake:65 (message):
+  Failed to find detours version.
+Call Stack (most recent call first):
+  plugins/win-capture/graphics-hook/CMakeLists.txt:3 (find_package)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+-- Found Vulkan: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x86/lib/vulkan-1.lib (found version "1.3.216")  missing components: glslc glslangValidator
+-- Configuring done (12.8s)
+-- Generating done (0.2s)
+-- Build files have been written to: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x86
+-- Setting up Pre-Built obs-deps (x64)
+-- Downloading https://github.com/obsproject/obs-deps/releases/download/2025-08-23/windows-deps-2025-08-23-x64.zip
+-- Downloading https://github.com/obsproject/obs-deps/releases/download/2025-08-23/windows-deps-2025-08-23-x64.zip - done
+-- Setting up Pre-Built obs-deps (x64) - done
+-- Setting up Pre-Built Qt6 (x64)
+-- Downloading https://github.com/obsproject/obs-deps/releases/download/2025-08-23/windows-deps-qt6-2025-08-23-x64.zip
+-- Downloading https://github.com/obsproject/obs-deps/releases/download/2025-08-23/windows-deps-qt6-2025-08-23-x64.zip - done
+-- Setting up Pre-Built Qt6 (x64) - done
+-- Setting up Chromium Embedded Framework (x64)
+-- Downloading https://cdn-fastly.obsproject.com/downloads/cef_binary_6533_windows_x64_v2.zip
+-- Downloading https://cdn-fastly.obsproject.com/downloads/cef_binary_6533_windows_x64_v2.zip - done
+-- Setting up Chromium Embedded Framework (x64) - done
+-- Found SIMDe: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/include (found version "0.8.2")
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
+-- Looking for pthread_create in pthreads
+-- Looking for pthread_create in pthreads - not found
+-- Looking for pthread_create in pthread
+-- Looking for pthread_create in pthread - not found
+-- Found Threads: TRUE
+-- Found FFmpeg: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avformat-61.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avutil-59.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/swscale-8.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/swresample-5.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avcodec-61.dll (found suitable version "7.1", minimum required is "6.1") found components: avformat avutil swscale swresample avcodec
+-- Found ZLIB: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/zlib.lib (found version "1.3.1")
+-- Found Uthash: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/include (found version "2.3.0")
+-- Found jansson: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/jansson.lib (found version "2.14.1")
+-- Performing Test COMPILER_HAS_DEPRECATED_ATTR
+-- Performing Test COMPILER_HAS_DEPRECATED_ATTR - Failed
+-- Performing Test COMPILER_HAS_DEPRECATED
+-- Performing Test COMPILER_HAS_DEPRECATED - Success
+-- Found OpenGL: opengl32
+-- aja: Using new libajantv2 library
+CMake Warning (dev) at cmake/finders/FindLibAJANTV2.cmake:100 (message):
+  Failed to find LibAJANTV2 version.
+Call Stack (most recent call first):
+  plugins/aja/CMakeLists.txt:10 (find_package)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+-- Found LibAJANTV2: optimized;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/ajantv2.lib;debug;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/ajantv2d.lib (found version "0.0.0")
+-- Found FFmpeg: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avcodec-61.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avfilter-10.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avdevice-61.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avutil-59.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/swscale-8.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avformat-61.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/swresample-5.dll (found suitable version "7.1", minimum required is "6.1") found components: avcodec avfilter avdevice avutil swscale avformat swresample
+-- Found FFmpeg: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avcodec-61.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avfilter-10.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avdevice-61.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avutil-59.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/swscale-8.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avformat-61.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/swresample-5.dll (found version "7.1") found components: avcodec avdevice avutil avformat
+-- Found AMF: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/include (found suitable version "1.4.36", minimum required is "1.4.29")
+-- Found FFmpeg: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avcodec-61.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avfilter-10.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avdevice-61.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avutil-59.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/swscale-8.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avformat-61.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/swresample-5.dll (found version "7.1") found components: avcodec avutil avformat
+CMake Warning (dev) at cmake/finders/FindLibspeexdsp.cmake:87 (message):
+  Failed to find Libspeexdsp version.
+Call Stack (most recent call first):
+  plugins/obs-filters/cmake/speexdsp.cmake:4 (find_package)
+  plugins/obs-filters/CMakeLists.txt:34 (include)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+-- Found Libspeexdsp: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/speexdsp.lib (found version "0.0.0")
+CMake Warning (dev) at cmake/finders/FindLibrnnoise.cmake:87 (message):
+  Failed to find Librnnoise version.
+Call Stack (most recent call first):
+  plugins/obs-filters/cmake/rnnoise.cmake:5 (find_package)
+  plugins/obs-filters/CMakeLists.txt:35 (include)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+-- Found Librnnoise: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/rnnoise.lib (found version "0.0.0")
+-- Found FFnvcodec: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/include (found suitable version "12.2", minimum required is "12")
+-- Found VPL: optimized;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/vpl.lib;debug;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/vpld.lib (Required is at least version "2.9")
+-- Found VPL: optimized;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/vpl.lib;debug;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/vpld.lib (found suitable version "2.14", minimum required is "2.9")
+-- Performing Test HAVE_STDATOMIC
+-- Performing Test HAVE_STDATOMIC - Success
+-- Found WrapAtomic: TRUE
+-- Found CURL: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/cmake/CURL/CURLConfig.cmake (found version "8.12.1-DEV")
+-- Found Libx264: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/libx264-164.dll (found version "0.164.3106")
+-- Found Freetype: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/freetype.lib (found version "2.13.3")
+CMake Warning (dev) at cmake/finders/FindDetours.cmake:65 (message):
+  Failed to find detours version.
+Call Stack (most recent call first):
+  plugins/win-capture/graphics-hook/CMakeLists.txt:3 (find_package)
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+-- Found Detours: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/detours.lib (found version "0.0.0")
+-- Found Vulkan: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/lib/vulkan-1.lib (found version "1.3.216")  missing components: glslc glslangValidator
+-- Found FFmpeg: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avcodec-61.dll;D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/.deps/obs-deps-2025-08-23-x64/bin/avutil-59.dll (found version "7.1") found components: avcodec avutil
+                      _                   _             _ _       
+                 ___ | |__  ___       ___| |_ _   _  __| (_) ___  
+                / _ \| '_ \/ __|_____/ __| __| | | |/ _` | |/ _ \ 
+               | (_) | |_) \__ \_____\__ \ |_| |_| | (_| | | (_) |
+                \___/|_.__/|___/     |___/\__|\__,_|\__,_|_|\___/ 
+
+OBS:  Application Version: 32.1.2-67-gb86ec5bc0-modified-pulsar - Build Number: 1
+==================================================================================
+
+
+------------------------       Enabled Features           ------------------------
+ - Direct3D 11 renderer
+ - NVIDIA Audio FX support
+ - NVIDIA Video FX support
+ - OpenGL renderer
+ - Plugin Support
+ - RNNoise noise suppression
+ - SpeexDSP noise suppression
+------------------------       Disabled Features          ------------------------
+ - Browser sources are not enabled by default (set CEF_ROOT_DIR and ENABLE_BROWSER)
+ - User Interface
+------------------------        Enabled Modules           ------------------------
+ - aja
+ - coreaudio-encoder
+ - decklink
+ - graphics-hook
+ - image-source
+ - libobs-d3d11
+ - libobs-winrt
+ - nv-filters
+ - obs-ffmpeg
+ - obs-filters
+ - obs-nvenc
+ - obs-outputs
+ - obs-qsv11
+ - obs-text
+ - obs-transitions
+ - obs-virtualcam-module
+ - obs-vst
+ - obs-webrtc
+ - obs-x264
+ - rtmp-services
+ - text-freetype2
+ - vlc-video
+ - win-capture
+ - win-dshow
+ - win-wasapi
+------------------------        Disabled Modules          ------------------------
+ - obs-browser
+ - obs-libfdk
+ - obs-websocket
+ - test-input
+----------------------------------------------------------------------------------
+-- Configuring done (110.9s)
+-- Generating done (2.9s)
+CMake Warning:
+  Manually-specified variables were not used by the project:
+
+    RESTREAM_CLIENTID
+    RESTREAM_HASH
+    TWITCH_CLIENTID
+    TWITCH_HASH
+    YOUTUBE_CLIENTID
+    YOUTUBE_CLIENTID_HASH
+    YOUTUBE_SECRET
+    YOUTUBE_SECRET_HASH
+
+
+-- Build files have been written to: D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261013-source-telemetry/upstream/build_x64

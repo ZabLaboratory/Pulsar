@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Private Vision mask coverage probe</title>
+    <style>
+      html, body { margin: 0; width: 322px; height: 546px; overflow: hidden; background: transparent; }
+      #vision { display: block; width: 322px; height: 546px; }
+      #legacy { position: fixed; left: -1000px; top: 0; width: 322px; height: 546px; }
+    </style>
+  </head>
+  <body>
+    <canvas id="vision" width="320" height="180"></canvas>
+    <canvas id="legacy" width="320" height="180" aria-hidden="true"></canvas>
+    <script type="module" src="/page.mjs"></script>
+  </body>
+</html>

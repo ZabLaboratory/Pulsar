@@ -30,6 +30,8 @@ goes through the vendor namespace.
 
 | Request | Inputs | Outputs |
 |---|---|---|
+| `GetNvidiaGpuUsage` | — | `available, scope: "whole-device", reason, devices` with optional measured GPU/VRAM counters; read-only driver query, no per-effect attribution. |
+| `GetNativeEffectMetrics` | `sourceName, filterName` | `available, processedFrames, lastProcessingMs, imagesAllocated, processingStopped`; native graphics-thread counters, pipeline wall-time scope. Unknown sources/unsupported filters return unavailable; no filter is created. |
 | `GetDestinations` | — | `destinations: [{id, name, kind, url, enabled, active}, ...]` |
 | `CreateDestination` | `name, kind ("rtmp_custom" \| "vod_local" \| "twitch" \| "youtube"), url, key?` | `id` (or `error`) |
 | `RemoveDestination` | `id` | `removed: bool` |

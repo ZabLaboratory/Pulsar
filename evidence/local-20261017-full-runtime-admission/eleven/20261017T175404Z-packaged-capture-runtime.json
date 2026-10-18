@@ -1,0 +1,30 @@
+{
+  "startedUtc": "2026-10-17T17:54:04.108811+00:00",
+  "passed": true,
+  "sourceHead": "0f4563c7e0fdba84f9f0ebfefd4e53da86b2e579",
+  "privateRuntime": true,
+  "runtimeInstanceId": "packaged-capture-44a4e324121f8d52",
+  "sourceChanges": "CMake staging, package presence and CI cache gate correction pending signed checkpoint",
+  "binaryHashes": {
+    "bin/64bit/pulsar.exe": "67fec80bf8d3c8d976b5f7fcfb31f4cd07cb8c185445240a815efb5d3ee563bb",
+    "bin/64bit/obs.dll": "be089be088cb7a161cd3ae34152d2aeb4a6923e57b23b2dbf0988c47c7f22c21",
+    "obs-plugins/64bit/obs-websocket.dll": "2bd6a2d2529c0a6907fb941b0b524e71e05ad2fe835c564de89ad2e965e23f0b",
+    "obs-plugins/64bit/pulsar-capture-effects.dll": "48f6d1d2691c6cc87528b5302c87dc0f52114fff7e540b2a138195ad0183cfcd",
+    "obs-plugins/64bit/pulsar-browser.dll": "603665d8e65e0c73888f8cd7300a4a1f644e96faff3b3a4e1f8c101a101bfcd2",
+    "obs-plugins/64bit/pulsar-browser-page.exe": "0540ef748f6fd643581bdceefb8b2ff583c9b5deb340d9dbeb752a5bfa20cc5d"
+  },
+  "scope": "Existing seven-effect fixed-fixture GPU pixel probe, 80 atomic appearance admissions, rotation/framing/reset/collision on the fresh full bundle; no physical capture, public stream, or installed Prism qualification.",
+  "ownedPid": 41956,
+  "pixelProof": {
+    "effects": 7,
+    "atomicAdmissions": 80,
+    "rotationAdmissions": 6,
+    "reset": true,
+    "zOrderPreserved": true,
+    "foreignCollisionPreserved": true
+  },
+  "gracefulShutdown": true,
+  "exitCode": 0,
+  "forcedKill": false,
+  "endedUtc": "2026-10-17T17:54:18.118904+00:00"
+}

@@ -1,0 +1,16 @@
+{
+  "unit": "local-20261016-global-texel-composition",
+  "base": "5ae8ca490f524cdd79bb460362d1251aaa275b61",
+  "role": "eleven",
+  "thread": "01a11a8b-8f4f-7fc2-abc4-7983042e4f63",
+  "authority": "Full remaining corrections, except transitions and scene-switch duration; current user AGENTS direct by default",
+  "scope": [
+    "plugins/pulsar-capture-effects/src/group-composition*",
+    "plugins/pulsar-capture-effects/CMakeLists.txt",
+    "plugins/pulsar-capture-effects/README.md",
+    "scripts/probe-global-texel-composition.py"
+  ],
+  "intent": "Native world-grid composition for canonical Vision global texels, full affine capture wrapper, one owner opacity, existing scene lifetime/atomic refusal fences. Explicit coordinateSpace, no implicit auto detection.",
+  "validation": "Compile against exact private OBS70a583 ABI, synthetic private native readback, all legacy native composition cases. No common runtime or public output.",
+  "limits": "Masks, non-normal group blends and effects remain open until implementation and parity proof; do not report full project completion."
+}

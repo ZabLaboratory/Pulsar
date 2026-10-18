@@ -1,0 +1,23 @@
+{"report": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T123656Z-group-composition-probe.json", "passed": false, "ownedProcessExited": true, "scratchRemoved": true, "scratchCleanupError": null}
+Traceback (most recent call last):
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-fractional-capture-box\scripts\probe-capture-framing.py", line 37, in <module>
+    native.main()
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-fractional-capture-box\scripts\probe-group-composition.py", line 1607, in main
+    report["probe"] = asyncio.run(exercise(
+                      ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mathias\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Mathias\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mathias\AppData\Local\Programs\Python\Python311\Lib\asyncio\base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-fractional-capture-box\scripts\probe-capture-framing.py", line 26, in combined
+    paint = await effects.run(config, output)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Documents\Zab\Pulsar\.worktrees\eleven-local-20261017-fractional-capture-box\scripts\probe-capture-effects.py", line 171, in run
+    assert image.getpixel(right_outside)[3]==0,(label,'right-outside',right_outside,image.getpixel(right_outside))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ('fractional-padded-transformed', 'right-outside', (594, 317), (1, 2, 8, 9))

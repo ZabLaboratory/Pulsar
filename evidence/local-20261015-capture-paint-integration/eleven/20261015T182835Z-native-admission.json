@@ -1,0 +1,1054 @@
+{
+  "startedUtc": "2026-10-15T18:28:35.328326+00:00",
+  "passed": true,
+  "provenance": {
+    "runtimeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261009-capture-effects\\build-effects\\runtime",
+    "runtimeExeSha256": "fac3466e90a744bff14ca68dac2967e5a51ecd610e9fcf1c1381f8b203299ac8",
+    "runtimeObsSha256": "fc8eb80e1104b39501e5c23113c5b2e73138334cd4c1c0f98f9e158f9cf46048",
+    "rebuiltPlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\.cache\\capture-paint-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "rebuiltPluginSha256": "c2b38fc097fab9c774ad18525ea6c52b9120940e2bc5db09c1e346adcbe09ecd",
+    "sourceCppSha256": "70b6ccc06787cf1a80f78454c19140317ff6e7099276d6232669f92caa182d04",
+    "sourceShaderSha256": "9174c57105d4ad2c0cbe114b75721e65f7310916af31fe9a8ccd578f4436872b"
+  },
+  "ownedPid": 46716,
+  "effects": {
+    "zOrderPreserved": true,
+    "foreignCollisionPreserved": true,
+    "atomicAdmissions": [
+      {
+        "index": 0,
+        "effect": "baseline",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 1,
+        "effect": "drop-shadow",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 2,
+        "effect": "inner-shadow",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 3,
+        "effect": "layer-blur",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 4,
+        "effect": "backdrop-blur",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 5,
+        "effect": "noise",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 6,
+        "effect": "texture",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 7,
+        "effect": "glass",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 8,
+        "effect": "baseline",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 9,
+        "effect": "drop-shadow",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 10,
+        "effect": "inner-shadow",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 11,
+        "effect": "layer-blur",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 12,
+        "effect": "backdrop-blur",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 13,
+        "effect": "noise",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 14,
+        "effect": "texture",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 15,
+        "effect": "glass",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 16,
+        "effect": "baseline",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 17,
+        "effect": "drop-shadow",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 18,
+        "effect": "inner-shadow",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 19,
+        "effect": "layer-blur",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 20,
+        "effect": "backdrop-blur",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 21,
+        "effect": "noise",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 22,
+        "effect": "texture",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 23,
+        "effect": "glass",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 24,
+        "effect": "baseline",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 25,
+        "effect": "drop-shadow",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 26,
+        "effect": "inner-shadow",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 27,
+        "effect": "layer-blur",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 28,
+        "effect": "backdrop-blur",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 29,
+        "effect": "noise",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 30,
+        "effect": "texture",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 31,
+        "effect": "glass",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 32,
+        "effect": "baseline",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 33,
+        "effect": "drop-shadow",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 34,
+        "effect": "inner-shadow",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 35,
+        "effect": "layer-blur",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 36,
+        "effect": "backdrop-blur",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 37,
+        "effect": "noise",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 38,
+        "effect": "texture",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 39,
+        "effect": "glass",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 40,
+        "effect": "baseline",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 41,
+        "effect": "drop-shadow",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 42,
+        "effect": "inner-shadow",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 43,
+        "effect": "layer-blur",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 44,
+        "effect": "backdrop-blur",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 45,
+        "effect": "noise",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 46,
+        "effect": "texture",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 47,
+        "effect": "glass",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 48,
+        "effect": "baseline",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 49,
+        "effect": "drop-shadow",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 50,
+        "effect": "inner-shadow",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 51,
+        "effect": "layer-blur",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 52,
+        "effect": "backdrop-blur",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 53,
+        "effect": "noise",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 54,
+        "effect": "texture",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 55,
+        "effect": "glass",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 56,
+        "effect": "baseline",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 57,
+        "effect": "drop-shadow",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 58,
+        "effect": "inner-shadow",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 59,
+        "effect": "layer-blur",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 60,
+        "effect": "backdrop-blur",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 61,
+        "effect": "noise",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 62,
+        "effect": "texture",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 63,
+        "effect": "glass",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 64,
+        "effect": "baseline",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 65,
+        "effect": "drop-shadow",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 66,
+        "effect": "inner-shadow",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 67,
+        "effect": "layer-blur",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 68,
+        "effect": "backdrop-blur",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 69,
+        "effect": "noise",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 70,
+        "effect": "texture",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 71,
+        "effect": "glass",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 72,
+        "effect": "baseline",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 73,
+        "effect": "drop-shadow",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 74,
+        "effect": "inner-shadow",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 75,
+        "effect": "layer-blur",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      },
+      {
+        "index": 76,
+        "effect": "backdrop-blur",
+        "padding": 0,
+        "size": [
+          320.0,
+          180.0
+        ]
+      },
+      {
+        "index": 77,
+        "effect": "noise",
+        "padding": 20,
+        "size": [
+          360.0,
+          220.0
+        ]
+      },
+      {
+        "index": 78,
+        "effect": "texture",
+        "padding": 60,
+        "size": [
+          440.0,
+          300.0
+        ]
+      },
+      {
+        "index": 79,
+        "effect": "glass",
+        "padding": 120,
+        "size": [
+          560.0,
+          420.0
+        ]
+      }
+    ],
+    "rotationAdmissions": [
+      {
+        "angle": -90,
+        "transform": {
+          "alignment": 0,
+          "boundsAlignment": 0,
+          "boundsHeight": 0.0,
+          "boundsType": "OBS_BOUNDS_NONE",
+          "boundsWidth": 0.0,
+          "cropBottom": 0,
+          "cropLeft": 0,
+          "cropRight": 0,
+          "cropToBounds": false,
+          "cropTop": 0,
+          "height": 300.0,
+          "positionX": 660.0,
+          "positionY": 390.0,
+          "rotation": -90.0,
+          "scaleX": 1.0,
+          "scaleY": 1.0,
+          "sourceHeight": 300.0,
+          "sourceWidth": 440.0,
+          "width": 440.0
+        },
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-rotation-minus-90.png"
+      },
+      {
+        "angle": -35,
+        "transform": {
+          "alignment": 0,
+          "boundsAlignment": 0,
+          "boundsHeight": 0.0,
+          "boundsType": "OBS_BOUNDS_NONE",
+          "boundsWidth": 0.0,
+          "cropBottom": 0,
+          "cropLeft": 0,
+          "cropRight": 0,
+          "cropToBounds": false,
+          "cropTop": 0,
+          "height": 300.0,
+          "positionX": 660.0,
+          "positionY": 390.0,
+          "rotation": -35.0,
+          "scaleX": 1.0,
+          "scaleY": 1.0,
+          "sourceHeight": 300.0,
+          "sourceWidth": 440.0,
+          "width": 440.0
+        },
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-rotation-minus-35.png"
+      },
+      {
+        "angle": 30,
+        "transform": {
+          "alignment": 0,
+          "boundsAlignment": 0,
+          "boundsHeight": 0.0,
+          "boundsType": "OBS_BOUNDS_NONE",
+          "boundsWidth": 0.0,
+          "cropBottom": 0,
+          "cropLeft": 0,
+          "cropRight": 0,
+          "cropToBounds": false,
+          "cropTop": 0,
+          "height": 300.0,
+          "positionX": 660.0,
+          "positionY": 390.0,
+          "rotation": 30.0,
+          "scaleX": 1.0,
+          "scaleY": 1.0,
+          "sourceHeight": 300.0,
+          "sourceWidth": 440.0,
+          "width": 440.0
+        },
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-rotation-30.png"
+      },
+      {
+        "angle": 90,
+        "transform": {
+          "alignment": 0,
+          "boundsAlignment": 0,
+          "boundsHeight": 0.0,
+          "boundsType": "OBS_BOUNDS_NONE",
+          "boundsWidth": 0.0,
+          "cropBottom": 0,
+          "cropLeft": 0,
+          "cropRight": 0,
+          "cropToBounds": false,
+          "cropTop": 0,
+          "height": 300.0,
+          "positionX": 660.0,
+          "positionY": 390.0,
+          "rotation": 90.0,
+          "scaleX": 1.0,
+          "scaleY": 1.0,
+          "sourceHeight": 300.0,
+          "sourceWidth": 440.0,
+          "width": 440.0
+        },
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-rotation-90.png"
+      },
+      {
+        "angle": 180,
+        "transform": {
+          "alignment": 0,
+          "boundsAlignment": 0,
+          "boundsHeight": 0.0,
+          "boundsType": "OBS_BOUNDS_NONE",
+          "boundsWidth": 0.0,
+          "cropBottom": 0,
+          "cropLeft": 0,
+          "cropRight": 0,
+          "cropToBounds": false,
+          "cropTop": 0,
+          "height": 300.0,
+          "positionX": 660.0,
+          "positionY": 390.0,
+          "rotation": 180.0,
+          "scaleX": 1.0,
+          "scaleY": 1.0,
+          "sourceHeight": 300.0,
+          "sourceWidth": 440.0,
+          "width": 440.0
+        },
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-rotation-180.png"
+      },
+      {
+        "angle": 0,
+        "transform": {
+          "alignment": 5,
+          "boundsAlignment": 0,
+          "boundsHeight": 0.0,
+          "boundsType": "OBS_BOUNDS_NONE",
+          "boundsWidth": 0.0,
+          "cropBottom": 0,
+          "cropLeft": 0,
+          "cropRight": 0,
+          "cropToBounds": false,
+          "cropTop": 0,
+          "height": 300.0,
+          "positionX": 440.0,
+          "positionY": 240.0,
+          "rotation": 0.0,
+          "scaleX": 1.0,
+          "scaleY": 1.0,
+          "sourceHeight": 300.0,
+          "sourceWidth": 440.0,
+          "width": 440.0
+        },
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-rotation-0.png"
+      }
+    ],
+    "effects": [
+      {
+        "kind": "drop-shadow",
+        "difference": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            255
+          ]
+        ],
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-drop-shadow.png"
+      },
+      {
+        "kind": "inner-shadow",
+        "difference": [
+          [
+            0,
+            255
+          ],
+          [
+            0,
+            255
+          ],
+          [
+            0,
+            255
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-inner-shadow.png"
+      },
+      {
+        "kind": "layer-blur",
+        "difference": [
+          [
+            0,
+            203
+          ],
+          [
+            0,
+            199
+          ],
+          [
+            0,
+            165
+          ],
+          [
+            0,
+            159
+          ]
+        ],
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-layer-blur.png"
+      },
+      {
+        "kind": "backdrop-blur",
+        "difference": [
+          [
+            0,
+            142
+          ],
+          [
+            0,
+            142
+          ],
+          [
+            0,
+            19
+          ],
+          [
+            0,
+            165
+          ]
+        ],
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-backdrop-blur.png"
+      },
+      {
+        "kind": "noise",
+        "difference": [
+          [
+            0,
+            179
+          ],
+          [
+            0,
+            179
+          ],
+          [
+            0,
+            179
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-noise.png"
+      },
+      {
+        "kind": "texture",
+        "difference": [
+          [
+            0,
+            189
+          ],
+          [
+            0,
+            186
+          ],
+          [
+            0,
+            158
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-texture.png"
+      },
+      {
+        "kind": "glass",
+        "difference": [
+          [
+            0,
+            255
+          ],
+          [
+            0,
+            255
+          ],
+          [
+            0,
+            255
+          ],
+          [
+            0,
+            255
+          ]
+        ],
+        "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-capture-paint-integration\\evidence\\local-20261015-capture-paint-integration\\eleven\\20261015T182852Z-86d318f45a-glass.png"
+      }
+    ],
+    "reset": true,
+    "scope": "GPU fixed-fixture pixels and 80 atomic admissions; not physical device availability"
+  },
+  "ownedProcessExited": true,
+  "scratchRemoved": true,
+  "finishedUtc": "2026-10-15T18:29:06.355664+00:00",
+  "limits": "Synthetic GPU fixtures only; external runtime dependencies; no full package, physical capture, arbitrary group mask, live, recording or transition proof"
+}

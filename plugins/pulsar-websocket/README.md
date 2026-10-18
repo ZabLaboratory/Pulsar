@@ -64,6 +64,11 @@ See the [failure runbook](../../docs/runbooks/diagnose-a-failed-go-live.md).
 The frontend callback table is installed before this module loads, so
 event subscriptions have a live owner. Teardown stops request/event admission
 and drains active callbacks before libobs/frontend state is released.
+The frontend sends `OBS_FRONTEND_EVENT_SCRIPTING_SHUTDOWN` before
+`OBS_FRONTEND_EVENT_EXIT`. `EventHandler` runs its exit cleanup once across
+those events, then removes its frontend callback during EXIT while the callback
+table is still installed. Its later module-unload destructor is idempotent and
+does not call the frontend API after the table has been removed.
 
 `src/websocketserver/` owns transport, `src/requesthandler/` baseline
 requests, `src/eventhandler/` libobs-to-v5 events, `Config.cpp`
@@ -96,6 +101,24 @@ allocations. Non-Windows returns null. Reads do not activate inactive sources.
 Each valid read renews a five-second CPU/GPU profiling lease (patch 0059).
 When polling stops, the render thread expires that lease and releases profiler
 samples/timers. Explicit resource-trace profiling keeps its independent policy.
+On Windows, an overlay using an older libobs without the lease API keeps the
+WebSocket plugin loadable and returns `NotReady` with
+`SOURCE_TELEMETRY_REQUIRES_UPDATED_LIBOBS` for this request. It never enables
+permanent profiling as a compatibility fallback.
+Native packaging now rejects that mixed cohort before stamping a bundle:
+`scripts/check-source-telemetry-bundle.py` checks PE exports and module imports;
+`scripts/probe-source-telemetry.py --exe ... --work-dir ... --report ...`
+verifies color/CEF samples, source-local RAM, idle lease expiry and graceful
+shutdown on an isolated runtime without starting Stream or Record. See the
+[development guide](../../docs/DEVELOPMENT.md) for complete commands and limits.
 `cpuTickMaxMs`, `cpuRenderFirstPassMaxMs` and `gpuRenderFirstPassMaxMs` report
 individual tick/first-render maxima. They are not combined per-frame maxima for
 the summed CPU/GPU average costs.
+
+Screenshot requests refuse inputs without video dimensions before allocating
+D3D11 resources, including width-only and height-only requests. Computed dimensions
+are bounded by D3D11 texture limits; image/render/staging allocation failures
+return the existing processing failure without dereferencing null resources.
+`scripts/probe-source-screenshot.py --exe <isolated-copy> --output <explicit-dir>`
+verifies unavailable/valid sources and modern filter round-trips with synthetic
+inputs, no recording, and graceful shutdown.

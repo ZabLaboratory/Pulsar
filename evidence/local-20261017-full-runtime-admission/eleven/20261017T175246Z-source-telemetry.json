@@ -1,0 +1,122 @@
+{
+  "schema": "pulsar.source-telemetry-proof.v1",
+  "privateRuntime": true,
+  "passed": true,
+  "samples": [
+    {
+      "available": false,
+      "cpuMs": null,
+      "cpuRenderFirstPassMaxMs": null,
+      "cpuTickMaxMs": null,
+      "frameBudgetMs": 16.666666666666668,
+      "gpuMs": null,
+      "gpuRenderFirstPassMaxMs": null,
+      "ramBytes": 2752,
+      "ramScope": "core-allocations-lower-bound",
+      "showing": true
+    },
+    {
+      "available": true,
+      "cpuMs": 0.01909,
+      "cpuRenderFirstPassMaxMs": 0.0373,
+      "cpuTickMaxMs": 0.0023,
+      "frameBudgetMs": 16.666666666666668,
+      "gpuMs": 0.003557,
+      "gpuRenderFirstPassMaxMs": 0.00512,
+      "ramBytes": 2752,
+      "ramScope": "core-allocations-lower-bound",
+      "showing": true
+    },
+    {
+      "available": true,
+      "cpuMs": 0.0186,
+      "cpuRenderFirstPassMaxMs": 0.0373,
+      "cpuTickMaxMs": 0.0023,
+      "frameBudgetMs": 16.666666666666668,
+      "gpuMs": 0.003699,
+      "gpuRenderFirstPassMaxMs": 0.00512,
+      "ramBytes": 2752,
+      "ramScope": "core-allocations-lower-bound",
+      "showing": true
+    },
+    {
+      "available": true,
+      "cpuMs": 0.017637,
+      "cpuRenderFirstPassMaxMs": 0.0373,
+      "cpuTickMaxMs": 0.0023,
+      "frameBudgetMs": 16.666666666666668,
+      "gpuMs": 0.00368,
+      "gpuRenderFirstPassMaxMs": 0.00512,
+      "ramBytes": 2752,
+      "ramScope": "core-allocations-lower-bound",
+      "showing": true
+    }
+  ],
+  "browserSamples": [
+    {
+      "available": false,
+      "cpuMs": null,
+      "cpuRenderFirstPassMaxMs": null,
+      "cpuTickMaxMs": null,
+      "frameBudgetMs": 16.666666666666668,
+      "gpuMs": null,
+      "gpuRenderFirstPassMaxMs": null,
+      "ramBytes": 199360,
+      "ramScope": "core-allocations-lower-bound",
+      "showing": true
+    },
+    {
+      "available": true,
+      "cpuMs": 0.012249,
+      "cpuRenderFirstPassMaxMs": 0.0549,
+      "cpuTickMaxMs": 0.1799,
+      "frameBudgetMs": 16.666666666666668,
+      "gpuMs": 0.00632,
+      "gpuRenderFirstPassMaxMs": 0.008192,
+      "ramBytes": 199360,
+      "ramScope": "core-allocations-lower-bound",
+      "showing": true
+    },
+    {
+      "available": true,
+      "cpuMs": 0.012201,
+      "cpuRenderFirstPassMaxMs": 0.0549,
+      "cpuTickMaxMs": 0.1799,
+      "frameBudgetMs": 16.666666666666668,
+      "gpuMs": 0.006397,
+      "gpuRenderFirstPassMaxMs": 0.008192,
+      "ramBytes": 199360,
+      "ramScope": "core-allocations-lower-bound",
+      "showing": true
+    },
+    {
+      "available": true,
+      "cpuMs": 0.012033,
+      "cpuRenderFirstPassMaxMs": 0.0549,
+      "cpuTickMaxMs": 0.1799,
+      "frameBudgetMs": 16.666666666666668,
+      "gpuMs": 0.006335,
+      "gpuRenderFirstPassMaxMs": 0.008192,
+      "ramBytes": 199360,
+      "ramScope": "core-allocations-lower-bound",
+      "showing": true
+    }
+  ],
+  "afterIdle": {
+    "available": false,
+    "cpuMs": null,
+    "cpuRenderFirstPassMaxMs": null,
+    "cpuTickMaxMs": null,
+    "frameBudgetMs": 16.666666666666668,
+    "gpuMs": null,
+    "gpuRenderFirstPassMaxMs": null,
+    "ramBytes": 2752,
+    "ramScope": "core-allocations-lower-bound",
+    "showing": true
+  },
+  "streamActive": false,
+  "recordingActive": false,
+  "gracefulShutdown": true,
+  "exitCode": 0,
+  "forcedKill": false
+}

@@ -1,0 +1,13 @@
+# Native reset stability checkpoint
+
+The latest exact workload run completed successfully once. It rendered for 20.000 seconds at 1920×1080, produced a 1,200-frame delta at 60.000002 fps, recommitted generation 2, and received an accepted `ResetGroupComposition` response in 0.297 seconds. The reset trace reached its final `delete-end` phase. Host PID 26836 exited with code 0; shutdown was not forced.
+
+This is one successful sample of an intermittent issue, not a root-cause resolution. The reset did not stall, so the render-stall trigger wrote no minidump and the live mutex collector did not run. No owner or lock-cycle conclusion follows from this run. A second run was not started after the D: cleanup priority arrived.
+
+The run used the retained qualified plugin DLL (`efb62a4996a7962fa65b7a28d5cc444aba07d6c21aea67a9e476a89778ae2dfa`) and shutdown helper (`f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff`) from the prior private runtime. No plugin build or shared runtime install occurred. The current plugin-build cache held a different DLL hash and was left untouched. The run report records the actual CMake source checkout at `70a58302435308e609e0b1114efe3ef402f810b7`, distinguishes the clean review checkout at `6328ff8b3c29f10f29b7e1fad75f170efc41e198`, and verifies the retained `obs.lib` hash.
+
+The live owner probe now discovers thread IDs from the exact pthread wait-site stack witness rather than using historical IDs. It groups up to eight candidate threads by at most two distinct mutex addresses and limits live reads to 72 bytes per mutex (144 bytes total). Its source-layout gate deliberately reports owners as unknown for normal `kind=0` mutexes. Offline derivation against the earlier dump found three historical waiters grouped on two mutex addresses; this validates address discovery only and is not current live ownership evidence.
+
+Validation completed before the run: Python AST parsing of the runner and collector, runner `--help`, historical-dump `--derive-only --discover-waiters` (no process access), and `git diff --check`. The exact live run itself passed its rendering, generation replacement, reset, and clean-exit checks. No transition, readiness, switch duration, build, or cleanup was touched.
+
+Durable run artifacts are the same-stamp `20261017T164707Z-reset-exact.json`, `20261017T164707Z-reset-exact-host-log.txt`, and four PNGs in this evidence directory. The private staged runtime remains at `.cache/native-reset-stability/private-runtime-exact-20261017T164707Z`; its atlas is a generated cache artifact. Preserve the qualified upstream build/runtime cache and its exact source checkouts if the owner-capture run is resumed later.

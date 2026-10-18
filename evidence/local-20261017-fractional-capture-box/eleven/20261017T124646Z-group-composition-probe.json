@@ -1,0 +1,2409 @@
+{
+  "startedUtc": "2026-10-17T12:46:46.260252+00:00",
+  "passed": true,
+  "browserPreShutdownFixture": {
+    "enabled": true,
+    "mode": "private-test-helper-no-browser-source-fence",
+    "browserModulesInRuntime": [],
+    "helperCheck": "enumerates OBS sources when the host requests the browser fence and returns success only when no browser_source/browser_source_v2 exists",
+    "cefShutdownExercised": false
+  },
+  "hostExecutable": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\.cache\\fractional-capture-box\\private-runtime-6962c7d258e946f4a6b415eb9f86c576\\runtime\\bin\\64bit\\pulsar.exe",
+    "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973",
+    "copiedFromPrivateBuild": false
+  },
+  "provenance": {
+    "runtimeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo",
+    "runtimeExeSha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973",
+    "runtimeObsSha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1",
+    "privateCapturePlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\.cache\\fractional-capture-box-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+    "privateCapturePluginSha256": "861ce7b3edee06bbbc505a0cad961d6f4368ef77037d72ec3bb6eb3d7bb8e903",
+    "privateWebsocketPlugin": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+    "privateWebsocketPluginSha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b",
+    "privateGraphicsRemoveHelper": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\pulsar-private-build\\plugins\\pulsar-capture-effects\\RelWithDebInfo\\z-group-composition-shutdown-test-helper.dll",
+    "privateGraphicsRemoveHelperSha256": "f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff",
+    "graphicsRemoveHelperPurpose": "test-only module calls obs_source_remove within an OBS graphics task and queues a second removal during module unload after stop_video",
+    "jsonBridgeSource": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\plugins\\pulsar-websocket\\src\\utils\\Json.cpp",
+    "jsonBridgeSourceSha256": "e40f65258346441c4435928e46c929ba20b8e0eabcc9a8334f6edfa538fadc0f",
+    "jsonBridgeBuiltFrom": "the supplied private obs-websocket.dll, built by this unit from this checkout"
+  },
+  "upstreamShutdownContract": {
+    "revision": "70a58302435308e609e0b1114efe3ef402f810b7",
+    "obsSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_shutdown:1477; stop_video:1512; module unload loop:1517",
+      "contract": "the graphics video thread is stopped and joined before module unload callbacks"
+    },
+    "graphicsTaskSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-video.c",
+      "sha256": "1fa1ede0abaa100b3362dd9fefee4fdfbb77a63afd3ef73989c17e993fd38512",
+      "locations": "execute_graphics_tasks:1024; task execution:1216; loop stop check:1248",
+      "contract": "graphics tasks are executed before the loop checks whether to exit; final-boundary races are handled by the plugin-owned pending-event set"
+    },
+    "queueSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_queue_task:3518-3544",
+      "contract": "same-task-thread callbacks execute inline; otherwise graphics tasks enter the queue, so module unload cannot wait on a stopped graphics worker"
+    },
+    "videoTaskReleaseSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs.c",
+      "sha256": "da13fe70b29028846b53b20fa0bbd67beb69dd08fdb18a28a3f30cf8ad65ad56",
+      "locations": "obs_shutdown module unload loop:1516-1528; obs_free_video/deque_free(video.tasks):909-950, called at 1534",
+      "contract": "graphics tasks enqueued after stop_video cannot execute; after module unload the video task deque is freed without invoking the callbacks, so payload ownership must be discharged by the plugin before the queue storage is released"
+    },
+    "moduleListSource": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-module.c",
+      "sha256": "175abd54c06153b75c893162522ce95086e509dbf9f46864ac71c7f1b483e6ae",
+      "locations": "obs_open_module prepends at 181-198; free_module:777-817; obs_shutdown:1516-1528",
+      "contract": "the module list is prepended on successful load and unloaded from its head; the runtime probe records load and unload marker order instead of assuming file enumeration order"
+    },
+    "globalSourceRemoveSignal": {
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout\\libobs\\obs-internal.h",
+      "sha256": "bb79629027174c25ba262d17ca00956308346f7626f62ecd889ec27d5ab6057e",
+      "locations": "obs_source_dosignal:1100-1111",
+      "contract": "private sources intentionally omit global source_remove; the private helper removes its retained synthetic source then forwards the same source pointer through the global source_remove handler so the plugin's actual listener queues an event after stop_video without registering an input for frontend cleanup"
+    }
+  },
+  "ownedPid": 49444,
+  "syntheticOnlyBootstrap": {
+    "desktopAudioDeviceId": "pulsar-synthetic-test-no-device",
+    "microphoneConfigured": false,
+    "processAudioConfigured": false,
+    "initializedWasapiDevices": [],
+    "browserModulesInRuntime": [],
+    "browserPreShutdownFixture": "test-only no-browser source assertion",
+    "result": "no WASAPI endpoint initialized during private bootstrap"
+  },
+  "probe": {
+    "scene": "native-group-proof-7a04c03fe0",
+    "runtimeInstanceId": "group-proof-10fcb6c581c449a79df2f2eb8b5daaf0",
+    "generation": 2,
+    "planHash": "a03d4761780d4ea112521132a8c122d873e760f362a7a01dadcf000ac96b0fcc",
+    "sceneItemIds": {
+      "red": 1,
+      "blue": 2
+    },
+    "appearanceWrapper": {
+      "sceneName": "native-appearance-7a04c03fe0",
+      "sourceIsNestedScene": true,
+      "stagingSceneItemEnabled": false,
+      "authoredCaptureVisible": true
+    },
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "overlapPixel": [
+      127,
+      0,
+      0,
+      127
+    ],
+    "expectedGroupOpacityAlpha": 128,
+    "colorSourceV3Convention": {
+      "redInputReportedRgb": [
+        0,
+        0,
+        255
+      ],
+      "blueInputReportedRgb": [
+        255,
+        0,
+        0
+      ]
+    },
+    "sourcePixels": {
+      "red": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "blue": [
+        255,
+        0,
+        0,
+        255
+      ]
+    },
+    "malformedNumericArray": {
+      "response": {
+        "error": "invalid-affine: expected named affine object",
+        "ok": false
+      },
+      "pixelsUnchanged": true,
+      "reason": "The actual obs-websocket bridge preserves only object entries inside arrays."
+    },
+    "unsafeJsonIntegers": {
+      "generationResponse": {
+        "error": "invalid-generation: generation must be a positive integer",
+        "ok": false
+      },
+      "generationPixelsUnchanged": true,
+      "sceneItemIdResponse": {
+        "error": "invalid-capture: sceneItemId must be positive",
+        "ok": false
+      },
+      "sceneItemIdPixelsUnchanged": true,
+      "maximumSafeInteger": 9007199254740991
+    },
+    "successiveCommit": {
+      "generation": 2,
+      "planHash": "03ed33347649d1e8bc8f36097a95213dc6525a39d4e4493f83dd3b4392adadb7",
+      "overlapPixel": [
+        0,
+        0,
+        191,
+        191
+      ],
+      "expectedGroupOpacityAlpha": 191
+    },
+    "reset": {
+      "generation": 2,
+      "ok": true,
+      "reset": true
+    },
+    "restoredPixel": [
+      0,
+      0,
+      255,
+      255
+    ],
+    "translatedLocalOpacity": {
+      "sourceDimensions": [
+        64,
+        64
+      ],
+      "translationX": 256,
+      "opacity": 0.5,
+      "sampleAt": [
+        288,
+        32
+      ],
+      "pixel": [
+        0,
+        0,
+        127,
+        127
+      ],
+      "sourcePixel": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "reset": {
+        "generation": 1,
+        "ok": true,
+        "reset": true
+      },
+      "stagingVisibilityRestored": false
+    },
+    "solarBand": {
+      "scene": "native-solar-band-7a04c03fe0",
+      "sceneItemId": 2,
+      "sourceInput": "image_source",
+      "sourceDimensions": [
+        1920,
+        1080
+      ],
+      "sourceSceneItemEnabledBefore": false,
+      "sourceSceneItemEnabledAfterReset": false,
+      "legacyVisibleItemId": 1,
+      "legacyVisibleBefore": true,
+      "legacyVisibleAfterCommit": false,
+      "legacyVisibleAfterReset": true,
+      "legacyPixelBefore": [
+        208,
+        32,
+        90,
+        255
+      ],
+      "legacyPixelAfterReset": [
+        208,
+        32,
+        90,
+        255
+      ],
+      "bands": [
+        17,
+        18
+      ],
+      "sameSceneItemReused": true,
+      "cropPixels": [
+        {
+          "left": 700,
+          "top": 350,
+          "right": 1160,
+          "bottom": 670
+        },
+        {
+          "left": 900,
+          "top": 350,
+          "right": 960,
+          "bottom": 670
+        }
+      ],
+      "ownerLocalRects": [
+        {
+          "x": 30,
+          "y": 20,
+          "width": 60,
+          "height": 60
+        },
+        {
+          "x": 130,
+          "y": 20,
+          "width": 60,
+          "height": 60
+        }
+      ],
+      "ownerAffine": {
+        "m00": 1,
+        "m01": 0,
+        "tx": 200,
+        "m10": 0,
+        "m11": 1,
+        "ty": 100
+      },
+      "sampleSceneCoordinates": [
+        [
+          260,
+          150
+        ],
+        [
+          360,
+          150
+        ]
+      ],
+      "sourcePixels": {
+        "red": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "green": [
+          0,
+          255,
+          0,
+          255
+        ]
+      },
+      "compositedPixels": {
+        "red": [
+          255,
+          0,
+          0,
+          255
+        ],
+        "green": [
+          0,
+          255,
+          0,
+          255
+        ]
+      },
+      "invalidCrop": {
+        "error": "invalid-crop: crop removes source or dimensions are unknown",
+        "ok": false
+      },
+      "invalidCropPixelsUnchanged": true,
+      "invalidRect": {
+        "error": "invalid-band-rect: atlas page rectangle must fit its declared coordinate space bounds",
+        "ok": false
+      },
+      "invalidRectPixelsUnchanged": true,
+      "duplicateBand": {
+        "error": "duplicate-solar-band: 17",
+        "ok": false
+      },
+      "duplicateBandPixelsUnchanged": true,
+      "replacementSetMismatchSameHash": {
+        "error": "stale-generation: native-solar-band-7a04c03fe0",
+        "ok": false
+      },
+      "replacementSetMismatchPixelsUnchanged": true,
+      "replacementSetMismatchChangedHash": {
+        "error": "stale-generation: native-solar-band-7a04c03fe0",
+        "ok": false
+      },
+      "replacementSetMismatchChangedHashPixelsUnchanged": true,
+      "unsupportedMask": {
+        "error": "unsupported-mask: coverage must be materialized before group mutation",
+        "ok": false
+      },
+      "unsupportedMaskPixelsUnchanged": true,
+      "reset": {
+        "generation": 1,
+        "ok": true,
+        "reset": true
+      },
+      "resetRestoresLegacyPixels": true,
+      "staleAfterReset": {
+        "error": "stale-generation: native-solar-band-7a04c03fe0",
+        "ok": false
+      },
+      "staleReplayPreservesLegacyPixels": true
+    },
+    "mixedComposition": {
+      "scene": "native-mixed-composition-7a04c03fe0",
+      "childrenInPaintOrder": [
+        "solarBand:31",
+        "capture:green",
+        "solarBand:32",
+        "capture:green@0.25",
+        "capture:green@0.75",
+        "group:rotated"
+      ],
+      "sameCaptureSceneItemReused": true,
+      "captureAndBandOverlap": {
+        "scenePoint": [
+          260,
+          150
+        ],
+        "pixel": [
+          0,
+          127,
+          0,
+          127
+        ],
+        "expectedAlphaAfterGroupOpacity": [
+          127,
+          128
+        ],
+        "groupOpacity": 0.5,
+        "captureAuthoredVisibleWhileSourceSceneItemDisabled": true
+      },
+      "repeatedCaptureOccurrences": [
+        {
+          "localOpacity": 0.25,
+          "pixel": [
+            0,
+            32,
+            0,
+            32
+          ],
+          "expectedAlphaAfterGroupOpacity": [
+            31,
+            32
+          ],
+          "scenePoint": [
+            532,
+            282
+          ]
+        },
+        {
+          "localOpacity": 0.75,
+          "pixel": [
+            0,
+            95,
+            0,
+            95
+          ],
+          "expectedAlphaAfterGroupOpacity": [
+            95,
+            96
+          ],
+          "scenePoint": [
+            632,
+            282
+          ]
+        }
+      ],
+      "nestedGroup": {
+        "affine": {
+          "m00": 0,
+          "m01": -1,
+          "tx": 600,
+          "m10": 1,
+          "m11": 0,
+          "ty": 250
+        },
+        "parentTranslation": {
+          "m00": 1,
+          "m01": 0,
+          "tx": 200,
+          "m10": 0,
+          "m11": 1,
+          "ty": 100
+        },
+        "sourcePixel": [
+          0,
+          128,
+          255,
+          255
+        ],
+        "sourcePixelAfterGroupOpacity": [
+          0,
+          64,
+          128,
+          127
+        ],
+        "expectedScenePixelBounds": [
+          764,
+          370,
+          780,
+          386
+        ],
+        "observedScenePixelBounds": [
+          764,
+          370,
+          780,
+          386
+        ]
+      },
+      "replacementItems": [
+        1,
+        3,
+        4
+      ],
+      "resetRestoresLegacyAndStagingVisibility": true,
+      "reset": {
+        "generation": 1,
+        "ok": true,
+        "reset": true
+      }
+    },
+    "sourceRemovalLifecycle": {
+      "removeInput": {
+        "removedInput": "native-remove-input-7a04c03fe0",
+        "response": {},
+        "compositedPixel": [
+          0,
+          255,
+          0,
+          255
+        ],
+        "restored": {
+          "attempts": 2,
+          "pixel": [
+            208,
+            90,
+            42,
+            255
+          ],
+          "remainingSceneItemIds": [
+            1
+          ],
+          "legacyVisible": true
+        }
+      },
+      "graphicsTaskSourceRemove": {
+        "sourceName": "native-graphics-remove-input-7a04c03fe0",
+        "response": {
+          "executedOnGraphicsTask": true,
+          "ok": true,
+          "removedSourceUuid": "2e52638a-2fd1-4ef9-bc49-f3e9c1f08da8"
+        },
+        "restored": {
+          "attempts": 1,
+          "pixel": [
+            208,
+            90,
+            42,
+            255
+          ],
+          "remainingSceneItemIds": [
+            1
+          ],
+          "legacyVisible": true
+        },
+        "executedOnGraphicsTask": true
+      },
+      "sameNameSceneRecreation": {
+        "oldSceneUuid": "10deb2ec-d450-463c-9116-33dfbb8d90dd",
+        "newSceneUuid": "b7bd810e-e752-4bb1-88dc-23f02bbb1550",
+        "differentUuid": true,
+        "newSceneGenerationOneCommit": {
+          "generation": 1,
+          "ok": true,
+          "planHash": "bd633a08ef23ee9d184de54b41e1f8c20990501d26ad44be86a8a50c0ad50b18"
+        },
+        "readbackPixel": [
+          0,
+          255,
+          0,
+          255
+        ],
+        "reset": {
+          "generation": 1,
+          "ok": true,
+          "reset": true
+        }
+      },
+      "activeCompositionAtModuleUnload": {
+        "scene": "native-unload-active-7a04c03fe0",
+        "generation": 1,
+        "leftActiveForShutdown": true
+      },
+      "sourceRemovalArmedForModuleUnload": {
+        "ok": true,
+        "sourceName": "native-pending-unload-7a04c03fe0",
+        "sourceUuid": "86c3cc0f-26ef-4899-94b9-88e95e6d0b99"
+      }
+    },
+    "readbackImages": [
+      {
+        "phase": "source-red",
+        "path": "20261017T124703Z-7a04c03fe0-group-source-red.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "source-blue",
+        "path": "20261017T124703Z-7a04c03fe0-group-source-blue.png",
+        "sha256": "69efafc1b75b4424c1a82bfc668afcac6e4b1e22139b38ac269d48783b2e1225"
+      },
+      {
+        "phase": "before-reset",
+        "path": "20261017T124703Z-7a04c03fe0-group-before-reset.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-refusal",
+        "path": "20261017T124703Z-7a04c03fe0-group-after-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-unsafe-generation-refusal",
+        "path": "20261017T124703Z-7a04c03fe0-group-after-unsafe-generation-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-unsafe-scene-item-refusal",
+        "path": "20261017T124703Z-7a04c03fe0-group-after-unsafe-scene-item-refusal.png",
+        "sha256": "cf684680897b487fcf6ce3eb44516be2d0d1f98d38bbcbfee3629afe4f1a1455"
+      },
+      {
+        "phase": "after-update",
+        "path": "20261017T124703Z-7a04c03fe0-group-after-update.png",
+        "sha256": "e9854a935f10b25f3a7ac7c39df0a783c57c5c9473e5e05af28d162699140ca4"
+      },
+      {
+        "phase": "after-reset",
+        "path": "20261017T124703Z-7a04c03fe0-group-after-reset.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "offset-source",
+        "path": "20261017T124703Z-7a04c03fe0-group-offset-source.png",
+        "sha256": "bb8f8507d76886b6dc49bb59cffb947e09a92ee7bbbd9434a65f4a01abc97790"
+      },
+      {
+        "phase": "translated-local-opacity",
+        "path": "20261017T124703Z-7a04c03fe0-group-translated-local-opacity.png",
+        "sha256": "6a60fa863cfea733ebee0ee3c3c4766676748c9f87069423009ab52c8298e2f6"
+      },
+      {
+        "phase": "solar-legacy-before-commit",
+        "path": "20261017T124703Z-7a04c03fe0-group-solar-legacy-before-commit.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4"
+      },
+      {
+        "phase": "solar-atlas-source",
+        "path": "20261017T124703Z-7a04c03fe0-group-solar-atlas-source.png",
+        "sha256": "264e290a7fcaac040762569f76ddb40dd4ff397b878e97df608e7d8e4de00f3a"
+      },
+      {
+        "phase": "solar-band-committed",
+        "path": "20261017T124703Z-7a04c03fe0-group-solar-band-committed.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-replacement-set-mismatch",
+        "path": "20261017T124703Z-7a04c03fe0-group-solar-band-after-replacement-set-mismatch.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-plan-hash-mismatch",
+        "path": "20261017T124703Z-7a04c03fe0-group-solar-band-after-plan-hash-mismatch.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-invalid-crop",
+        "path": "20261017T124703Z-7a04c03fe0-group-solar-band-after-invalid-crop.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-invalid-rect",
+        "path": "20261017T124703Z-7a04c03fe0-group-solar-band-after-invalid-rect.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-duplicate-band",
+        "path": "20261017T124703Z-7a04c03fe0-group-solar-band-after-duplicate-band.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-unsupported-mask",
+        "path": "20261017T124703Z-7a04c03fe0-group-solar-band-after-unsupported-mask.png",
+        "sha256": "f92c3bb4593aa0c5690ca914ce403e29d3b370b4fc685da3f728f4f517a0ec30"
+      },
+      {
+        "phase": "solar-band-after-reset",
+        "path": "20261017T124703Z-7a04c03fe0-group-solar-band-after-reset.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4"
+      },
+      {
+        "phase": "solar-band-after-stale-generation",
+        "path": "20261017T124703Z-7a04c03fe0-group-solar-band-after-stale-generation.png",
+        "sha256": "473cdff5f17c10f065919833d7fcd191bc48791a7bae1e39addcaa77814f29b4"
+      },
+      {
+        "phase": "mixed-legacy-before",
+        "path": "20261017T124703Z-7a04c03fe0-group-mixed-legacy-before.png",
+        "sha256": "c20168750e3e69439053b03f9329c44ea533047798aab131f749153297d193cc"
+      },
+      {
+        "phase": "mixed-atlas-source",
+        "path": "20261017T124703Z-7a04c03fe0-group-mixed-atlas-source.png",
+        "sha256": "264e290a7fcaac040762569f76ddb40dd4ff397b878e97df608e7d8e4de00f3a"
+      },
+      {
+        "phase": "mixed-capture-source",
+        "path": "20261017T124703Z-7a04c03fe0-group-mixed-capture-source.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      },
+      {
+        "phase": "nested-capture-source",
+        "path": "20261017T124703Z-7a04c03fe0-group-nested-capture-source.png",
+        "sha256": "d31d93e6390169e3f4573963b8077e1b6e69afd20ab3a0160b4aa52fd0864ee5"
+      },
+      {
+        "phase": "mixed-composition-committed",
+        "path": "20261017T124703Z-7a04c03fe0-group-mixed-composition-committed.png",
+        "sha256": "b7b48351530013b950797c0ebb47cbef9be81e71ed55f6e323b38bd88ab40b45"
+      },
+      {
+        "phase": "mixed-composition-after-reset",
+        "path": "20261017T124703Z-7a04c03fe0-group-mixed-composition-after-reset.png",
+        "sha256": "c20168750e3e69439053b03f9329c44ea533047798aab131f749153297d193cc"
+      },
+      {
+        "phase": "remove-dependency-legacy-before",
+        "path": "20261017T124703Z-7a04c03fe0-group-remove-dependency-legacy-before.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301"
+      },
+      {
+        "phase": "remove-dependency-before-removal",
+        "path": "20261017T124703Z-7a04c03fe0-group-remove-dependency-before-removal.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      },
+      {
+        "phase": "remove-dependency-restored-1",
+        "path": "20261017T124703Z-7a04c03fe0-group-remove-dependency-restored-1.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      },
+      {
+        "phase": "remove-dependency-restored-2",
+        "path": "20261017T124703Z-7a04c03fe0-group-remove-dependency-restored-2.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301"
+      },
+      {
+        "phase": "graphics-source-remove-restored-1",
+        "path": "20261017T124703Z-7a04c03fe0-group-graphics-source-remove-restored-1.png",
+        "sha256": "0e5e497915554b75ccc4d7b61ee8a6a387fb314b73ad3ab4c5f4d93396e8f301"
+      },
+      {
+        "phase": "same-name-new-uuid-generation-1",
+        "path": "20261017T124703Z-7a04c03fe0-group-same-name-new-uuid-generation-1.png",
+        "sha256": "23e88f83b54609bf92040d84eb2a8570fd134c12f406a1cf8d3941d159449b33"
+      }
+    ],
+    "capturePaintAndFractionalFraming": {
+      "zOrderPreserved": true,
+      "foreignCollisionPreserved": true,
+      "atomicAdmissions": [
+        {
+          "index": 0,
+          "effect": "baseline",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 1,
+          "effect": "drop-shadow",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 2,
+          "effect": "inner-shadow",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 3,
+          "effect": "layer-blur",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 4,
+          "effect": "backdrop-blur",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 5,
+          "effect": "noise",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 6,
+          "effect": "texture",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 7,
+          "effect": "glass",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 8,
+          "effect": "baseline",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 9,
+          "effect": "drop-shadow",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 10,
+          "effect": "inner-shadow",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 11,
+          "effect": "layer-blur",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 12,
+          "effect": "backdrop-blur",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 13,
+          "effect": "noise",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 14,
+          "effect": "texture",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 15,
+          "effect": "glass",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 16,
+          "effect": "baseline",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 17,
+          "effect": "drop-shadow",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 18,
+          "effect": "inner-shadow",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 19,
+          "effect": "layer-blur",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 20,
+          "effect": "backdrop-blur",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 21,
+          "effect": "noise",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 22,
+          "effect": "texture",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 23,
+          "effect": "glass",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 24,
+          "effect": "baseline",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 25,
+          "effect": "drop-shadow",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 26,
+          "effect": "inner-shadow",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 27,
+          "effect": "layer-blur",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 28,
+          "effect": "backdrop-blur",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 29,
+          "effect": "noise",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 30,
+          "effect": "texture",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 31,
+          "effect": "glass",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 32,
+          "effect": "baseline",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 33,
+          "effect": "drop-shadow",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 34,
+          "effect": "inner-shadow",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 35,
+          "effect": "layer-blur",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 36,
+          "effect": "backdrop-blur",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 37,
+          "effect": "noise",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 38,
+          "effect": "texture",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 39,
+          "effect": "glass",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 40,
+          "effect": "baseline",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 41,
+          "effect": "drop-shadow",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 42,
+          "effect": "inner-shadow",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 43,
+          "effect": "layer-blur",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 44,
+          "effect": "backdrop-blur",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 45,
+          "effect": "noise",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 46,
+          "effect": "texture",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 47,
+          "effect": "glass",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 48,
+          "effect": "baseline",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 49,
+          "effect": "drop-shadow",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 50,
+          "effect": "inner-shadow",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 51,
+          "effect": "layer-blur",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 52,
+          "effect": "backdrop-blur",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 53,
+          "effect": "noise",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 54,
+          "effect": "texture",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 55,
+          "effect": "glass",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 56,
+          "effect": "baseline",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 57,
+          "effect": "drop-shadow",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 58,
+          "effect": "inner-shadow",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 59,
+          "effect": "layer-blur",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 60,
+          "effect": "backdrop-blur",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 61,
+          "effect": "noise",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 62,
+          "effect": "texture",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 63,
+          "effect": "glass",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 64,
+          "effect": "baseline",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 65,
+          "effect": "drop-shadow",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 66,
+          "effect": "inner-shadow",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 67,
+          "effect": "layer-blur",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 68,
+          "effect": "backdrop-blur",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 69,
+          "effect": "noise",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 70,
+          "effect": "texture",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 71,
+          "effect": "glass",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 72,
+          "effect": "baseline",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 73,
+          "effect": "drop-shadow",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 74,
+          "effect": "inner-shadow",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 75,
+          "effect": "layer-blur",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        },
+        {
+          "index": 76,
+          "effect": "backdrop-blur",
+          "padding": 0,
+          "size": [
+            320.0,
+            180.0
+          ]
+        },
+        {
+          "index": 77,
+          "effect": "noise",
+          "padding": 20,
+          "size": [
+            360.0,
+            220.0
+          ]
+        },
+        {
+          "index": 78,
+          "effect": "texture",
+          "padding": 60,
+          "size": [
+            440.0,
+            300.0
+          ]
+        },
+        {
+          "index": 79,
+          "effect": "glass",
+          "padding": 120,
+          "size": [
+            560.0,
+            420.0
+          ]
+        }
+      ],
+      "rotationAdmissions": [
+        {
+          "angle": -90,
+          "transform": {
+            "alignment": 0,
+            "boundsAlignment": 0,
+            "boundsHeight": 0.0,
+            "boundsType": "OBS_BOUNDS_NONE",
+            "boundsWidth": 0.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 300.0,
+            "positionX": 660.0,
+            "positionY": 390.0,
+            "rotation": -90.0,
+            "scaleX": 1.0,
+            "scaleY": 1.0,
+            "sourceHeight": 300.0,
+            "sourceWidth": 440.0,
+            "width": 440.0
+          },
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-rotation-minus-90.png"
+        },
+        {
+          "angle": -35,
+          "transform": {
+            "alignment": 0,
+            "boundsAlignment": 0,
+            "boundsHeight": 0.0,
+            "boundsType": "OBS_BOUNDS_NONE",
+            "boundsWidth": 0.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 300.0,
+            "positionX": 660.0,
+            "positionY": 390.0,
+            "rotation": -35.0,
+            "scaleX": 1.0,
+            "scaleY": 1.0,
+            "sourceHeight": 300.0,
+            "sourceWidth": 440.0,
+            "width": 440.0
+          },
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-rotation-minus-35.png"
+        },
+        {
+          "angle": 30,
+          "transform": {
+            "alignment": 0,
+            "boundsAlignment": 0,
+            "boundsHeight": 0.0,
+            "boundsType": "OBS_BOUNDS_NONE",
+            "boundsWidth": 0.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 300.0,
+            "positionX": 660.0,
+            "positionY": 390.0,
+            "rotation": 30.0,
+            "scaleX": 1.0,
+            "scaleY": 1.0,
+            "sourceHeight": 300.0,
+            "sourceWidth": 440.0,
+            "width": 440.0
+          },
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-rotation-30.png"
+        },
+        {
+          "angle": 90,
+          "transform": {
+            "alignment": 0,
+            "boundsAlignment": 0,
+            "boundsHeight": 0.0,
+            "boundsType": "OBS_BOUNDS_NONE",
+            "boundsWidth": 0.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 300.0,
+            "positionX": 660.0,
+            "positionY": 390.0,
+            "rotation": 90.0,
+            "scaleX": 1.0,
+            "scaleY": 1.0,
+            "sourceHeight": 300.0,
+            "sourceWidth": 440.0,
+            "width": 440.0
+          },
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-rotation-90.png"
+        },
+        {
+          "angle": 180,
+          "transform": {
+            "alignment": 0,
+            "boundsAlignment": 0,
+            "boundsHeight": 0.0,
+            "boundsType": "OBS_BOUNDS_NONE",
+            "boundsWidth": 0.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 300.0,
+            "positionX": 660.0,
+            "positionY": 390.0,
+            "rotation": 180.0,
+            "scaleX": 1.0,
+            "scaleY": 1.0,
+            "sourceHeight": 300.0,
+            "sourceWidth": 440.0,
+            "width": 440.0
+          },
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-rotation-180.png"
+        },
+        {
+          "angle": 0,
+          "transform": {
+            "alignment": 5,
+            "boundsAlignment": 0,
+            "boundsHeight": 0.0,
+            "boundsType": "OBS_BOUNDS_NONE",
+            "boundsWidth": 0.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 300.0,
+            "positionX": 440.0,
+            "positionY": 240.0,
+            "rotation": 0.0,
+            "scaleX": 1.0,
+            "scaleY": 1.0,
+            "sourceHeight": 300.0,
+            "sourceWidth": 440.0,
+            "width": 440.0
+          },
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-rotation-0.png"
+        }
+      ],
+      "fractionalFraming": [
+        {
+          "case": "fractional-width",
+          "requestedContentSize": [
+            0.2,
+            18
+          ],
+          "expectedZoomedBounds": [
+            2,
+            180
+          ],
+          "actualZoomedBounds": [
+            2.0,
+            180.0
+          ],
+          "outsidePixel": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-fractional-width.png"
+        },
+        {
+          "case": "fractional-height",
+          "requestedContentSize": [
+            32,
+            0.3
+          ],
+          "expectedZoomedBounds": [
+            320,
+            3
+          ],
+          "actualZoomedBounds": [
+            320.0,
+            3.0
+          ],
+          "outsidePixel": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-fractional-height.png"
+        },
+        {
+          "case": "zero-width-fallback",
+          "requestedContentSize": [
+            0,
+            18
+          ],
+          "expectedZoomedBounds": [
+            10,
+            180
+          ],
+          "actualZoomedBounds": [
+            10.0,
+            180.0
+          ],
+          "outsidePixel": null,
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-zero-width-fallback.png"
+        },
+        {
+          "case": "negative-height-fallback",
+          "requestedContentSize": [
+            32,
+            -2
+          ],
+          "expectedZoomedBounds": [
+            320,
+            10
+          ],
+          "actualZoomedBounds": [
+            320.0,
+            10.0
+          ],
+          "outsidePixel": null,
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-negative-height-fallback.png"
+        }
+      ],
+      "optionalGeometryReset": {
+        "sameExistingFilterName": "prism/capture-effects",
+        "filterCountBefore": 1,
+        "filterCountAfter": 1,
+        "precedingCommitOptionalGeometry": {
+          "content_box_x": 0,
+          "content_box_y": 50,
+          "content_box_width": 32,
+          "content_box_height": -2
+        },
+        "replacementCommitOmittedOptionalKeys": [
+          "content_box_x",
+          "content_box_y",
+          "content_box_width",
+          "content_box_height"
+        ],
+        "expectedDefaultContentBoxOrigin": [
+          0,
+          0
+        ],
+        "expectedDefaultContentBoxSize": [
+          10.5,
+          8.75
+        ],
+        "observedInnerBounds": [
+          105.0,
+          87.5
+        ],
+        "observedInnerPosition": [
+          -47.0,
+          -39.5
+        ],
+        "sourceZoom": 10.0,
+        "transformToleranceSceneUnits": 0.0001,
+        "innerPositionToleranceSceneUnits": 0.51
+      },
+      "externalGeometry": [
+        {
+          "case": "fractional-outer-transformed",
+          "requestedBlockSize": [
+            10.5,
+            8.75
+          ],
+          "requestedPadding": 0,
+          "expectedRasterExtent": [
+            10.5,
+            8.75
+          ],
+          "rasterAllocation": [
+            11,
+            9
+          ],
+          "outerRasterScale": [
+            0.9545454545454546,
+            0.9722222222222222
+          ],
+          "sourceZoom": 10.0,
+          "externalZoom": 2.0,
+          "transformToleranceSceneUnits": 0.0001,
+          "innerPositionToleranceSceneUnits": 0.51,
+          "expectedContentSize": [
+            21.0,
+            17.5
+          ],
+          "expectedTransformedSize": [
+            21.0,
+            17.5
+          ],
+          "actualTransformedSize": [
+            20.99999964237213,
+            17.49999976158142
+          ],
+          "outerTransform": {
+            "alignment": 5,
+            "boundsAlignment": 0,
+            "boundsHeight": 0.0,
+            "boundsType": "OBS_BOUNDS_NONE",
+            "boundsWidth": 0.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 17.5,
+            "positionX": 500.0,
+            "positionY": 300.0,
+            "rotation": 0.0,
+            "scaleX": 1.9090908765792847,
+            "scaleY": 1.9444444179534912,
+            "sourceHeight": 9.0,
+            "sourceWidth": 11.0,
+            "width": 21.0
+          },
+          "innerTransform": {
+            "alignment": 5,
+            "boundsAlignment": 0,
+            "boundsHeight": 87.5,
+            "boundsType": "OBS_BOUNDS_STRETCH",
+            "boundsWidth": 105.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 180.0,
+            "positionX": -47.0,
+            "positionY": -39.5,
+            "rotation": 0.0,
+            "scaleX": 1.0,
+            "scaleY": 1.0,
+            "sourceHeight": 180.0,
+            "sourceWidth": 320.0,
+            "width": 320.0
+          },
+          "edgePixels": {
+            "right": [
+              10,
+              17,
+              78,
+              90
+            ],
+            "rightOutside": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "bottom": [
+              205,
+              205,
+              242,
+              255
+            ],
+            "bottomOutside": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "leftOutside": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "topOutside": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "opaqueInterior": {
+              "coordinate": [
+                510,
+                308
+              ],
+              "rgba": [
+                149,
+                154,
+                234,
+                255
+              ],
+              "alphaRequired": 255
+            },
+            "padding": null,
+            "outerPaintAlphaBounds": null,
+            "outerPaintAlphaThreshold": null,
+            "outerPaintBoundsTolerancePixels": null
+          },
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-fractional-outer-transformed.png"
+        },
+        {
+          "case": "fractional-padded-transformed",
+          "requestedBlockSize": [
+            10.5,
+            8.75
+          ],
+          "requestedPadding": 1.25,
+          "expectedRasterExtent": [
+            13.0,
+            11.25
+          ],
+          "rasterAllocation": [
+            13,
+            12
+          ],
+          "outerRasterScale": [
+            1.0,
+            0.9375
+          ],
+          "sourceZoom": 10.0,
+          "externalZoom": 4.0,
+          "transformToleranceSceneUnits": 0.0001,
+          "innerPositionToleranceSceneUnits": 0.51,
+          "expectedContentSize": [
+            42.0,
+            35.0
+          ],
+          "expectedTransformedSize": [
+            52.0,
+            45.0
+          ],
+          "actualTransformedSize": [
+            52.0,
+            45.0
+          ],
+          "outerTransform": {
+            "alignment": 5,
+            "boundsAlignment": 0,
+            "boundsHeight": 0.0,
+            "boundsType": "OBS_BOUNDS_NONE",
+            "boundsWidth": 0.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 45.0,
+            "positionX": 545.0,
+            "positionY": 295.0,
+            "rotation": 0.0,
+            "scaleX": 4.0,
+            "scaleY": 3.75,
+            "sourceHeight": 12.0,
+            "sourceWidth": 13.0,
+            "width": 52.0
+          },
+          "innerTransform": {
+            "alignment": 5,
+            "boundsAlignment": 0,
+            "boundsHeight": 87.5,
+            "boundsType": "OBS_BOUNDS_STRETCH",
+            "boundsWidth": 105.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 180.0,
+            "positionX": -47.0,
+            "positionY": -39.5,
+            "rotation": 0.0,
+            "scaleX": 1.0,
+            "scaleY": 1.0,
+            "sourceHeight": 180.0,
+            "sourceWidth": 320.0,
+            "width": 320.0
+          },
+          "edgePixels": {
+            "right": [
+              7,
+              12,
+              58,
+              66
+            ],
+            "rightOutside": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "bottom": [
+              147,
+              148,
+              179,
+              189
+            ],
+            "bottomOutside": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "leftOutside": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "topOutside": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "opaqueInterior": {
+              "coordinate": [
+                560,
+                317
+              ],
+              "rgba": [
+                191,
+                196,
+                245,
+                255
+              ],
+              "alphaRequired": 255
+            },
+            "padding": {
+              "left": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "right": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "top": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "bottom": [
+                0,
+                0,
+                0,
+                0
+              ]
+            },
+            "outerPaintAlphaBounds": [
+              547,
+              297,
+              595,
+              338
+            ],
+            "outerPaintAlphaThreshold": 1,
+            "outerPaintBoundsTolerancePixels": 0
+          },
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-fractional-padded-transformed.png"
+        },
+        {
+          "case": "subpixel-outer-transformed",
+          "requestedBlockSize": [
+            0.2,
+            18.25
+          ],
+          "requestedPadding": 0,
+          "expectedRasterExtent": [
+            0.2,
+            18.25
+          ],
+          "rasterAllocation": [
+            1,
+            19
+          ],
+          "outerRasterScale": [
+            0.2,
+            0.9605263157894737
+          ],
+          "sourceZoom": 10.0,
+          "externalZoom": 3.0,
+          "transformToleranceSceneUnits": 0.0001,
+          "innerPositionToleranceSceneUnits": 0.51,
+          "expectedContentSize": [
+            0.6000000000000001,
+            54.75
+          ],
+          "expectedTransformedSize": [
+            0.6000000000000001,
+            54.75
+          ],
+          "actualTransformedSize": [
+            0.6000000238418579,
+            54.74999952316284
+          ],
+          "outerTransform": {
+            "alignment": 5,
+            "boundsAlignment": 0,
+            "boundsHeight": 0.0,
+            "boundsType": "OBS_BOUNDS_NONE",
+            "boundsWidth": 0.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 54.75,
+            "positionX": 700.0,
+            "positionY": 300.0,
+            "rotation": 0.0,
+            "scaleX": 0.6000000238418579,
+            "scaleY": 2.8815789222717285,
+            "sourceHeight": 19.0,
+            "sourceWidth": 1.0,
+            "width": 0.6000000238418579
+          },
+          "innerTransform": {
+            "alignment": 5,
+            "boundsAlignment": 0,
+            "boundsHeight": 182.5,
+            "boundsType": "OBS_BOUNDS_STRETCH",
+            "boundsWidth": 2.0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "cropRight": 0,
+            "cropToBounds": false,
+            "cropTop": 0,
+            "height": 180.0,
+            "positionX": -1.0,
+            "positionY": -82.0,
+            "rotation": 0.0,
+            "scaleX": 1.0,
+            "scaleY": 1.0,
+            "sourceHeight": 180.0,
+            "sourceWidth": 320.0,
+            "width": 320.0
+          },
+          "edgePixels": {
+            "inside": [
+              42,
+              42,
+              54,
+              58
+            ],
+            "leftOutside": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "rightOutside": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "bottom": [
+              42,
+              42,
+              54,
+              58
+            ],
+            "bottomOutside": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "topOutside": [
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-subpixel-outer-transformed.png"
+        }
+      ],
+      "effects": [
+        {
+          "kind": "drop-shadow",
+          "difference": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              255
+            ]
+          ],
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-drop-shadow.png"
+        },
+        {
+          "kind": "inner-shadow",
+          "difference": [
+            [
+              0,
+              255
+            ],
+            [
+              0,
+              255
+            ],
+            [
+              0,
+              255
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-inner-shadow.png"
+        },
+        {
+          "kind": "layer-blur",
+          "difference": [
+            [
+              0,
+              203
+            ],
+            [
+              0,
+              199
+            ],
+            [
+              0,
+              165
+            ],
+            [
+              0,
+              159
+            ]
+          ],
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-layer-blur.png"
+        },
+        {
+          "kind": "backdrop-blur",
+          "difference": [
+            [
+              0,
+              142
+            ],
+            [
+              0,
+              142
+            ],
+            [
+              0,
+              19
+            ],
+            [
+              0,
+              165
+            ]
+          ],
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-backdrop-blur.png"
+        },
+        {
+          "kind": "noise",
+          "difference": [
+            [
+              0,
+              179
+            ],
+            [
+              0,
+              179
+            ],
+            [
+              0,
+              179
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-noise.png"
+        },
+        {
+          "kind": "texture",
+          "difference": [
+            [
+              0,
+              189
+            ],
+            [
+              0,
+              186
+            ],
+            [
+              0,
+              158
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-texture.png"
+        },
+        {
+          "kind": "glass",
+          "difference": [
+            [
+              0,
+              255
+            ],
+            [
+              0,
+              255
+            ],
+            [
+              0,
+              255
+            ],
+            [
+              0,
+              255
+            ]
+          ],
+          "file": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\evidence\\local-20261017-fractional-capture-box\\eleven\\20261017T124649Z-f1e94086b5-glass.png"
+        }
+      ],
+      "reset": true,
+      "scope": "GPU fixed-fixture pixels, fractional inner and outer geometry under zoom, integer raster allocation, and 80 atomic admissions; not physical device availability"
+    }
+  },
+  "shutdownWaitSeconds": 0.156,
+  "shutdownTimeoutSeconds": 30.0,
+  "ownedProcessExited": true,
+  "gracefulShutdownRequested": true,
+  "forcedTerminationUsed": false,
+  "redactedShutdownTail": [
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | source 'native-mixed-atlas-7a04c03fe0' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | source 'native-mixed-capture-7a04c03fe0' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | source 'native-nested-capture-7a04c03fe0' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | source 'native-unload-legacy-7a04c03fe0' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | source 'Pulsar composition bounds 52' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | source 'Pulsar composition group 53 mixed-owner' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | source 'PulsarCapture' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | source 'PulsarDesktopAudio' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | private source 'PulsarLaneA' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | private source 'PulsarLaneB' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | private source 'Fade' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | source 'Pulsar composition bounds 54' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | source 'native-unload-input-7a04c03fe0' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | source 'Default' destroyed",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | private source 'PulsarPreviewBootstrap' destroyed",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=0",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx pulsar-frontend-stub | callbacks uninstalled",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_unload_removed_source uuid=86c3cc0f-26ef-4899-94b9-88e95e6d0b99 on_graphics_task=0 removed=1 global_signal_forwarded=1",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=1 pending_released=1",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | private source 'native-pending-unload-7a04c03fe0' destroyed",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | [obs_module_unload] Shutting down...",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | [WebSocketServer::Stop] Server stopped successfully",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | [obs_module_unload] Finished shutting down.",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | Freeing OBS context data",
+    "2026-10-17T12:47:08Z DEBUG 3Gtr5g1Nz40x9wzx libobs | canvas 'Main' (6c69626f-6273-4c00-9d88-c5136d61696e) destroyed",
+    "PULSAR_LEGACY_ALIAS lease=released id=group-proof-10fcb6c581c449a79df2f2eb8b5daaf0 path=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\.cache\\fractional-capture-box\\private-runtime-6962c7d258e946f4a6b415eb9f86c576\\state\\leases\\directshow-program-preview.lock authority=Local\\Pulsar.DirectShowProgramPreview metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\9eab04979f2b22fc.lock",
+    "PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=group-proof-10fcb6c581c449a79df2f2eb8b5daaf0 dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\.cache\\fractional-capture-box\\private-runtime-6962c7d258e946f4a6b415eb9f86c576\\state\\runtime authority=Local\\Pulsar.Authority.c078b8fee09b68f9 metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\c078b8fee09b68f9.lock",
+    "PULSAR_RUNTIME_INSTANCE lease=released id=group-proof-10fcb6c581c449a79df2f2eb8b5daaf0 dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-fractional-capture-box\\.cache\\fractional-capture-box\\private-runtime-6962c7d258e946f4a6b415eb9f86c576\\state\\runtime authority=Local\\Pulsar.Runtime.group-proof-10fcb6c581c449a79df2f2eb8b5daaf0 metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\7d3911873a629a78.lock"
+  ],
+  "shutdownMilestones": [
+    "PULSAR_SHUTDOWN_CONTROL event=ready id=group-proof-10fcb6c581c449a79df2f2eb8b5daaf0 mechanism=inherited_event",
+    "2026-10-17T12:46:47Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_GROUP_COMPOSITION event=module_load",
+    "2026-10-17T12:46:47Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_load",
+    "2026-10-17T12:46:47Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=no_browser_pre_shutdown_fixture_registered scope=no_browser_sources_only cef_shutdown=not_exercised",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=pending_unload_source_armed",
+    "PULSAR_SHUTDOWN_CONTROL event=signaled id=group-proof-10fcb6c581c449a79df2f2eb8b5daaf0 mechanism=inherited_event",
+    "[pulsar-headless] shutting down",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | PULSAR_WEBSOCKET_QUIESCE event=ack active_handlers=0 sessions=0 no_handlers_after_ack=1",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=no_browser_pre_shutdown success=1 browser_sources=0",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=scripting_shutdown",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=started",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=complete",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_received phase=exit",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=duplicate_skipped",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_detached phase=exit",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_begin scenes=5 sources=12",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_verify_begin",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=0",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_GROUP_COMPOSITION_TEST_HELPER event=module_unload_removed_source uuid=86c3cc0f-26ef-4899-94b9-88e95e6d0b99 on_graphics_task=0 removed=1 global_signal_forwarded=1",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=1 pending_released=1",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | [obs_module_unload] Shutting down...",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached",
+    "2026-10-17T12:47:08Z INFO 3Gtr5g1Nz40x9wzx obs-websocket | [obs_module_unload] Finished shutting down."
+  ],
+  "shutdownDiagnostics": {
+    "errorFree": true,
+    "errorCount": 0,
+    "errors": [],
+    "attribution": "No shutdown ERROR log was observed after the shutdown signal."
+  },
+  "gracefulShutdownEvidence": {
+    "eventAdopted": true,
+    "eventSignaled": true,
+    "hostShutdownReached": true,
+    "exitCode": 0
+  },
+  "frontendCallbackShutdownLifecycle": {
+    "scriptShutdownThenExitRunsCleanupOnce": true,
+    "exitCleanupMarkerCountsAreExact": true,
+    "exitCallbackDetachedBeforeTableUninstall": true,
+    "destructorSkippedDuplicateRemovalAfterUninstall": true,
+    "noMissingFrontendCallbackError": true,
+    "markerIndexes": {
+      "scriptingShutdownReceived": 402,
+      "exitReceived": 407,
+      "exitCleanupStarted": 403,
+      "exitCleanupComplete": 405,
+      "duplicateCleanupSkipped": 409,
+      "exitDetach": 411,
+      "callbacksUninstalled": 448,
+      "websocketUnloadStarted": 452,
+      "destructorSkip": 454,
+      "websocketUnloadFinished": 455
+    },
+    "passed": true
+  },
+  "compositionModuleUnloadCleanup": {
+    "markerObserved": true,
+    "activeCompositionsBeforeCleanup": 0,
+    "generationFencesBeforeCleanup": 0,
+    "pendingRemovalEventsBeforeCleanup": 1,
+    "pendingRemovalEventsReleased": 1
+  },
+  "pendingRemovalUnloadProof": {
+    "testHelperLoadedAfterCapturePlugin": true,
+    "testRemovalRanBeforeCapturePluginUnload": true,
+    "helperRemovalOnStoppedGraphicsThread": true,
+    "pendingEventObservedAtCaptureUnload": true,
+    "pendingEventReleasedAtCaptureUnload": true,
+    "markerIndexes": {
+      "captureModuleLoad": 97,
+      "testHelperModuleLoad": 101,
+      "testHelperUnloadRemoval": 449,
+      "captureModuleUnloadCleanup": 450
+    },
+    "passed": true
+  },
+  "boundedExitWithoutForcedTermination": true,
+  "cleanShutdown": true,
+  "activeCompositionCleanlyUnloaded": false,
+  "activeCompositionDisposedBeforeModuleUnload": true,
+  "gracefulShutdownAfterActiveComposition": true,
+  "scratchRemoved": true,
+  "finishedUtc": "2026-10-17T12:47:08.311168+00:00",
+  "limits": "Private synthetic GPU readback only; SolarBand source crops and owner-local placement are covered, masks remain explicitly unsupported, and no physical capture, public output, transition or switch is exercised. The private no-browser shutdown fixture does not exercise CEF teardown."
+}

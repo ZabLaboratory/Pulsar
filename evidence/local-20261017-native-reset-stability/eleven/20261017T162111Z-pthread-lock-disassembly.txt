@@ -1,0 +1,15 @@
+DLL .cache/native-reset-stability/private-runtime-exact-20261017T155459Z/runtime/bin/64bit/w32-pthreads.dll
+DLL_SHA256 296dd07553f0f4293354281ce0540fe2dfe8d9a4d8a197994343e718694267c9
+FILE_TIMESTAMP 0xa76c6d58 CHECKSUM 0x0
+0x3828: sal byte ptr [rbx + riz + 0xf], 0x1f
+0x382d: add byte ptr [rax], r8b
+0x3830: mov rcx, qword ptr [rbx + 0x20]
+0x3834: mov edx, 0xffffffff
+0x3839: call qword ptr [rip + 0x117f9]
+0x383f: test eax, eax
+0x3841: jne 0x37c3
+0x3843: mov eax, 0xffffffff
+0x3848: xchg dword ptr [rbx], eax
+0x384a: test eax, eax
+0x384c: jne 0x3830
+0x384e: test edi, edi

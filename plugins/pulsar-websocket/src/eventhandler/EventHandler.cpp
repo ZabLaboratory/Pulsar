@@ -24,6 +24,7 @@ EventHandler::EventHandler()
 	blog_debug("[EventHandler::EventHandler] Setting up...");
 
 	obs_frontend_add_event_callback(OnFrontendEvent, this);
+	_frontendEventCallbackRegistered = true;
 
 	signal_handler_t *coreSignalHandler = obs_get_signal_handler();
 	if (coreSignalHandler) {
@@ -48,7 +49,12 @@ EventHandler::~EventHandler()
 {
 	blog_debug("[EventHandler::~EventHandler] Shutting down...");
 
-	obs_frontend_remove_event_callback(OnFrontendEvent, this);
+	if (_frontendEventCallbackRegistered) {
+		UnregisterFrontendEventCallback();
+		blog(LOG_INFO, "PULSAR_WEBSOCKET event=frontend_callback_detached phase=destructor");
+	} else {
+		blog(LOG_INFO, "PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached");
+	}
 
 	coreSignals.clear();
 
@@ -262,7 +268,14 @@ void EventHandler::OnFrontendEvent(enum obs_frontend_event event, void *private_
 	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
 		eventHandler->FrontendFinishedLoadingMultiHandler();
 		break;
+	case OBS_FRONTEND_EVENT_EXIT:
+		blog(LOG_INFO, "PULSAR_WEBSOCKET event=frontend_exit_received phase=exit");
+		eventHandler->FrontendExitMultiHandler();
+		eventHandler->UnregisterFrontendEventCallback();
+		blog(LOG_INFO, "PULSAR_WEBSOCKET event=frontend_callback_detached phase=exit");
+		break;
 	case OBS_FRONTEND_EVENT_SCRIPTING_SHUTDOWN:
+		blog(LOG_INFO, "PULSAR_WEBSOCKET event=frontend_exit_received phase=scripting_shutdown");
 		eventHandler->FrontendExitMultiHandler();
 		break;
 
@@ -434,6 +447,15 @@ void EventHandler::OnFrontendEvent(enum obs_frontend_event event, void *private_
 	}
 }
 
+void EventHandler::UnregisterFrontendEventCallback()
+{
+	if (!_frontendEventCallbackRegistered)
+		return;
+
+	obs_frontend_remove_event_callback(OnFrontendEvent, this);
+	_frontendEventCallbackRegistered = false;
+}
+
 void EventHandler::FrontendFinishedLoadingMultiHandler()
 {
 	blog_debug(
@@ -459,6 +481,13 @@ void EventHandler::FrontendFinishedLoadingMultiHandler()
 
 void EventHandler::FrontendExitMultiHandler()
 {
+	bool expected = false;
+	if (!_frontendExitHandled.compare_exchange_strong(expected, true)) {
+		blog(LOG_INFO, "PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=duplicate_skipped");
+		return;
+	}
+
+	blog(LOG_INFO, "PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=started");
 	blog_debug("[EventHandler::FrontendExitMultiHandler] OBS is unloading. Disabling events...");
 
 	HandleExitStarted();
@@ -480,6 +509,7 @@ void EventHandler::FrontendExitMultiHandler()
 	}
 
 	blog_debug("[EventHandler::FrontendExitMultiHandler] Finished.");
+	blog(LOG_INFO, "PULSAR_WEBSOCKET event=frontend_exit_cleanup phase=complete");
 }
 
 // Only called for creation of a public source

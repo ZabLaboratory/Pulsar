@@ -50,6 +50,8 @@ private:
 	ObsReadyCallback _obsReadyCallback;
 
 	std::atomic<bool> _obsReady = false;
+	std::atomic<bool> _frontendExitHandled = false;
+	bool _frontendEventCallbackRegistered = false;
 
 	std::vector<OBSSignal> coreSignals;
 	OBSSignal recordFileChangedSignal;
@@ -67,6 +69,7 @@ private:
 
 	// Signal handler: frontend
 	static void OnFrontendEvent(enum obs_frontend_event event, void *private_data);
+	void UnregisterFrontendEventCallback();
 	void FrontendFinishedLoadingMultiHandler();
 	void FrontendExitMultiHandler();
 

@@ -1,0 +1,38 @@
+{
+  "results": [
+    {
+      "path": "20261017T120930Z-cef-shutdown.json",
+      "sha256": "cb78d6c4c1e53d3bdd1c6a3e28ca92e72c7fc1fab99cbc4c83bcfa88803dcf6f",
+      "passed": true
+    },
+    {
+      "path": "20261017T121056Z-cef-audio-shutdown.json",
+      "sha256": "700925ff7a99933877398c3dd8796d50f29108a94340a049db840d7688f1fb8d",
+      "passed": true
+    },
+    {
+      "path": "20261017T121228Z-cef-audio-final.json",
+      "sha256": "e119f29b77679278f8b1903ed0f09be5b22f97286b0629de22d8de4b7bad9e1a",
+      "passed": true
+    }
+  ],
+  "restoration": [
+    {
+      "path": "20261017T120930Z-cef-shutdown.json",
+      "gitBlob": "8208c364c2192c73a4b01481e3e9e1810b31c9c9",
+      "sha256": "cb78d6c4c1e53d3bdd1c6a3e28ca92e72c7fc1fab99cbc4c83bcfa88803dcf6f"
+    },
+    {
+      "path": "20261017T121056Z-cef-audio-shutdown.json",
+      "gitBlob": "6c5be56c15aa7e4956eeb3860a2962f5a422b594",
+      "sha256": "700925ff7a99933877398c3dd8796d50f29108a94340a049db840d7688f1fb8d"
+    },
+    {
+      "path": "20261017T121228Z-cef-audio-final.json",
+      "gitBlob": "92d403a790d60ddd25f5739a284043ffb8c08038",
+      "sha256": "e119f29b77679278f8b1903ed0f09be5b22f97286b0629de22d8de4b7bad9e1a"
+    }
+  ],
+  "reason": "Fixed evidence serialization filename collision. Original result bytes recovered from prior staged Git blobs and verified against pre-existing checkpoint SHA256; native logs retained separately as verbatim JSON strings. No regenerated or invented test result.",
+  "repositoryObservation": "Read-only git fsck also reported commit-graph entries referencing unavailable commits. No repository repair, GC or metadata mutation performed; repository-wide integrity is not certified by this qualification."
+}

@@ -66,8 +66,8 @@ bool IsSafetyStopRequest(const std::string &requestType)
 // GetState is included because it is the adapter's explicit observation API.
 // A retry of Take must remain gated: once the frontend has frozen, admitting
 // it to the vendor would let the adapter mutate state (and report success)
-// through the legacy CallVendorRequest ingress.  Only Abort (to cancel an
-// already admitted operation) and GetState (observation) may bypass.
+// through the legacy CallVendorRequest ingress. Only named Abort and the
+// explicit state/result observations of these two adapters may bypass.
 bool IsControlledSceneSwitchPendingBypass(const Request &request)
 {
 	if (request.RequestType != "CallVendorRequest" || !request.RequestData.is_object())
@@ -82,10 +82,10 @@ bool IsControlledSceneSwitchPendingBypass(const Request &request)
 	if (vendor == request.RequestData.end() || nestedRequest == request.RequestData.end() ||
 	    !vendor->is_string() || !nestedRequest->is_string())
 		return false;
-	if (vendor->get<std::string>() != "pulsar-scene-switch")
-		return false;
 	const std::string nested = nestedRequest->get<std::string>();
-	return nested == "Abort" || nested == "GetState";
+	if (vendor->get<std::string>() == "pulsar-transitions")
+		return nested == "Abort" || nested == "GetState" || nested == "GetResult" || nested == "GetPreviewResult";
+	return vendor->get<std::string>() == "pulsar-scene-switch" && (nested == "Abort" || nested == "GetState");
 }
 
 // The public scene/transition request shape remains unchanged.  A latency

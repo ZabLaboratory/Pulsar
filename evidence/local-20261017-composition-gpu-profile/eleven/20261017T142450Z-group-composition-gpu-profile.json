@@ -1,0 +1,240 @@
+{
+  "bootstrap": {
+    "initializedWasapiDevices": [],
+    "microphoneConfigured": false,
+    "noBrowserModules": true,
+    "processAudioConfigured": false
+  },
+  "browserModulesInRuntime": [],
+  "error": "'process'",
+  "errorType": "KeyError",
+  "finishedUtc": "2026-10-17T14:25:23.271284+00:00",
+  "forcedTerminationUsed": false,
+  "generatedMaskFixtures": [
+    {
+      "alphaSamples": {
+        "left": 255,
+        "right": 0
+      },
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\20261017T142450Z-atlas-a.png",
+      "sha256": "695611aabf8d270621a1b8e880cc4c399aad8a43b920faabda64ea6003e36f9e"
+    },
+    {
+      "alphaSamples": {
+        "left": 0,
+        "right": 255
+      },
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\20261017T142450Z-atlas-b.png",
+      "sha256": "92475cabefc2706f97cfbd4dd656623750b7cd456f4699e6ceaa1182ae01aaf6"
+    }
+  ],
+  "gracefulShutdownRequested": true,
+  "initialGetStats": {
+    "activeFps": 60.0000024000001,
+    "availableDiskSpace": 0.0,
+    "averageFrameRenderTime": 0.543281,
+    "cpuUsage": 0.9964123012010353,
+    "memoryUsage": 75.9765625,
+    "outputSkippedFrames": 0,
+    "outputTotalFrames": 0,
+    "renderSkippedFrames": 0,
+    "renderTotalFrames": 138,
+    "webSocketSessionIncomingMessages": 3,
+    "webSocketSessionOutgoingMessages": 3
+  },
+  "inputs": {
+    "obs-websocket.dll": {
+      "bytes": 2855936,
+      "matchesPriorQualification": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\obs-plugins\\64bit\\obs-websocket.dll",
+      "sha256": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b"
+    },
+    "obs.dll": {
+      "bytes": 1491968,
+      "matchesPriorQualification": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\obs.dll",
+      "sha256": "891f6c58b1a9e865836fb94f03f8d90b238198b55c70d2656214cde4790478b1"
+    },
+    "pulsar-capture-effects.dll": {
+      "bytes": 573440,
+      "matchesPriorQualification": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-group-coverage\\.cache\\native-group-coverage\\plugin-build\\RelWithDebInfo\\pulsar-capture-effects.dll",
+      "sha256": "9b17835e8db5ed452fd59e0fbe31d07f12e022df888540db6986e3a73918d093"
+    },
+    "pulsar.exe": {
+      "bytes": 1677824,
+      "matchesPriorQualification": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\upstream-build-25ed780b7f392a1690dfca929cd57679959cf3ad\\rundir\\RelWithDebInfo\\bin\\64bit\\pulsar.exe",
+      "sha256": "69ab22a5829bee254d53fa9edc463cfbdb33886a23781ae67fdc40fb1b36e973"
+    },
+    "z-group-composition-shutdown-test-helper.dll": {
+      "bytes": 55296,
+      "matchesPriorQualification": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261015-native-group-composition\\.cache\\native-group-composition\\pulsar-private-build\\plugins\\pulsar-capture-effects\\RelWithDebInfo\\z-group-composition-shutdown-test-helper.dll",
+      "sha256": "f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff"
+    }
+  },
+  "limitations": [
+    "The mask atlas and captures are synthetic color/image sources; this is not an end-to-end Solar owner or physical-capture workload.",
+    "The reported renderTotalFrames delta proves the OBS render thread advanced while the committed scene was Program. OBS exposes no per-group composed-frame counter, so this does not isolate group shader frames from other scene-render work.",
+    "OBS averageFrameRenderTime is a rolling average, not a per-frame distribution; its sampled p95/max summarize the polling values only.",
+    "nvidia-smi load and VRAM are system-wide first-GPU readings, not attributable to Pulsar.",
+    "GetStats output frame counters are expected to remain zero because the probe deliberately starts no output.",
+    "Windows allocation counts are not observable here; process private bytes and working set are sampled instead."
+  ],
+  "nominalNoCompositionPixels": {
+    "dimensions": [
+      128,
+      72
+    ],
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\evidence\\local-20261017-composition-gpu-profile\\eleven\\20261017T142450Z-nominal-no-composition.png",
+    "samplePixels": {
+      "left": [
+        48,
+        32,
+        32,
+        255
+      ],
+      "right": [
+        48,
+        32,
+        32,
+        255
+      ]
+    },
+    "sha256": "cd0e67cb95e2e04bb366da7a41b1b0059f9628f304d7ae9533f5e70e2274418d"
+  },
+  "nominalNoCompositionSetupStats": {
+    "activeFps": 60.0000024000001,
+    "availableDiskSpace": 0.0,
+    "averageFrameRenderTime": 1.477178,
+    "cpuUsage": 1.1669686429510966,
+    "memoryUsage": 95.74609375,
+    "outputSkippedFrames": 0,
+    "outputTotalFrames": 0,
+    "renderSkippedFrames": 0,
+    "renderTotalFrames": 445,
+    "webSocketSessionIncomingMessages": 20,
+    "webSocketSessionOutgoingMessages": 20
+  },
+  "outputStateBeforeSampling": {
+    "record": {
+      "outputActive": false,
+      "outputBytes": 0,
+      "outputDuration": 0,
+      "outputPaused": false,
+      "outputTimecode": "00:00:00.000",
+      "outputTotalFrames": 0
+    },
+    "stream": {
+      "outputActive": false,
+      "outputBytes": 0,
+      "outputCongestion": 0.0,
+      "outputDuration": 0,
+      "outputReconnecting": false,
+      "outputSkippedFrames": 0,
+      "outputTimecode": "00:00:00.000",
+      "outputTotalFrames": 0
+    }
+  },
+  "ownedPid": 28636,
+  "ownedProcessExited": true,
+  "passed": false,
+  "privateRuntimePath": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\private-runtime-0ee0e04e73874c4a8b3d3b7360668d25\\runtime",
+  "privateRuntimeRetained": true,
+  "processCounters": {
+    "available": true,
+    "error": null,
+    "logicalCpuCount": 16
+  },
+  "profileType": "offline synthetic OBS render workload",
+  "programSceneBeforeComposition": {
+    "currentProgramSceneName": "native-composition-perf-0b7afd22fe",
+    "currentProgramSceneUuid": "ffd83082-24f8-49b4-a0b9-c05700ce9275",
+    "sceneName": "native-composition-perf-0b7afd22fe",
+    "sceneUuid": "ffd83082-24f8-49b4-a0b9-c05700ce9275"
+  },
+  "programSceneConfiguredOnceBeforeSampling": true,
+  "redactedShutdownTail": "EBUG M1XsxQd3IfCEaJPs libobs | private source 'Pulsar composition world-capture 8' destroyed\n  | 2026-10-17T14:25:23Z DEBUG M1XsxQd3IfCEaJPs libobs | private source 'Pulsar composition crop-scene 5' destroyed\n  | 2026-10-17T14:25:23Z DEBUG M1XsxQd3IfCEaJPs libobs | private source 'Pulsar composition crop-scene 7' destroyed\n  | 2026-10-17T14:25:23Z DEBUG M1XsxQd3IfCEaJPs libobs | source 'native-composition-perf-0b7afd22fe-capture-0' destroyed\n  | 2026-10-17T14:25:23Z DEBUG M1XsxQd3IfCEaJPs libobs | source 'native-composition-perf-0b7afd22fe-capture-1' destroyed\n  | 2026-10-17T14:25:23Z INFO M1XsxQd3IfCEaJPs libobs | PULSAR_FRONTEND_CLEANUP event=source_graph_drained destroy_passes=1\n  | 2026-10-17T14:25:23Z INFO M1XsxQd3IfCEaJPs pulsar-frontend-stub | callbacks uninstalled\n  | 2026-10-17T14:25:23Z INFO M1XsxQd3IfCEaJPs libobs | PULSAR_GROUP_COMPOSITION event=module_unload_cleanup_complete active_before=0 fences_before=0 pending_before=0 pending_released=0\n  | 2026-10-17T14:25:23Z INFO M1XsxQd3IfCEaJPs obs-websocket | [obs_module_unload] Shutting down...\n  | 2026-10-17T14:25:23Z INFO M1XsxQd3IfCEaJPs obs-websocket | [WebSocketServer::Stop] Server stopped successfully\n  | 2026-10-17T14:25:23Z INFO M1XsxQd3IfCEaJPs obs-websocket | PULSAR_WEBSOCKET event=frontend_callback_destructor_skip phase=already_detached\n  | 2026-10-17T14:25:23Z INFO M1XsxQd3IfCEaJPs obs-websocket | [obs_module_unload] Finished shutting down.\n  | 2026-10-17T14:25:23Z INFO M1XsxQd3IfCEaJPs libobs | Freeing OBS context data\n  | 2026-10-17T14:25:23Z DEBUG M1XsxQd3IfCEaJPs libobs | canvas 'Main' (6c69626f-6273-4c00-9d88-c5136d61696e) destroyed\n  | PULSAR_LEGACY_ALIAS lease=released id=composition-performance-43f49b0163a24c7395ed69b7b902a331 path=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\private-runtime-0ee0e04e73874c4a8b3d3b7360668d25\\state\\leases\\directshow-program-preview.lock authority=Local\\Pulsar.DirectShowProgramPreview metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\9eab04979f2b22fc.lock\n  | PULSAR_RUNTIME_INSTANCE runtime_dir_lease=released id=composition-performance-43f49b0163a24c7395ed69b7b902a331 dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\private-runtime-0ee0e04e73874c4a8b3d3b7360668d25\\state\\runtime authority=Local\\Pulsar.Authority.7174ebeb0cd0f83a metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\7174ebeb0cd0f83a.lock\n  | PULSAR_RUNTIME_INSTANCE lease=released id=composition-performance-43f49b0163a24c7395ed69b7b902a331 dir=D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile\\.cache\\native-composition-performance\\private-runtime-0ee0e04e73874c4a8b3d3b7360668d25\\state\\runtime authority=Local\\Pulsar.Runtime.composition-performance-43f49b0163a24c7395ed69b7b902a331 metadata=C:\\Users\\Mathias\\AppData\\Local\\Pulsar\\authorities\\session-1\\06d85986779fe705.lock",
+  "runtimeInstanceId": "composition-performance-43f49b0163a24c7395ed69b7b902a331",
+  "scenarioLabels": [
+    "single-normal",
+    "root-and-capture-masks-blends",
+    "root-mask-multiply-opacity",
+    "capture-mask-screen",
+    "four-masked-blended-owners",
+    "dynamic-atlas-active"
+  ],
+  "sceneInventory": {
+    "atlasSceneItemId": 10,
+    "backdropSceneItemId": 1,
+    "captureSceneItemIds": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "fullResolutionSyntheticSolidCaptures": 8,
+    "replacedSceneItems": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ]
+  },
+  "scope": {
+    "frameBudgetMs": 16.666667,
+    "noPhysicalCapture": true,
+    "noRecordingOrStreaming": true,
+    "sampledMetrics": [
+      "OBS GetStats",
+      "Windows process CPU time and memory",
+      "nvidia-smi system-wide GPU utilization"
+    ],
+    "samplesPerSecond": 1,
+    "scenarioLimit": 2,
+    "scenariosSeconds": 20,
+    "sceneSelectedOnceBeforeSampling": true,
+    "targetFps": 60.0,
+    "transitionAndSwitchTimingExcluded": true,
+    "viewport": [
+      1920,
+      1080
+    ]
+  },
+  "shutdownTimeoutSeconds": 30,
+  "sourceHead": "b8a2ee202d132a46519e8dd0c0a9a1c8a9e12913",
+  "sourceWorktree": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-composition-gpu-profile",
+  "stagedRuntimeHashes": {
+    "obs-websocket.dll": "d3ecaf55d8adc4a9e593589d0ec232ac4974db00980a41361a3fb8df989ef26b",
+    "pulsar-capture-effects.dll": "9b17835e8db5ed452fd59e0fbe31d07f12e022df888540db6986e3a73918d093",
+    "z-group-composition-shutdown-test-helper.dll": "f83277e677f6ecb28b12f5efc5234ed21176cfb4eb519cc1ce99e1d51d991eff"
+  },
+  "startedUtc": "2026-10-17T14:24:50.508775+00:00",
+  "syntheticScene": "native-composition-perf-0b7afd22fe",
+  "videoSettings": {
+    "baseHeight": 1080,
+    "baseWidth": 1920,
+    "fpsDenominator": 1,
+    "fpsNumerator": 60,
+    "outputHeight": 1080,
+    "outputWidth": 1920
+  }
+}

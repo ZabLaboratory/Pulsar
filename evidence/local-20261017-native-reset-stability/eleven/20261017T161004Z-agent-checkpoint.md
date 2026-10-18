@@ -1,0 +1,21 @@
+# Native reset stability diagnostic checkpoint
+
+Checkpoint time: 2026-10-17 16:10:04 UTC. Repository-local evidence only; no Pulsar product source changes, host launches, builds, GPU runs, or test runs were made during this offline diagnostic continuation.
+
+The exact 4-owner/8-capture, 1920x1080@60, 20-second generation-2 recommit/reset workload has four recorded repetitions: two reset passes and two reset freezes. The freeze snapshots are `20261017T155217Z-gen2-reset-freeze.dmp` and `20261017T155459Z-gen2-reset-freeze.dmp`. Both failed runs had successful scene/screenshot windows and static `renderTotalFrames` over 64 `GetStats` samples; reset timed out after about 20 seconds and the host failed closed with `active_handlers=2`, `forced=false`. The two passing resets completed in about 0.3 seconds. All four runs used the same instrumented plugin DLL SHA-256 `EFB62A4996A7962FA65B7A28D5CC444ABA07D6C21AEA67A9E476A89778AE2DFA`; instrumentation may affect timing, so this is evidence of an intermittent failure in the measured build, not a comparison against an uninstrumented binary.
+
+The 155459 dump has a reliably walked graphics-thread stack: `ntdll!NtWaitForSingleObject+0x14` → `KERNELBASE!WaitForSingleObjectEx+0xaf` → `w32-pthreads.dll!pthread_mutex_lock+0x12f`. The returned address `w32-pthreads.dll+0x383f` is confirmed by local PE `.pdata` and `.xdata`; module timestamp matches the dump record, checksum is zero in both. The local machine code at that site is `mov rcx, qword ptr [rbx+0x20]`, `mov edx, 0xffffffff`, then an indirect wait call. This supports that the thread is waiting on the pthread mutex event handle (observed handle value `0x4f0`) with an infinite timeout. A second worker thread independently has the same three resolved frames and the same observed wait handle value. This does not identify the mutex object, its owner, or a deadlock cycle.
+
+Limits: the dump contains 14 streams and no HandleDataStream. No matching `w32-pthreads` PDB is present; the symbol is resolved from the PE export/name table, with function-range unwind data checked locally. Stack walking stops after the pthread frame at an unmapped heap-looking value `0x2142252dd50`; it is not treated as a resolved return address. Heap pages holding pthread mutex objects are not included, so no owner field can yet be read from the dumps. The bundled dependency source candidate is `deps/w32-pthreads/pthread_mutex_lock.c` in the cached upstream source; it is not symbol-line proof for the built DLL.
+
+Authoritative runs and digests:
+
+- `20261017T155217Z-reset-exact.json` SHA-256 `F9EA165549177C8B5C578005DE414C51BF5F8EB57ADA64758B45EEE6DA2282AB`; host log SHA-256 `4916EC27EFDAB1F1EB739167551903695CCAEA098141AF227AEDC165309E2117`; dump SHA-256 `390d966af7c6b109a4fc6e0cf5e65ceae4ab7aebcd02da7e5fa9eca3a35c8b7b`.
+- `20261017T155459Z-reset-exact.json` SHA-256 `0B8147D248EBF63F2F241B6F26B60B636FC78039D38DFD0EE6FEAA30B5991A4A`; host log SHA-256 `238E2F2EE7FF885AA4F1C01985F7DAD76722065B492E05F2D32D4667C807D531`; dump SHA-256 `9f3ecf3c1d7abc1d2226993dcc2f19cbb94ca7a62db94d4bebd58b8852c9e298`.
+- Reader `20261017T160804Z-dump-stackwalk.py` SHA-256 `40303F4109A98953353A231123CB02AB4196FCD7D5E6132DFA3C467093F6CAF1`.
+- Supporting offline readers: `20261017T160804Z-dump-thread-inventory.py` SHA-256 `D7FD941C68E2DA45CBF163704E6C07DC67B8EAED066DC5EDA7EE3E7670CB5F79`; `20261017T160804Z-inspect-pthread-frame.py` SHA-256 `4E1D7AB2418DE7FEEA6862051662C9091474BA4ED63B45DC85F541C4377652B3`; `20261017T160804Z-inspect-unwind.py` SHA-256 `FDA9C5EFA36782A3F554B291064DC9BC5884284E2A8406CC08AD540CAC3C699A`.
+- `20261017T161004Z-stackwalk-155459-18964.txt` preserves the current stack-walk output.
+
+Source/runtime context: checkout HEAD `9a3da1dad08744139633210f79f993532ee2e1a4`; exact OBS source HEAD `6328ff8b3c29f10f29b7e1fad75f170efc41e198` (the cache directory suffix `25ed...` is not its revision); qualified `obs.lib` SHA-256 `b11eee9ea91c6bcff2d9fe62cfe6edba2fbcff57036c8cfb9d8f3f1b5a0729e4`.
+
+Next offline step: use the existing dump stack and module unwind data to test whether the mutex-object pointer and any candidate owner are actually recoverable. Do not infer a source fix or owner from the current wait handle alone.

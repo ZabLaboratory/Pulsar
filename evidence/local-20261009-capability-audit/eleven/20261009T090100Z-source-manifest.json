@@ -1,0 +1,1090 @@
+{
+  "source": "D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261009-capability-audit",
+  "at": "2026-10-09T09:01:46.957Z",
+  "files": [
+    {
+      "path": "plugins/pulsar-browser/browser-app.cpp",
+      "sha256": "9e906228a8555b03513141f4be3c45177093b746b4ba1ed6348e8ed0e926d473"
+    },
+    {
+      "path": "plugins/pulsar-browser/browser-app.hpp",
+      "sha256": "8711d48139ff222fcfafcf135316cad2d278c4902a69fe71d16c859e2f640604"
+    },
+    {
+      "path": "plugins/pulsar-browser/browser-audio-callback-gate.hpp",
+      "sha256": "862cc27b78aa8f904da2ebeffb96e19a6103a6a61df71082bc99172153cd4bd5"
+    },
+    {
+      "path": "plugins/pulsar-browser/browser-client.cpp",
+      "sha256": "63285daa3e93beed81ad0861b8866e5d7d6876549ec9f6f1f7d142ca8e189be0"
+    },
+    {
+      "path": "plugins/pulsar-browser/browser-client.hpp",
+      "sha256": "bdd6e1aa69878eb95b36e3e70a968cca437bdc84cc7cda451b659e177dc72d78"
+    },
+    {
+      "path": "plugins/pulsar-browser/browser-render-callback-gate.hpp",
+      "sha256": "f95c5abaf34bad4835f92c2fa2f88c39acf27e841e1342e877a1dd15e0288ca4"
+    },
+    {
+      "path": "plugins/pulsar-browser/browser-scheme.cpp",
+      "sha256": "6e48a4d5ad69eef8d2b8b23386f7f7cbc1b2f7edc73fb8aed91a6d49e2ac0679"
+    },
+    {
+      "path": "plugins/pulsar-browser/browser-scheme.hpp",
+      "sha256": "ad723a25115f82cf383b045ae8b84ec9c84a207837a61d7d0b7972da00012829"
+    },
+    {
+      "path": "plugins/pulsar-browser/browser-source-task-state.hpp",
+      "sha256": "f4b2d099f89ac192d40a4e8ee76696b6d451bf7e898a3d225bffb388413a7bbc"
+    },
+    {
+      "path": "plugins/pulsar-browser/browser-version.h",
+      "sha256": "b70741e9302f5d9c284e1a6e1abc70273d1b873aa518d36d959eb71f1d481ddd"
+    },
+    {
+      "path": "plugins/pulsar-browser/cef-headers.hpp",
+      "sha256": "c2d488d762fc7993e4d2815bf7c6dd1c82b832fe39f789a50960f1f242f84beb"
+    },
+    {
+      "path": "plugins/pulsar-browser/deps/base64/base64.cpp",
+      "sha256": "6cb0fd9f94a289c11380e8bb27f4865cfc96e8e85603eab5feb475b413cf1987"
+    },
+    {
+      "path": "plugins/pulsar-browser/deps/base64/base64.hpp",
+      "sha256": "4dfd140e94c2e5a1ffea71ff9d683800b41e4c2f27f0eaa35b050c41e09c62f0"
+    },
+    {
+      "path": "plugins/pulsar-browser/deps/ip-string-posix.cpp",
+      "sha256": "9890e27c50445b3efa91a104f60332152bf6ffebd395769ca228597578315185"
+    },
+    {
+      "path": "plugins/pulsar-browser/deps/ip-string-windows.cpp",
+      "sha256": "6a4377b0a9f1fd3f727f5a7029a2e04cc556f4351891749d7081031023332397"
+    },
+    {
+      "path": "plugins/pulsar-browser/deps/ip-string.hpp",
+      "sha256": "3225418c0af362d6ffbc8fffb03ee07f39440e5257cf0f9dbc1bfdb69ef97ced"
+    },
+    {
+      "path": "plugins/pulsar-browser/deps/signal-restore.cpp",
+      "sha256": "a198b701a4aa2b5d47ffe0a1ce92df4513182c823d979cfedc42ce1cde97adaa"
+    },
+    {
+      "path": "plugins/pulsar-browser/deps/signal-restore.hpp",
+      "sha256": "c3a0bfa6b6dbc71bf41b3d0d8bdd411293bbafb0b8e7e672adff58f1fa3047cb"
+    },
+    {
+      "path": "plugins/pulsar-browser/deps/wide-string.cpp",
+      "sha256": "90c3f177898066eb7d4c29a144a56ce1fbd4a264af256d2be25fe55f292651ba"
+    },
+    {
+      "path": "plugins/pulsar-browser/deps/wide-string.hpp",
+      "sha256": "13801c3a6f75affc1e6331a082481a462d5b64773e8d5a7301b927b9109bffb7"
+    },
+    {
+      "path": "plugins/pulsar-browser/drm-format.cpp",
+      "sha256": "c2f0fa3aa250009f40ae4e8a430bc86b89102b3f135761a09f8ab55e78be3fc9"
+    },
+    {
+      "path": "plugins/pulsar-browser/drm-format.hpp",
+      "sha256": "acb74cb4dad470fc52f29a04ef8b59b4c76700780a46cf5a176ea8ae507c516f"
+    },
+    {
+      "path": "plugins/pulsar-browser/linux-keyboard-helpers.hpp",
+      "sha256": "628ed35587fff8bc09740375f2e83a94b586fe7506de70a1b91079548c872996"
+    },
+    {
+      "path": "plugins/pulsar-browser/obs-browser-page/obs-browser-page-main.cpp",
+      "sha256": "b87d0a00b8d4da1b09232f83ab9b752b7b44648042ae4880dcfa5d2d79f7b278"
+    },
+    {
+      "path": "plugins/pulsar-browser/obs-browser-plugin.cpp",
+      "sha256": "686a0823b79f0c26a3ba21898579f7029596e11c19daaebac8971c96086b07a4"
+    },
+    {
+      "path": "plugins/pulsar-browser/obs-browser-source.cpp",
+      "sha256": "00fad67585f3242b29dbc616e98f5b992eaa45e4951f8d25444fa0061f362da6"
+    },
+    {
+      "path": "plugins/pulsar-browser/obs-browser-source.hpp",
+      "sha256": "ee60fdd0285fdca9b45d31d0c3ab3510c3d22b2c399ee10c254b81c29bcc7224"
+    },
+    {
+      "path": "plugins/pulsar-browser/panel/browser-panel-client.cpp",
+      "sha256": "b1d43734c5029c86a4fe7351c6f036f794807b9a1efdcadd92079c6e40083345"
+    },
+    {
+      "path": "plugins/pulsar-browser/panel/browser-panel-client.hpp",
+      "sha256": "ad4855f7712777b56169178473d786bfb95a24fb69772096efd058b56a0bebdd"
+    },
+    {
+      "path": "plugins/pulsar-browser/panel/browser-panel-internal.hpp",
+      "sha256": "92cfde731699304cc72c60fd7a88bb45dc9398031302d83dbf2b73cf53d2b02b"
+    },
+    {
+      "path": "plugins/pulsar-browser/panel/browser-panel.cpp",
+      "sha256": "e1cbc6168abd3ec655346950ccb667c20f1ee7aaacb1a9135dc89d3fa5e91597"
+    },
+    {
+      "path": "plugins/pulsar-browser/panel/browser-panel.hpp",
+      "sha256": "d88f281decbd66a58644e27078531a5a514a75aada4fcc154ad315bb5823890d"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/include/pulsar-dual-lane-config.h",
+      "sha256": "512afac024c8bfef203c54b981b5ee91c01bb74f6a661c83bb25b366084addb4"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/include/pulsar-dual-lane-control.h",
+      "sha256": "a5035b523b7b9355f4a7b52a56a3ad4a3f7dab75c48dc56e4ebe83c159953258"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/include/pulsar-frontend-stub.h",
+      "sha256": "6e99961e43dbce2a182b6de922b0694b5039a19c23aeecf59f28976e8e193fdb"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/include/pulsar-media-transition.h",
+      "sha256": "162a318abaaa3d948526681fa5cbcc62e6540ef9d23463902c7f00dd06e65ce9"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/include/pulsar-preview-frame.h",
+      "sha256": "dd419b56cbe401510873cdde83191436703cf0b97a4128e800310bfb859673d3"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/include/pulsar-program-audio.h",
+      "sha256": "eb72ab4fcee66d338094ef4692078cd4bc218274ba63ad0a2fd9feb4dbac4cc4"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/include/pulsar-runtime-telemetry-abi.h",
+      "sha256": "8d7335b178e841abb9de49b43268111ca144d018199fa3d04d79f45997d8ece3"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/include/pulsar-runtime-telemetry-signals.h",
+      "sha256": "29a0401b057ec128c36332d1d2bde7eeb70609820a3378b72009646b71398db4"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/include/pulsar-runtime-telemetry.h",
+      "sha256": "76f0634b1654a9987d1f257e425c331c018e38c4604f00ff7971682dae9b589a"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/include/pulsar-stream-egress.h",
+      "sha256": "f42a73ce109ec2475cd5dc13bd1b3db30bcc016f85a216715ff1ddf49edb54e1"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/include/pulsar-transition-controller.h",
+      "sha256": "967278eb0c5e61b17e0b30730d45475fde5e8dac09e65a93456aca85bc816a8f"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/src/pulsar-frontend-stub.cpp",
+      "sha256": "6798dcf360c088203a48d22036769ae549ed7b7b70f20e3e1724bb7b1f09500a"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/src/pulsar-media-transition-config.cpp",
+      "sha256": "0aed92066ad176c18b305ed42925802af0d94777d96911e7ba6d0196097e1310"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/src/pulsar-media-transition.cpp",
+      "sha256": "da224be967ce60142bd312a2d25440b3c0a4b5c93c21895454b0c5f64bcd49f3"
+    },
+    {
+      "path": "plugins/pulsar-frontend-stub/src/pulsar-preview-frame.cpp",
+      "sha256": "b214bbff64cec62befe81a1c41a33eddabb7b17ec94bca7a5849bfe2a754ab7d"
+    },
+    {
+      "path": "plugins/pulsar-headless/dir-hardening.cpp",
+      "sha256": "532a78f34d45f492ca57b246e71a6c0106e41f521508123765a4a6aa3f2b011b"
+    },
+    {
+      "path": "plugins/pulsar-headless/dir-hardening.h",
+      "sha256": "8c8f5be91c0ebcba68ef9925e4491919ee66a86d7f394a177295581fdeb91dfd"
+    },
+    {
+      "path": "plugins/pulsar-headless/log-handler.cpp",
+      "sha256": "a40bd8c7c1f649a8a9009c911208e413a19716ebcf720d92e4fc91585da168f5"
+    },
+    {
+      "path": "plugins/pulsar-headless/log-handler.h",
+      "sha256": "3a7a7c09a2924a1c3f37e98702843e50f3d65dbed87227c50482b31adb9260ed"
+    },
+    {
+      "path": "plugins/pulsar-headless/main.cpp",
+      "sha256": "e96331c0fd7e559c6e954e07f300c9cc61d1901a07808c44bd4a4722efca07a4"
+    },
+    {
+      "path": "plugins/pulsar-headless/realtime-work-queue.cpp",
+      "sha256": "38bc5bb7d8119ba1e6cdc6198ffd70b8b2a9a678d17bdf1ef97aca2f8deda47a"
+    },
+    {
+      "path": "plugins/pulsar-headless/realtime-work-queue.h",
+      "sha256": "0ca1d4f232a3308cd52d77e65f195b342e706ae05635004e3d2224cb3ec30154"
+    },
+    {
+      "path": "plugins/pulsar-headless/runtime-identity.cpp",
+      "sha256": "1a2610611827553026c2cf420d731b74d2b18d3eb81c855243f8c3e9f748e641"
+    },
+    {
+      "path": "plugins/pulsar-headless/runtime-identity.h",
+      "sha256": "5df36702d236b2f13dbaff774e6266b08e9a68636466578a03f746b07f3f9228"
+    },
+    {
+      "path": "plugins/pulsar-multi-stream/src/plugin-main.cpp",
+      "sha256": "5c7f3f7b60ae153e5f1be4d2e7be919db3cabbb8a1bf49233d66dd6ce4253324"
+    },
+    {
+      "path": "plugins/pulsar-nv-secure-load/pulsar-nv-secure-load.h",
+      "sha256": "5f71bf59896fa76aa6532f7dcf777e6e08b1982f8527839abdfcae9711ebc7d3"
+    },
+    {
+      "path": "plugins/pulsar-output-classify/pulsar-output-classify.h",
+      "sha256": "84ccd7c1dc6007ab08260b7c52f01dc9d4e34ae5639ab6a06a040082cdcb9041"
+    },
+    {
+      "path": "plugins/pulsar-scene-source/src/plugin-main.cpp",
+      "sha256": "65b2de7834307aabe4bc2e85e595e8b753593d7b8b30b70067c6cce0aba071d5"
+    },
+    {
+      "path": "plugins/pulsar-websocket/lib/obs-websocket-api.h",
+      "sha256": "c29e8e38ee66c36db79cae86217ab0f270aad39f97e82090809d087c281b7948"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/Config.cpp",
+      "sha256": "8971dc9ebb21daffa92353238d474e619ac2d2462312161b6baa9280932bb5dc"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/Config.h",
+      "sha256": "f64b54b6d72cb2c27071d291e38bc0a6c1ff9d7303f512049361b8c0c683e8b9"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler.cpp",
+      "sha256": "21a99abfe4acd05638dcf319d8b35fb62aab51730e2d000f4ca250d4bdc6a13b"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler.h",
+      "sha256": "db620d2cbc98fa7cec709e8db178c5847a1ec23d31ac1a493359e459b6df752d"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler_Canvases.cpp",
+      "sha256": "3e9485f9956b5978f6b4b861488605d113b01665fa5c3dd45b17586832597564"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler_Config.cpp",
+      "sha256": "3235ceef1e1149947a42bbf0c6a50222632045716c5b9b2ad69ac6e6a187e99e"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler_Filters.cpp",
+      "sha256": "7dbc95a48f4db9c0b8eadb665656c3508e89ee1cfc3700d07e01991eb3a7eb45"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler_General.cpp",
+      "sha256": "3cbbc47c24610d2c045a0ab5007d3c7352bbb28296693b66fef52bbc3a4ecb3c"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler_Inputs.cpp",
+      "sha256": "bee09a98bdc86ede0527d9b9810d934141741e91e8251d677ad18566806f4312"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler_MediaInputs.cpp",
+      "sha256": "f807093d2a45001a94ab08d8177ac213d40710260da7b2324f8aa1d3387eabdd"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler_Outputs.cpp",
+      "sha256": "e11861bcfb64f9a831abc03a278d9c835b349165298cccac2519469e968ec90b"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler_SceneItems.cpp",
+      "sha256": "7b17ba656b7f7de4822dbdcb4fbce8e721268b61749d8efd7e592eff954d84ac"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler_Scenes.cpp",
+      "sha256": "95704c6c51faee8d8be8879e4ea4a990402bb69981814bcdcc78179f8b6dadf3"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler_Transitions.cpp",
+      "sha256": "f38617cae6ff61beb3386372a7cdf570f411fc60274ca0c9443a043dd8493b03"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/EventHandler_Ui.cpp",
+      "sha256": "c46880dc6457843a9fe4a545a4e7b5ba86c99ea672040b9a5eac7539c93a8d23"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/eventhandler/types/EventSubscription.h",
+      "sha256": "581ebca96ffc157a9738c250c823182d41e9ba7fb2dff62127f3bf35ca81eaf1"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/obs-websocket.cpp",
+      "sha256": "a7218ae8699ad65214ab2d77726afa73cebabd6ec85f1dceb9a0700a5e67382b"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/obs-websocket.h",
+      "sha256": "08527e853bede58ae93cd9cf4506af43d4e8de21dbebc1cb60cbcb9c32fc71dd"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/OutputEffect.h",
+      "sha256": "165082862e6012dc2606d56d4ce8708ccc11437bbc36855e48eb8aa85c127ee2"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestBatchHandler.cpp",
+      "sha256": "e39a8e1c3a3e3b0f42323f71cac38ec8d78d2b28f491c80483cac0126dfb509a"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestBatchHandler.h",
+      "sha256": "cdbe5694df4a5a5c38fd3b9029d508682e7c40eae305f1a77925e5d41cfdda0d"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler.cpp",
+      "sha256": "5ca45e2f605b40a6c016c6ea30ef0080e306f420d88fab2dec597e08ccd4a630"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler.h",
+      "sha256": "3b9b0b377e93b352b8cea2f6849c5912e319c715e2d11b8f9a1cd85c66808695"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Canvases.cpp",
+      "sha256": "87331abcfc2ca47fd5ea4123206ea19a0745d238d3acec0689f59a427a8ffd49"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Config.cpp",
+      "sha256": "7b89e5463ec945efe44a5b515b5ddf7d47be640f0cf2a5b4ba7f5f575794dbb3"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Filters.cpp",
+      "sha256": "1fc20ce9b351ba56b32435dcac4fb7fd1dffa0659ef879d4da7941c4f79d9e72"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_General.cpp",
+      "sha256": "f0dc3bc65e526e906b6f2257e5215884a9a729d869f0cc8785afe624cc84b874"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Inputs.cpp",
+      "sha256": "b73ddf59bb3a1339fb77ca47c543a49c91cfd93d1a8ad835e9c396eaf117d9b1"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_MediaInputs.cpp",
+      "sha256": "94c84dff87e42c3e220db1effb6266c0cc40c5aba86b328fb0b8f0f1d82a5420"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Outputs.cpp",
+      "sha256": "3f1bd5b75bb55ddc9460b161bd0e98d3058eaf572979ff2aee6876e55c9e7d94"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Record.cpp",
+      "sha256": "7837355858c9eeda748ce70e5958efb7f23ed11eb370cd6e5d98f2e630bc177e"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_SceneItems.cpp",
+      "sha256": "d553af34bbd5c8833730d595d4b95432a0e1b05242699fd4aca6df4286146175"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Scenes.cpp",
+      "sha256": "bc8adf6184494148aaa29494aa16710f8b47a71196bc10c4e0274ef89cc5bddc"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Sources.cpp",
+      "sha256": "de363eda4cbd4cfccb8fc9b6832b5743ee430cda99faa01cc8a11a7dd433eec9"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Stream.cpp",
+      "sha256": "71f8d9dd73052c5bae364644b1dce00e142cd581923edba40dee000a94ef2779"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Transitions.cpp",
+      "sha256": "e81819711c0986520fd4f25333991dde5e1e41db01d17536dd86812d485fa435"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/RequestHandler_Ui.cpp",
+      "sha256": "2a5ebc1ca857f08f074c39e936854f967cda799712ea5040296c9ab5038a8982"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/rpc/Request.cpp",
+      "sha256": "c67d9b618ff142f66055a109ecbac4829a1739e0588da910fc3d6effa1223417"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/rpc/Request.h",
+      "sha256": "a7c231301894923adeb91691f59548fad147de219ad47451a6d26821d8dbec86"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/rpc/RequestBatchRequest.cpp",
+      "sha256": "2eeb6c90ff9357904fb7244ca398165de94cd95544c492a02382cc8374507be2"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/rpc/RequestBatchRequest.h",
+      "sha256": "ba6c7b300d6f2491a4939f472e5d19b5f29867751a00464452876d44a293369a"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/rpc/RequestResult.cpp",
+      "sha256": "5228f87b820e8919ca6efeb3cbb3ff9f04676e4a414e17c087518becbfe5bdb1"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/rpc/RequestResult.h",
+      "sha256": "1c3259aaa1c3075f53884492a07d700af8eb025be10bc151d07cc5bc80316ef4"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/types/RequestBatchExecutionType.h",
+      "sha256": "57759dd27c2ab75559bec62a050677d91e69226e2235eaeb8edcfe46497857a4"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/requesthandler/types/RequestStatus.h",
+      "sha256": "82c876cf182705029dae6e06449a3d7ed696812cfeec5c33f7e5393590d22227"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Compat.cpp",
+      "sha256": "fefdba925f9de246af29864a6580367c92ceac8a6bc830f680ddd08de7b4125d"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Compat.h",
+      "sha256": "8351e922511da9b8287853d39ae34ff89bc80ca74546f127e137ff7245c16b36"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Crypto.cpp",
+      "sha256": "54e06acdb7cfce20ae73ce19f25b2afd341ab158665cbbc1127f706089a3e55d"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Crypto.h",
+      "sha256": "157f2429ab5b1567f31f4592bed55ead6b7bd6718bec276d36bae818b4e87b3f"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Json.cpp",
+      "sha256": "e40f65258346441c4435928e46c929ba20b8e0eabcc9a8334f6edfa538fadc0f"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Json.h",
+      "sha256": "7a978f7f0ac1a76de5e30d82dcedf99e30decb0a14c49c21d4265ee8c3818e10"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs.cpp",
+      "sha256": "c46a4c14bb6da0a80c1179371b200b2a17cdfa34243069193e11f01ec9f02a1f"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs.h",
+      "sha256": "0d6367a673754fb2e194e272fbda2cafe98af6f0909e72587a4c82e784fe58d6"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs_ActionHelper.cpp",
+      "sha256": "5a538c925fbb4ec7282189df72108e473622515fb748f75912b1fac77f3f00c8"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs_ArrayHelper.cpp",
+      "sha256": "7b7d6d85fdec784696222658de800d190bb6de6e8ef213fad60f339c42cd9cb0"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs_NumberHelper.cpp",
+      "sha256": "262999dc97e2a36b6a24bb1536c7990db9cb70e57529acb0cae2746e8b8267ba"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs_ObjectHelper.cpp",
+      "sha256": "a707d7c9de6dee20db13271edc3da7cccfac25b42a501db65199cd19ca51ee91"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs_OutputHelper.cpp",
+      "sha256": "ade1bfff828b782a52ed95e73e1d94ca0807e7a901f71cb2a192d321b1a97fc2"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs_SearchHelper.cpp",
+      "sha256": "29647fce7f13e2c5a00af7e276aeaeef921b4760b2f3dcc826bb608c58338d73"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs_StringHelper.cpp",
+      "sha256": "02778c0a7cd24f3994e902ee8c2d36fd109f930f536c95897964d8104e3c2452"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs_VolumeMeter.cpp",
+      "sha256": "9b27c3d1656b3b09e8ae2aa654a21b0689873adb0fc0e70adc276751d5734f4b"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs_VolumeMeter.h",
+      "sha256": "2abc6242ebe8e6bc7da11be4940bf7de96e7586735a99a2273798952aee23c6d"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Obs_VolumeMeter_Helpers.h",
+      "sha256": "4b1f9afb2e0855337f992547f9de7de520d28e60c2b1455d66dcb25caf0c4f77"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Platform.cpp",
+      "sha256": "7e24a34fdf8c59e3aa791f2bc6e906411f5a22e1f8d67b84a5761691800e1e9c"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Platform.h",
+      "sha256": "6969726dc821ce59fdca7eb37b312e0c844f160a5a5c2ba5f7053a6eb0b3f0e0"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/utils/Utils.h",
+      "sha256": "5f76ab368f09792b5a3b57d09cf3ba34ee1397d201d6822ed342b143eb13859c"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/WebSocketApi.cpp",
+      "sha256": "ffc2e70265b1e3699a8d858bd5ddf635d444115d2b404cac1403e8a9b5c1d8c9"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/WebSocketApi.h",
+      "sha256": "02843d93afa31ec5c327924823d7be946ee687aebc0603a76bf41f72dba346b4"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/websocketserver/rpc/WebSocketSession.h",
+      "sha256": "022e3bd257607bc09aedfd26c8cc96a51d517db356d8d7fbf8a21e435b97a02c"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/websocketserver/types/WebSocketCloseCode.h",
+      "sha256": "682855627fdc37eec80c406497aff7d47c0f9cdd951d6fe24a1d2c66ca44bd8b"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/websocketserver/types/WebSocketOpCode.h",
+      "sha256": "9b5911e9ae965b0ca9c9d2db39861af2e153c3c2c1738f1ac15aa4f9c1f3be8a"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/websocketserver/WebSocketServer.cpp",
+      "sha256": "37c0edca414d742704388b55b1f78c8ed72306f049602c1abe98d92733ea90a1"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/websocketserver/WebSocketServer.h",
+      "sha256": "2f3649539843631b8228735f6d3d68782aa8d25c80f16374b84cef259cdd18e4"
+    },
+    {
+      "path": "plugins/pulsar-websocket/src/websocketserver/WebSocketServer_Protocol.cpp",
+      "sha256": "00d026bc57c73978254fcd17dc5ff2a906cc25b1afb9a25ddb165849ebe06f6b"
+    },
+    {
+      "path": "scripts/analyze-telemetry-signals.py",
+      "sha256": "46607953e356cc685885ec3e23181192f4b00bbd3e8c0b20dc959d40f383760b"
+    },
+    {
+      "path": "scripts/assets/stinger-demo.manifest.json",
+      "sha256": "e1bd8e0cfbabb3e55494c000a9ef24eba4c5a6a1aa3a3a8217c107d5ff116596"
+    },
+    {
+      "path": "scripts/bench-media-source-load.py",
+      "sha256": "8d7b12790b4ab2dd551fd9e88ad58b49ccf5f08f05043cd5611ba0315f4993ea"
+    },
+    {
+      "path": "scripts/check-nv-filters-packaging.py",
+      "sha256": "8cd25120288951e629e02b0b4947bbf4f9e83a6a3ee5b17159e246db3a259024"
+    },
+    {
+      "path": "scripts/check-nvenc-preset-contract.py",
+      "sha256": "f61f59153c579fd842e699148a68569aa76768b9a325008fa8ce6f76df10f1d4"
+    },
+    {
+      "path": "scripts/check-qsv-preset-contract.py",
+      "sha256": "5ddc75163b6fe3443f3f984dd4c60fa010edde22d41637a464133308c26eb5c0"
+    },
+    {
+      "path": "scripts/check-webpage-control-level.py",
+      "sha256": "99b910f87f7567f2c06e8c72d93547502230873ee102287c2e6aeccf5b3ddc03"
+    },
+    {
+      "path": "scripts/ci-native-cache.py",
+      "sha256": "4afd780a56d30048b29481532cc2f7051a178f506985e27f58435ea8be009cb0"
+    },
+    {
+      "path": "scripts/contracts/capability-coverage.json",
+      "sha256": "c1229f8ffab6a3e55ae0cf84fcff18ad3436311301e81cd5162d20e570897576"
+    },
+    {
+      "path": "scripts/contracts/scene_control/fixtures/malicious.json",
+      "sha256": "2cdf3a11e1a999d5b75e5d709313cae0973bbb08a4bb8fba1d4c7b7af7e11996"
+    },
+    {
+      "path": "scripts/contracts/scene_control/fixtures/valid.json",
+      "sha256": "fa281a4bc2de1c7a5bb345bc84a38da7fe34ea253aab1b41d9a3c4235b04f2e4"
+    },
+    {
+      "path": "scripts/contracts/scene_control/test_252_preview_audio_descope_contract.py",
+      "sha256": "64027f786a2415444b1bf470a64df192b23733af6a0dc75879bcef8ae1c87cab"
+    },
+    {
+      "path": "scripts/contracts/scene_control/test_dual_lane_contract.py",
+      "sha256": "b6c5e1f8a7987a7d8566af5e18c5416fb704a790e9b08fd0607730d822c08d71"
+    },
+    {
+      "path": "scripts/contracts/scene_control/test_program_audio_contract.py",
+      "sha256": "cd3c32a1854821fd2b31c8689593942d0113dee984eebfe5478d98eafdbb02be"
+    },
+    {
+      "path": "scripts/contracts/scene_control/test_scene_control_contract.py",
+      "sha256": "cecd76f0f98f55e55ce24d78c36b17acec97fc4ef891e48805a8216b66c5377a"
+    },
+    {
+      "path": "scripts/contracts/scene_control/__init__.py",
+      "sha256": "96fd14190d4ef31c6980a6d85dd7ff82dcc9412c8e672f347c87a8f7bc2e1e60"
+    },
+    {
+      "path": "scripts/contracts/scene_switch_v1/fixtures/examples.json",
+      "sha256": "d507f72103027d4e43e7073e3b0f139c9959b9347a95cb43162998e1674b284a"
+    },
+    {
+      "path": "scripts/contracts/scene_switch_v1/schema.json",
+      "sha256": "518f2af390cecbd9a5403f3e77b5c26855e5762243b4bfdf859b2e2f45234525"
+    },
+    {
+      "path": "scripts/contracts/scene_switch_v1/test_draft202012_schema.py",
+      "sha256": "af9648f7932361d6d78d707e061161b3459f20d951f85d80416112d497549bf5"
+    },
+    {
+      "path": "scripts/contracts/scene_switch_v1/test_low_latency_interleave_contract.py",
+      "sha256": "25d9a49f8fd73566098cbfaa0775c12f84809fc1ec6bbd57948ec55506f9ac82"
+    },
+    {
+      "path": "scripts/contracts/scene_switch_v1/test_probe247_evidence.py",
+      "sha256": "3de62816a0584b9b739cd1d6a25ab96af5190a5a4ec0aa7158c075e8ae3de886"
+    },
+    {
+      "path": "scripts/contracts/scene_switch_v1/test_runtime_telemetry_producer_contract.py",
+      "sha256": "0a144b24ad4c6cb68ac6c98a736690e71c5aa304abe270ffc7daa5ebe337eb2e"
+    },
+    {
+      "path": "scripts/contracts/scene_switch_v1/test_runtime_transport_contract.py",
+      "sha256": "3c87a737e19535d4a85252ef8d6a0fd201effd466380e6374ddd1e7a9444d66d"
+    },
+    {
+      "path": "scripts/contracts/scene_switch_v1/test_scene_switch_contract.py",
+      "sha256": "a8cfc342ba22f68e25f77a77e8d831944a1539b0bad6677f857ce9918dc4c64d"
+    },
+    {
+      "path": "scripts/contracts/scene_switch_v1/__init__.py",
+      "sha256": "ed0551c91721ec5e6ab76806c234eb2567a168e783290d4408dcd0e87aa68707"
+    },
+    {
+      "path": "scripts/fixtures/m10-orion-scene.lsml.json",
+      "sha256": "12f4a6848696c0ef22463477314d7a5d54a5100baf4e00d42014fbbb8703c09b"
+    },
+    {
+      "path": "scripts/live-test/vendor/babel.min.js",
+      "sha256": "2623a9e22809915ce789b4461154e277ddce520d5a4320c14d44332a5d0dcea0"
+    },
+    {
+      "path": "scripts/live-test/vendor/react-dom.production.min.js",
+      "sha256": "35f4f974f4b2bcd44da73963347f8952e341f83909e4498227d4e26b98f66f0d"
+    },
+    {
+      "path": "scripts/live-test/vendor/react.production.min.js",
+      "sha256": "d949f1c3687aedadcedac85261865f29b17cd273997e7f6b2bfc53b2f9d4c4dd"
+    },
+    {
+      "path": "scripts/m10_orion_standin.py",
+      "sha256": "d9957a112525d7d929f33df599b618149b1aeeee93f6421fc9320f83ee5d7a37"
+    },
+    {
+      "path": "scripts/m10_setup.py",
+      "sha256": "127e9e5a84d7d603634861e0b3e700bb2e618fa94beef66579e0645485069298"
+    },
+    {
+      "path": "scripts/prepare-pages-proof.py",
+      "sha256": "cec24401a17ee9c9d6b357a616813ee6e101e816b374da1cf3927d17dbf488e3"
+    },
+    {
+      "path": "scripts/probe-247-runtime.py",
+      "sha256": "c802c76c56a90f84c83c1cad5fc73d0a8a4039b2126106df7c724062337064ef"
+    },
+    {
+      "path": "scripts/probe-adaptive.py",
+      "sha256": "64967aa371dc73909d8b854f03c3232bcb9e84f5603372da56b0f19d10aa7795"
+    },
+    {
+      "path": "scripts/probe-audio-multitrack.py",
+      "sha256": "8c29b3279c3b53049810e96515c0e89846655108ce8003edd4693a57c62826d9"
+    },
+    {
+      "path": "scripts/probe-audio-tracks-oracle.py",
+      "sha256": "58c7ced80413ff3e939454afd17c2bd1d279975374a968f5f8958ad4231e84e6"
+    },
+    {
+      "path": "scripts/probe-av-flash-click.py",
+      "sha256": "50293b94e3d6784119d0212b941ffaee03fc21f0a0bc8beec13c6338a8a98a41"
+    },
+    {
+      "path": "scripts/probe-browser-m3.py",
+      "sha256": "6973659df3acdcab859076c58649c8928015b669a282d52fce2ea8762e87ee08"
+    },
+    {
+      "path": "scripts/probe-capability-contract.py",
+      "sha256": "b3bda83a300068bc22a9ef128ea3d14e1fe2e69f8b9cdac0a7294056d1e6d10d"
+    },
+    {
+      "path": "scripts/probe-configurable-transition.py",
+      "sha256": "33fbadd99b86243cca69675655ed7b00c13b69dc02d406267c179387e46f7d8f"
+    },
+    {
+      "path": "scripts/probe-dual-lane-rollback.py",
+      "sha256": "6b95846e1bd40b4a685a535779566b4f3516f84b3ce3a545ca4ede2e09552b7c"
+    },
+    {
+      "path": "scripts/probe-dual-lane.py",
+      "sha256": "03850a3923c3006cc7a45ecabfcda011abd7a7bc9048e3f6d0f6fb304e889fa3"
+    },
+    {
+      "path": "scripts/probe-events.py",
+      "sha256": "7883b6e511390ac7828140f27847ae3864cf024e28a4b2f3428d56fd432170c5"
+    },
+    {
+      "path": "scripts/probe-loopback-bind.py",
+      "sha256": "863992c8000510c75d0bc4715edb5d6c568c0d0d697e884c22ec1c944c258dd7"
+    },
+    {
+      "path": "scripts/probe-m10-canvas-live.py",
+      "sha256": "fc74d61a948fbc50ee9f404b2d961294c1e1aa4c7f8abbcf69c21f248ff4b4da"
+    },
+    {
+      "path": "scripts/probe-m6-live.py",
+      "sha256": "2d00c9e2093d098121f154bf8d52f6772337c8375485dfb4e11dcefd3304a497"
+    },
+    {
+      "path": "scripts/probe-manifest-adapters-scales.py",
+      "sha256": "42bf2dadcc9f526dca404e207be8582f5a916562ce67e38cd5e3085515602dc7"
+    },
+    {
+      "path": "scripts/probe-manifest-inventories.py",
+      "sha256": "e1d469816c5e1cffb4bf85f48161babb12e9d538de5f9c74b6ecfd39287339d0"
+    },
+    {
+      "path": "scripts/probe-monitoring-devices.py",
+      "sha256": "557586b8e4417f8181212d9e351e4a08c6f1f8d958e140b80829031cd4d8d483"
+    },
+    {
+      "path": "scripts/probe-multi-stream.py",
+      "sha256": "90e0d1e6965c1e14a7966fb2de7d8ed5a2ed96ebc09bc8ecb0cf1bc6ac98b1f2"
+    },
+    {
+      "path": "scripts/probe-nvenc-preset.py",
+      "sha256": "d2abc054f2f7d5452fcecdf8bafd8ccc448f97147f930b10e2ab1ea721a2242f"
+    },
+    {
+      "path": "scripts/probe-nvenc-profile-frontier.py",
+      "sha256": "08721121540c8a370c2df4439d076e25df7fa882f5b0343f7c0d3a3f0846b8fb"
+    },
+    {
+      "path": "scripts/probe-nvenc-quality.py",
+      "sha256": "56cfafefd8e602d874ff12d457a1a18efab98efe97cf4333dc38558ab4e67b75"
+    },
+    {
+      "path": "scripts/probe-output-effect.py",
+      "sha256": "5812e46e62821c8b98dac7e4c05ce3e49894922beed79e30437a94d9b8dc958e"
+    },
+    {
+      "path": "scripts/probe-preview-transition.py",
+      "sha256": "823696f91b73d95a4c205172c628ba8ee7e2d7ecfc202b9803769fd44888b1ab"
+    },
+    {
+      "path": "scripts/probe-program-audio.py",
+      "sha256": "14f892b332a2d24a9cd8d1465235f33efc5b075090b4ee78975f85dac7a68b8c"
+    },
+    {
+      "path": "scripts/probe-qsv-preset.py",
+      "sha256": "63158078c323231c5cbdceaf0f630fac59c1a3cc73b6a73e33a8c1e8ec8ebcd6"
+    },
+    {
+      "path": "scripts/probe-record-m2.py",
+      "sha256": "87eb13525941b0f5e8671c0762eafbe265e353b5b55a65b33690feac82859f6f"
+    },
+    {
+      "path": "scripts/probe-record-split.py",
+      "sha256": "80cfcfced6fe540171f4059d314d0518337272aaa5f1e4abfb0f3689a321d0a3"
+    },
+    {
+      "path": "scripts/probe-record.py",
+      "sha256": "fc8e5451adc5f02f120e7ad2e4f02bdc7d61503a4c5bf8a3399e3bc3abca3589"
+    },
+    {
+      "path": "scripts/probe-replay.py",
+      "sha256": "7173f2ac365fe9754944b890dd970dce33a274087627cdd968cbb7b8692ba011"
+    },
+    {
+      "path": "scripts/probe-scene-list-truth.py",
+      "sha256": "352de0ea0f69ce65fbe9574c80458a2769a040a30780afc1dc89ac67f95393c9"
+    },
+    {
+      "path": "scripts/probe-scene-name-drift.py",
+      "sha256": "c9260e8299be50608c8855b26fd5a1730f4077b4b708cba226918f5d858aa045"
+    },
+    {
+      "path": "scripts/probe-source-kinds.py",
+      "sha256": "02bdd2af16607ca6e7e3af4e87178ad3402b63f7aa1b3740884b3e3479a822cb"
+    },
+    {
+      "path": "scripts/probe-source-telemetry.py",
+      "sha256": "799011292a655e380aa702232a9dbe8b5d6fc62593d8327e240a62abe0f0ce14"
+    },
+    {
+      "path": "scripts/probe-spike-gpu-coexist.py",
+      "sha256": "b0fc4f44240c03cf9486f64d364088f08cb7341c8140ae09d7be1776eec751c3"
+    },
+    {
+      "path": "scripts/probe-stinger-smoke.py",
+      "sha256": "11b530b34317d528acadb8d9cb707dd8e47213cded5fc2ed3642b1c0bb7dc026"
+    },
+    {
+      "path": "scripts/probe-stream-egress-guard.py",
+      "sha256": "82bdfcdbe391620f5074b10dc80cccd4e95f39b8f5e144a54aa8ce54184c59e2"
+    },
+    {
+      "path": "scripts/probe-take-latency.py",
+      "sha256": "66301bfa84e5a3c5c07d957cd267a3ae13593acba06b78b47612939965fd6bab"
+    },
+    {
+      "path": "scripts/probe-transition-boundary.py",
+      "sha256": "ae63c09ea7363e1bdb761f8baa2181b2834a1858b7655f574d23e9e27660dd56"
+    },
+    {
+      "path": "scripts/probe-transition-raw-boundary.py",
+      "sha256": "2b4b10b697a103f63c186ce5c8815b83634e89d99e08b6d432e0f62f8eaf8bb0"
+    },
+    {
+      "path": "scripts/probe-twitch-live.py",
+      "sha256": "185e16ab1392f88063f3a8be5c1121f296e58685bd1cdb50f282a9f235e2aeb3"
+    },
+    {
+      "path": "scripts/probe-twitch-rtmps.py",
+      "sha256": "573daf7e7b8b600f7dad9eb6d33a824d1b4229410533f59d00df84aa1e694d8a"
+    },
+    {
+      "path": "scripts/probe-twitch-scene-switch.py",
+      "sha256": "0445b36b210bdc5f41430e99dc2ec5431f3705872e0540ab348d1038b0415020"
+    },
+    {
+      "path": "scripts/probe-vcam-scene-mode.py",
+      "sha256": "634899c513921a9b273f52ac92025f754eb30f149186e6f32080c750fe63f1c6"
+    },
+    {
+      "path": "scripts/probe-webpage-control-level.py",
+      "sha256": "b2609192a332b8cffa2f8b6efbe643d0146f96fab161af31a846fe8d4a3adf8b"
+    },
+    {
+      "path": "scripts/probe-websocket.py",
+      "sha256": "f2b50510df33cc966c22ae383731be1b64ff674b6c834ab2c9cac493a1bec34b"
+    },
+    {
+      "path": "scripts/publish-existing-release.py",
+      "sha256": "76dd6595e70b7720f3511819c9bbbd4e377cca5650afa2c6b0215a56091abe05"
+    },
+    {
+      "path": "scripts/redact-websocket-config.py",
+      "sha256": "e54690a816f0505d21cb22ae6db24c2d46574548bdcc49f672219d93751d419b"
+    },
+    {
+      "path": "scripts/report-253-study.py",
+      "sha256": "825caada45cb8257891e545658e667eb5b75967e5e35a61d84dbb66215b0710f"
+    },
+    {
+      "path": "scripts/test-cef-provisioning.py",
+      "sha256": "c0ae8fb6356c811f7b7f14e6784f05b694e2b9df955e5d06e8a40ce453f0305f"
+    },
+    {
+      "path": "scripts/test_ci_native_cache.py",
+      "sha256": "6d9c6a992d0a246412d9ca2df2b655eaf14344d3cbb9d3e7d86733bad60ba9bd"
+    },
+    {
+      "path": "scripts/test_live_workflow.py",
+      "sha256": "73cc894f3db57bee3990f24dc092aa5565ea64890366f082100dbe487c611a69"
+    },
+    {
+      "path": "scripts/test_m10_setup.py",
+      "sha256": "32cd867ca6096863c0425b3ed73119e8684acfade6413f8914ccae8bea13fe4f"
+    },
+    {
+      "path": "scripts/test_prepare_pages_proof.py",
+      "sha256": "159753472cac9e2d57e738f0e6130f57790e71e21e05139435680d736038fed1"
+    },
+    {
+      "path": "scripts/test_probe_m10_real_orion.py",
+      "sha256": "73091809f7e114cc9838aafe1228f082655d33e09508d0387a1174e01cda2761"
+    },
+    {
+      "path": "scripts/test_probe_twitch_live.py",
+      "sha256": "ed0ebb6c2d5f308e151edfdcbd303fa77aa67008b39b5e5cc8be6f355bf11ebf"
+    },
+    {
+      "path": "scripts/test_publish_existing_release.py",
+      "sha256": "a1ce560a98e7359e461b79be0a9c56106c7d012dd44e9986284fd87518a7c0bb"
+    },
+    {
+      "path": "scripts/trace-integrity.py",
+      "sha256": "a7e2ed2d4c1b5ea2ffb60532cb434a76e3766c383c0a7ba2a52265bddd5e45bd"
+    },
+    {
+      "path": "tests/build-win/test_build_win_fastpath.py",
+      "sha256": "e81c9263f3070e36bc26959d7d19fb22b33025153eed376898fbf2e11502877f"
+    },
+    {
+      "path": "tests/cmake_external/test_external_upstream_build_dir.py",
+      "sha256": "769768d4b21fa896780d4d763446602c00993af1fae9821026b962fa0ec7a4ae"
+    },
+    {
+      "path": "tests/d3d11-return-transport/test_d3d11_recovery_contract.py",
+      "sha256": "284198ce4c565ba8297484f1e58b4737a0d75a838c1842a73d432334d69ff797"
+    },
+    {
+      "path": "tests/d3d11-return-transport/test_d3d11_return_transport.py",
+      "sha256": "865cc4105a126e5503ab6b5206e2bb110a27874a1ec9f6a0e704e3e561f12a17"
+    },
+    {
+      "path": "tests/d3d11-return-transport/test_f02_readonly_abi_contract.py",
+      "sha256": "de59f32776fe18cd6ace56b7db2f95ae32ae81a9cd0ed8a253d59fc92e973d6e"
+    },
+    {
+      "path": "tests/d3d11-return-transport/test_private_helper_auth_contract.py",
+      "sha256": "b8657a21d21ae8e70e2bbe0fa99b9fb2c642edfc55da096f047d6768a3371a55"
+    },
+    {
+      "path": "tests/dir-hardening-probe/dir-hardening-probe-test.cpp",
+      "sha256": "87477fc9026584f507ea5a13607b94eb2a74c8a700d7f082d9471b634f21343d"
+    },
+    {
+      "path": "tests/directshow-namespace-probe/directshow-namespace-probe-test.cpp",
+      "sha256": "7c7899bb73e81e3b040c250fa42a52e90036d8793619de82ef37e9a216292433"
+    },
+    {
+      "path": "tests/dual-lane-config/dual-lane-config-probe.cpp",
+      "sha256": "3aacbe146761f007e1026250e027fc8bc5cf5c3ecba2c8b233191b77998769b5"
+    },
+    {
+      "path": "tests/dual-lane-hot-swap/test_hot_lane_activation_contract.py",
+      "sha256": "bbaef3836fad18be446e5c38202c1697ec0b320dc67cfc46f9a11739be958fc2"
+    },
+    {
+      "path": "tests/lease-watcher/registration-pipe-probe.cpp",
+      "sha256": "f9e51733c0022a5beaa716717de2d4773942a17455ac4748f228bbf5ff7844c3"
+    },
+    {
+      "path": "tests/lease-watcher/test_consumer_registration_contract.py",
+      "sha256": "1bf47bd015b7e57e34a60f68bbc6529345ec39b497da6665ad57c60b57da0a4b"
+    },
+    {
+      "path": "tests/lease-watcher/test_lease_watcher_contract.py",
+      "sha256": "b80bbc5bc79fca71c1fa2582414df1d55b3cdfefd4c0fb77e8a31594ed8273bf"
+    },
+    {
+      "path": "tests/log-handler-probe/log-handler-probe-test.cpp",
+      "sha256": "a46524d0f52510467114a9361864c8fcafd45ba8b85344f15ac111a58c471999"
+    },
+    {
+      "path": "tests/output-attempt-settled-probe/output-attempt-settled-probe-test.cpp",
+      "sha256": "d89151a53964a1a11c6c84272b54802a765a62b7a75b93b99e78f7bba580fd63"
+    },
+    {
+      "path": "tests/output-classify-probe/output-classify-probe-test.cpp",
+      "sha256": "499a8eeb883183c18016a7ed0a1d556195e822a71a3c1abdd79669ef9b529348"
+    },
+    {
+      "path": "tests/probe-audio-multitrack/test_probe_audio_multitrack_contract.py",
+      "sha256": "ece6b02b0e04adcb28e93eb5acab876e739288e2e23b3bf4b9cc5a4f048cd1ce"
+    },
+    {
+      "path": "tests/probe-dual-lane/test_marker_metadata.py",
+      "sha256": "d44b93ecb2097db17d6ba6062686df1ff4cbdf9bcd4d2efb1ce791f952184862"
+    },
+    {
+      "path": "tests/probe-dual-lane/test_native_packet_content.py",
+      "sha256": "d20a3efc1d87ebee312bb84928eaadce4682636154e2837979790ee1c84b3a64"
+    },
+    {
+      "path": "tests/probe-dual-lane/test_native_receiver.py",
+      "sha256": "c7a0bae260854707db59d3bf25cc1c3d9697f1e6db9ff67f9609be8dd3a9927e"
+    },
+    {
+      "path": "tests/probe-dual-lane/test_probe_dual_lane.py",
+      "sha256": "24fdc53e8754a1e494ddfeecdef6e205facb72f447897edbe0401f59bc9dd652"
+    },
+    {
+      "path": "tests/probe-nvenc-async-output/test_async_output.py",
+      "sha256": "29cd13471146348390792fab1f0af327265f437ce177e22a53dd5aa4619da335"
+    },
+    {
+      "path": "tests/probe-nvenc-quality/test_probe_nvenc_quality.py",
+      "sha256": "47f3172836ed035c692ed6aaa3776ea27c27d088f20e5db71987ebdccdd03790"
+    },
+    {
+      "path": "tests/probe-nvenc-ready-drain/test_ready_drain.py",
+      "sha256": "e839adfa3424638ea7972f4e9027e3c8d66b9db58b8be3349397078270457d17"
+    },
+    {
+      "path": "tests/probe-output-effect/test_probe_output_effect_contract.py",
+      "sha256": "9fab8a2a455e5084df6712e07833c95f02ac78be7c174a2a6e69a61e2c4eb843"
+    },
+    {
+      "path": "tests/probe-scene-name-drift/test_probe_scene_name_drift_contract.py",
+      "sha256": "3087ed8adfa049694452e9459922e2e9f2754a0d269178502a1669f67d8819e5"
+    },
+    {
+      "path": "tests/probe-take-latency/test_probe_take_latency.py",
+      "sha256": "0202640c169b206a00607172eaab7d3a76b7cf6b85f3b60ebad3e15ada07fdc5"
+    },
+    {
+      "path": "tests/probe-take-latency/test_record_stop_contract.py",
+      "sha256": "5aff8468feff4575617df6fbb5a0782dbc4ae537c0d7eb062b8645aeb78e0e07"
+    },
+    {
+      "path": "tests/pulsar-headless-shutdown/audio-callback-gate-test.cpp",
+      "sha256": "32cd2cbaf33a8ea528bec33a25b08d4b50ef767d90a39849f0993f2940e7d2d3"
+    },
+    {
+      "path": "tests/pulsar-headless-shutdown/browser-source-task-state-test.cpp",
+      "sha256": "314e37c1ed60d663b582592b353c7d8840f4dfe8cbb4ce50c37a1f45a88a528b"
+    },
+    {
+      "path": "tests/pulsar-headless-shutdown/test_graceful_shutdown.py",
+      "sha256": "7a7a8b6739bda299c6363a415ca5fb873235675b6298169825ac0174c1a2440d"
+    },
+    {
+      "path": "tests/pulsar-headless-shutdown/test_websocket_quiesce.py",
+      "sha256": "08ddd6e3ccb2b73f33bd631ac837fb747cc1255b7c6c06c4cbedae406ce24847"
+    },
+    {
+      "path": "tests/pulsar-media-transition/config-probe.cpp",
+      "sha256": "7fb5aaae32bccd62bd615b9b54450cd2fed99190cddf3e43c507b3af8a19b817"
+    },
+    {
+      "path": "tests/pulsar-transition-controller/transition-controller-probe.cpp",
+      "sha256": "a96047557d5a1bd8f313e5d8f425947b4f61b1f7829c14307258ee15df09f666"
+    },
+    {
+      "path": "tests/return-queue-safety/test_content_identity.py",
+      "sha256": "4cfcb904635f6af2002a74cdd8d698e3f06265733ea2008d57fd41f74296f48b"
+    },
+    {
+      "path": "tests/return-queue-safety/test_current_readback_audio_clock.py",
+      "sha256": "ccdc9a5487191bc37a3957f35ec0d60ce6d150632bb9b1e23c9604219a3186ab"
+    },
+    {
+      "path": "tests/return-queue-safety/test_pipeline_stats_atomic.py",
+      "sha256": "31c220fee3a9d258735e4bf96a417edac859b10717692bb6d53012adae760a01"
+    },
+    {
+      "path": "tests/return-queue-safety/test_return_queue_safety.py",
+      "sha256": "0164aae165fc8f7cfb4c85d1c1e02bbdd5d84f4fe5dd5345c025e500fbc59bad"
+    },
+    {
+      "path": "tests/return-queue-safety/test_tight_nv12_copy.py",
+      "sha256": "7b9cf01d920c8de00b2a6231ca4a15b1e4f1a56f70202e06ecd18f641057dbe1"
+    },
+    {
+      "path": "tests/rtwq-lifecycle/probe-wasapi.py",
+      "sha256": "bc5205c7c7f4f6df40595a91c70fb98b298b596488e82472ae1d4507f0b25b24"
+    },
+    {
+      "path": "tests/rtwq-lifecycle/rtwq-lifecycle-test.cpp",
+      "sha256": "b479b5f2047215aed3b6fe616d52c7b7c1d3ca705cc12200f188aaeba8379c1c"
+    },
+    {
+      "path": "tests/runtime-isolation-probe/runtime-isolation-probe-test.cpp",
+      "sha256": "6b2a18a3489d3cb75d9ee67cbf8972a17e8f18c9e4ef922dfe64a4ad1f416c91"
+    },
+    {
+      "path": "tests/telemetry-signals/test_telemetry_signals.py",
+      "sha256": "2a2983fbeb8555a54516b7402533cbde760a0e0ae55dc6314195e89c7753556d"
+    },
+    {
+      "path": "tests/trace-integrity/test_trace_integrity.py",
+      "sha256": "eb2b6af57c84910bb98878d9754abffb4fdac0a1d1f07a20e37f99896809400c"
+    },
+    {
+      "path": "tests/ux-251/consumer.mjs",
+      "sha256": "201bb79bbb669e230df888a32a74ff29a59b7fc5212b8a87bbc396e236afa8c2"
+    },
+    {
+      "path": "tests/ux-251/consumer.test.mjs",
+      "sha256": "c25ab38df50f2b59f8d4e51c93f55a8a7ff11602d14d84df2c92958b655bbf56"
+    },
+    {
+      "path": "tests/ws-debug-probe/ws-debug-probe-test.cpp",
+      "sha256": "904637381550a0fc3c7370e85790ad7b15e3d6208972d0cb69795747dcba4fe7"
+    }
+  ]
+}

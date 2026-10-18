@@ -1,0 +1,6 @@
+{
+  "passed": true,
+  "pin": "bd73b922891e56839b0bc86bdc519802802f9d68",
+  "candidate": "e2aca78947507d2c75c85e44aa6ea1db81b3c46d",
+  "check": "Both patches replay in order on pinned native sources and match the compiled candidate. Earlier patch stack has no nv-filters changes."
+}

@@ -1,0 +1,213 @@
+{
+  "runtime": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+  "programBefore": {
+    "currentProgramSceneName": "Default",
+    "currentProgramSceneUuid": "dcda6008-9844-415e-8f32-8a1883267f16",
+    "sceneName": "Default",
+    "sceneUuid": "dcda6008-9844-415e-8f32-8a1883267f16"
+  },
+  "programAfter": {
+    "currentProgramSceneName": "Default",
+    "currentProgramSceneUuid": "dcda6008-9844-415e-8f32-8a1883267f16",
+    "sceneName": "Default",
+    "sceneUuid": "dcda6008-9844-415e-8f32-8a1883267f16"
+  },
+  "trace": [
+    {},
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "closing"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "closing"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "closing"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "closing"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "closing"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "closing"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "closing"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "closing"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "covered"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "covered"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "opening"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "opening"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "opening"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "opening"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "opening"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "opening"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "opening"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "opening"
+    },
+    {
+      "channel": "preview",
+      "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+      "cut_time_ms": 894,
+      "operational": true,
+      "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+      "start_frame_id": 4185,
+      "start_pts_ns": 1680651633516310,
+      "status": "opening"
+    }
+  ],
+  "completed": {
+    "channel": "preview",
+    "command_id": "preview-234d4122-95ae-417c-bd00-81bae190bc1b",
+    "cut_time_ms": 894,
+    "frame_id": 4337,
+    "operational": true,
+    "pts_ns": 1680654166849542,
+    "runtime_instance_id": "prism-a37085fb5bc24fd3bc968c0f5c36b61d",
+    "start_frame_id": 4185,
+    "start_pts_ns": 1680651633516310,
+    "status": "completed"
+  },
+  "error": null
+}

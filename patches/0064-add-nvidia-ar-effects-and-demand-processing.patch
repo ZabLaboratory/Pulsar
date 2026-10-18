@@ -1,0 +1,675 @@
+From 1246de1a4f0df3f12034dd6fdbdea75e4a8bddc1 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 15:56:37 +0200
+Subject: [PATCH] feat(nvidia): AR camera effects and demand processing
+
+Bind installed Maxine AR face tracking and gaze redirection to the existing VFX GPU pipeline. Add bounded crop, native comparison, graphics-thread processing counters and lazy image allocation. Repair failure cleanup and partial allocations. Upstream core is unchanged; nv-filters integration is carried as a patch for the local capability audit.
+---
+ plugins/nv-filters/data/rtx_blur.effect    |   9 +-
+ plugins/nv-filters/nv-filters.c            |  13 +
+ plugins/nv-filters/nvidia-videofx-filter.c | 309 ++++++++++++++++++---
+ 3 files changed, 288 insertions(+), 43 deletions(-)
+
+diff --git a/plugins/nv-filters/data/rtx_blur.effect b/plugins/nv-filters/data/rtx_blur.effect
+index 89824b8c2..22f68ea9e 100644
+--- a/plugins/nv-filters/data/rtx_blur.effect
++++ b/plugins/nv-filters/data/rtx_blur.effect
+@@ -5,6 +5,8 @@ uniform texture2d image;
+ uniform float multiplier;
+ uniform float compare;
+ uniform float processed_mix;
++uniform float2 crop_offset;
++uniform float crop_size;
+ uniform texture2d mask;
+ uniform texture2d blurred;
+ 
+@@ -55,10 +57,11 @@ FragPos VSConvertUnorm(uint id : VERTEXID)
+ 
+ float4 Mask(FragData f_in)
+ {
+-	float4 rgba = image.Sample(texSampler, f_in.uv);
+-	float3 blur = srgb_nonlinear_to_linear(blurred.Sample(texSampler, f_in.uv).rgb);
++	float2 uv = (compare > 0.5 && f_in.uv.x < 0.5) ? f_in.uv : crop_offset + f_in.uv * crop_size;
++    float4 rgba = image.Sample(texSampler, uv);
++	float3 blur = srgb_nonlinear_to_linear(blurred.Sample(texSampler, uv).rgb);
+ 	// Between blurred and unblurred area we interpolate to have a smooth transition.
+-	float m = smoothstep(0.85, 0.95, mask.Sample(texSampler, f_in.uv).a);
++	float m = smoothstep(0.85, 0.95, mask.Sample(texSampler, uv).a);
+ 	float mix_amount = (compare > 0.5 && f_in.uv.x < 0.5) ? 0.0 : processed_mix;
+ 	float3 out_lin = lerp(rgba.rgb, lerp(blur, rgba.rgb, m), mix_amount);
+ 	return float4(out_lin, rgba.a);
+diff --git a/plugins/nv-filters/nv-filters.c b/plugins/nv-filters/nv-filters.c
+index 411f77ec6..0975ead04 100644
+--- a/plugins/nv-filters/nv-filters.c
++++ b/plugins/nv-filters/nv-filters.c
+@@ -26,6 +26,12 @@ extern struct obs_source_info nvidia_blur_filter_info;
+ extern struct obs_source_info nvidia_background_blur_filter_info;
+ extern struct obs_source_info nvidia_denoise_filter_info;
+ extern bool nvvfx_denoise_models_available(void);
++extern struct obs_source_info nvidia_autoframe_filter_info;
++extern struct obs_source_info nvidia_eye_contact_filter_info;
++extern bool nvvfx_ar_load(void);
++extern bool nvvfx_ar_face_model_available(void);
++extern bool nvvfx_ar_eye_models_available(void);
++extern void nvvfx_ar_unload(void);
+ extern bool load_nvidia_vfx(void);
+ extern void unload_nvidia_vfx(void);
+ #endif
+@@ -78,6 +84,12 @@ bool obs_module_load(void)
+ 		obs_register_source(&nvidia_background_blur_filter_info);
+ 		if (nvvfx_denoise_models_available())
+ 			obs_register_source(&nvidia_denoise_filter_info);
++        if (nvvfx_ar_load()) {
++            if (nvvfx_ar_face_model_available())
++                obs_register_source(&nvidia_autoframe_filter_info);
++            if (nvvfx_ar_eye_models_available())
++                obs_register_source(&nvidia_eye_contact_filter_info);
++        }
+ 	}
+ #endif
+ 	return true;
+@@ -89,6 +101,7 @@ void obs_module_unload(void)
+ 	unload_nvidia_afx();
+ #endif
+ #ifdef LIBNVVFX_ENABLED
++	nvvfx_ar_unload();
+ 	unload_nvidia_vfx();
+ #endif
+ }
+diff --git a/plugins/nv-filters/nvidia-videofx-filter.c b/plugins/nv-filters/nvidia-videofx-filter.c
+index 60421f8a5..c1bc60fca 100644
+--- a/plugins/nv-filters/nvidia-videofx-filter.c
++++ b/plugins/nv-filters/nvidia-videofx-filter.c
+@@ -4,6 +4,9 @@
+ #include <d3d11.h>
+ #include <d3d11_1.h>
+ #include "nvvfx-load.h"
++#include <pulsar-nvar-load.h>
++#include <math.h>
++#include <util/platform.h>
+ /* -------------------------------------------------------- */
+ 
+ #define do_log(level, format, ...) \
+@@ -45,7 +48,7 @@
+ #define S_STRENGTH_DEFAULT 0.5
+ #define TEXT_MODE_BLUR_STRENGTH MT_("Nvvfx.Method.Blur.Strength")
+ 
+-enum nvvfx_fx_id { S_FX_AIGS, S_FX_BLUR, S_FX_BG_BLUR, S_FX_DENOISE };
++enum nvvfx_fx_id { S_FX_AIGS, S_FX_BLUR, S_FX_BG_BLUR, S_FX_DENOISE, S_FX_AUTOFRAME, S_FX_EYE };
+ 
+ bool nvvfx_loaded = false;
+ bool nvvfx_new_sdk = false;
+@@ -86,6 +89,13 @@ struct nvvfx_data {
+ 	float threshold;
+ 	bool compare;
+ 	bool denoise_reset;
++    pulsar_ar_handle ar_handle;
++    pulsar_ar_rect ar_rects[25];
++    pulsar_ar_boxes ar_boxes;
++    pulsar_ar_point ar_landmarks[126], ar_eye_landmarks[126];
++    float ar_confidence[126], ar_gaze[2], ar_translation[3], ar_rotation[4], ar_direction[6];
++    float crop_x, crop_y, crop_size, zoom, smoothing, frame_seconds, lost_seconds;
++    uint64_t processed_count, last_processing_ns;
+ 
+ 	/* Every nth frame is processed through the FX (where n =
+ 	 * processing_interval) so that the same mask is used for n consecutive
+@@ -153,6 +163,92 @@ bool nvvfx_denoise_models_available(void)
+     return true;
+ }
+ 
++static const char *nv_autoframe_filter_name(void *unused)
++{
++    UNUSED_PARAMETER(unused);
++    return "NVIDIA Auto Frame";
++}
++static const char *nv_eye_filter_name(void *unused)
++{
++    UNUSED_PARAMETER(unused);
++    return "NVIDIA Eye Contact";
++}
++
++static bool nvvfx_ar_create(struct nvvfx_data *filter)
++{
++    char models[MAX_PATH];
++    bool eye = filter->filter_id == S_FX_EYE;
++    if (!pulsar_ar.module)
++        return false;
++#define AR_CHECK(call) do { NvCV_Status status = (call); if (status != NVCV_SUCCESS) { error("AR initialization failed: %i", status); return false; } } while (0)
++    AR_CHECK(pulsar_ar.create(eye ? "GazeRedirection" : "FaceDetection", &filter->ar_handle));
++    snprintf(models, sizeof(models), "%s\\models", pulsar_ar.dir);
++    AR_CHECK(pulsar_ar.set_string(filter->ar_handle, "NvAR_Parameter_Config_ModelDir", models));
++    AR_CHECK(pulsar_ar.set_stream(filter->ar_handle, "NvAR_Parameter_Config_CUDAStream", filter->stream));
++    AR_CHECK(pulsar_ar.set_u32(filter->ar_handle, "NvAR_Parameter_Config_Temporal", 0xffffffffu));
++    if (eye) {
++        AR_CHECK(pulsar_ar.set_u32(filter->ar_handle, "NvAR_Parameter_Config_Landmarks_Size", 126));
++        AR_CHECK(pulsar_ar.set_u32(filter->ar_handle, "NvAR_Parameter_Config_GazeRedirect", 1));
++        AR_CHECK(pulsar_ar.set_u32(filter->ar_handle, "NvAR_Parameter_Config_EyeSizeSensitivity", 3));
++    }
++    AR_CHECK(pulsar_ar.load(filter->ar_handle));
++#undef AR_CHECK
++    return true;
++}
++
++static bool nvvfx_ar_images(struct nvvfx_data *filter)
++{
++    bool eye = filter->filter_id == S_FX_EYE;
++#define AR_CHECK(call) do { NvCV_Status status = (call); if (status != NVCV_SUCCESS) { error("AR image binding failed: %i", status); return false; } } while (0)
++    AR_CHECK(pulsar_ar.set_object(filter->ar_handle, "NvAR_Parameter_Input_Image", filter->BGR_src_img, sizeof(NvCVImage)));
++    filter->ar_boxes.boxes = filter->ar_rects;
++    filter->ar_boxes.max_boxes = 25;
++    filter->ar_boxes.num_boxes = 0;
++    AR_CHECK(pulsar_ar.set_object(filter->ar_handle, "NvAR_Parameter_Output_BoundingBoxes", &filter->ar_boxes, sizeof(pulsar_ar_boxes)));
++    if (eye) {
++        AR_CHECK(pulsar_ar.set_object(filter->ar_handle, "NvAR_Parameter_Output_Image", filter->blur_BGR_dst_img, sizeof(NvCVImage)));
++        AR_CHECK(pulsar_ar.set_s32(filter->ar_handle, "NvAR_Parameter_Input_Width", (int)filter->width));
++        AR_CHECK(pulsar_ar.set_s32(filter->ar_handle, "NvAR_Parameter_Input_Height", (int)filter->height));
++        AR_CHECK(pulsar_ar.set_object(filter->ar_handle, "NvAR_Parameter_Output_Landmarks", filter->ar_landmarks, sizeof(pulsar_ar_point)));
++        AR_CHECK(pulsar_ar.set_object(filter->ar_handle, "NvAR_Parameter_Output_GazeOutputLandmarks", filter->ar_eye_landmarks, sizeof(pulsar_ar_point)));
++        AR_CHECK(pulsar_ar.set_f32_array(filter->ar_handle, "NvAR_Parameter_Output_LandmarksConfidence", filter->ar_confidence, 126));
++        AR_CHECK(pulsar_ar.set_f32_array(filter->ar_handle, "NvAR_Parameter_Output_OutputGazeVector", filter->ar_gaze, 2));
++        AR_CHECK(pulsar_ar.set_f32_array(filter->ar_handle, "NvAR_Parameter_Output_OutputHeadTranslation", filter->ar_translation, 3));
++        AR_CHECK(pulsar_ar.set_object(filter->ar_handle, "NvAR_Parameter_Output_HeadPose", filter->ar_rotation, sizeof(filter->ar_rotation)));
++        AR_CHECK(pulsar_ar.set_object(filter->ar_handle, "NvAR_Parameter_Output_GazeDirection", filter->ar_direction, 3 * sizeof(float)));
++    }
++#undef AR_CHECK
++    return true;
++}
++
++static void nvvfx_frame_subject(struct nvvfx_data *filter)
++{
++    const pulsar_ar_rect *subject = NULL;
++    for (uint8_t i = 0; i < filter->ar_boxes.num_boxes && i < 25; ++i) {
++        const pulsar_ar_rect *box = &filter->ar_rects[i];
++        if (isfinite(box->x) && isfinite(box->y) && isfinite(box->width) && isfinite(box->height) &&
++            box->width > 0.f && box->height > 0.f && (!subject || box->width * box->height > subject->width * subject->height))
++            subject = box;
++    }
++    float x = filter->crop_x, y = filter->crop_y, size = filter->crop_size;
++    if (subject) {
++        filter->lost_seconds = 0.f;
++        size = fminf(1.f, fmaxf(1.f / filter->zoom, fmaxf(subject->width / filter->width * 4.f, subject->height / filter->height * 4.f)));
++        x = fmaxf(0.f, fminf(1.f - size, (subject->x + subject->width * .5f) / filter->width - size * .5f));
++        y = fmaxf(0.f, fminf(1.f - size, (subject->y + subject->height * 1.3f) / filter->height - size * .5f));
++    } else {
++        filter->lost_seconds += filter->frame_seconds;
++        if (filter->lost_seconds > 1.f) {
++            x = y = 0.f;
++            size = 1.f;
++        }
++    }
++    float weight = 1.f - expf(-filter->frame_seconds / filter->smoothing);
++    filter->crop_x += (x - filter->crop_x) * weight;
++    filter->crop_y += (y - filter->crop_y) * weight;
++    filter->crop_size += (size - filter->crop_size) * weight;
++}
++
+ static void nvvfx_filter_update(void *data, obs_data_t *settings)
+ {
+ 	struct nvvfx_data *filter = (struct nvvfx_data *)data;
+@@ -163,8 +259,15 @@ static void nvvfx_filter_update(void *data, obs_data_t *settings)
+ 	filter->threshold = (float)obs_data_get_double(settings, S_THRESHOLDFX);
+ 	filter->processing_interval = (int)obs_data_get_int(settings, S_PROCESSING);
+ 	float strength = (float)obs_data_get_double(settings, S_STRENGTH);
++    if (id == S_FX_AUTOFRAME || id == S_FX_EYE) {
++        filter->strength = isfinite(strength) ? fmaxf(0.f, fminf(1.f, strength)) : 0.f;
++        float zoom = (float)obs_data_get_double(settings, "zoom");
++        float smoothing = (float)obs_data_get_double(settings, "smoothing");
++        filter->zoom = isfinite(zoom) ? fmaxf(1.f, fminf(3.f, zoom)) : 1.8f;
++        filter->smoothing = isfinite(smoothing) ? fmaxf(.05f, fminf(2.f, smoothing)) : .25f;
++    }
+     if (id == S_FX_DENOISE) {
+-        filter->strength = strength;
++        filter->strength = isfinite(strength) ? fmaxf(0.f, fminf(1.f, strength)) : 0.f;
+         int mode = obs_data_get_int(settings, S_MODE) == 1 ? 1 : 0;
+         if (filter->mode != mode) {
+             filter->mode = mode;
+@@ -211,25 +314,25 @@ static void nvvfx_filter_actual_destroy(void *data)
+ 
+ 	os_atomic_set_bool(&filter->processing_stop, true);
+ 
+-	if (filter->images_allocated) {
++	/* Partial image allocation must be released too. Background blur owns
++	 * both textures, not just the blurred one. */
++	{
+ 		obs_enter_graphics();
+-		if (filter->filter_id == S_FX_AIGS)
++		if (filter->alpha_texture)
+ 			gs_texture_destroy(filter->alpha_texture);
+-		else
++		if (filter->blur_texture)
+ 			gs_texture_destroy(filter->blur_texture);
+ 
+ 		gs_texrender_destroy(filter->render);
+ 		gs_texrender_destroy(filter->render_unorm);
+ 		obs_leave_graphics();
+-		NvCVImage_Destroy(filter->src_img);
+-		NvCVImage_Destroy(filter->BGR_src_img);
+-		NvCVImage_Destroy(filter->A_dst_img);
+-		NvCVImage_Destroy(filter->dst_img);
+-		if (filter->filter_id != S_FX_AIGS) {
+-			NvCVImage_Destroy(filter->blur_BGR_dst_img);
+-			NvCVImage_Destroy(filter->RGBA_dst_img);
+-			NvCVImage_Destroy(filter->blur_dst_img);
+-		}
++		if (filter->src_img) NvCVImage_Destroy(filter->src_img);
++		if (filter->BGR_src_img) NvCVImage_Destroy(filter->BGR_src_img);
++		if (filter->A_dst_img) NvCVImage_Destroy(filter->A_dst_img);
++		if (filter->dst_img) NvCVImage_Destroy(filter->dst_img);
++		if (filter->blur_BGR_dst_img) NvCVImage_Destroy(filter->blur_BGR_dst_img);
++		if (filter->RGBA_dst_img) NvCVImage_Destroy(filter->RGBA_dst_img);
++		if (filter->blur_dst_img) NvCVImage_Destroy(filter->blur_dst_img);
+ 	}
+ 
+ 	if (filter->handle) {
+@@ -243,6 +346,8 @@ static void nvvfx_filter_actual_destroy(void *data)
+             NvVFX_DeallocateState(filter->handle_blur, filter->stateObjectHandle);
+ 		NvVFX_DestroyEffect(filter->handle_blur);
+ 	}
++    if (filter->ar_handle)
++        pulsar_ar.destroy(filter->ar_handle);
+ 	if (filter->stream)
+ 		NvVFX_CudaStreamDestroy(filter->stream);
+ 
+@@ -280,6 +385,10 @@ static bool nvvfx_filter_create_internal(struct nvvfx_data *filter)
+ 	case S_FX_AIGS:
+ 		vfxErr = NvVFX_CreateEffect(NVVFX_FX_GREEN_SCREEN, &filter->handle);
+ 		break;
++	case S_FX_AUTOFRAME:
++	case S_FX_EYE:
++		vfxErr = NVCV_SUCCESS;
++		break;
+ 	case S_FX_DENOISE:
+ 		vfxErr = NvVFX_CreateEffect(NVVFX_FX_DENOISING, &filter->handle_blur);
+ 		break;
+@@ -289,14 +398,14 @@ static bool nvvfx_filter_create_internal(struct nvvfx_data *filter)
+ 	case S_FX_BG_BLUR:
+ 		vfxErr = NvVFX_CreateEffect(NVVFX_FX_GREEN_SCREEN, &filter->handle);
+ 		if (NVCV_SUCCESS != vfxErr)
+-			log_nverror_destroy(filter, vfxErr);
++			return false;
+ 		vfxErr = NvVFX_CreateEffect(NVVFX_FX_BGBLUR, &filter->handle_blur);
+ 		break;
+ 	default:
+ 		return false;
+ 	}
+ 	if (NVCV_SUCCESS != vfxErr)
+-		log_nverror_destroy(filter, vfxErr);
++		return false;
+ 	/* debug */
+ #ifdef _DEBUG
+ 	if (id == S_FX_AIGS || id == S_FX_BG_BLUR) {
+@@ -313,7 +422,7 @@ static bool nvvfx_filter_create_internal(struct nvvfx_data *filter)
+ 	/* 2. Set models path & initialize CudaStream */
+ 	vfxErr = NvVFX_CudaStreamCreate(&filter->stream);
+ 	if (NVCV_SUCCESS != vfxErr)
+-		log_nverror_destroy(filter, vfxErr);
++		return false;
+ 
+ 	if (id == S_FX_AIGS || id == S_FX_BG_BLUR) {
+ 		char buffer[MAX_PATH];
+@@ -324,21 +433,22 @@ static bool nvvfx_filter_create_internal(struct nvvfx_data *filter)
+ 		 * unvouched-for root -- NVVFX_MODEL_DIRECTORY is where the SDK
+ 		 * goes looking for TensorRT packages to deserialise. */
+ 		if (!nvvfx_get_sdk_path(buffer, MAX_PATH)) {
+-			log_nverror_destroy(filter, NVCV_ERR_MODEL);
+ 			return false;
+ 		}
+ 		size_t max_len = sizeof(modelDir) / sizeof(char);
+ 		snprintf(modelDir, max_len, "%s\\%s", buffer, PULSAR_NV_MODEL_SUBDIR);
+ 		vfxErr = NvVFX_SetString(filter->handle, NVVFX_MODEL_DIRECTORY, modelDir);
++		if (NVCV_SUCCESS != vfxErr)
++			return false;
+ 		vfxErr = NvVFX_SetCudaStream(filter->handle, NVVFX_CUDA_STREAM, filter->stream);
+ 		if (NVCV_SUCCESS != vfxErr)
+-			log_nverror_destroy(filter, vfxErr);
++			return false;
+ 	}
+ 
+ 	if (id == S_FX_BLUR || id == S_FX_BG_BLUR) {
+ 		vfxErr = NvVFX_SetCudaStream(filter->handle_blur, NVVFX_CUDA_STREAM, filter->stream);
+ 		if (NVCV_SUCCESS != vfxErr)
+-			log_nverror_destroy(filter, vfxErr);
++			return false;
+ 	}
+     if (id == S_FX_DENOISE) {
+         char sdk[MAX_PATH], modelDir[MAX_PATH];
+@@ -352,6 +462,8 @@ static bool nvvfx_filter_create_internal(struct nvvfx_data *filter)
+         if (vfxErr != NVCV_SUCCESS)
+             return false;
+     }
++    if (id == S_FX_AUTOFRAME || id == S_FX_EYE)
++        return nvvfx_ar_create(filter);
+ 	return true;
+ }
+ 
+@@ -363,6 +475,23 @@ static void nvvfx_logger_callback(void *data, const char *msg)
+ 	blog(LOG_ERROR, "[NVIDIA Video Effect: '%s']", msg);
+ }
+ 
++struct nvvfx_metrics_call { struct nvvfx_data *filter; calldata_t *result; };
++static void nvvfx_metrics_graphics(void *data)
++{
++    struct nvvfx_metrics_call *call = data;
++    struct nvvfx_data *filter = call->filter;
++    calldata_set_int(call->result, "processed_frames", filter->processed_count);
++    calldata_set_float(call->result, "last_processing_ms", filter->last_processing_ns / 1000000.0);
++    calldata_set_bool(call->result, "images_allocated", filter->images_allocated);
++    calldata_set_bool(call->result, "processing_stopped", filter->processing_stop);
++}
++static void nvvfx_metrics(void *data, calldata_t *result)
++{
++    struct nvvfx_metrics_call call = { data, result };
++    // Read only on the owning graphics thread while the caller holds the source.
++    obs_queue_task(OBS_TASK_GRAPHICS, nvvfx_metrics_graphics, &call, true);
++}
++
+ static void *nvvfx_filter_create(obs_data_t *settings, obs_source_t *context, enum nvvfx_fx_id id)
+ {
+ 	struct nvvfx_data *filter = (struct nvvfx_data *)bzalloc(sizeof(*filter));
+@@ -386,6 +515,8 @@ static void *nvvfx_filter_create(obs_data_t *settings, obs_source_t *context, en
+ 	filter->filter_id = id;
+ 	// blur specific
+ 	filter->strength = -1;
++    filter->crop_size = 1.f;
++    filter->frame_seconds = 1.f / 60.f;
+ 
+ #ifdef _DEBUG
+ 	/* sanity check of sdk version */
+@@ -399,8 +530,11 @@ static void *nvvfx_filter_create(obs_data_t *settings, obs_source_t *context, en
+ #endif
+ 	/* 1. Create FX */
+ 	/* 2. Set models path & initialize CudaStream */
+-	if (!nvvfx_filter_create_internal(filter))
++	if (!nvvfx_filter_create_internal(filter)) {
++		error("Unable to initialize NVIDIA effect %i; releasing partial resources", id);
++		nvvfx_filter_destroy(filter);
+ 		return NULL;
++	}
+ 
+ 	/* 3. Load effect. */
+ 	char *effect_path = obs_module_file(id != S_FX_AIGS ? "rtx_blur.effect" : "rtx_greenscreen.effect");
+@@ -435,6 +569,7 @@ static void *nvvfx_filter_create(obs_data_t *settings, obs_source_t *context, en
+ 	}
+ 
+ 	nvvfx_filter_update(filter, settings);
++    proc_handler_add(obs_source_get_proc_handler(context), "void get_nvidia_processing()", nvvfx_metrics, filter);
+ 
+ 	/* Setup NVIDIA logger */
+ 	if (nvvfx_new_sdk)
+@@ -463,26 +598,41 @@ static void *nv_denoise_filter_create(obs_data_t *settings, obs_source_t *contex
+     return nvvfx_filter_create(settings, context, S_FX_DENOISE);
+ }
+ 
++static void *nv_autoframe_filter_create(obs_data_t *settings, obs_source_t *context)
++{
++    return nvvfx_filter_create(settings, context, S_FX_AUTOFRAME);
++}
++static void *nv_eye_filter_create(obs_data_t *settings, obs_source_t *context)
++{
++    return nvvfx_filter_create(settings, context, S_FX_EYE);
++}
++
+ static void nvvfx_filter_reset(void *data, calldata_t *calldata)
+ {
+ 	struct nvvfx_data *filter = (struct nvvfx_data *)data;
+ 	NvCV_Status vfxErr;
+ 
+ 	os_atomic_set_bool(&filter->processing_stop, true);
++    if (filter->filter_id == S_FX_AUTOFRAME || filter->filter_id == S_FX_EYE)
++        return;
+ 	// [A] first destroy
+ 	if (filter->handle) {
+ 		if (filter->stateObjectHandle) {
+ 			NvVFX_DeallocateState(filter->handle, filter->stateObjectHandle);
+ 		}
+ 		NvVFX_DestroyEffect(filter->handle);
++		filter->handle = NULL;
+ 	}
+ 	if (filter->handle_blur) {
+         if (filter->filter_id == S_FX_DENOISE && filter->stateObjectHandle)
+             NvVFX_DeallocateState(filter->handle_blur, filter->stateObjectHandle);
+ 		NvVFX_DestroyEffect(filter->handle_blur);
++		filter->handle_blur = NULL;
+ 	}
++	filter->stateObjectHandle = NULL;
+ 	if (filter->stream) {
+ 		NvVFX_CudaStreamDestroy(filter->stream);
++		filter->stream = NULL;
+ 	}
+ 
+ 	// [B] recreate
+@@ -624,6 +774,8 @@ static bool init_blur_images(struct nvvfx_data *filter)
+ 		NvCVImage_Alloc(filter->RGBA_dst_img, width, height, NVCV_RGBA, NVCV_U8, NVCV_CHUNKY, NVCV_GPU, 1);
+ 	}
+ 
++    if (id == S_FX_AUTOFRAME || id == S_FX_EYE)
++        return nvvfx_ar_images(filter);
+ 	/* 3. Set input & output images for nv blur FX */
+ 	NvVFX_SetImage(filter->handle_blur, NVVFX_INPUT_IMAGE, filter->BGR_src_img);
+ 	if (id == S_FX_BG_BLUR)
+@@ -666,7 +818,7 @@ static void init_images(struct nvvfx_data *filter)
+ 			goto fail;
+ 	}
+ 	/* 2. Create blur texture & associated NvCVImage */
+-	if (filter->filter_id == S_FX_BG_BLUR || filter->filter_id == S_FX_BLUR || filter->filter_id == S_FX_DENOISE) {
++	if (filter->filter_id != S_FX_AIGS) {
+ 		if (!create_blur_texture(filter))
+ 			goto fail;
+ 	}
+@@ -694,7 +846,7 @@ static void init_images(struct nvvfx_data *filter)
+ 	}
+ 
+ 	/* 6. Init blur images */
+-	if (filter->filter_id == S_FX_BLUR || filter->filter_id == S_FX_BG_BLUR || filter->filter_id == S_FX_DENOISE) {
++	if (filter->filter_id != S_FX_AIGS) {
+ 		if (!init_blur_images(filter))
+ 			goto fail;
+ 	}
+@@ -724,6 +876,7 @@ fail:
+ enum nvvfx_run_mode { SYNC, ASYNC };
+ static bool process_texture(struct nvvfx_data *filter)
+ {
++    const uint64_t started = os_gettime_ns();
+ 	enum nvvfx_fx_id id = filter->filter_id;
+ 	CUstream process_stream = filter->stream;
+ 
+@@ -781,6 +934,20 @@ static bool process_texture(struct nvvfx_data *filter)
+ 			goto fail;
+ 		}
+ 	}
++    bool ar = id == S_FX_AUTOFRAME || id == S_FX_EYE;
++    if (ar) {
++        /* Keep a deterministic unchanged output when no face is detected. */
++        vfxErr = NvCVImage_Transfer(filter->BGR_src_img, filter->blur_BGR_dst_img, 1.f, process_stream, NULL);
++        if (vfxErr != NVCV_SUCCESS)
++            goto fail;
++        vfxErr = pulsar_ar.run(filter->ar_handle);
++        if (vfxErr != NVCV_SUCCESS) {
++            error("Error running NVIDIA AR: %i", vfxErr);
++            goto fail;
++        }
++        if (id == S_FX_AUTOFRAME)
++            nvvfx_frame_subject(filter);
++    }
+ 	/* 5. BLUR FX */
+ 	if (id != S_FX_AIGS) {
+ 		/* 5a. Run BLUR FX except for AIGS */
+@@ -790,7 +957,7 @@ static bool process_texture(struct nvvfx_data *filter)
+                 goto fail;
+             filter->denoise_reset = false;
+         }
+-		vfxErr = NvVFX_Run(filter->handle_blur, SYNC);
++		vfxErr = ar ? NVCV_SUCCESS : NvVFX_Run(filter->handle_blur, SYNC);
+ 		if (vfxErr != NVCV_SUCCESS) {
+ 			const char *errString = NvCV_GetErrorStringFromCode(vfxErr);
+ 			error("Error running the BLUR FX; error %i: %s", vfxErr, errString);
+@@ -827,6 +994,8 @@ static bool process_texture(struct nvvfx_data *filter)
+ 		}
+ 	}
+ 
++	filter->processed_count++;
++    filter->last_processing_ns = os_gettime_ns() - started;
+ 	return true;
+ fail:
+ 	os_atomic_set_bool(&filter->processing_stop, true);
+@@ -842,10 +1011,11 @@ static struct obs_source_frame *nvvfx_filter_video(void *data, struct obs_source
+ 
+ static void nvvfx_filter_tick(void *data, float t)
+ {
+-	UNUSED_PARAMETER(t);
++
+ 
+ 	struct nvvfx_data *filter = (struct nvvfx_data *)data;
+ 
++    filter->frame_seconds = fmaxf(.001f, fminf(.1f, t));
+ 	if (filter->processing_stop) {
+ 		return;
+ 	}
+@@ -884,12 +1054,8 @@ static void nvvfx_filter_tick(void *data, float t)
+ 		filter->width = cx;
+ 		filter->height = cy;
+ 	}
+-	if (!filter->images_allocated) {
+-		obs_enter_graphics();
+-		init_images(filter);
+-		obs_leave_graphics();
+-		filter->initial_render = false;
+-	}
++	/* Allocate on render demand. An unused source must not allocate images
++	 * or load its video model just because it receives ticks. */
+ 
+ 	filter->processed_frame = false;
+ }
+@@ -947,7 +1113,15 @@ static void draw_greenscreen_blur(struct nvvfx_data *filter, bool has_blur)
+         gs_effect_set_float(gs_effect_get_param_by_name(filter->effect, "compare"), filter->compare ? 1.f : 0.f);
+         if (has_blur)
+             gs_effect_set_float(gs_effect_get_param_by_name(filter->effect, "processed_mix"),
+-                                filter->filter_id == S_FX_DENOISE ? filter->strength : 1.f);
++                                filter->filter_id == S_FX_DENOISE || filter->filter_id == S_FX_EYE ? filter->strength : 1.f);
++        if (has_blur) {
++            struct vec2 crop;
++            vec2_set(&crop, filter->filter_id == S_FX_AUTOFRAME ? filter->crop_x * filter->strength : 0.f,
++                           filter->filter_id == S_FX_AUTOFRAME ? filter->crop_y * filter->strength : 0.f);
++            gs_effect_set_vec2(gs_effect_get_param_by_name(filter->effect, "crop_offset"), &crop);
++            gs_effect_set_float(gs_effect_get_param_by_name(filter->effect, "crop_size"),
++                                filter->filter_id == S_FX_AUTOFRAME ? 1.f + (filter->crop_size - 1.f) * filter->strength : 1.f);
++        }
+ 		gs_effect_set_texture(filter->mask_param, filter->alpha_texture);
+ 		if (has_blur) {
+ 			gs_effect_set_texture_srgb(filter->blur_param, filter->blur_texture);
+@@ -991,12 +1165,6 @@ static void nvvfx_filter_render(void *data, gs_effect_t *effect, bool has_blur)
+ 		return;
+ 	}
+ 
+-	/* 1. Render to retrieve texture. */
+-	if (!filter->render) {
+-		obs_source_skip_video_filter(filter->context);
+-		return;
+-	}
+-
+ 	const uint32_t target_flags = obs_source_get_output_flags(target);
+ 	const uint32_t parent_flags = obs_source_get_output_flags(parent);
+ 
+@@ -1013,17 +1181,22 @@ static void nvvfx_filter_render(void *data, gs_effect_t *effect, bool has_blur)
+ 		obs_source_get_color_space(target, OBS_COUNTOF(preferred_spaces), preferred_spaces);
+ 
+ 	enum nvvfx_fx_id id = filter->filter_id;
+-	if ((id == S_FX_BLUR || id == S_FX_DENOISE) && (source_space == GS_CS_709_EXTENDED || source_space == GS_CS_709_SCRGB)) {
++	if ((id == S_FX_BLUR || id == S_FX_DENOISE || id == S_FX_EYE || id == S_FX_AUTOFRAME) && (source_space == GS_CS_709_EXTENDED || source_space == GS_CS_709_SCRGB)) {
+ 		obs_source_skip_video_filter(filter->context);
+ 		return;
+ 	}
+ 
+-	if (filter->space != source_space) {
++	if (!filter->images_allocated || filter->space != source_space) {
+ 		filter->space = source_space;
+ 		init_images(filter);
+ 		filter->initial_render = false;
++		if (!filter->images_allocated || filter->processing_stop) {
++			obs_source_skip_video_filter(filter->context);
++			return;
++		}
+ 	}
+ 
++	/* Texrenders are created by demand allocation above. */
+ 	gs_texrender_t *const render = filter->render;
+ 	gs_texrender_reset(render);
+ 	gs_blend_state_push();
+@@ -1175,6 +1348,10 @@ static obs_properties_t *nvvfx_filter_properties(void *data)
+ 	struct nvvfx_data *filter = (struct nvvfx_data *)data;
+ 	obs_properties_t *props = obs_properties_create();
+     obs_properties_add_bool(props, "compare", "Before / after split (native output)");
++    if (filter->filter_id == S_FX_AUTOFRAME) {
++        obs_properties_add_float_slider(props, "zoom", "Maximum zoom", 1, 3, .05);
++        obs_properties_add_float_slider(props, "smoothing", "Follow smoothing (seconds)", .05, 2, .05);
++    }
+     if (filter->filter_id == S_FX_DENOISE) {
+         obs_property_t *mode = obs_properties_add_list(props, S_MODE, "Noise removal mode", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+         obs_property_list_add_int(mode, "Preserve details", 0);
+@@ -1207,6 +1384,8 @@ static obs_properties_t *nvvfx_filter_properties(void *data)
+ 
+ static void nvvfx_filter_defaults(obs_data_t *settings)
+ {
++	obs_data_set_default_double(settings, "zoom", 1.8);
++	obs_data_set_default_double(settings, "smoothing", .25);
+ 	obs_data_set_default_bool(settings, "compare", false);
+ 	obs_data_set_default_int(settings, S_MODE, S_MODE_QUALITY);
+ 	obs_data_set_default_double(settings, S_THRESHOLDFX, S_THRESHOLDFX_DEFAULT);
+@@ -1413,3 +1592,53 @@ struct obs_source_info nvidia_denoise_filter_info = {
+     .video_tick = nvvfx_filter_tick,
+     .video_get_color_space = nvvfx_filter_get_color_space,
+ };
++
++bool nvvfx_ar_load(void)
++{
++    return pulsar_ar_load();
++}
++bool nvvfx_ar_face_model_available(void)
++{
++    return pulsar_ar_has_model("face_detection_*.trtpkg");
++}
++bool nvvfx_ar_eye_models_available(void)
++{
++    return nvvfx_ar_face_model_available() && pulsar_ar_has_model("faceland_126_*.trtpkg") &&
++        pulsar_ar_has_model("gazeredir_encoder_*.trtpkg") && pulsar_ar_has_model("gazeredir_decoder_*.trtpkg");
++}
++void nvvfx_ar_unload(void)
++{
++    pulsar_ar_unload();
++}
++
++struct obs_source_info nvidia_autoframe_filter_info = {
++    .id = "nv_autoframe_filter",
++    .type = OBS_SOURCE_TYPE_FILTER,
++    .output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_SRGB,
++    .get_name = nv_autoframe_filter_name,
++    .create = nv_autoframe_filter_create,
++    .destroy = nvvfx_filter_destroy,
++    .get_defaults = nvvfx_filter_defaults,
++    .get_properties = nvvfx_filter_properties,
++    .update = nvvfx_filter_update,
++    .filter_video = nvvfx_filter_video,
++    .video_render = nv_blur_filter_render,
++    .video_tick = nvvfx_filter_tick,
++    .video_get_color_space = nvvfx_filter_get_color_space,
++};
++
++struct obs_source_info nvidia_eye_contact_filter_info = {
++    .id = "nv_eye_contact_filter",
++    .type = OBS_SOURCE_TYPE_FILTER,
++    .output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_SRGB,
++    .get_name = nv_eye_filter_name,
++    .create = nv_eye_filter_create,
++    .destroy = nvvfx_filter_destroy,
++    .get_defaults = nvvfx_filter_defaults,
++    .get_properties = nvvfx_filter_properties,
++    .update = nvvfx_filter_update,
++    .filter_video = nvvfx_filter_video,
++    .video_render = nv_blur_filter_render,
++    .video_tick = nvvfx_filter_tick,
++    .video_get_color_space = nvvfx_filter_get_color_space,
++};
+-- 
+2.54.0.windows.1
+

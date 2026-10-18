@@ -1,0 +1,153 @@
+{
+  "started": 1791618065.745401,
+  "mode": "isolated synthetic colour and generated tone; no physical camera, RTMP or recording",
+  "filters": [
+    {
+      "kind": "color_filter_v2",
+      "target": "AuditColor",
+      "createUpdateReadbackBypass": true,
+      "controlMs": 9.084100005566142
+    },
+    {
+      "kind": "chroma_key_filter_v2",
+      "target": "AuditColor",
+      "createUpdateReadbackBypass": true,
+      "controlMs": 8.992599992780015
+    },
+    {
+      "kind": "noise_suppress_filter",
+      "target": "AuditTone",
+      "createUpdateReadbackBypass": true,
+      "controlMs": 5.92720000713598
+    },
+    {
+      "kind": "noise_gate_filter",
+      "target": "AuditTone",
+      "createUpdateReadbackBypass": true,
+      "controlMs": 5.76569999975618
+    },
+    {
+      "kind": "compressor_filter",
+      "target": "AuditTone",
+      "createUpdateReadbackBypass": true,
+      "controlMs": 5.362500000046566
+    },
+    {
+      "kind": "limiter_filter",
+      "target": "AuditTone",
+      "createUpdateReadbackBypass": true,
+      "controlMs": 4.40560000424739
+    },
+    {
+      "kind": "gain_filter",
+      "target": "AuditTone",
+      "createUpdateReadbackBypass": true,
+      "controlMs": 3.303799996501766
+    }
+  ],
+  "baselinePixel": [
+    0,
+    255,
+    0,
+    255
+  ],
+  "videoStack": {
+    "filters": [
+      {
+        "filterEnabled": true,
+        "filterIndex": 0,
+        "filterKind": "color_filter_v2",
+        "filterName": "audit/color_filter_v2",
+        "filterSettings": {
+          "opacity": 0.75
+        }
+      },
+      {
+        "filterEnabled": true,
+        "filterIndex": 1,
+        "filterKind": "chroma_key_filter_v2",
+        "filterName": "audit/chroma_key_filter_v2",
+        "filterSettings": {
+          "key_color_type": "green",
+          "opacity": 1.0,
+          "similarity": 500
+        }
+      }
+    ]
+  },
+  "audioStack": {
+    "filters": [
+      {
+        "filterEnabled": true,
+        "filterIndex": 0,
+        "filterKind": "noise_suppress_filter",
+        "filterName": "audit/noise_suppress_filter",
+        "filterSettings": {
+          "method": "speex",
+          "suppress_level": -20
+        }
+      },
+      {
+        "filterEnabled": true,
+        "filterIndex": 1,
+        "filterKind": "noise_gate_filter",
+        "filterName": "audit/noise_gate_filter",
+        "filterSettings": {
+          "open_threshold": -25.0
+        }
+      },
+      {
+        "filterEnabled": true,
+        "filterIndex": 2,
+        "filterKind": "compressor_filter",
+        "filterName": "audit/compressor_filter",
+        "filterSettings": {
+          "ratio": 3.0
+        }
+      },
+      {
+        "filterEnabled": true,
+        "filterIndex": 3,
+        "filterKind": "limiter_filter",
+        "filterName": "audit/limiter_filter",
+        "filterSettings": {
+          "threshold": -9.0
+        }
+      },
+      {
+        "filterEnabled": true,
+        "filterIndex": 4,
+        "filterKind": "gain_filter",
+        "filterName": "audit/gain_filter",
+        "filterSettings": {
+          "db": -6.0
+        }
+      }
+    ]
+  },
+  "keyedPixel": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "bypassedPixel": [
+    0,
+    225,
+    0,
+    191
+  ],
+  "restoredPixel": [
+    0,
+    255,
+    0,
+    255
+  ],
+  "shutdown": {
+    "exitCode": 0,
+    "forced": false
+  },
+  "passed": true,
+  "stagingErrors": 0,
+  "completed": 1791618069.5436168
+}

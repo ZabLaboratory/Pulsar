@@ -1,0 +1,69 @@
+{
+  "passed": true,
+  "videoSha256": "ecec251eed0ab5bd9542871ab5ed79d4c28ef455d3a4e59a8510f618036369ec",
+  "check": "decoded H264 pixels and decoded AAC signal follow actual native effect/settings steps; not just metadata",
+  "audio": [
+    {
+      "method": "denoiser",
+      "encodedAudioRms": {
+        "75": 0.012089559808373451,
+        "25": 0.03981930390000343,
+        "0": 0.06584518402814865
+      }
+    },
+    {
+      "method": "dereverb",
+      "encodedAudioRms": {
+        "75": 0.01606990024447441,
+        "25": 0.03631529584527016,
+        "0": 0.04579981788992882
+      }
+    },
+    {
+      "method": "dereverb_denoiser",
+      "encodedAudioRms": {
+        "75": 0.01224804762750864,
+        "25": 0.03608640655875206,
+        "0": 0.047915466129779816
+      }
+    }
+  ],
+  "videoSamples": [
+    {
+      "seconds": 5,
+      "decodedPixelSha256": "2756c96258658520b1972766c7a9ec2b7e70cdf70991c19606e4221bc02a4c0a",
+      "bodyMean": 0.0,
+      "bodyStd": 0.0
+    },
+    {
+      "seconds": 14,
+      "decodedPixelSha256": "8415dc460e9f3d441a905443160417fb6806434396163121c4aa73968f1f1b0c",
+      "bodyMean": 73.025,
+      "bodyStd": 0.22220486043288973
+    },
+    {
+      "seconds": 25,
+      "decodedPixelSha256": "276c3b1e10aa8e5cc416d5192cee0b6cf163d435218e4412427064d7ab0a99c6",
+      "bodyMean": 73.025,
+      "bodyStd": 0.22220486043288973
+    },
+    {
+      "seconds": 36,
+      "decodedPixelSha256": "4c10def1cfc944d48f60c7dff1675a62ffa42979c5e883ce483380e80d05ebb0",
+      "bodyMean": 73.034375,
+      "bodyStd": 0.288432590694949
+    },
+    {
+      "seconds": 52,
+      "decodedPixelSha256": "7bfe468fc649198c5c7b894cca63507d3161ac76b2a4b6d4c351747a6907792c",
+      "bodyMean": 72.98439732142857,
+      "bodyStd": 3.4364514430888016
+    },
+    {
+      "seconds": 68,
+      "decodedPixelSha256": "53f448e6a50826e3d9e62db71ac20857aa75155d1da72e04366697b90ab14964",
+      "bodyMean": 72.98439732142857,
+      "bodyStd": 3.4364514430888016
+    }
+  ]
+}

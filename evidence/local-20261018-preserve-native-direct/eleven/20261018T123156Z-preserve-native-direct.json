@@ -1,0 +1,15 @@
+{
+  "scope": "Pulsar native capture-effects plugin",
+  "baseRevision": "d174d93ab1b0ce67ce3145296d1b127357f1777d",
+  "probe": "scripts/probe-capture-effects.py",
+  "result": "pass",
+  "stagedDirectPreserved": true,
+  "stagedOuterHidden": true,
+  "ordinaryDirectRemoved": true,
+  "atomicAdmissions": 80,
+  "effects": 7,
+  "reset": true,
+  "pluginSha256": "F17EA6DE8E0BBE5E8FB9E586ECDAF859FC82149F2007CC78DB3EF3A63B848045",
+  "runtimePluginSha256": "F17EA6DE8E0BBE5E8FB9E586ECDAF859FC82149F2007CC78DB3EF3A63B848045",
+  "cameraProof": "Prism physical startup reports a visible native group; capture fixture probe does not certify camera drag latency"
+}

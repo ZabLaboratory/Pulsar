@@ -4,6 +4,7 @@
 // See README.md for a full example.
 
 export { PulsarClient } from "./client.js";
+export type { StingerConfig, TransitionState, TransitionLane, SwitchLaneRequest, LaneSwitchResult } from "./transitions.js";
 export {
   PulsarVendorError,
   PulsarNotConnectedError,

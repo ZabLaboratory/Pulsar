@@ -1,0 +1,82 @@
+From 48f3a5b57f19d5145773259e43238a4f815d86c0 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?ClodoCap=C3=A9o?=
+ <159788250+ClodoCapeo@users.noreply.github.com>
+Date: Sat, 10 Oct 2026 12:19:28 +0200
+Subject: [PATCH] fix(nv-filters): bind blur images before loading and guard
+ empty SDK logs
+
+The installed VFX 0.7.6 SDK reports Missing src dst when blur is loaded
+during creation/reset before any input/output image has been bound.
+Defer the initial/recreated blur load to init_blur_images, which binds
+both images. Keep reloads on live strength changes after allocation and
+report failed SetF32/Load statuses instead of discarding them.
+
+SDK logger teardown can call back with a null/empty message. Do not pass
+that to a %s error log; preserve every nonempty SDK diagnostic.
+
+This requires editing nv-filters' private initialization/reset/logger
+callbacks, which a separate Pulsar plugin cannot intercept. It is
+eligible for upstream OBS review; secure SDK loader policy is unchanged.
+Work unit: Eleven local-20261010-nvidia-sdk-integration, Pulsar PR #301.
+This patch does not fix the separately reproduced AFX live intensity
+failure and does not reinterpret an SDK load as full qualification.
+---
+ plugins/nv-filters/nvidia-audiofx-filter.c |  2 ++
+ plugins/nv-filters/nvidia-videofx-filter.c | 14 ++++++++++----
+ 2 files changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/plugins/nv-filters/nvidia-audiofx-filter.c b/plugins/nv-filters/nvidia-audiofx-filter.c
+index 4382eb50c..fc0c39141 100644
+--- a/plugins/nv-filters/nvidia-audiofx-filter.c
++++ b/plugins/nv-filters/nvidia-audiofx-filter.c
+@@ -653,6 +653,8 @@ static void nvidia_audio_update(void *data, obs_data_t *s)
+ static void nvafx_logger_callback(void *data, const char *msg)
+ {
+ 	UNUSED_PARAMETER(data);
++	if (!msg || !*msg)
++		return;
+ 	blog(LOG_ERROR, "[NVIDIA Audio Effects: Error - '%s'] ", msg);
+ }
+ 
+diff --git a/plugins/nv-filters/nvidia-videofx-filter.c b/plugins/nv-filters/nvidia-videofx-filter.c
+index 009083ebb..9e80a59b9 100644
+--- a/plugins/nv-filters/nvidia-videofx-filter.c
++++ b/plugins/nv-filters/nvidia-videofx-filter.c
+@@ -146,7 +146,12 @@ static void nvvfx_filter_update(void *data, obs_data_t *settings)
+ 		if (filter->strength != strength) {
+ 			filter->strength = strength;
+ 			vfxErr = NvVFX_SetF32(filter->handle_blur, NVVFX_STRENGTH, filter->strength);
+-			vfxErr = NvVFX_Load(filter->handle_blur);
++			/* The blur SDK requires bound source/destination images at load.
++			 * First render performs that load in init_blur_images(). */
++			if (NVCV_SUCCESS == vfxErr && filter->images_allocated)
++				vfxErr = NvVFX_Load(filter->handle_blur);
++			if (NVCV_SUCCESS != vfxErr)
++				error("Error updating blur FX %i", vfxErr);
+ 		}
+ 	}
+ }
+@@ -291,6 +296,8 @@ static bool nvvfx_filter_create_internal(struct nvvfx_data *filter)
+ static void nvvfx_logger_callback(void *data, const char *msg)
+ {
+ 	UNUSED_PARAMETER(data);
++	if (!msg || !*msg)
++		return;
+ 	blog(LOG_ERROR, "[NVIDIA Video Effect: '%s']", msg);
+ }
+ 
+@@ -431,9 +438,8 @@ static void nvvfx_filter_reset(void *data, calldata_t *calldata)
+ 		vfxErr = NvVFX_SetF32(filter->handle_blur, NVVFX_STRENGTH, filter->strength);
+ 		if (NVCV_SUCCESS != vfxErr)
+ 			error("Error loading NVIDIA Video FX %i", vfxErr);
+-		vfxErr = NvVFX_Load(filter->handle_blur);
+-		if (NVCV_SUCCESS != vfxErr)
+-			error("Error loading blur FX %i", vfxErr);
++		/* Newly recreated handles have no bound images yet. The next
++		 * init_blur_images() binds them before loading the effect. */
+ 	}
+ 
+ 	filter->images_allocated = false;
+-- 
+2.54.0.windows.1
+

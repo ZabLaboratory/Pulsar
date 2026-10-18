@@ -1,0 +1,19 @@
+{
+  "capturedUtc": "2026-10-16T00:44:39.9116074Z",
+  "workUnit": "local-20261015-native-group-composition",
+  "status": "open-investigation",
+  "observedContract": "pulsar_frontend_cleanup_succeeded() becomes false when verify_libobs_scene_data_drained finds orphan scenes or sources after destroy queue drain and frontend reference release.",
+  "observedBranches": "Two host frontend_source_cleanup_failed branches still release runtime leases/close shutdown handle/return1. Unlike browser fence failure, WebSocket and browser barriers have already succeeded and frontend callback table is removed.",
+  "implication": "Do not infer the browser callback race or claim a reproduced crash in this distinct state. Determine whether orphan source/DLL destruction and successor overlap require the same no-return boundary, with a private synthetic orphan fixture.",
+  "decision": "No additional product fix authorized by this note; preserve branches until bounded diagnosis/reproduction.",
+  "sources": [
+    "plugins/pulsar-headless/main.cpp:1420",
+    "plugins/pulsar-headless/main.cpp:1511",
+    "plugins/pulsar-frontend-stub/src/pulsar-frontend-stub.cpp:verify_libobs_scene_data_drained",
+    "plugins/pulsar-frontend-stub/src/pulsar-frontend-stub.cpp:pulsar_frontend_shutdown"
+  ],
+  "exclusions": [
+    "No installed runtime/device/live actions",
+    "No transition or switch-duration changes"
+  ]
+}

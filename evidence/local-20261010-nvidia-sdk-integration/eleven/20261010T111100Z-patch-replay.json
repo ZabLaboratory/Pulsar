@@ -1,0 +1,6 @@
+{
+  "passed": true,
+  "pin": "bd73b922891e56839b0bc86bdc519802802f9d68",
+  "candidate": "6fc5905315af589cde8dc1f7c85212d5ee6ad65a",
+  "check": "The three NVIDIA patches replay in order on pinned native sources and match the compiled candidate. Earlier patch stack has no nv-filters changes."
+}

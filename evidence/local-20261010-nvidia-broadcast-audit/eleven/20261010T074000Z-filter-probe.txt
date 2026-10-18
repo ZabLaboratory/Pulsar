@@ -1,0 +1,59 @@
+import asyncio,base64,hashlib,importlib.util,io,json,os,sys,wave,math,struct,time
+from pathlib import Path
+from PIL import Image
+import websockets
+root=Path('D:/Documents/Zab/Pulsar/.worktrees/eleven-local-20261009-capability-audit')
+spec=importlib.util.spec_from_file_location('stack_transport',root/'scripts/probe-configurable-transition.py')
+t=importlib.util.module_from_spec(spec);sys.modules[spec.name]=t;spec.loader.exec_module(t)
+work=root/'.cache/nvidia-filter-stack';work.mkdir(parents=True,exist_ok=True)
+proof=root/'evidence/local-20261010-nvidia-broadcast-audit/eleven/20261010T074000Z-native-filters.json'
+tone=work/'tone.wav'
+with wave.open(str(tone),'wb') as w:
+ w.setparams((1,2,48000,0,'NONE','not compressed'))
+ w.writeframes(b''.join(struct.pack('<h',int(1500*math.sin(2*math.pi*440*i/48000))) for i in range(48000)))
+os.environ['PULSAR_DIRECTSHOW_LEGACY_ALIAS']='0';os.environ['PULSAR_LEGACY_ALIAS']='disabled'
+os.environ['NV_VIDEO_EFFECTS_PATH']='C:\\Program Files';os.environ['NVAFX_SDK_DIR']=''
+p=t.process.PulsarProcess(Path('C:/Users/Mathias/AppData/Roaming/prism-dev/components/pulsar/active/bin/64bit/pulsar.exe'),'nvenc',work)
+r={'started':time.time(),'mode':'isolated synthetic colour and generated tone; no physical camera, RTMP or recording','filters':[]}
+async def run():
+ p.spawn();await asyncio.to_thread(p.wait_for,t.process.READY_RE,45);await asyncio.to_thread(p.wait_for_shutdown_control_ready,10)
+ async with websockets.connect(f'ws://127.0.0.1:{p.port}',max_size=8*1024*1024) as ws:
+  hello=json.loads(await ws.recv())['d'];ident={'rpcVersion':1,'eventSubscriptions':0}
+  if 'authentication' in hello:
+   a=hello['authentication'];s=base64.b64encode(hashlib.sha256((p.password+a['salt']).encode()).digest()).decode();ident['authentication']=base64.b64encode(hashlib.sha256((s+a['challenge']).encode()).digest()).decode()
+  await ws.send(json.dumps({'op':1,'d':ident}));assert json.loads(await ws.recv())['op']==2
+  wire=t.Wire(ws)
+  for inp in (await wire.call('GetInputList'))['inputs']:
+   if inp['inputKind'].startswith('wasapi'):await wire.call('SetInputMute',{'inputName':inp['inputName'],'inputMuted':True})
+  await wire.call('CreateScene',{'sceneName':'SyntheticAudit'})
+  await wire.call('CreateInput',{'sceneName':'SyntheticAudit','inputName':'AuditColor','inputKind':'color_source_v3','inputSettings':{'color':0xff00ff00,'width':64,'height':64},'sceneItemEnabled':True})
+  await wire.call('CreateInput',{'sceneName':'SyntheticAudit','inputName':'AuditTone','inputKind':'ffmpeg_source','inputSettings':{'local_file':str(tone),'is_local_file':True,'looping':True},'sceneItemEnabled':True})
+  async def pixel():
+   await asyncio.sleep(.08)
+   data=(await wire.call('GetSourceScreenshot',{'sourceName':'AuditColor','imageFormat':'png','imageWidth':64,'imageHeight':64}))['imageData']
+   im=Image.open(io.BytesIO(base64.b64decode(data.split(',')[1]))).convert('RGBA');return list(im.getpixel((32,32)))
+  r['baselinePixel']=await pixel()
+  cases=[('color_filter_v2','AuditColor',{'opacity':.5},{'opacity':.75}),('chroma_key_filter_v2','AuditColor',{'key_color_type':'green','similarity':400,'opacity':1.},{'similarity':500}),('noise_suppress_filter','AuditTone',{'method':'rnnoise'},{'method':'speex','suppress_level':-20}),('noise_gate_filter','AuditTone',{'open_threshold':-30.},{'open_threshold':-25.}),('compressor_filter','AuditTone',{'ratio':4.},{'ratio':3.}),('limiter_filter','AuditTone',{'threshold':-6.},{'threshold':-9.}),('gain_filter','AuditTone',{'db':-3.},{'db':-6.})]
+  for kind,source,settings,update in cases:
+   name='audit/'+kind;begin=time.perf_counter()
+   await wire.call('CreateSourceFilter',{'sourceName':source,'filterName':name,'filterKind':kind,'filterSettings':settings})
+   await wire.call('SetSourceFilterSettings',{'sourceName':source,'filterName':name,'filterSettings':update,'overlay':True})
+   actual=await wire.call('GetSourceFilter',{'sourceName':source,'filterName':name})
+   assert actual['filterKind']==kind and all(actual['filterSettings'].get(k)==v for k,v in update.items())
+   await wire.call('SetSourceFilterEnabled',{'sourceName':source,'filterName':name,'filterEnabled':False})
+   disabled=await wire.call('GetSourceFilter',{'sourceName':source,'filterName':name});assert disabled['filterEnabled'] is False
+   await wire.call('SetSourceFilterEnabled',{'sourceName':source,'filterName':name,'filterEnabled':True})
+   r['filters'].append({'kind':kind,'target':source,'createUpdateReadbackBypass':True,'controlMs':(time.perf_counter()-begin)*1000})
+  r['videoStack']=await wire.call('GetSourceFilterList',{'sourceName':'AuditColor'})
+  r['audioStack']=await wire.call('GetSourceFilterList',{'sourceName':'AuditTone'})
+  r['keyedPixel']=await pixel();assert r['keyedPixel'][3]==0
+  await wire.call('SetSourceFilterEnabled',{'sourceName':'AuditColor','filterName':'audit/chroma_key_filter_v2','filterEnabled':False})
+  r['bypassedPixel']=await pixel();assert 189<=r['bypassedPixel'][3]<=193
+  for kind,source,*_ in cases:await wire.call('RemoveSourceFilter',{'sourceName':source,'filterName':'audit/'+kind})
+  r['restoredPixel']=await pixel();assert r['restoredPixel']==r['baselinePixel']
+try:asyncio.run(run())
+except Exception as err:r['failure']={'type':type(err).__name__,'message':str(err)};raise
+finally:
+ p.shutdown();r['shutdown']={'exitCode':p.proc.poll(),'forced':p.forced_kill_used};r['passed']='failure' not in r and r['shutdown']=={'exitCode':0,'forced':False}
+ r['stagingErrors']=sum('Failed to create staging surface' in line for line in p.snapshot());r['completed']=time.time()
+ proof.write_text(json.dumps(r,indent=2)+'\n',encoding='utf8',newline='\n');print(json.dumps({'passed':r['passed'],'filters':len(r['filters']),'pixels':{k:r.get(k) for k in ['baselinePixel','keyedPixel','bypassedPixel','restoredPixel']},'shutdown':r['shutdown'],'proof':str(proof)}))

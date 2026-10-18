@@ -1,0 +1,56 @@
+{
+  "schema": "pulsar.vision-solar-prism-cef-root-background-oracle-diagnostic/1",
+  "createdUtc": "2026-10-17T16:03:09Z",
+  "sourceRun": {
+    "path": "evidence/local-20261017-cef-coverage-chain/eleven/20261017T155811Z-cef-coverage-chain.json",
+    "sha256": "f77fa10eeba0ce586a111686a13479db995cda9015cc321ad54513b1a04ebb20",
+    "passed": false,
+    "error": "The native screenshot readback completed, but the old harness expected the separate OBS backdrop at clipped overflow."
+  },
+  "contract": {
+    "fixtureRoot": "scripts/cef-coverage-chain/page.mjs:47-52",
+    "rootLayoutBackground": "#0c1119",
+    "backgroundIsOpaque": true,
+    "nativeWireRootGroup": "prism.native-composition.root.v1",
+    "rootChildrenInPaintOrder": ["solarBand:0", "group:vision.owner.1"],
+    "maskedOwnerId": "vision.owner.1",
+    "meaning": "Zero mask coverage reveals opaque LSML root band 0. The standalone OBS backdrop source is occluded at these coordinates."
+  },
+  "realPixels": {
+    "initialAtlas": {
+      "path": "evidence/local-20261017-cef-coverage-chain/eleven/20261017T155811Z-a7855b77-cef-atlas-initial.png",
+      "sha256": "798ab5b72be0fcc49885b5be1d301538c6ccdf234a51b3acfb08611b8db0e80c",
+      "atlasBand0ClippedOverflow": {"scenePoint": [62, 40], "atlasPoint": [63, 41], "rgba": [12, 17, 25, 255]},
+      "atlasBand0StencilFrameOverflow": {"scenePoint": [124, 40], "atlasPoint": [125, 41], "rgba": [12, 17, 25, 255]}
+    },
+    "nativeInitialScreenshot": {
+      "path": "evidence/local-20261017-cef-coverage-chain/eleven/20261017T155811Z-a7855b77-scene-mask-050.png",
+      "sha256": "8951b4883a4b8694baf40e73d92e14cf3904a0154bb4ef980513ac5dfc8c2ef9",
+      "clippedOverflow": [12, 17, 25, 255],
+      "stencilFrameOverflow": [12, 17, 25, 255]
+    },
+    "standaloneObsBackdrop": {
+      "path": "evidence/local-20261017-cef-coverage-chain/eleven/20261017T155811Z-a7855b77-backdrop-source.png",
+      "sha256": "14f66420e3fa9965c27f7890a5ed155a711836af83ed10d4a508e982fc9e43f5",
+      "partialPointRgba": [64, 48, 32, 255],
+      "isExpectedAtZeroMaskCoverage": false
+    }
+  },
+  "independentOfflineRecheck": {
+    "usedSavedRealCefAtlasAndNativeScreenshot": true,
+    "band0PrecedesMaskedOwner": true,
+    "rootLayoutBackground": "#0c1119",
+    "atlasAndNativeOverflowSamplesMatchExactly": true,
+    "result": "PASS"
+  },
+  "changesForNextRun": [
+    "Read root-band 0 samples from the actual CEF atlas using the wire crop and rect.",
+    "Require root band 0 before the masked owner group and require the owner mask reference.",
+    "Compare native zero-coverage points to the opaque LSML root band instead of the separate OBS backdrop source.",
+    "Preserve the failed source run and its captured PNGs unchanged."
+  ],
+  "limits": [
+    "The prior run did not reach the native negative-mask request, updated opacity frame, reset verification, or legacy presenter rejection.",
+    "The prior host exited gracefully with code 0 and no forced termination, but this does not qualify the full chain."
+  ]
+}

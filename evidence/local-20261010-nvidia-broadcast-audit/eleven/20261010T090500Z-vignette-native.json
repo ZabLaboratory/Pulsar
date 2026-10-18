@@ -1,0 +1,69 @@
+{
+  "started": 1791619606.1370175,
+  "mode": "isolated synthetic camera-effect regression",
+  "inputInventoryCount": 16,
+  "baseline": {
+    "center": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "corner": [
+      255,
+      255,
+      255,
+      255
+    ]
+  },
+  "vignette": {
+    "center": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "corner": [
+      51,
+      51,
+      51,
+      255
+    ]
+  },
+  "keyedCenter": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "checks": [
+    "registration",
+    "pixel falloff",
+    "opaque alpha",
+    "native bypass",
+    "zero intensity",
+    "live update",
+    "filter stack",
+    "transparent center",
+    "removal"
+  ],
+  "stats": {
+    "activeFps": 0.0,
+    "availableDiskSpace": 116569.078125,
+    "averageFrameRenderTime": 0.0,
+    "cpuUsage": 4.318120284665795,
+    "memoryUsage": 97.70703125,
+    "outputSkippedFrames": 0,
+    "outputTotalFrames": 0,
+    "renderSkippedFrames": 0,
+    "renderTotalFrames": 38,
+    "webSocketSessionIncomingMessages": 23,
+    "webSocketSessionOutgoingMessages": 23
+  },
+  "shutdown": {
+    "exitCode": 0,
+    "forced": false
+  },
+  "stagingErrors": 0,
+  "passed": true
+}

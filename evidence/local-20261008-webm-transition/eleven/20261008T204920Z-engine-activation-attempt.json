@@ -1,0 +1,23 @@
+{
+  "time": "2026-10-08T20:49:20.913Z",
+  "hostPid": 5392,
+  "oldPid": 24624,
+  "newPid": 20356,
+  "exe": "C:/Users/Mathias/AppData/Roaming/prism-dev/components/pulsar/active/bin/64bit/pulsar.exe",
+  "exeSha256": "fac3466e90a744bff14ca68dac2967e5a51ecd610e9fcf1c1381f8b203299ac8",
+  "selected": "06c5c92a-66f8-4431-92df-374dc56fab51",
+  "status": {
+    "pulsarRunning": true,
+    "pulsarPort": 52536,
+    "libobsVersion": "32.1.2-47-g76c902175-modified-pulsar",
+    "activeDestinations": [],
+    "activeDestinationLabels": [],
+    "captureMode": null,
+    "state": "idle"
+  },
+  "recording": {
+    "active": false,
+    "paused": false
+  },
+  "activationError": null
+}

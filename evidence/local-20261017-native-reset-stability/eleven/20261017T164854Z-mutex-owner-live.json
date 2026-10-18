@@ -1,0 +1,335 @@
+{
+  "capturedAtUtc": "2026-10-17T16:49:31.045920Z",
+  "layoutProvenance": {
+    "mutexKind": {
+      "errorcheck": 2,
+      "normal": 0,
+      "recursive": 1,
+      "robustKinds": "negative encodings"
+    },
+    "ownerThreadTracking": {
+      "kindZero": "not tracked; initialized null and omitted from normal lock/unlock path",
+      "negativeRobust": "unresolved by this collector",
+      "supportedKinds": "positive non-normal kinds only"
+    },
+    "pdbAge": 1,
+    "pdbGuid": "0c146b86-591e-6192-622d-0e72837eebde",
+    "pdbSha256": "85100dc57849c760761a64d68eaa27ad3075b513d0069617b64d520b8da9f682",
+    "pthreadMutexFields": {
+      "event": {
+        "offset": 32,
+        "type": "HANDLE[8]"
+      },
+      "kind": {
+        "offset": 8,
+        "type": "signed 32-bit"
+      },
+      "lock_idx": {
+        "offset": 0,
+        "type": "signed 32-bit"
+      },
+      "ownerThread": {
+        "offset": 16,
+        "type": "ptw32_handle_t[16]"
+      },
+      "recursive_count": {
+        "offset": 4,
+        "type": "signed 32-bit"
+      },
+      "robustNode": {
+        "offset": 40,
+        "type": "pointer[8]"
+      }
+    },
+    "pthreadMutexSize": 48,
+    "ptw32Handle": {
+      "pOffset": 0,
+      "size": 16,
+      "xOffset": 8
+    },
+    "ptw32Thread": {
+      "ptHandleOffset": 16,
+      "seqNumberOffset": 0,
+      "size": 432,
+      "stateOffset": 40,
+      "threadHOffset": 8
+    }
+  },
+  "minidump": {
+    "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\20261017T164854Z-gen2-freeze.dmp",
+    "sha256": "a496c683564d198fd9383707ae33c8dc3d6a2e0e2a622138cd0968eac322a74f"
+  },
+  "moduleIdentities": {
+    "pulsar-capture-effects.dll": {
+      "matchesPinnedBuild": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\private-runtime-exact-20261017T164854Z\\runtime\\obs-plugins\\64bit\\pulsar-capture-effects.dll",
+      "sha256": "efb62a4996a7962fa65b7a28d5cc444aba07d6c21aea67a9e476a89778ae2dfa"
+    },
+    "w32-pthreads.dll": {
+      "matchesPinnedBuild": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\private-runtime-exact-20261017T164854Z\\runtime\\bin\\64bit\\w32-pthreads.dll",
+      "sha256": "296dd07553f0f4293354281ce0540fe2dfe8d9a4d8a197994343e718694267c9"
+    },
+    "w32-pthreads.pdb": {
+      "matchesPinnedBuild": true,
+      "path": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\private-runtime-exact-20261017T155459Z\\runtime\\bin\\64bit\\w32-pthreads.pdb",
+      "sha256": "85100dc57849c760761a64d68eaa27ad3075b513d0069617b64d520b8da9f682"
+    }
+  },
+  "mutexes": [
+    {
+      "internalAddress": "0x1a8c1f76160",
+      "liveStackPointer": "0x1a8c1f76160",
+      "metadata": {
+        "kind": 1,
+        "lock_idx": -1,
+        "recursive_count": 1
+      },
+      "ownerResolution": {
+        "ownerStackCorrelation": {
+          "context": {
+            "rip": "0x7ff9a3b60e44",
+            "rsp": "0x100d76f228"
+          },
+          "nextStep": "symbolize this TID from the same minidump before asserting a lock cycle",
+          "presentInSameMinidump": true,
+          "tid": 7888
+        },
+        "ownerThreadStructAddress": "0x1a8c09a5760",
+        "ptHandle": {
+          "p": "0x1a8c09a5760",
+          "x": 0
+        },
+        "ptHandleMatchesMutexOwnerThread": true,
+        "resolved": true,
+        "seqNumber": 6,
+        "state": 1,
+        "threadH": "0x8d0",
+        "threadHandleResolution": {
+          "processId": 65348,
+          "resolved": true,
+          "sameTargetProcess": true,
+          "tid": 7888
+        },
+        "tidPresentInLiveTargetSnapshot": true
+      },
+      "ownerThread": {
+        "p": "0x1a8c09a5760",
+        "x": 0
+      },
+      "readByteLimit": 72,
+      "readBytes": 72,
+      "stackWitnesses": [
+        {
+          "contextRip": "0x7ff9a3b60e44",
+          "contextRsp": "0x100ceff288",
+          "internalMutexAddress": "0x1a8c1f76160",
+          "savedRbxSlot": "0x100ceff330",
+          "tid": 32472,
+          "waitReturnAddress": "0x7ff96efb383f",
+          "waitReturnSlot": "0x100ceff328"
+        }
+      ],
+      "waiterTids": [
+        32472
+      ]
+    },
+    {
+      "internalAddress": "0x1a839d00360",
+      "liveStackPointer": "0x1a839d00360",
+      "metadata": {
+        "kind": 1,
+        "lock_idx": -1,
+        "recursive_count": 1
+      },
+      "ownerResolution": {
+        "ownerStackCorrelation": {
+          "context": {
+            "rip": "0x7ff9a3b60e44",
+            "rsp": "0x100ceff288"
+          },
+          "nextStep": "symbolize this TID from the same minidump before asserting a lock cycle",
+          "presentInSameMinidump": true,
+          "tid": 32472
+        },
+        "ownerThreadStructAddress": "0x1a839d017c0",
+        "ptHandle": {
+          "p": "0x1a839d017c0",
+          "x": 0
+        },
+        "ptHandleMatchesMutexOwnerThread": true,
+        "resolved": true,
+        "seqNumber": 3,
+        "state": 1,
+        "threadH": "0x514",
+        "threadHandleResolution": {
+          "processId": 65348,
+          "resolved": true,
+          "sameTargetProcess": true,
+          "tid": 32472
+        },
+        "tidPresentInLiveTargetSnapshot": true
+      },
+      "ownerThread": {
+        "p": "0x1a839d017c0",
+        "x": 0
+      },
+      "readByteLimit": 72,
+      "readBytes": 72,
+      "stackWitnesses": [
+        {
+          "contextRip": "0x7ff9a3b60e44",
+          "contextRsp": "0x100d76f228",
+          "internalMutexAddress": "0x1a839d00360",
+          "savedRbxSlot": "0x100d76f2d0",
+          "tid": 7888,
+          "waitReturnAddress": "0x7ff96efb383f",
+          "waitReturnSlot": "0x100d76f2c8"
+        },
+        {
+          "contextRip": "0x7ff9a3b60e44",
+          "contextRsp": "0x100dc6f258",
+          "internalMutexAddress": "0x1a839d00360",
+          "savedRbxSlot": "0x100dc6f300",
+          "tid": 62544,
+          "waitReturnAddress": "0x7ff96efb383f",
+          "waitReturnSlot": "0x100dc6f2f8"
+        }
+      ],
+      "waiterTids": [
+        7888,
+        62544
+      ]
+    }
+  ],
+  "pid": 65348,
+  "processImage": "D:\\Documents\\Zab\\Pulsar\\.worktrees\\eleven-local-20261017-native-reset-stability\\.cache\\native-reset-stability\\private-runtime-exact-20261017T164854Z\\runtime\\bin\\64bit\\pulsar.exe",
+  "readBudget": {
+    "aggregateBytes": 144,
+    "aggregateLimitForTwoMutexes": 144,
+    "distinctMutexCount": 2,
+    "maxPerDistinctMutexBytes": 72
+  },
+  "schema": "pulsar.w32-pthreads-owner-read/2",
+  "sourceProvenance": {
+    "checkout": "upstream-source-25ed780b7f392a1690dfca929cd57679959cf3ad-windows-checkout",
+    "checkoutHead": "70a58302435308e609e0b1114efe3ef402f810b7",
+    "files": {
+      "deps/w32-pthreads/pthread.h": "591f146fb0d5ec6650ccf7c5bd74a8fd9726e8df5620bf2b0862a452c7a05834",
+      "deps/w32-pthreads/pthread_mutex_init.c": "3078aa4c129a9fda1afb0e35d34c26e8e4900b72663fd9053e4fd0c7fb314427",
+      "deps/w32-pthreads/pthread_mutex_lock.c": "80be844a36c5efd00694c3b68e630dbb5141b459d2319b9425afc94ce07caf87",
+      "deps/w32-pthreads/pthread_mutex_unlock.c": "b1af1517c6fb732c598091bb54f4559488255e95c76045c26a561d1167a51312"
+    }
+  },
+  "stackWitness": {
+    "meaning": "KERNELBASE WaitForSingleObjectEx wait return; next qword is saved RBX (internal mutex pointer)",
+    "pthreadMutexLockWaitReturnRva": 14399,
+    "savedRbxSlotFromRsp": 168,
+    "waitReturnFromRsp": 160
+  },
+  "waiterDiscovery": {
+    "candidateCount": 3,
+    "candidateLimit": 8,
+    "candidateTids": [
+      32472,
+      7888,
+      62544
+    ],
+    "distinctMutexCount": 2,
+    "distinctMutexLimit": 2,
+    "rejectedThreadSample": [
+      {
+        "reason": "RuntimeError: waiter TID 43872 stack does not match pinned pthread wait site: return=0x7ff6a85833a4, expected=0x7ff96efb383f",
+        "tid": 43872
+      },
+      {
+        "reason": "RuntimeError: waiter TID 4536 stack does not match pinned pthread wait site: return=0x1a839c800c0, expected=0x7ff96efb383f",
+        "tid": 4536
+      },
+      {
+        "reason": "RuntimeError: waiter TID 49388 stack does not match pinned pthread wait site: return=0x1a839c804f0, expected=0x7ff96efb383f",
+        "tid": 49388
+      },
+      {
+        "reason": "RuntimeError: waiter TID 28900 stack does not match pinned pthread wait site: return=0x1a839c838c0, expected=0x7ff96efb383f",
+        "tid": 28900
+      },
+      {
+        "reason": "RuntimeError: waiter TID 21944 stack does not match pinned pthread wait site: return=0x7ff9006314bf, expected=0x7ff96efb383f",
+        "tid": 21944
+      },
+      {
+        "reason": "RuntimeError: waiter TID 9712 stack does not match pinned pthread wait site: return=0x7ff98aa8b031, expected=0x7ff96efb383f",
+        "tid": 9712
+      },
+      {
+        "reason": "RuntimeError: waiter TID 64292 stack does not match pinned pthread wait site: return=0x0, expected=0x7ff96efb383f",
+        "tid": 64292
+      },
+      {
+        "reason": "RuntimeError: waiter TID 42464 stack does not match pinned pthread wait site: return=0x7ff98aad625f, expected=0x7ff96efb383f",
+        "tid": 42464
+      }
+    ],
+    "rejectedThreadSampleLimit": 8,
+    "status": "unique-witnesses",
+    "witnesses": [
+      {
+        "contextRip": "0x7ff9a3b60e44",
+        "contextRsp": "0x100ceff288",
+        "internalMutexAddress": "0x1a8c1f76160",
+        "savedRbxSlot": "0x100ceff330",
+        "tid": 32472,
+        "waitReturnAddress": "0x7ff96efb383f",
+        "waitReturnSlot": "0x100ceff328"
+      },
+      {
+        "contextRip": "0x7ff9a3b60e44",
+        "contextRsp": "0x100d76f228",
+        "internalMutexAddress": "0x1a839d00360",
+        "savedRbxSlot": "0x100d76f2d0",
+        "tid": 7888,
+        "waitReturnAddress": "0x7ff96efb383f",
+        "waitReturnSlot": "0x100d76f2c8"
+      },
+      {
+        "contextRip": "0x7ff9a3b60e44",
+        "contextRsp": "0x100dc6f258",
+        "internalMutexAddress": "0x1a839d00360",
+        "savedRbxSlot": "0x100dc6f300",
+        "tid": 62544,
+        "waitReturnAddress": "0x7ff96efb383f",
+        "waitReturnSlot": "0x100dc6f2f8"
+      }
+    ]
+  },
+  "waiterStackWitnesses": [
+    {
+      "contextRip": "0x7ff9a3b60e44",
+      "contextRsp": "0x100ceff288",
+      "internalMutexAddress": "0x1a8c1f76160",
+      "savedRbxSlot": "0x100ceff330",
+      "tid": 32472,
+      "waitReturnAddress": "0x7ff96efb383f",
+      "waitReturnSlot": "0x100ceff328"
+    },
+    {
+      "contextRip": "0x7ff9a3b60e44",
+      "contextRsp": "0x100d76f228",
+      "internalMutexAddress": "0x1a839d00360",
+      "savedRbxSlot": "0x100d76f2d0",
+      "tid": 7888,
+      "waitReturnAddress": "0x7ff96efb383f",
+      "waitReturnSlot": "0x100d76f2c8"
+    },
+    {
+      "contextRip": "0x7ff9a3b60e44",
+      "contextRsp": "0x100dc6f258",
+      "internalMutexAddress": "0x1a839d00360",
+      "savedRbxSlot": "0x100dc6f300",
+      "tid": 62544,
+      "waitReturnAddress": "0x7ff96efb383f",
+      "waitReturnSlot": "0x100dc6f2f8"
+    }
+  ]
+}
