@@ -77,6 +77,60 @@ MIRROR_RE = re.compile(r"\bkWebpageControlLevelNone\s*=\s*(-?\d+)")
 # the enclosing function's marker; each carries the evidence the gate re-checks,
 # so the exemption cannot outlive the guarantee it rests on.
 WAIVERS = {
+    "create_group_world_source": {
+        "site": "plugins/pulsar-capture-effects/src/group-composition-world-source.cpp",
+        "call": "obs_source_create_private",
+        "reason": "creates only the locally registered pulsar_composition_world_affine input, never browser_source.",
+        "evidence": [
+            ("plugins/pulsar-capture-effects/src/group-composition-world-source.cpp",
+             r'constexpr const char \*source_id = "pulsar_composition_world_affine";'),
+            ("plugins/pulsar-capture-effects/src/group-composition-world-source.cpp",
+             r"info\.id = source_id;[\s\S]{0,120}?info\.type = OBS_SOURCE_TYPE_INPUT;"),
+            ("plugins/pulsar-capture-effects/src/group-composition-world-source.cpp",
+             r"obs_source_create_private\(source_id, name, nullptr\)"),
+        ],
+    },
+    "create_group_dependency_source": {
+        "site": "plugins/pulsar-capture-effects/src/group-composition-world-source.cpp",
+        "call": "obs_source_create_private",
+        "reason": "creates only the locally registered pulsar_composition_dependency input, never browser_source.",
+        "evidence": [
+            ("plugins/pulsar-capture-effects/src/group-composition-world-source.cpp",
+             r'constexpr const char \*dependency_source_id = "pulsar_composition_dependency";'),
+            ("plugins/pulsar-capture-effects/src/group-composition-world-source.cpp",
+             r"dependency\.id = dependency_source_id;[\s\S]{0,120}?dependency\.type = OBS_SOURCE_TYPE_INPUT;"),
+            ("plugins/pulsar-capture-effects/src/group-composition-world-source.cpp",
+             r"obs_source_create_private\(dependency_source_id, name,"),
+        ],
+    },
+    "create_preview_frame": {
+        "site": "plugins/pulsar-frontend-stub/src/pulsar-preview-frame.cpp",
+        "call": "obs_source_create_private",
+        "reason": "creates only the locally registered pulsar_preview_frame input, never browser_source.",
+        "evidence": [
+            ("plugins/pulsar-frontend-stub/src/pulsar-preview-frame.cpp",
+             r'constexpr const char \*kSourceId = "pulsar_preview_frame";'),
+            ("plugins/pulsar-frontend-stub/src/pulsar-preview-frame.cpp",
+             r"info\.id = kSourceId;[\s\S]{0,120}?info\.type = OBS_SOURCE_TYPE_INPUT;"),
+            ("plugins/pulsar-frontend-stub/src/pulsar-preview-frame.cpp",
+             r'obs_source_create_private\(kSourceId, "PulsarOutgoingPreviewFrame", settings\)'),
+        ],
+    },
+    "admit": {
+        "site": "plugins/pulsar-capture-effects/src/capture-effects.cpp",
+        "call": "obs_source_reset_settings",
+        "reason": "resets only the verified pulsar_capture_effects FILTER, never browser_source.",
+        "evidence": [
+            ("plugins/pulsar-capture-effects/src/capture-effects.cpp",
+             r'obs_source_get_id\(prepared\.filter\)\) != "pulsar_capture_effects"'),
+            ("plugins/pulsar-capture-effects/src/capture-effects.cpp",
+             r'prepared\.filter = obs_source_create\("pulsar_capture_effects"'),
+            ("plugins/pulsar-capture-effects/src/capture-effects.cpp",
+             r'info\.id = "pulsar_capture_effects";[\s\S]{0,120}?info\.type = OBS_SOURCE_TYPE_FILTER;'),
+            ("plugins/pulsar-capture-effects/src/capture-effects.cpp",
+             r'auto \*filter = prepared\.filter;[\s\S]{0,2600}?obs_source_reset_settings\(filter, snapshot\)'),
+        ],
+    },
     "ActionHelper::CreateSourceFilter": {
         "call": "obs_source_create_private",
         "reason": (
@@ -418,6 +472,7 @@ def check_creation_sites(sources: list[pathlib.Path]) -> list[str]:
                     k
                     for k, w in WAIVERS.items()
                     if k in header and w["call"] in body
+                    and w.get("site", path.relative_to(REPO_ROOT).as_posix()) == path.relative_to(REPO_ROOT).as_posix()
                 ),
                 None,
             )
@@ -470,7 +525,9 @@ def check_mutation_sites(sources: list[pathlib.Path]) -> list[str]:
                 continue
             header, body = found
             waiver_key = next(
-                (k for k, w in WAIVERS.items() if k in header and w["call"] in body),
+                (k for k, w in WAIVERS.items()
+                 if k in header and w["call"] in body
+                 and w.get("site", path.relative_to(REPO_ROOT).as_posix()) == path.relative_to(REPO_ROOT).as_posix()),
                 None,
             )
             if waiver_key is not None:
