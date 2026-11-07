@@ -400,6 +400,14 @@ semantics or qualifying an inactive scene.
 
 ### Translation-only retained-tree recommits
 
+Both native protocol versions build the same world-affine capture source in
+`global-scene-texels`. A translation can reuse that source within its own
+protocol version. Owner-local capture plans continue through ordinary staging.
+An uncontended translation can run in the OBS tick before the output frame.
+The graphics queue completes the request and handles changes that require full
+staging. The generation fence and source validation apply to both paths.
+The release probe moves a cropped, rotated capture and checks that returning
+it to its starting pose restores every pixel. See the [native camera measurements](../../evidence/local-20261107-capture-motion/eleven/20261107T031036Z-native-recommit.json).
 When a higher-generation `CommitGroupComposition` differs from the admitted
 plan only in capture `tx`/`ty`, Pulsar can retain the active native group tree
 and update the retained child transforms. The gate compares the plan's full

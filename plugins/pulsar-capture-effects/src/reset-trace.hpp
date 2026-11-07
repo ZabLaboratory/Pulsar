@@ -38,7 +38,7 @@ inline void event(const char *component, uint64_t object_id, const char *phase,
                   const void *source, const void *resource = nullptr,
                   uint64_t value = 0)
 {
-#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE) && !defined(PULSAR_GROUP_COMPOSITION_TIMING_ONLY)
   blog(LOG_INFO,
        "PULSAR_NATIVE_RESET_TRACE component=%s id=%llu tid=%llu phase=%s "
        "source=%p resource=%p value=%llu",

@@ -213,6 +213,26 @@ async def world_exercise(config, output, runtime_id, scratch):
             reply = await commit(conflicting)
             assert not reply.get("ok") and "stale-generation" in reply.get("error", ""), reply
             refusals.append({"case": "same-generation-different-space", "error": reply["error"]})
+            # /1 and /2 carry the same world-space affine. A scene with a
+            # rotated, cropped source must keep its pixels even after a return.
+            child = groups[1]["children"][1]
+            for generation, dx in [(5, 40), (6, 0)]:
+                child["affine"]["tx"] = 140 + dx
+                reply = await commit(payload(generation))
+                assert reply.get("ok"), reply
+                active_generation = generation
+                timing = reply.get("debugCommitTiming")
+                if timing is not None:
+                    assert timing["geometryFastPath"] and timing["buildGroupMs"] == 0, timing
+                moved = await readback(f"capture-translate-{dx}", viewport)
+                legacy.assert_pixel_near(moved.getpixel((120 + dx, 55)), (0, 50, 0, 64),
+                                         "retained world-space translation", 1)
+                if dx:
+                    assert moved.getpixel((120, 55)) == (0, 0, 0, 0), "old capture position visible"
+                else:
+                    assert moved.tobytes() == mixed.tobytes(), "return differs from the original composed frame"
+                generations.append({"generation": generation, "captureDx": dx,
+                                    "retained": timing["geometryFastPath"] if timing else None})
             return {"coordinateSpace": "global-scene-texels", "viewport": list(viewport),
                     "generations": generations, "refusals": refusals, "images": images,
                     "capture": "synthetic image with vertical source-space crop; full affine shear",
