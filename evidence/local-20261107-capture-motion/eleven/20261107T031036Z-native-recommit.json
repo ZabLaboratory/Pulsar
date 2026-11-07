@@ -1,0 +1,138 @@
+{
+  "method": "Same native Preview camera, repeated translations of an authored global-scene-texels plan/1. Figures cover callbacks observed in each instrumented host log following initial construction. No direct physical pointer measurement here. Exact-pixel regression test rerun separately with production tracing disabled.",
+  "before": {
+    "measuredCommitsAfterFirstGeneration": 43,
+    "retained": 0,
+    "beforeRender": 0,
+    "groupBuilds": 43,
+    "graphicsCallbackMs": {
+      "50": 13.3812,
+      "95": 17.098,
+      "100": 17.7574
+    },
+    "groupBuildMs": {
+      "50": 13.0605,
+      "95": 16.7601,
+      "100": 17.356
+    },
+    "queueMs": {
+      "50": 7.0672,
+      "95": 15.3431,
+      "100": 16.3413
+    }
+  },
+  "after": {
+    "measuredCommitsAfterFirstGeneration": 83,
+    "retained": 83,
+    "beforeRender": 59,
+    "groupBuilds": 0,
+    "graphicsCallbackMs": {
+      "50": 0.174,
+      "95": 0.2817,
+      "100": 0.5582
+    },
+    "groupBuildMs": {
+      "50": 0.0,
+      "95": 0.0,
+      "100": 0.0
+    },
+    "queueMs": {
+      "50": 3.503,
+      "95": 10.3221,
+      "100": 13.3392
+    }
+  },
+  "releaseDllSha256": "abb0ca9df08f7baa4fce9203127b08621c0ceaf0051997bb7ec13cff11c295bc",
+  "releaseProbe": {
+    "result": true,
+    "generations": [
+      {
+        "generation": 1,
+        "exactCheckerboardPixels": 1024
+      },
+      {
+        "generation": 2,
+        "sample": [
+          0,
+          50,
+          50,
+          127
+        ]
+      },
+      {
+        "generation": 3,
+        "sample": [
+          0,
+          25,
+          25,
+          63
+        ]
+      },
+      {
+        "generation": 4,
+        "sample": [
+          0,
+          50,
+          0,
+          63
+        ]
+      },
+      {
+        "generation": 5,
+        "captureDx": 40,
+        "retained": null
+      },
+      {
+        "generation": 6,
+        "captureDx": 0,
+        "retained": null
+      }
+    ],
+    "refusals": [
+      {
+        "case": "unknown-space",
+        "error": "unsupported-coordinate-space: unknown",
+        "pixelsPreserved": true
+      },
+      {
+        "case": "scaled-band",
+        "error": "global-band-resampling: global texels require exact integer placement without scaling",
+        "pixelsPreserved": true
+      },
+      {
+        "case": "fractional-band",
+        "error": "global-band-resampling: global texels require exact integer placement without scaling",
+        "pixelsPreserved": true
+      },
+      {
+        "case": "float-overflow",
+        "error": "invalid-affine: transform exceeds native float range",
+        "pixelsPreserved": true
+      },
+      {
+        "case": "same-generation-different-space",
+        "error": "stale-generation: global-texel-proof-8a527662d2"
+      }
+    ],
+    "sha256ByPhase": {
+      "exact-grid": "6b7de5300cf4f5f4281af91024d27d01f7586bd59da7dd39411cbc14dad8fa92",
+      "mixed-shear-opacity": "c964f9e534dcf2b4625ed473da6c6755bfbf5a4e242a962f2f51bf84a1110743",
+      "nested-opacity": "7d08a91abaadedc1f01185e9569d95929afc1d5d7f1ff7def6e3e956a5ba4e43",
+      "rotated-crop": "1c6eb6808bdf8c6d1af21a8f342c6d61d421aea46ddfdbd05f915a591ede2f62",
+      "unknown-space": "1c6eb6808bdf8c6d1af21a8f342c6d61d421aea46ddfdbd05f915a591ede2f62",
+      "scaled-band": "1c6eb6808bdf8c6d1af21a8f342c6d61d421aea46ddfdbd05f915a591ede2f62",
+      "fractional-band": "1c6eb6808bdf8c6d1af21a8f342c6d61d421aea46ddfdbd05f915a591ede2f62",
+      "float-overflow": "1c6eb6808bdf8c6d1af21a8f342c6d61d421aea46ddfdbd05f915a591ede2f62",
+      "capture-translate-40": "7d685975e690d9857a1e2c18bdb9907dc3e2382267b51f3da227f4b85245df65",
+      "capture-translate-0": "1c6eb6808bdf8c6d1af21a8f342c6d61d421aea46ddfdbd05f915a591ede2f62"
+    },
+    "viewport": [
+      1920,
+      1080
+    ],
+    "capture": "synthetic image with vertical source-space crop; full affine shear",
+    "gracefulShutdown": true,
+    "forcedTermination": false,
+    "exitCode": 0
+  }
+}

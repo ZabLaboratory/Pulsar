@@ -1469,7 +1469,7 @@ bool group_equal_except_capture_translation(const Group &a, const Group &b,
 bool plans_equal_except_capture_translation(const Plan &active,
                                             const Plan &next)
 {
-  if (active.protocol_version != 2 || next.protocol_version != 2 ||
+  if (active.protocol_version != next.protocol_version ||
       active.coordinate_space != CoordinateSpace::GlobalSceneTexels ||
       next.coordinate_space != CoordinateSpace::GlobalSceneTexels ||
       active.coordinate_space != next.coordinate_space ||
@@ -2331,6 +2331,8 @@ struct Commit {
   obs_data_t *request = nullptr;
   obs_data_t *response = nullptr;
   uint64_t reset_trace_id = 0;
+  bool retained_only = false;
+  bool applied_before_render = false;
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
   CommitTiming timing;
 #endif
@@ -2414,6 +2416,14 @@ void commit_graphics(void *data)
       return;
     }
 
+    const bool geometry_translation_plan =
+        previous && previous->generation == last &&
+        previous->scene_uuid == scene_uuid &&
+        plans_equal_except_capture_translation(previous->plan_snapshot, plan);
+    if (commit.retained_only &&
+        (!geometry_translation_plan || !previous->geometry_snapshot_ready))
+      return;
+
     CandidateGuard candidate;
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
     candidate.timing = &commit.timing;
@@ -2437,10 +2447,6 @@ void commit_graphics(void *data)
     if (!resolved) {
       return;
     }
-    const bool geometry_translation_plan =
-        previous && previous->generation == last &&
-        previous->scene_uuid == scene_uuid &&
-        plans_equal_except_capture_translation(previous->plan_snapshot, plan);
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
     commit.timing.geometry_snapshot_ready =
         previous && previous->geometry_snapshot_ready;
@@ -2483,15 +2489,17 @@ void commit_graphics(void *data)
         swap_plan(previous->plan_snapshot, plan);
         previous->generation = next_generation;
         fence_it->second.generation = next_generation;
+        commit.applied_before_render = commit.retained_only;
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
         commit.timing.geometry_fast_path = true;
 #endif
         return;
       }
     }
+    if (commit.retained_only)
+      return;
     candidate.state.plan_snapshot = plan;
-    if (plan.protocol_version == 2 &&
-        plan.coordinate_space == CoordinateSpace::GlobalSceneTexels) {
+    if (plan.coordinate_space == CoordinateSpace::GlobalSceneTexels) {
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
       phase_started = CommitClock::now();
 #endif
@@ -2582,7 +2590,7 @@ void commit_graphics(void *data)
       remove_root(candidate.state.root, candidate.state.generation);
       candidate.state.root = nullptr;
     }
-    if (!slot->input_bindings.empty() && slot->protocol_version == 2 &&
+    if (!slot->input_bindings.empty() &&
         slot->coordinate_space == CoordinateSpace::GlobalSceneTexels) {
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
       phase_started = CommitClock::now();
@@ -2604,10 +2612,52 @@ void commit_graphics(void *data)
   }
 }
 
-void commit_request(obs_data_t *request, obs_data_t *response, void *)
+// The normal OBS graphics queue runs after output_frames(). Offer a single
+// uncontended retained translation at the start of that same graphics frame.
+// The mandatory queued callback owns completion and the caller's lifetime.
+// Both consumers execute on the graphics thread; neither can run in parallel.
+std::atomic<Commit *> before_render_candidate{nullptr};
+std::atomic<unsigned> group_requests_in_flight{0};
+
+struct GroupRequestScope {
+  const bool uncontended = group_requests_in_flight.fetch_add(1) == 0;
+  ~GroupRequestScope() { group_requests_in_flight.fetch_sub(1); }
+};
+
+void apply_before_render(void *, float)
 {
-  Commit commit{request, response};
-  obs_queue_task(OBS_TASK_GRAPHICS, commit_graphics, &commit, true);
+  if (group_requests_in_flight.load() != 1)
+    return;
+  auto *pending = before_render_candidate.exchange(nullptr);
+  if (!pending || active_compositions.empty())
+    return;
+  auto *response = obs_data_create();
+  if (!response)
+    return;
+  Commit attempt{pending->request, response};
+  attempt.retained_only = true;
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+  attempt.timing = pending->timing;
+  attempt.reset_trace_id = pending->reset_trace_id;
+#endif
+  commit_graphics(&attempt);
+  if (attempt.applied_before_render) {
+    pending->applied_before_render = true;
+    obs_data_apply(pending->response, response);
+#if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
+    pending->timing = attempt.timing;
+#endif
+  }
+  obs_data_release(response);
+}
+
+void finish_graphics_commit(void *data)
+{
+  auto *commit = static_cast<Commit *>(data);
+  auto *candidate = commit;
+  before_render_candidate.compare_exchange_strong(candidate, nullptr);
+  if (!commit->applied_before_render)
+    commit_graphics(commit);
 }
 
 struct Reset {
@@ -2717,6 +2767,7 @@ void reset_request(obs_data_t *request, obs_data_t *response, void *)
   commit.reset_trace_id = next_reset_trace_id();
   reset_trace(commit.reset_trace_id, "request_enter");
   reset_trace(commit.reset_trace_id, "queue_wait_begin");
+  GroupRequestScope scope;
   obs_queue_task(OBS_TASK_GRAPHICS, reset_graphics, &commit, true);
   reset_trace(commit.reset_trace_id, "queue_wait_end");
 }
@@ -2847,7 +2898,12 @@ void group_composition_request(obs_data_t *request, obs_data_t *response,
   commit.timing.handler_started = CommitClock::now();
   commit.timing.queue_started = CommitClock::now();
 #endif
-  obs_queue_task(OBS_TASK_GRAPHICS, commit_graphics, &commit, true);
+  GroupRequestScope scope;
+  if (scope.uncontended && !obs_in_task_thread(OBS_TASK_GRAPHICS)) {
+    Commit *empty = nullptr;
+    before_render_candidate.compare_exchange_strong(empty, &commit);
+  }
+  obs_queue_task(OBS_TASK_GRAPHICS, finish_graphics_commit, &commit, true);
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
   const auto handler_finished = CommitClock::now();
   auto *timing = obs_data_create();
@@ -2875,6 +2931,7 @@ void group_composition_request(obs_data_t *request, obs_data_t *response,
                     commit.timing.geometry_prevalidation_success);
   obs_data_set_int(timing, "geometryPrevalidationFailure",
                    commit.timing.geometry_prevalidation_failure);
+  obs_data_set_bool(timing, "geometryBeforeRender", commit.applied_before_render);
   obs_data_set_bool(timing, "geometryFastPath",
                     commit.timing.geometry_fast_path);
   obs_data_set_double(timing, "atomicSwapMs", commit.timing.atomic_swap_ms);
@@ -2899,12 +2956,14 @@ void reset_group_composition_request(obs_data_t *request, obs_data_t *response,
   commit.reset_trace_id = next_reset_trace_id();
   reset_trace(commit.reset_trace_id, "request_enter");
   reset_trace(commit.reset_trace_id, "queue_wait_begin");
+  GroupRequestScope scope;
   obs_queue_task(OBS_TASK_GRAPHICS, reset_graphics, &commit, true);
   reset_trace(commit.reset_trace_id, "queue_wait_end");
 }
 
 void group_composition_unload()
 {
+  obs_remove_tick_callback(apply_before_render, nullptr);
   signal_handler_t *handler = nullptr;
   {
     std::lock_guard<std::mutex> lock(source_remove_mutex);
@@ -2973,6 +3032,7 @@ bool group_composition_load()
     return false;
   signal_handler_connect(global_signal_handler, "source_remove",
                          source_removed_signal, nullptr);
+  obs_add_tick_callback(apply_before_render, nullptr);
   accepting_source_removals = true;
   return true;
 }
