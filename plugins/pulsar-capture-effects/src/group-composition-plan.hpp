@@ -68,6 +68,8 @@ struct Plan {
   uint64_t generation = 0;
   std::vector<Group> groups;
   std::vector<int64_t> replaced_scene_item_ids;
+  // Transaction-local retirement, retained only to identify an exact replay.
+  std::vector<int64_t> retired_capture_scene_item_ids;
   std::unordered_map<std::string, size_t> by_id;
   size_t child_count = 0;
 };

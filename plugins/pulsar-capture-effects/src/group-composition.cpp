@@ -383,6 +383,7 @@ void swap_plan(Plan &left, Plan &right) noexcept
   swap(left.generation, right.generation);
   left.groups.swap(right.groups);
   left.replaced_scene_item_ids.swap(right.replaced_scene_item_ids);
+  left.retired_capture_scene_item_ids.swap(right.retired_capture_scene_item_ids);
   left.by_id.swap(right.by_id);
   swap(left.child_count, right.child_count);
 }
@@ -400,6 +401,7 @@ struct ActiveComposition {
   PrivateSceneSnapshot host_scene_snapshot;
   std::vector<PrivateSceneSnapshot> private_scenes;
   std::vector<WorldAffineBinding> world_affines;
+  std::vector<SourceRef> owned_group_sources;
   std::vector<GroupWorldSourceTranslationUpdate> geometry_updates;
   std::vector<InputBinding> input_bindings;
   bool geometry_snapshot_ready = false;
@@ -420,6 +422,7 @@ struct ActiveComposition {
     swap(host_scene_snapshot, other.host_scene_snapshot);
     private_scenes.swap(other.private_scenes);
     world_affines.swap(other.world_affines);
+    owned_group_sources.swap(other.owned_group_sources);
     geometry_updates.swap(other.geometry_updates);
     input_bindings.swap(other.input_bindings);
     swap(geometry_snapshot_ready, other.geometry_snapshot_ready);
@@ -854,18 +857,23 @@ bool source_filters_match(obs_source_t *source,
   return match.matches && match.index == expected.size();
 }
 
-struct RootGroupSizeTransition {
-  obs_sceneitem_t *item = nullptr;
-  obs_source_t *source = nullptr;
+struct GroupSizeSettlement {
+  size_t scene_index = 0;
+  size_t item_index = 0;
+};
+
+struct GroupSizeTransitions {
+  const std::vector<SourceRef> *owned_sources = nullptr;
   uint32_t width = 0;
   uint32_t height = 0;
-  size_t snapshot_index = std::numeric_limits<size_t>::max();
+  size_t scene_index = 0;
+  std::vector<GroupSizeSettlement> settlements;
 };
 
 bool scene_item_matches_snapshot(obs_scene_t *scene, obs_sceneitem_t *item,
                                  const SceneItemSnapshot &expected,
                                  uint32_t *failure_reason = nullptr,
-                                 RootGroupSizeTransition *root_size = nullptr,
+                                 GroupSizeTransitions *group_sizes = nullptr,
                                  size_t snapshot_index = 0)
 {
   const auto fail = [failure_reason](uint32_t reason) {
@@ -907,16 +915,21 @@ bool scene_item_matches_snapshot(obs_scene_t *scene, obs_sceneitem_t *item,
   const uint32_t actual_height = obs_source_get_height(source);
   if (expected.source_width != actual_width ||
       expected.source_height != actual_height) {
-    const bool initial_root_size_settlement =
-        root_size && expected.item == root_size->item &&
-        expected.source.get() == root_size->source && expected.group &&
+    // OBS computes a new group's extent on its first render. Only groups
+    // constructed by this exact composition may settle from zero to the
+    // anchored global viewport; identity, transforms and contents still match.
+    const bool initial_owned_group_size_settlement =
+        group_sizes && group_sizes->owned_sources && expected.group &&
         expected.source_width == 0 && expected.source_height == 0 &&
-        actual_width == root_size->width &&
-        actual_height == root_size->height &&
-        root_size->snapshot_index == std::numeric_limits<size_t>::max();
-    if (!initial_root_size_settlement)
+        actual_width == group_sizes->width && actual_height == group_sizes->height &&
+        std::any_of(group_sizes->owned_sources->begin(),
+                    group_sizes->owned_sources->end(),
+                    [source](const SourceRef &owned) { return owned.get() == source; });
+    if (!initial_owned_group_size_settlement)
       return fail(6);
-    root_size->snapshot_index = snapshot_index;
+    if (group_sizes->settlements.size() >= group_sizes->settlements.capacity())
+      return fail(6);
+    group_sizes->settlements.push_back({group_sizes->scene_index, snapshot_index});
   }
   if (expected.source_enabled != obs_source_enabled(source))
     return fail(7);
@@ -929,7 +942,7 @@ bool scene_item_matches_snapshot(obs_scene_t *scene, obs_sceneitem_t *item,
 
 struct SceneMatch {
   const PrivateSceneSnapshot *expected = nullptr;
-  RootGroupSizeTransition *root_size = nullptr;
+  GroupSizeTransitions *group_sizes = nullptr;
   size_t index = 0;
   bool matches = true;
   uint32_t failure_reason = 0;
@@ -949,7 +962,7 @@ bool match_scene_item_callback(obs_scene_t *scene, obs_sceneitem_t *item,
   uint32_t item_failure_reason = 0;
   if (!scene_item_matches_snapshot(
           scene, item, match.expected->items[match.index],
-          &item_failure_reason, match.root_size, match.index)) {
+          &item_failure_reason, match.group_sizes, match.index)) {
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
     if (item_failure_reason == 6) {
       const auto &expected = match.expected->items[match.index];
@@ -976,7 +989,7 @@ bool match_scene_item_callback(obs_scene_t *scene, obs_sceneitem_t *item,
 bool scene_snapshot_matches(obs_scene_t *scene,
                             const PrivateSceneSnapshot &expected,
                             uint32_t *failure_reason = nullptr,
-                            RootGroupSizeTransition *root_size = nullptr)
+                            GroupSizeTransitions *group_sizes = nullptr)
 {
   if (failure_reason)
     *failure_reason = 0;
@@ -986,7 +999,7 @@ bool scene_snapshot_matches(obs_scene_t *scene,
       *failure_reason = 31;
     return false;
   }
-  SceneMatch match{&expected, root_size};
+  SceneMatch match{&expected, group_sizes};
   obs_scene_enum_items(scene, match_scene_item_callback, &match);
   if (!match.matches) {
     if (failure_reason)
@@ -1109,7 +1122,7 @@ bool capture_geometry_snapshots(ActiveComposition &state)
     state.geometry_snapshot_ready = false;
   };
   try {
-    if (!state.root || state.world_affines.empty())
+    if (!state.root)
       return false;
     obs_scene_t *host_scene = obs_sceneitem_get_scene(state.root);
     if (!host_scene)
@@ -1190,7 +1203,7 @@ bool capture_geometry_snapshots(ActiveComposition &state)
 bool scene_bindings_match(obs_scene_t *scene,
                           const ActiveComposition &active,
                           uint32_t &failure_reason,
-                          RootGroupSizeTransition &root_size)
+                          GroupSizeTransitions &group_sizes)
 {
   failure_reason = 0;
   const auto root_it = active.plan_snapshot.by_id.find(root_id);
@@ -1206,14 +1219,13 @@ bool scene_bindings_match(obs_scene_t *scene,
       root_bounds.height <= std::numeric_limits<uint32_t>::max() &&
       std::floor(root_bounds.width) == root_bounds.width &&
       std::floor(root_bounds.height) == root_bounds.height) {
-    root_size.item = active.root;
-    root_size.source = obs_sceneitem_get_source(active.root);
-    root_size.width = static_cast<uint32_t>(root_bounds.width);
-    root_size.height = static_cast<uint32_t>(root_bounds.height);
+    group_sizes.owned_sources = &active.owned_group_sources;
+    group_sizes.width = static_cast<uint32_t>(root_bounds.width);
+    group_sizes.height = static_cast<uint32_t>(root_bounds.height);
   }
   uint32_t host_snapshot_failure = 0;
   if (!scene_snapshot_matches(scene, active.host_scene_snapshot,
-                              &host_snapshot_failure, &root_size)) {
+                              &host_snapshot_failure, &group_sizes)) {
     failure_reason = host_snapshot_failure ? host_snapshot_failure : 31;
     return false;
   }
@@ -1281,13 +1293,15 @@ bool build_geometry_translation_updates(
                        binding.crop_scene_source.get(), binding.affine,
                        next_child.affine});
   }
-  return !updates.empty();
+  // A raster-only graph has no capture matrices, but still needs the same
+  // locked topology/source validation before retaining its tree.
+  return true;
 }
 
 struct RetainedGeometryTransaction {
   ActiveComposition *active = nullptr;
   const std::vector<GroupWorldSourceTranslationUpdate> *updates = nullptr;
-  RootGroupSizeTransition root_size;
+  GroupSizeTransitions group_sizes;
   size_t next_scene_index = 0;
   bool valid = true;
   bool applied = false;
@@ -1305,16 +1319,18 @@ void update_retained_geometry_callback(void *data, obs_scene_t *scene)
   if (transaction.next_scene_index == 0) {
     uint32_t failure_reason = 0;
     if (!scene_bindings_match(scene, active, failure_reason,
-                              transaction.root_size)) {
+                              transaction.group_sizes)) {
       transaction.valid = false;
       transaction.failure_reason = failure_reason ? failure_reason : 3;
       return;
     }
   } else {
     const size_t private_index = transaction.next_scene_index - 1;
+    transaction.group_sizes.scene_index = transaction.next_scene_index;
     if (private_index >= active.private_scenes.size() ||
         !scene_snapshot_matches(
-            scene, active.private_scenes[private_index])) {
+            scene, active.private_scenes[private_index], nullptr,
+            &transaction.group_sizes)) {
       transaction.valid = false;
       transaction.failure_reason = 4;
       return;
@@ -1341,32 +1357,39 @@ void update_retained_geometry_callback(void *data, obs_scene_t *scene)
     transaction.failure_reason = 7;
     return;
   }
-  SceneItemSnapshot *root_size_snapshot = nullptr;
-  if (transaction.root_size.snapshot_index !=
-      std::numeric_limits<size_t>::max()) {
-    auto &items = active.host_scene_snapshot.items;
-    const size_t index = transaction.root_size.snapshot_index;
-    if (index >= items.size() || items[index].item != transaction.root_size.item ||
-        items[index].source.get() != transaction.root_size.source ||
-        items[index].source_width != 0 || items[index].source_height != 0 ||
-        obs_source_get_width(transaction.root_size.source) !=
-            transaction.root_size.width ||
-        obs_source_get_height(transaction.root_size.source) !=
-            transaction.root_size.height) {
+  // Do not mutate snapshots while validation can still fail. All parent and
+  // child locks are held here, and the world-source batch itself is prevalidated.
+  for (const auto &settlement : transaction.group_sizes.settlements) {
+    const auto &items = settlement.scene_index == 0
+        ? active.host_scene_snapshot.items
+        : active.private_scenes[settlement.scene_index - 1].items;
+    if (settlement.item_index >= items.size()) {
       transaction.valid = false;
       transaction.failure_reason = 34;
       return;
     }
-    root_size_snapshot = &items[index];
+    const auto &snapshot = items[settlement.item_index];
+    if (snapshot.source_width != 0 || snapshot.source_height != 0 ||
+        obs_source_get_width(snapshot.source.get()) != transaction.group_sizes.width ||
+        obs_source_get_height(snapshot.source.get()) != transaction.group_sizes.height) {
+      transaction.valid = false;
+      transaction.failure_reason = 34;
+      return;
+    }
   }
   transaction.applied = group_world_source_update_translations(
       transaction.updates->data(), transaction.updates->size());
   if (!transaction.applied) {
     transaction.valid = false;
     transaction.failure_reason = 6;
-  } else if (root_size_snapshot) {
-    root_size_snapshot->source_width = transaction.root_size.width;
-    root_size_snapshot->source_height = transaction.root_size.height;
+    return;
+  }
+  for (const auto &settlement : transaction.group_sizes.settlements) {
+    auto &items = settlement.scene_index == 0
+        ? active.host_scene_snapshot.items
+        : active.private_scenes[settlement.scene_index - 1].items;
+    items[settlement.item_index].source_width = transaction.group_sizes.width;
+    items[settlement.item_index].source_height = transaction.group_sizes.height;
   }
 }
 
@@ -1387,6 +1410,7 @@ bool try_retained_geometry_update(
   RetainedGeometryTransaction transaction;
   transaction.active = &active;
   transaction.updates = &updates;
+  transaction.group_sizes.settlements.reserve(active.owned_group_sources.size());
   obs_scene_atomic_update(active.host_scene_snapshot.scene,
                           update_retained_geometry_callback, &transaction);
   if (!transaction.valid || !transaction.applied) {
@@ -1428,8 +1452,7 @@ bool mask_equal(const Mask &a, const Mask &b)
          rect_equal(a.rect, b.rect) && a.is_null == b.is_null;
 }
 
-bool child_equal_except_capture_translation(const Child &a, const Child &b,
-                                             bool &translation_changed)
+bool child_equal_except_capture_translation(const Child &a, const Child &b)
 {
   if (a.kind != b.kind || a.scene_item_id != b.scene_item_id ||
       a.group_id != b.group_id || a.band != b.band ||
@@ -1441,15 +1464,12 @@ bool child_equal_except_capture_translation(const Child &a, const Child &b,
   if (a.kind == ChildKind::Capture) {
     if (!affine_linear_equal(a.affine, b.affine))
       return false;
-    translation_changed = translation_changed || a.affine.tx != b.affine.tx ||
-                          a.affine.ty != b.affine.ty;
     return true;
   }
   return affine_equal(a.affine, b.affine);
 }
 
-bool group_equal_except_capture_translation(const Group &a, const Group &b,
-                                            bool &translation_changed)
+bool group_equal_except_capture_translation(const Group &a, const Group &b)
 {
   if (a.id != b.id || a.parent_id != b.parent_id ||
       a.parent_is_null != b.parent_is_null || a.order != b.order ||
@@ -1460,8 +1480,7 @@ bool group_equal_except_capture_translation(const Group &a, const Group &b,
       a.children.size() != b.children.size())
     return false;
   for (size_t index = 0; index < a.children.size(); ++index)
-    if (!child_equal_except_capture_translation(a.children[index], b.children[index],
-                                                translation_changed))
+    if (!child_equal_except_capture_translation(a.children[index], b.children[index]))
       return false;
   return true;
 }
@@ -1478,16 +1497,16 @@ bool plans_equal_except_capture_translation(const Plan &active,
       active.replaced_scene_item_ids != next.replaced_scene_item_ids ||
       active.child_count != next.child_count ||
       active.groups.size() != next.groups.size() ||
-      active.by_id != next.by_id || active.generation >= next.generation ||
-      active.plan_hash == next.plan_hash)
+      active.by_id != next.by_id || active.generation >= next.generation)
     return false;
-  bool translation_changed = false;
+  // Solar may update the pixels of an already-bound raster atlas without
+  // changing native geometry. A higher generation must still validate and
+  // acknowledge that revision, without tearing down identical render sources.
   for (size_t index = 0; index < active.groups.size(); ++index)
     if (!group_equal_except_capture_translation(active.groups[index],
-                                                next.groups[index],
-                                                translation_changed))
+                                                next.groups[index]))
       return false;
-  return translation_changed;
+  return true;
 }
 
 void apply_transform(obs_sceneitem_t *item, const Transform &transform)
@@ -1911,6 +1930,7 @@ bool build_group(Plan &plan, const Group &group, obs_scene_t *parent_scene,
                  const std::unordered_map<int64_t, ResolvedCapture> &captures,
                  obs_sceneitem_t **out,
                  std::vector<WorldAffineBinding> &world_affines,
+                 std::vector<SourceRef> &owned_group_sources,
                  obs_data_t *response)
 {
   Transform transform;
@@ -1958,7 +1978,7 @@ bool build_group(Plan &plan, const Group &group, obs_scene_t *parent_scene,
       }
       obs_sceneitem_t *nested = nullptr;
       if (!build_group(plan, plan.groups[group_it->second], inner, captures,
-                       &nested, world_affines, response))
+                       &nested, world_affines, owned_group_sources, response))
         return false;
     } else {
       const auto it = captures.find(child.scene_item_id);
@@ -2024,6 +2044,8 @@ bool build_group(Plan &plan, const Group &group, obs_scene_t *parent_scene,
   apply_transform(item, transform);
   if (group.id != root_id)
     obs_sceneitem_set_visible(item, group.visible && !transform.empty);
+  SourceRef owned_source(obs_source_get_ref(obs_sceneitem_get_source(item)));
+  owned_group_sources.push_back(std::move(owned_source));
   return true;
 }
 
@@ -2044,10 +2066,80 @@ void release_state(ActiveComposition &state)
   state.host_scene_snapshot = PrivateSceneSnapshot();
   state.private_scenes.clear();
   state.world_affines.clear();
+  state.owned_group_sources.clear();
   state.input_bindings.clear();
   state.plan_snapshot = Plan();
   state.geometry_snapshot_ready = false;
   state.root = nullptr;
+}
+
+struct RetiredCaptureItem {
+  int64_t id = 0;
+  obs_sceneitem_t *item = nullptr;
+  obs_source_t *source = nullptr;
+};
+
+bool retired_capture_items_match(obs_scene_t *scene,
+                                const std::vector<RetiredCaptureItem> &items)
+{
+  for (const auto &entry : items) {
+    obs_sceneitem_t *item = obs_scene_find_sceneitem_by_id(scene, entry.id);
+    if (!item || item != entry.item || obs_sceneitem_get_scene(item) != scene ||
+        obs_sceneitem_is_group(item) || obs_sceneitem_get_source(item) != entry.source ||
+        !obs_scene_from_source(entry.source))
+      return false;
+    const char *kind = obs_source_get_id(entry.source);
+    if (!kind || std::strcmp(kind, "scene") != 0)
+      return false;
+  }
+  return true;
+}
+
+// Only obsolete wrappers from this exact accepted front may be retired. The
+// previous state's originals and SourceRefs retain both identities until the
+// transaction and old-root retirement have completed.
+bool prepare_retired_capture_items(
+    const Plan &plan, obs_scene_t *scene, const ActiveComposition *previous,
+    const std::unordered_map<int64_t, ResolvedCapture> &captures,
+    std::vector<RetiredCaptureItem> &items, obs_data_t *response)
+{
+  items.reserve(plan.retired_capture_scene_item_ids.size());
+  for (const int64_t id : plan.retired_capture_scene_item_ids) {
+    if (captures.count(id)) {
+      set_error(response, "retired-capture-scene-item-referenced", std::to_string(id).c_str());
+      return false;
+    }
+    if (!previous) {
+      set_error(response, "retired-capture-scene-item-not-owned", std::to_string(id).c_str());
+      return false;
+    }
+    const auto binding = std::find_if(previous->input_bindings.begin(),
+        previous->input_bindings.end(), [id](const InputBinding &value) { return value.id == id; });
+    if (binding == previous->input_bindings.end() || !binding->source ||
+        binding->item == previous->root ||
+        !std::any_of(previous->originals.begin(), previous->originals.end(),
+            [&](const OriginalItem &entry) { return entry.id == id && entry.item == binding->item; })) {
+      set_error(response, "retired-capture-scene-item-not-owned", std::to_string(id).c_str());
+      return false;
+    }
+    items.push_back({id, binding->item, binding->source});
+  }
+  if (!retired_capture_items_match(scene, items)) {
+    set_error(response, "retired-capture-scene-item-identity-mismatch");
+    return false;
+  }
+  return true;
+}
+
+void write_retired_capture_items(obs_data_t *response, const std::vector<int64_t> &ids)
+{
+  DataArrayRef array(obs_data_array_create());
+  for (const auto id : ids) {
+    DataRef entry(obs_data_create());
+    obs_data_set_int(entry.data, "sceneItemId", static_cast<long long>(id));
+    obs_data_array_push_back(array.array, entry.data);
+  }
+  obs_data_set_array(response, "retiredCaptureSceneItems", array.array);
 }
 
 struct SwapVisibility {
@@ -2056,6 +2148,8 @@ struct SwapVisibility {
   bool new_root_visible = true;
   std::vector<OriginalItem> *old_originals = nullptr;
   std::vector<OriginalItem> *new_originals = nullptr;
+  const std::vector<RetiredCaptureItem> *retired_captures = nullptr;
+  bool applied = false;
 };
 
 bool contains_item(const std::vector<OriginalItem> &items, int64_t id,
@@ -2069,6 +2163,13 @@ bool contains_item(const std::vector<OriginalItem> &items, int64_t id,
 void swap_visibility(void *data, obs_scene_t *scene)
 {
   auto &swap = *static_cast<SwapVisibility *>(data);
+  // Recheck the entire removal set under the same scene lock as the swap.
+  // Refuse before the first mutation if an external writer changed an identity.
+  if (swap.retired_captures && !swap.retired_captures->empty() &&
+      (!retired_capture_items_match(scene, *swap.retired_captures) ||
+       !swap.old_root || obs_sceneitem_get_scene(swap.old_root) != scene ||
+       obs_scene_find_sceneitem_by_id(scene, obs_sceneitem_get_id(swap.old_root)) != swap.old_root))
+    return;
   if (swap.old_originals) {
     for (const auto &original : *swap.old_originals) {
       if (contains_item(*swap.new_originals, original.id, original.item))
@@ -2083,6 +2184,10 @@ void swap_visibility(void *data, obs_scene_t *scene)
   if (swap.old_root)
     obs_sceneitem_set_visible(swap.old_root, false);
   obs_sceneitem_set_visible(swap.new_root, swap.new_root_visible);
+  if (swap.retired_captures)
+    for (const auto &entry : *swap.retired_captures)
+      obs_sceneitem_remove(entry.item);
+  swap.applied = true;
 }
 
 void remove_root(obs_sceneitem_t *root, uint64_t generation)
@@ -2388,10 +2493,20 @@ void commit_graphics(void *data)
       set_error(commit.response, "scene-identity-mismatch", plan.scene_name.c_str());
       return;
     }
+    // Idempotence acknowledges a graph that is still installed, not merely a
+    // generation admitted in the past. Keep this identity check before replay.
+    if (previous && (!previous->root ||
+        obs_sceneitem_get_scene(previous->root) != scene ||
+        obs_scene_find_sceneitem_by_id(scene, obs_sceneitem_get_id(previous->root)) !=
+            previous->root)) {
+      set_error(commit.response, "active-root-replaced", plan.scene_name.c_str());
+      return;
+    }
     if (plan.generation <= last) {
       if (previous && plan.generation == previous->generation &&
           plan.plan_hash == previous->plan_snapshot.plan_hash &&
           plan.replaced_scene_item_ids == previous->replaced_scene_item_ids &&
+          plan.retired_capture_scene_item_ids == previous->plan_snapshot.retired_capture_scene_item_ids &&
           plan.coordinate_space == previous->coordinate_space &&
           plan.protocol_version == previous->protocol_version &&
           plan.runtime_instance_id == previous->runtime_instance_id) {
@@ -2399,6 +2514,8 @@ void commit_graphics(void *data)
         obs_data_set_bool(commit.response, "idempotent", true);
         obs_data_set_int(commit.response, "generation",
                          static_cast<long long>(plan.generation));
+        obs_data_set_string(commit.response, "planHash", plan.plan_hash.c_str());
+        write_retired_capture_items(commit.response, plan.retired_capture_scene_item_ids);
       } else {
         set_error(commit.response, "stale-generation", plan.scene_name.c_str());
       }
@@ -2409,15 +2526,9 @@ void commit_graphics(void *data)
                 "reset the prior runtime graph before changing its fence");
       return;
     }
-    if (previous &&
-        obs_scene_find_sceneitem_by_id(scene, obs_sceneitem_get_id(previous->root)) !=
-            previous->root) {
-      set_error(commit.response, "active-root-replaced", plan.scene_name.c_str());
-      return;
-    }
-
     const bool geometry_translation_plan =
         previous && previous->generation == last &&
+        plan.retired_capture_scene_item_ids.empty() &&
         previous->scene_uuid == scene_uuid &&
         plans_equal_except_capture_translation(previous->plan_snapshot, plan);
     if (commit.retained_only &&
@@ -2447,6 +2558,12 @@ void commit_graphics(void *data)
     if (!resolved) {
       return;
     }
+    std::vector<RetiredCaptureItem> retired_captures;
+    if (!prepare_retired_capture_items(plan, scene, previous, captures,
+                                      retired_captures, commit.response))
+      return;
+    // Prepare the immutable echo before publishing a graph or removing items.
+    write_retired_capture_items(commit.response, plan.retired_capture_scene_item_ids);
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
     commit.timing.geometry_snapshot_ready =
         previous && previous->geometry_snapshot_ready;
@@ -2527,7 +2644,8 @@ void commit_graphics(void *data)
                                          &commit.timing.shader_creation);
 #endif
       built = build_group(plan, root, scene, captures, &candidate.state.root,
-                          candidate.state.world_affines, commit.response);
+                          candidate.state.world_affines,
+                          candidate.state.owned_group_sources, commit.response);
     }
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
     commit.timing.build_ms = elapsed_ms(phase_started, CommitClock::now());
@@ -2575,10 +2693,15 @@ void commit_graphics(void *data)
                         plan.groups[plan.by_id.at(root_id)].visible,
                         previous ? &previous->originals : nullptr,
                         &candidate.state.originals};
+    swap.retired_captures = &retired_captures;
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
     phase_started = CommitClock::now();
 #endif
     obs_scene_atomic_update(scene, swap_visibility, &swap);
+    if (!swap.applied) {
+      set_error(commit.response, "retired-capture-scene-item-identity-mismatch");
+      return;
+    }
 #if defined(PULSAR_GROUP_COMPOSITION_RESET_TRACE)
     commit.timing.atomic_swap_ms = elapsed_ms(phase_started, CommitClock::now());
 #endif
@@ -2759,6 +2882,69 @@ void reset_graphics(void *data)
   obs_data_set_bool(request.response, "reset", true);
   obs_data_set_int(request.response, "generation", generation);
   reset_trace(request.reset_trace_id, "graphics_exit_success");
+}
+
+// Query only accepted metadata after earlier graphics commits complete. This
+// resolves an uncertain transport outcome without mutating or replaying a graph.
+void read_composition_graphics(void *data)
+{
+  auto &read = *static_cast<Commit *>(data);
+  try {
+    std::string scene_name;
+    std::string runtime_id;
+    if (!read_string(read.request, "sceneName", scene_name, read.response, 256) ||
+        !read_string(read.request, "runtimeInstanceId", runtime_id, read.response, 256))
+      return;
+    const char *runtime = std::getenv("PULSAR_RUNTIME_INSTANCE_ID");
+    if (!runtime || runtime_id != runtime) {
+      set_error(read.response, "runtime-instance-mismatch", scene_name.c_str());
+      return;
+    }
+    SourceRef source(obs_get_source_by_name(scene_name.c_str()));
+    obs_scene_t *scene = source ? obs_scene_from_source(source.get()) : nullptr;
+    const char *uuid = source ? obs_source_get_uuid(source.get()) : nullptr;
+    if (!scene || !uuid || !*uuid) {
+      set_error(read.response, "scene-not-found", scene_name.c_str());
+      return;
+    }
+    auto fence = generation_fences.find(uuid);
+    if (fence != generation_fences.end() &&
+        fence->second.scene_source.get() != source.get()) {
+      set_error(read.response, "scene-identity-mismatch", scene_name.c_str());
+      return;
+    }
+    auto found = active_compositions.find(uuid);
+    const ActiveComposition *active = found == active_compositions.end()
+        ? nullptr : &found->second;
+    if (active && (active->scene_uuid != uuid ||
+                   active->runtime_instance_id != runtime_id ||
+                   fence == generation_fences.end() ||
+                   active->generation != fence->second.generation)) {
+      set_error(read.response, "active-state-inconsistent", scene_name.c_str());
+      return;
+    }
+    if (active && (!active->root ||
+        obs_sceneitem_get_scene(active->root) != scene ||
+        obs_scene_find_sceneitem_by_id(scene, obs_sceneitem_get_id(active->root)) != active->root)) {
+      set_error(read.response, "active-root-replaced", scene_name.c_str());
+      return;
+    }
+    obs_data_set_bool(read.response, "ok", true);
+    obs_data_set_bool(read.response, "active", active != nullptr);
+    obs_data_set_int(read.response, "generation", fence == generation_fences.end()
+        ? 0 : static_cast<long long>(fence->second.generation));
+    obs_data_set_string(read.response, "sceneName", scene_name.c_str());
+    obs_data_set_string(read.response, "sceneUuid", uuid);
+    obs_data_set_string(read.response, "runtimeInstanceId", runtime_id.c_str());
+    write_retired_capture_items(read.response, active ?
+        active->plan_snapshot.retired_capture_scene_item_ids : std::vector<int64_t>{});
+    if (active)
+      obs_data_set_string(read.response, "planHash", active->plan_snapshot.plan_hash.c_str());
+  } catch (const std::exception &error) {
+    set_error(read.response, "composition-read-exception", error.what());
+  } catch (...) {
+    set_error(read.response, "composition-read-exception", "unknown");
+  }
 }
 
 void reset_request(obs_data_t *request, obs_data_t *response, void *)
@@ -2947,6 +3133,14 @@ void group_composition_request(obs_data_t *request, obs_data_t *response,
   obs_data_set_obj(response, "debugCommitTiming", timing);
   obs_data_release(timing);
 #endif
+}
+
+void read_group_composition_request(obs_data_t *request, obs_data_t *response,
+                                    void *)
+{
+  Commit read{request, response};
+  GroupRequestScope scope;
+  obs_queue_task(OBS_TASK_GRAPHICS, read_composition_graphics, &read, true);
 }
 
 void reset_group_composition_request(obs_data_t *request, obs_data_t *response,
