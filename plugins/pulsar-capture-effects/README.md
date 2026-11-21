@@ -398,7 +398,7 @@ then keeps the existing pixel and reset checks. This separates the immediate
 recommit skip delta from later diagnostic work without changing composition
 semantics or qualifying an inactive scene.
 
-### Translation-only retained-tree recommits
+### Retained-tree recommits for unchanged geometry and translations
 
 Both native protocol versions build the same world-affine capture source in
 `global-scene-texels`. A translation can reuse that source within its own
@@ -408,8 +408,8 @@ The graphics queue completes the request and handles changes that require full
 staging. The generation fence and source validation apply to both paths.
 The release probe moves a cropped, rotated capture and checks that returning
 it to its starting pose restores every pixel. See the [native camera measurements](../../evidence/local-20261107-capture-motion/eleven/20261107T031036Z-native-recommit.json).
-When a higher-generation `CommitGroupComposition` differs from the admitted
-plan only in capture `tx`/`ty`, Pulsar can retain the active native group tree
+When a higher-generation `CommitGroupComposition` has identical native geometry
+or differs from the admitted plan only in capture `tx`/`ty`, Pulsar can retain the active native group tree
 and update the retained child transforms. The gate compares the plan's full
 non-translation meaning and revalidates runtime, the bound host scene UUID and
 source (the lane's scene identity), generation, source bindings, exact
@@ -419,12 +419,95 @@ retained input source may keep its current settings. Internal group filters and
 other structural source semantics remain fenced. Preview and Live use this
 same API path; there is no Preview-only fast path.
 
+An unchanged native plan hash is allowed at a higher generation: a Solar text
+edit can update atlas pixels without changing the native graph. The commit
+still resolves and validates every bound source and advances the generation
+fence. Raster-only graphs use the same locked scene validation with an empty
+capture-matrix batch. A changed opacity, mask, ordering, source identity or
+other structural meaning continues through full staging.
+
+`scripts/probe-retained-raster-recommit.py` copies an explicit runtime and DLL
+into an isolated worktree cache. It checks retained root identity and exact GPU
+pixels for identical/new-hash revisions, translation and return, stale-generation
+refusal, appearance-change rebuild and a raster-only graph. It also runs the
+existing world-grid crop/rotation/opacity and atomic-refusal pixel regression.
+Pass `--runtime`, `--plugin` and an explicit `--output` equal to
+`evidence/local-20261114-render-stability/host/` or
+`evidence/local-20261115-audit-fixes/pulsar/`. `--nested-depth 0|1|2` selects
+the flat graph or one/two owned nested groups. The probe also checks that an
+external private-group transform forces a rebuild, while exact replay remains
+idempotent. The old DLL is the negative control. This synthetic proof does not certify CEF paint or physical captures.
+
 OBS nested scenes are locked from parent to child. The implementation validates
 the entire retained graph and computes every matrix change before applying the
 batch, so a failed prevalidation leaves the current tree untouched and proceeds
 through the existing full candidate rebuild and atomic swap. A newly created
-root group may settle from `0x0` to its exact planned viewport bounds once, but
-only for the retained root item/source; all later size checks are strict.
+owned group (root or nested) may settle from `0x0` to its exact planned global
+viewport bounds once. Construction retains the exact group sources; only those
+identities qualify, after all item transforms, filters, private settings,
+contents and source bindings match. The snapshot dimensions advance only after
+the entire locked graph and world-matrix batch succeeds. Later dimension
+changes remain strict, including physical/band sources and foreign groups.
+This accounts for libobs computing new group extents at their first render,
+without trusting arbitrary size changes or refreshing a failed snapshot.
+
+`ReadGroupComposition` is a read-only vendor request in
+`pulsar-capture-effects`, serialized on the same graphics queue as commits.
+It takes `{sceneName, runtimeInstanceId}` and returns
+`{ok, active, generation, sceneName, sceneUuid, runtimeInstanceId, planHash?, retiredCaptureSceneItems}`.
+The request validates the current runtime even when no graph exists, and binds
+the host scene by UUID plus retained source identity. Active graphs additionally
+require the accepted root identity and agreement with the generation fence.
+An existing scene without a fence returns `active:false, generation:0`;
+reset preserves the fence and returns its generation with `active:false` and
+no plan hash. A missing scene or foreign runtime is an error. Prism uses this
+accepted-state read to reconcile a missing commit acknowledgment; a successful
+read does not itself apply, reset or repair a graph. The retained-raster probe
+checks empty/active/reset reads, exact replay and runtime/scene refusals.
+
+An identical commit replay also validates that the accepted root item is still
+present in the exact host scene before returning an idempotent acknowledgment.
+Removing or moving that root yields `active-root-replaced` for both replay and
+new generations; a historical admission is not proof of a currently installed
+graph. `scripts/probe-raster-owner-blends.py` checks initial admission, healthy
+replay, readback and replay after root removal in a private synthetic runtime.
+It uses the same explicit `--runtime` and `--plugin` arguments, with `--output`
+equal to `evidence/local-20261115-first-move-rebuild/pulsar/` (the historical
+`evidence/local-20261115-postfix-fixes/pulsar/` destination remains accepted).
+
+Global-coordinate commits in either protocol accept optional
+`retiredCaptureSceneItems: [{sceneItemId}]`. This transaction-local manifest
+removes obsolete capture wrappers during the atomic root swap, before capturing
+the retained host snapshot. Removing them externally after acknowledgment would
+invalidate that snapshot and rebuild the tree on the next translation. IDs must
+be unique positive safe integers (maximum 4096), belong to the exact prior front's
+input bindings and retained original items, and still match their item/source
+identities in the direct host scene. Only ordinary scene-source wrappers qualify;
+groups, direct physical/image inputs, foreign items and the root do not. Every ID
+must be absent from all new captures, raster bands, masks and replaced items.
+The entire removal set and old root are revalidated under the swap's scene lock
+before any visible mutation. Candidate failure or an identity mismatch preserves
+the current front. Main may release the retired wrapper sources after ACK, but
+must not perform a second host-item deletion.
+
+Success and exact replay echo the sorted `retiredCaptureSceneItems` manifest;
+active readback returns the accepted manifest, and inactive readback returns an
+empty array. Same-generation replay with a changed manifest is refused. A new
+nonempty manifest requires full staging; the following translation with an empty
+manifest may retain that tree. The prior transaction's manifest is never used to
+relax snapshot comparisons. The raster-owner probe covers protocols /1 and /2,
+an external-cleanup negative control, retained identity and GPU pixels from the
+first subsequent movement, exact/different replay, malformed/foreign/referenced
+retirements, non-wrapper refusal and reset. Runtime transport uncertainty and Main
+cleanup sequencing remain the caller's responsibility.
+
+That probe also covers all 16 admitted group blends with a normal `solarBand`
+inside the blended owner above a native capture, plus once-only owner opacity.
+The owner supplies the blend envelope; a raster band itself remains normal.
+Backdrop sampling is scoped to the immediate parent scene prefix. An additional
+normal intermediate owner is an isolated surface, so a nested blended owner
+cannot sample a capture outside that intermediate owner. Receipt producers must
+preserve that isolation meaning or reject unsupported pass-through projections.
 
 Build with `PULSAR_GROUP_COMPOSITION_RESET_TRACE` to inspect
 `geometrySnapshotMs`, `geometryUpdateMs` and `geometryFastPath` in
