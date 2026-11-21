@@ -86,6 +86,20 @@ command IDs when full rather than evicting earlier results.
 Operational rollback freezes new Takes while leaving committed Program live.
 The state API reports that freeze explicitly.
 
+`SetPreviewComposite` accepts an optional nonempty `scene_name`. The requested
+composite must belong to the current physical Preview lane: `ZabLaneAComposite`
+for A, `ZabPreviewComposite` for B. Omitting the name follows that same current
+lane. A pending Take, frozen topology, missing source or Program alias is refused
+before changing PreviewView. The acknowledgement names the actual source;
+it also preserves an active Preview transition cover. Disabling the override
+restores the current native Preview root, whose name can change after Take.
+
+`scripts/probe-preview-composite-routing.py` reuses the private process and
+synthetic transition helpers to verify explicit/implicit binding on B/A/B/A,
+wrong-lane and malformed requests, unchanged Program/revisions during binding,
+inactive stream/record outputs and clean shutdown. It does not operate Prism
+or acquire a capture device.
+
 ## Transitions
 
 Cut is the default. `PULSAR_DUAL_LANE_TRANSITIONS=1` enables the optional

@@ -983,6 +983,8 @@ void obs_module_post_load(void) {
     obs_websocket_vendor_register_request(vendor, "CommitGroupComposition",
                                           group_composition_request, nullptr);
   if (vendor)
+    obs_websocket_vendor_register_request(vendor, "ReadGroupComposition",
+                                          read_group_composition_request, nullptr);
     obs_websocket_vendor_register_request(vendor, "ResetGroupComposition",
                                           reset_group_composition_request, nullptr);
 }

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <obs.h>
 #include <string>
 #include <unordered_set>
@@ -516,6 +517,43 @@ bool parse_plan(obs_data_t *request, Plan &plan, obs_data_t *response)
     return false;
   }
   plan.generation = static_cast<uint64_t>(generation);
+
+  if (obs_data_has_user_value(request, "retiredCaptureSceneItems")) {
+    obs_data_array_t *retired = nullptr;
+    if (!read_array(request, "retiredCaptureSceneItems", &retired, response)) {
+      set_error(response, "invalid-retired-capture-scene-items");
+      return false;
+    }
+    const std::unique_ptr<obs_data_array_t, decltype(&obs_data_array_release)>
+        retired_guard(retired, obs_data_array_release);
+    const size_t count = obs_data_array_count(retired);
+    if (count > max_nested_scene_sources) {
+      set_error(response, "invalid-retired-capture-scene-items", "limit exceeded");
+      return false;
+    }
+    plan.retired_capture_scene_item_ids.reserve(count);
+    for (size_t index = 0; index < count; ++index) {
+      obs_data_t *entry = obs_data_array_item(retired, index);
+      int64_t id = 0;
+      const bool valid = entry && read_integer(entry, "sceneItemId", id, response) && id > 0;
+      obs_data_release(entry);
+      if (!valid) {
+        set_error(response, "invalid-retired-capture-scene-items", "positive safe integer required");
+        return false;
+      }
+      plan.retired_capture_scene_item_ids.push_back(id);
+    }
+    auto &ids = plan.retired_capture_scene_item_ids;
+    std::sort(ids.begin(), ids.end());
+    if (std::adjacent_find(ids.begin(), ids.end()) != ids.end()) {
+      set_error(response, "duplicate-retired-capture-scene-item");
+      return false;
+    }
+    if (!ids.empty() && plan.coordinate_space != CoordinateSpace::GlobalSceneTexels) {
+      set_error(response, "invalid-retired-capture-scene-items", "requires global coordinates");
+      return false;
+    }
+  }
 
   obs_data_item_t *replaced_item = obs_data_item_byname(request,
                                                         "replacedSceneItems");
